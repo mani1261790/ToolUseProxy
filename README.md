@@ -61,6 +61,7 @@ API キーや認証情報のように文字列パターンで判別しやすい�
 現在は第1段階です。Codex の `PreToolUse` / `PostToolUse` Hooks に接続する最小スクリプトを用意し、これらのイベントから実際に取得できる情報を調査しています。現時点のスクリプトは stdin を受け取るだけで、記録・類似度計算・検知・遮断はまだ行いません。
 
 Hook の構成と接続方法は [docs/hook-setup.md](docs/hook-setup.md) にまとめています。
+関連文献の整理は [docs/literature-review.md](docs/literature-review.md) にまとめています。
 
 ## 進捗管理
 

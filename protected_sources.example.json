@@ -1,0 +1,18 @@
+{
+  "sources": [
+    {
+      "id": "env_main",
+      "path": ".env",
+      "type": "secretfile",
+      "sensitivity": "high",
+      "policy_tags": ["no_external", "no_search"]
+    },
+    {
+      "id": "private_impl",
+      "path": "private.py",
+      "type": "unpublished_impl",
+      "sensitivity": "high",
+      "policy_tags": ["no_external", "no_issue_post"]
+    }
+  ]
+}
