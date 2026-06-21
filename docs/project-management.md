@@ -1,0 +1,53 @@
+# GitHubでの研究進捗管理
+
+このプロジェクトでは、研究概要、作業項目、週次報告を次のように分けて管理します。
+
+## README
+
+研究の背景、目的、3段階のロードマップ、現在地を掲載します。週ごとの詳細な報告は追記しません。
+
+## Issues
+
+調査、実装、実験、文書化など、完了条件を持つ作業をIssueとして管理します。
+
+毎週の進捗報告も1週間につき1件のIssueとして作成し、`weekly-report`ラベルを付けます。Issue作成時は「週次進捗報告」テンプレートを使用します。
+
+週次報告には次の内容を記録します。
+
+- 今週の目標
+- 実施したこと
+- 分かったこと
+- Pull Request、Commit、文書、実験ログなどの成果物
+- 問題・未解決事項
+- 来週やること
+
+報告と確認が終わった週次IssueはCloseします。Close後も履歴、コメント、関連リンクは残ります。
+
+## GitHub Project
+
+ProjectはIssueとPull Requestの進行状況を一覧するために使用します。週次報告の本文を置く場所ではありません。
+
+次のフィールドを使用します。
+
+| フィールド | 用途 |
+| --- | --- |
+| Status | `Backlog`、`In Progress`、`Review`、`Done` |
+| Stage | `1: Trace`、`2: Detect`、`3: Stop` |
+| Type | `Research`、`Implementation`、`Evaluation`、`Documentation` |
+| Iteration | 1週間単位の作業期間 |
+
+次のビューを基本とします。
+
+- `Current Week`: 現在のIterationに含まれる項目
+- `By Status`: Status別のボード
+- `Research Roadmap`: Stage別に研究全体を確認する一覧
+
+ProjectのStatus Updateには、その週の要約と週次報告Issueへのリンクだけを記載します。
+
+## 毎週の流れ
+
+1. 週の開始時に、対象Issueを今週のIterationへ設定する
+2. 研究・実装を進め、CommitやPull Requestを対応するIssueへ関連付ける
+3. 週末に週次進捗報告Issueを作成する
+4. ProjectのStatus Updateへ短い要約と週次報告Issueへのリンクを載せる
+5. 未完了の作業を次のIterationへ移す
