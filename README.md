@@ -66,7 +66,9 @@ Hook の構成と接続方法は [docs/hook-setup.md](docs/hook-setup.md) にま
 
 研究・実装タスクはGitHub IssuesとGitHub Projectで管理し、毎週の進捗は`weekly-report`ラベルを付けたIssueとして記録します。READMEには研究全体の目的と現在地だけを掲載し、週報本文は蓄積しません。
 
-運用方法は [docs/project-management.md](docs/project-management.md) にまとめています。
+- [研究Project](https://github.com/users/mani1261790/projects/1)
+- [週次進捗報告](https://github.com/mani1261790/ToolUseProxy/issues?q=label%3Aweekly-report)
+- [進捗管理の運用方法](docs/project-management.md)
 
 ## 想定する対象
 

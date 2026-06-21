@@ -31,14 +31,12 @@ ProjectはIssueとPull Requestの進行状況を一覧するために使用し�
 
 | フィールド | 用途 |
 | --- | --- |
-| Status | `Backlog`、`In Progress`、`Review`、`Done` |
+| Status | `Todo`、`In Progress`、`Done` |
 | Stage | `1: Trace`、`2: Detect`、`3: Stop` |
 | Type | `Research`、`Implementation`、`Evaluation`、`Documentation` |
-| Iteration | 1週間単位の作業期間 |
 
-次のビューを基本とします。
+現在は標準のTableビューで管理します。作業項目が増えた段階で、次のビューを追加します。
 
-- `Current Week`: 現在のIterationに含まれる項目
 - `By Status`: Status別のボード
 - `Research Roadmap`: Stage別に研究全体を確認する一覧
 
@@ -46,8 +44,8 @@ ProjectのStatus Updateには、その週の要約と週次報告Issueへのリ�
 
 ## 毎週の流れ
 
-1. 週の開始時に、対象Issueを今週のIterationへ設定する
+1. 週の開始時に、今週着手するIssueを`In Progress`へ移す
 2. 研究・実装を進め、CommitやPull Requestを対応するIssueへ関連付ける
 3. 週末に週次進捗報告Issueを作成する
 4. ProjectのStatus Updateへ短い要約と週次報告Issueへのリンクを載せる
-5. 未完了の作業を次のIterationへ移す
+5. 完了したIssueを`Done`へ移し、次週の作業を決める
