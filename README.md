@@ -58,10 +58,13 @@ API キーや認証情報のように文字列パターンで判別しやすい�
 
 ## 現在地
 
-現在は第1段階です。Codex の `PreToolUse` / `PostToolUse` Hooks に接続する最小スクリプトを用意し、これらのイベントから実際に取得できる情報を調査しています。現時点のスクリプトは stdin を受け取るだけで、記録・類似度計算・検知・遮断はまだ行いません。
+現在は第1段階です。Codex の `PreToolUse` / `PostToolUse` Hooks から event と artifact を SQLite に記録し、artifact fragment 間の類似関係から source 非依存の情報流グラフを構築する実装を進めています。漏えい検知と遮断はまだ行いません。
 
 Hook の構成と接続方法は [docs/hook-setup.md](docs/hook-setup.md) にまとめています。
+情報流グラフと lineage の設計は [docs/information-flow-design.md](docs/information-flow-design.md) にまとめています。
+tool固有のI/Oを共通グラフへ変換するadapterは [docs/adapters.md](docs/adapters.md) にまとめています。
 関連文献の整理は [docs/literature-review.md](docs/literature-review.md) にまとめています。
+次に実装するタスクは [docs/implementation-tasks.md](docs/implementation-tasks.md) にまとめています。
 
 ## 進捗管理
 
@@ -70,6 +73,7 @@ Hook の構成と接続方法は [docs/hook-setup.md](docs/hook-setup.md) にま
 - [研究Project](https://github.com/users/mani1261790/projects/1)
 - [週次進捗報告](https://github.com/mani1261790/ToolUseProxy/issues?q=label%3Aweekly-report)
 - [進捗管理の運用方法](docs/project-management.md)
+- [実装タスク計画](docs/implementation-tasks.md)
 
 ## 想定する対象
 

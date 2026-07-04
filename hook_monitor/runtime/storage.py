@@ -2,13 +2,18 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import uuid
 from pathlib import Path
 
 from hook_monitor.runtime.models import (
+    ArtifactContext,
+    ArtifactFragment,
     ArtifactRecord,
     FlowEdge,
+    LineageAssignment,
     NormalizedEvent,
     ProtectedSource,
+    ResourceVersion,
     SourceChunk,
 )
 
@@ -41,6 +46,7 @@ class EventStore:
                 )
                 """
             )
+            self._ensure_column(conn, "events", "sequence_no", "INTEGER")
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS artifacts (
@@ -53,6 +59,22 @@ class EventStore:
                     token_count INTEGER NOT NULL,
                     recorded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (event_id) REFERENCES events (event_id)
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS artifact_fragments (
+                    fragment_id TEXT PRIMARY KEY,
+                    artifact_id TEXT NOT NULL,
+                    json_pointer TEXT NOT NULL,
+                    semantic_role TEXT NOT NULL,
+                    text TEXT NOT NULL,
+                    text_hash TEXT NOT NULL,
+                    normalized_text TEXT NOT NULL,
+                    token_count INTEGER NOT NULL,
+                    recorded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (artifact_id) REFERENCES artifacts (artifact_id)
                 )
                 """
             )
@@ -100,6 +122,101 @@ class EventStore:
                 """
             )
             conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS analysis_runs (
+                    analysis_run_id TEXT PRIMARY KEY,
+                    detector_version TEXT NOT NULL,
+                    config_json TEXT NOT NULL,
+                    started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    completed_at TEXT
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS information_flow_edges (
+                    edge_id TEXT PRIMARY KEY,
+                    src_node_kind TEXT NOT NULL,
+                    src_node_id TEXT NOT NULL,
+                    dst_node_kind TEXT NOT NULL,
+                    dst_node_id TEXT NOT NULL,
+                    relation TEXT NOT NULL,
+                    evidence_level TEXT NOT NULL,
+                    method TEXT NOT NULL,
+                    score REAL NOT NULL,
+                    reason TEXT NOT NULL,
+                    recorded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS source_binding_edges (
+                    analysis_run_id TEXT NOT NULL,
+                    edge_id TEXT NOT NULL,
+                    src_node_kind TEXT NOT NULL,
+                    src_node_id TEXT NOT NULL,
+                    dst_node_kind TEXT NOT NULL,
+                    dst_node_id TEXT NOT NULL,
+                    relation TEXT NOT NULL,
+                    evidence_level TEXT NOT NULL,
+                    method TEXT NOT NULL,
+                    score REAL NOT NULL,
+                    reason TEXT NOT NULL,
+                    recorded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (analysis_run_id, edge_id),
+                    FOREIGN KEY (analysis_run_id) REFERENCES analysis_runs (analysis_run_id)
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS resource_versions (
+                    node_id TEXT PRIMARY KEY,
+                    path TEXT NOT NULL,
+                    content_hash TEXT,
+                    sequence_no INTEGER NOT NULL,
+                    session_id TEXT,
+                    origin_tool_use_id TEXT,
+                    recorded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS analysis_state (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            self._migrate_information_flow_edges(conn)
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS lineage_assignments (
+                    analysis_run_id TEXT NOT NULL,
+                    source_node_kind TEXT NOT NULL,
+                    source_node_id TEXT NOT NULL,
+                    node_kind TEXT NOT NULL,
+                    node_id TEXT NOT NULL,
+                    best_path_score REAL NOT NULL,
+                    predecessor_edge_id TEXT,
+                    hop_count INTEGER NOT NULL,
+                    recorded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (
+                        analysis_run_id,
+                        source_node_kind,
+                        source_node_id,
+                        node_kind,
+                        node_id
+                    ),
+                    FOREIGN KEY (analysis_run_id) REFERENCES analysis_runs (analysis_run_id)
+                )
+                """
+            )
+            self._migrate_lineage_assignments(conn)
+            conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_events_tool_use_id ON events (tool_use_id)"
             )
             conn.execute(
@@ -109,14 +226,50 @@ class EventStore:
                 "CREATE INDEX IF NOT EXISTS idx_artifacts_event_id ON artifacts (event_id)"
             )
             conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_fragments_artifact_id ON artifact_fragments (artifact_id)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_fragments_text_hash ON artifact_fragments (text_hash)"
+            )
+            conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_source_chunks_source_id ON source_chunks (source_id)"
             )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_flow_edges_dst_artifact_id ON flow_edges (dst_artifact_id)"
             )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_information_flow_edges_src
+                ON information_flow_edges (src_node_kind, src_node_id)
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_information_flow_edges_dst
+                ON information_flow_edges (dst_node_kind, dst_node_id)
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_resource_versions_path ON resource_versions (path)"
+            )
+            self._backfill_event_sequence_numbers(conn)
 
-    def record(self, event: NormalizedEvent, artifacts: list[ArtifactRecord]) -> None:
+    def record(
+        self,
+        event: NormalizedEvent,
+        artifacts: list[ArtifactRecord],
+        fragments: list[ArtifactFragment] | None = None,
+    ) -> None:
         with self._connect() as conn:
+            existing = conn.execute(
+                "SELECT sequence_no FROM events WHERE event_id = ?",
+                (event.event_id,),
+            ).fetchone()
+            sequence_no = (
+                existing[0]
+                if existing and existing[0] is not None
+                else self._next_sequence_no(conn)
+            )
             conn.execute(
                 """
                 INSERT OR REPLACE INTO events (
@@ -130,8 +283,9 @@ class EventStore:
                     model,
                     permission_mode,
                     transcript_path,
-                    payload_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    payload_json,
+                    sequence_no
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     event.event_id,
@@ -145,6 +299,7 @@ class EventStore:
                     event.permission_mode,
                     event.transcript_path,
                     json.dumps(event.raw_payload, ensure_ascii=False, sort_keys=True),
+                    sequence_no,
                 ),
             )
             conn.executemany(
@@ -172,6 +327,34 @@ class EventStore:
                     for artifact in artifacts
                 ],
             )
+            if fragments:
+                conn.executemany(
+                    """
+                    INSERT OR REPLACE INTO artifact_fragments (
+                        fragment_id,
+                        artifact_id,
+                        json_pointer,
+                        semantic_role,
+                        text,
+                        text_hash,
+                        normalized_text,
+                        token_count
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    [
+                        (
+                            fragment.fragment_id,
+                            fragment.artifact_id,
+                            fragment.json_pointer,
+                            fragment.semantic_role,
+                            fragment.text,
+                            fragment.text_hash,
+                            fragment.normalized_text,
+                            fragment.token_count,
+                        )
+                        for fragment in fragments
+                    ],
+                )
 
     def upsert_sources(self, sources: list[ProtectedSource], chunks: list[SourceChunk]) -> None:
         with self._connect() as conn:
@@ -224,31 +407,257 @@ class EventStore:
                 ],
             )
 
-    def upsert_flow_edges(self, edges: list[FlowEdge]) -> None:
+    def upsert_artifact_fragments(self, fragments: list[ArtifactFragment]) -> None:
         with self._connect() as conn:
             conn.executemany(
                 """
-                INSERT OR REPLACE INTO flow_edges (
+                INSERT OR REPLACE INTO artifact_fragments (
+                    fragment_id,
+                    artifact_id,
+                    json_pointer,
+                    semantic_role,
+                    text,
+                    text_hash,
+                    normalized_text,
+                    token_count
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        fragment.fragment_id,
+                        fragment.artifact_id,
+                        fragment.json_pointer,
+                        fragment.semantic_role,
+                        fragment.text,
+                        fragment.text_hash,
+                        fragment.normalized_text,
+                        fragment.token_count,
+                    )
+                    for fragment in fragments
+                ],
+            )
+
+    def start_analysis_run(
+        self,
+        detector_version: str,
+        config: dict[str, object],
+    ) -> str:
+        analysis_run_id = uuid.uuid4().hex
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO analysis_runs (
+                    analysis_run_id,
+                    detector_version,
+                    config_json
+                ) VALUES (?, ?, ?)
+                """,
+                (
+                    analysis_run_id,
+                    detector_version,
+                    json.dumps(config, ensure_ascii=False, sort_keys=True),
+                ),
+            )
+        return analysis_run_id
+
+    def complete_analysis_run(self, analysis_run_id: str) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE analysis_runs
+                SET completed_at = CURRENT_TIMESTAMP
+                WHERE analysis_run_id = ?
+                """,
+                (analysis_run_id,),
+            )
+
+    def replace_information_flow_edges(self, edges: list[FlowEdge]) -> None:
+        with self._connect() as conn:
+            conn.execute("DELETE FROM information_flow_edges")
+            conn.executemany(
+                """
+                INSERT OR REPLACE INTO information_flow_edges (
                     edge_id,
                     src_node_kind,
                     src_node_id,
-                    dst_artifact_id,
+                    dst_node_kind,
+                    dst_node_id,
+                    relation,
+                    evidence_level,
                     method,
                     score,
                     reason
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
                     (
                         edge.edge_id,
                         edge.src_node_kind,
                         edge.src_node_id,
-                        edge.dst_artifact_id,
+                        edge.dst_node_kind,
+                        edge.dst_node_id,
+                        edge.relation,
+                        edge.evidence_level,
                         edge.method,
                         edge.score,
                         edge.reason,
                     )
                     for edge in edges
+                ],
+            )
+
+    def replace_resource_versions(self, resources: list[ResourceVersion]) -> None:
+        with self._connect() as conn:
+            conn.execute("DELETE FROM resource_versions")
+            conn.executemany(
+                """
+                INSERT INTO resource_versions (
+                    node_id,
+                    path,
+                    content_hash,
+                    sequence_no,
+                    session_id,
+                    origin_tool_use_id
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        resource.node_id,
+                        resource.path,
+                        resource.content_hash,
+                        resource.sequence_no,
+                        resource.session_id,
+                        resource.origin_tool_use_id,
+                    )
+                    for resource in resources
+                ],
+            )
+
+    def upsert_source_binding_edges(
+        self,
+        analysis_run_id: str,
+        edges: list[FlowEdge],
+    ) -> None:
+        with self._connect() as conn:
+            conn.executemany(
+                """
+                INSERT OR REPLACE INTO source_binding_edges (
+                    analysis_run_id,
+                    edge_id,
+                    src_node_kind,
+                    src_node_id,
+                    dst_node_kind,
+                    dst_node_id,
+                    relation,
+                    evidence_level,
+                    method,
+                    score,
+                    reason
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        analysis_run_id,
+                        edge.edge_id,
+                        edge.src_node_kind,
+                        edge.src_node_id,
+                        edge.dst_node_kind,
+                        edge.dst_node_id,
+                        edge.relation,
+                        edge.evidence_level,
+                        edge.method,
+                        edge.score,
+                        edge.reason,
+                    )
+                    for edge in edges
+                ],
+            )
+
+    def list_information_flow_edges(self) -> list[FlowEdge]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT
+                    edge_id,
+                    src_node_kind,
+                    src_node_id,
+                    dst_node_kind,
+                    dst_node_id,
+                    relation,
+                    evidence_level,
+                    method,
+                    score,
+                    reason
+                FROM information_flow_edges
+                """
+            ).fetchall()
+        return [
+            FlowEdge(
+                edge_id=row[0],
+                src_node_kind=row[1],
+                src_node_id=row[2],
+                dst_node_kind=row[3],
+                dst_node_id=row[4],
+                relation=row[5],
+                evidence_level=row[6],
+                method=row[7],
+                score=row[8],
+                reason=row[9],
+            )
+            for row in rows
+        ]
+
+    def get_analysis_state(self, key: str) -> str | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT value FROM analysis_state WHERE key = ?",
+                (key,),
+            ).fetchone()
+        return None if row is None else str(row[0])
+
+    def set_analysis_state(self, key: str, value: str) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO analysis_state (key, value)
+                VALUES (?, ?)
+                ON CONFLICT(key) DO UPDATE SET
+                    value = excluded.value,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (key, value),
+            )
+
+    def upsert_lineage_assignments(
+        self,
+        assignments: list[LineageAssignment],
+    ) -> None:
+        with self._connect() as conn:
+            conn.executemany(
+                """
+                INSERT OR REPLACE INTO lineage_assignments (
+                    analysis_run_id,
+                    source_node_kind,
+                    source_node_id,
+                    node_kind,
+                    node_id,
+                    best_path_score,
+                    predecessor_edge_id,
+                    hop_count
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        assignment.analysis_run_id,
+                        assignment.source_node_kind,
+                        assignment.source_node_id,
+                        assignment.node_kind,
+                        assignment.node_id,
+                        assignment.best_path_score,
+                        assignment.predecessor_edge_id,
+                        assignment.hop_count,
+                    )
+                    for assignment in assignments
                 ],
             )
 
@@ -273,6 +682,163 @@ class EventStore:
             )
             for row in rows
         ]
+
+    def list_artifact_contexts(self) -> list[ArtifactContext]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT
+                    f.fragment_id,
+                    f.artifact_id,
+                    f.json_pointer,
+                    f.semantic_role,
+                    f.text,
+                    f.text_hash,
+                    f.normalized_text,
+                    f.token_count,
+                    a.role,
+                    e.event_id,
+                    e.phase,
+                    e.session_id,
+                    e.turn_id,
+                    e.tool_use_id,
+                    e.tool_name,
+                    e.cwd,
+                    e.sequence_no
+                FROM artifact_fragments AS f
+                JOIN artifacts AS a ON a.artifact_id = f.artifact_id
+                JOIN events AS e ON e.event_id = a.event_id
+                ORDER BY e.sequence_no, f.fragment_id
+                """
+            ).fetchall()
+        return [
+            ArtifactContext(
+                fragment=ArtifactFragment(
+                    fragment_id=row[0],
+                    artifact_id=row[1],
+                    json_pointer=row[2],
+                    semantic_role=row[3],
+                    text=row[4],
+                    text_hash=row[5],
+                    normalized_text=row[6],
+                    token_count=row[7],
+                ),
+                artifact_role=row[8],
+                event_id=row[9],
+                phase=row[10],
+                session_id=row[11],
+                turn_id=row[12],
+                tool_use_id=row[13],
+                tool_name=row[14],
+                cwd=row[15],
+                sequence_no=row[16],
+            )
+            for row in rows
+        ]
+
+    def _ensure_column(
+        self,
+        conn: sqlite3.Connection,
+        table: str,
+        column: str,
+        definition: str,
+    ) -> None:
+        columns = {
+            row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+        }
+        if column not in columns:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+    def _migrate_information_flow_edges(self, conn: sqlite3.Connection) -> None:
+        columns = {
+            row[1]
+            for row in conn.execute(
+                "PRAGMA table_info(information_flow_edges)"
+            ).fetchall()
+        }
+        if "analysis_run_id" not in columns:
+            return
+
+        # artifact間グラフは再構築可能な派生データなので、旧試作スキーマは置換する。
+        conn.execute("DROP TABLE information_flow_edges")
+        conn.execute(
+            """
+            CREATE TABLE information_flow_edges (
+                edge_id TEXT PRIMARY KEY,
+                src_node_kind TEXT NOT NULL,
+                src_node_id TEXT NOT NULL,
+                dst_node_kind TEXT NOT NULL,
+                dst_node_id TEXT NOT NULL,
+                relation TEXT NOT NULL,
+                evidence_level TEXT NOT NULL,
+                method TEXT NOT NULL,
+                score REAL NOT NULL,
+                reason TEXT NOT NULL,
+                recorded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.execute(
+            "DELETE FROM analysis_state WHERE key LIKE 'artifact_graph_%'"
+        )
+
+    def _migrate_lineage_assignments(self, conn: sqlite3.Connection) -> None:
+        columns = {
+            row[1]
+            for row in conn.execute(
+                "PRAGMA table_info(lineage_assignments)"
+            ).fetchall()
+        }
+        if "source_chunk_id" not in columns:
+            return
+
+        # lineageは解析runごとの派生データなので、source node一般化時に再生成する。
+        conn.execute("DROP TABLE lineage_assignments")
+        conn.execute(
+            """
+            CREATE TABLE lineage_assignments (
+                analysis_run_id TEXT NOT NULL,
+                source_node_kind TEXT NOT NULL,
+                source_node_id TEXT NOT NULL,
+                node_kind TEXT NOT NULL,
+                node_id TEXT NOT NULL,
+                best_path_score REAL NOT NULL,
+                predecessor_edge_id TEXT,
+                hop_count INTEGER NOT NULL,
+                recorded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (
+                    analysis_run_id,
+                    source_node_kind,
+                    source_node_id,
+                    node_kind,
+                    node_id
+                ),
+                FOREIGN KEY (analysis_run_id) REFERENCES analysis_runs (analysis_run_id)
+            )
+            """
+        )
+
+    def _backfill_event_sequence_numbers(self, conn: sqlite3.Connection) -> None:
+        rows = conn.execute(
+            """
+            SELECT event_id
+            FROM events
+            WHERE sequence_no IS NULL
+            ORDER BY recorded_at, rowid
+            """
+        ).fetchall()
+        next_sequence = self._next_sequence_no(conn)
+        for offset, (event_id,) in enumerate(rows):
+            conn.execute(
+                "UPDATE events SET sequence_no = ? WHERE event_id = ?",
+                (next_sequence + offset, event_id),
+            )
+
+    def _next_sequence_no(self, conn: sqlite3.Connection) -> int:
+        row = conn.execute(
+            "SELECT COALESCE(MAX(sequence_no), 0) + 1 FROM events"
+        ).fetchone()
+        return int(row[0])
 
     def _connect(self) -> sqlite3.Connection:
         return sqlite3.connect(self.db_path)

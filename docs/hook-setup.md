@@ -83,7 +83,7 @@ Codex Hooks の設定と、そこから呼び出される監視プログラム�
 - `hooks/monitor_pre_tool.py`
 - `hooks/monitor_post_tool.py`
 
-どちらも現時点では no-op です。stdin を読むだけで、まだ解析・記録・判定はしません。
+どちらも stdin のHook payloadを受け取り、event、artifact、artifact fragmentをローカルSQLiteへ記録します。漏えい判定や遮断は行いません。
 
 ## 使い方
 
@@ -92,7 +92,7 @@ Codex の GUI か設定ファイルで、次の command を指定します。
 - `PreToolUse` -> `python3 /Users/mani/Developer/ToolUseProxy/hooks/monitor_pre_tool.py`
 - `PostToolUse` -> `python3 /Users/mani/Developer/ToolUseProxy/hooks/monitor_post_tool.py`
 
-この段階の目的は、まず hook から I/O を受け取れる入口を固定することです。観測、記録、情報流追跡は次の段階で足します。
+この段階の目的は、hook から I/O を受け取り、後から情報流を再解析できる観測ログを残すことです。
 
 ## 実装構造
 
@@ -110,12 +110,20 @@ hook_monitor/
     ids.py
     normalize.py
     parser.py
+    fragments.py
     storage.py
     source_config.py
     runner.py
   analysis/
+    adapters/
+      base.py
+      common.py
+      filesystem.py
+      registry.py
     chunking.py
     similarity.py
+    graph.py
+    lineage.py
     source_index.py
 ```
 
@@ -185,6 +193,9 @@ Codex
   - stdin から来た JSON payload を解釈します
   - `normalize_event()` が hook payload を event に変換します
   - `build_artifacts()` が phase ごとに `tool_input` / `tool_response` を抽出します
+- `hook_monitor/runtime/fragments.py`
+  - artifact全体とJSON内の値を比較用fragmentへ分割します
+  - `query`、`path`、`content`、`stdout`などのsemantic roleを付けます
 - `hook_monitor/runtime/storage.py`
   - SQLite への保存を担当します
   - `events` テーブルと `artifacts` テーブルを初期化し、記録します
@@ -199,9 +210,18 @@ Codex
 - `hook_monitor/analysis/chunking.py`
   - 保護対象 source を chunk に分割します
   - `.py` は関数や class 単位、テキストは段落単位で分割します
+- `hook_monitor/analysis/adapters/`
+  - tool固有のJSONを共通のresourceとedgeへ変換します
+  - 現在はFilesystem read/writeに対応しています
+  - 詳細は [adapters.md](adapters.md) にまとめています
 - `hook_monitor/analysis/similarity.py`
-  - source chunk と artifact の比較を担当します
+  - 任意の2つの文字列の比較を担当します
   - `exact -> substring -> shingle_jaccard -> embedding_cosine` の順で評価します
+- `hook_monitor/analysis/graph.py`
+  - sourceとは独立にartifact fragment間のedgeを構築します
+  - source chunkを既存グラフへ接続するbinding edgeも作ります
+- `hook_monitor/analysis/lineage.py`
+  - source bindingからedgeをたどり、各nodeへの最良経路を計算します
 - `hook_monitor/analysis/source_index.py`
   - source 定義を読み、chunk 化した一覧を作ります
   - offline な再解析や lineage 再構築で使います
@@ -212,7 +232,7 @@ Codex
 
 - `.tooluseproxy/events.db`
 
-中には主に2つのテーブルがあります。
+中には主に次のテーブルがあります。
 
 - `events`
   - hook が1回発火した記録を入れます
@@ -220,6 +240,16 @@ Codex
 - `artifacts`
   - その event から取り出した `tool_input` / `tool_output` を入れます
   - `event_id` で元の event にぶら下がります
+- `artifact_fragments`
+  - artifact内のquery、path、content、stdoutなどを比較単位として保存します
+- `information_flow_edges`
+  - source設定とは独立したartifact fragment間の情報流候補を保存します
+- `resource_versions`
+  - Filesystem adapterが再構成したファイルのversionを保存します
+- `source_binding_edges`
+  - protected sourceとartifactグラフの接続点を解析runごとに保存します
+- `lineage_assignments`
+  - sourceから各nodeへ到達する最良経路を保存します
 
 イメージとしては、
 
@@ -267,15 +297,15 @@ embedding を使って自然言語をベクトル化し、cos 類似度を取る
 
 将来的には、たとえば `embeddings.py` や `similarity.py` を追加して、
 
-- `artifacts` のテキストをベクトル化する
-- artifact 同士の cos 類似度を計算する
-- その結果を `flow_edges` のような別テーブルに保存する
+- `artifact_fragments` のテキストをベクトル化する
+- fragment 同士の cos 類似度を計算する
+- その結果を `information_flow_edges` に保存する
 
 という形に伸ばせます。
 
 ## 現在の比較器
 
-現在の実装では、source と artifact の比較は単一手法ではなく、段階的に行う想定です。
+現在の実装では、artifact fragment同士、およびsource chunkとartifact fragmentの比較を段階的に行います。
 
 1. `exact`
 2. `substring`
@@ -297,16 +327,19 @@ embedding を使って自然言語をベクトル化し、cos 類似度を取る
 
 保護対象 source は後から追加・変更される前提なので、過去のログに対して再解析できる必要があります。
 
-そのために、source 設定と `events.db` を使って `flow_edges` を再構築するコマンドを用意しています。
+そのために、source 設定と `events.db` を使ってartifactグラフとlineageを再構築するコマンドを用意しています。
 
 - `python3 /Users/mani/Developer/ToolUseProxy/scripts/rebuild_lineage.py`
 
 このコマンドは次を行います。
 
-1. `protected_sources.json` を読む
-2. source を chunk に分割する
-3. DB 内の `artifacts` と比較する
-4. 一致したものを `flow_edges` テーブルに保存する
+1. 過去artifactからfragmentを補完する
+2. source非依存のartifact間グラフを構築または再利用する
+3. `protected_sources.json` を読み、sourceをchunkに分割する
+4. source chunkをartifactグラフへ接続する
+5. sourceからのlineageを計算する
+
+詳細な設計は [information-flow-design.md](information-flow-design.md) にまとめています。
 
 ## なぜ分けているか
 

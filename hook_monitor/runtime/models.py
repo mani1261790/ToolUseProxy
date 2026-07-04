@@ -31,6 +31,32 @@ class ArtifactRecord:
 
 
 @dataclass(frozen=True)
+class ArtifactFragment:
+    fragment_id: str
+    artifact_id: str
+    json_pointer: str
+    semantic_role: str
+    text: str
+    text_hash: str
+    normalized_text: str
+    token_count: int
+
+
+@dataclass(frozen=True)
+class ArtifactContext:
+    fragment: ArtifactFragment
+    artifact_role: str
+    event_id: str
+    phase: str
+    session_id: str | None
+    turn_id: str | None
+    tool_use_id: str | None
+    tool_name: str | None
+    cwd: str | None
+    sequence_no: int
+
+
+@dataclass(frozen=True)
 class ProtectedSource:
     source_id: str
     path: str
@@ -52,11 +78,36 @@ class SourceChunk:
 
 
 @dataclass(frozen=True)
+class ResourceVersion:
+    node_id: str
+    path: str
+    content_hash: str | None
+    sequence_no: int
+    session_id: str | None
+    origin_tool_use_id: str | None
+
+
+@dataclass(frozen=True)
 class FlowEdge:
     edge_id: str
     src_node_kind: str
     src_node_id: str
-    dst_artifact_id: str
+    dst_node_kind: str
+    dst_node_id: str
+    relation: str
+    evidence_level: str
     method: str
     score: float
     reason: str
+
+
+@dataclass(frozen=True)
+class LineageAssignment:
+    analysis_run_id: str
+    source_node_kind: str
+    source_node_id: str
+    node_kind: str
+    node_id: str
+    best_path_score: float
+    predecessor_edge_id: str | None
+    hop_count: int

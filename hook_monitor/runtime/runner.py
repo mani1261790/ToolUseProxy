@@ -7,6 +7,7 @@ from pathlib import Path
 from hook_monitor.runtime.parser import (
     HookPayloadError,
     build_artifacts,
+    build_fragments,
     normalize_event,
     parse_hook_payload,
 )
@@ -25,10 +26,11 @@ def run_hook(phase: str) -> int:
 
     event = normalize_event(phase, payload)
     artifacts = build_artifacts(event)
+    fragments = build_fragments(artifacts)
 
     store = EventStore(_resolve_db_path())
     store.initialize()
-    store.record(event, artifacts)
+    store.record(event, artifacts, fragments)
     return 0
 
 

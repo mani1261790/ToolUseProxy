@@ -1,0 +1,243 @@
+# 情報流追跡の設計指針
+
+この文書は、ToolUseProxy の第1段階である「情報流を追跡可能にする」ための設計方針をまとめたものです。
+
+## 結論
+
+protected source と全 tool I/O を毎回直接比較するだけでは、多段の情報流は追跡できません。
+
+たとえば、次の流れを考えます。
+
+```text
+.env
+  -> tool output
+  -> xx.md
+  -> search query
+```
+
+`.env` と search query が十分に似ていなければ、直接比較では見逃します。一方で、それぞれの中間状態に情報が引き継がれていることを記録できれば、search query から `.env` まで経路を逆にたどれます。
+
+そのため、処理を次の2層に分けます。
+
+1. protected source とは独立に、artifact 間の情報流グラフを作る
+2. protected source をグラフ上の最初の一致箇所へ接続し、そこから lineage を伝播する
+
+source との比較は、情報流全体を判定する処理ではなく、既存グラフへ source を接続する seed 探索です。source と一致した全nodeへ直接edgeを張るのではなく、一致nodeのうち上流に別の一致nodeを持たない入口だけをseedにします。これにより、中間経路を残したままlineageを伝播できます。
+
+## 基本モデル
+
+### event
+
+Hook が1回発火した記録です。時系列、session、turn、tool、phase を保持します。
+
+各 event には `sequence_no` を付けます。時刻文字列だけでは同時刻の event を安定して並べられないため、情報流の前後関係にはこの連番を使います。
+
+### artifact
+
+Hook payload から取り出した tool input または tool output 全体です。raw payload を後から再解析するための保存単位です。
+
+### artifact fragment
+
+artifact 内で、実際に比較する文字列です。
+
+たとえば tool input が次のJSONだった場合、
+
+```json
+{
+  "path": "private.py",
+  "query": "独自アルゴリズムの閾値は0.73"
+}
+```
+
+artifact 全体だけでなく、次の fragment を作ります。
+
+```text
+/       -> tool_input全体
+/path   -> path
+/query  -> query
+```
+
+これにより、path、query、command、content、stdout など、役割の違う値を分けて比較できます。
+
+### source chunk
+
+`protected_sources.json` で指定した保護対象ファイルを、比較可能な単位へ分割したものです。
+
+- Python: 関数・class単位
+- Markdownやテキスト: 段落単位
+
+### edge
+
+情報がどの node からどの node へ伝わった可能性があるかを表します。
+
+現在は次の relation を使用します。
+
+- `same_content`
+  - 同じ tool call の Pre/Post に同じ入力が現れた
+- `derived_from`
+  - exact または substring により、内容の伝播を強く確認できた
+- `similar_to`
+  - shingle Jaccard により、内容が近いと推定された
+- `source_binding`
+  - protected source chunk が artifact fragment と一致した
+- `read_from`
+  - resource versionからtool outputが読み出された
+- `written_to`
+  - tool inputのcontentがresource versionへ書き込まれた
+
+## 観測事実と推定を分ける
+
+すべての edge を同じ強さで扱ってはいけません。
+
+```text
+structured
+content_exact
+content_lexical
+content_semantic
+```
+
+- `structured`
+  - tool_use_id、phase、role、Filesystem adapterなど構造上の対応から得た証拠
+- `content_exact`
+  - hash完全一致
+- `content_lexical`
+  - substring、n-gram、shingleなど文字列上の近さ
+- `content_semantic`
+  - embeddingなど意味上の近さ
+
+単に時系列で近いだけのartifactは、比較候補にはできますが、情報流edgeにはしません。
+
+## artifact 間グラフ
+
+artifact 間グラフは protected source の設定と無関係に作ります。
+
+比較対象は次の条件で絞ります。
+
+- 同じ session に属する
+- source側の `sequence_no` が destination側より小さい
+- 同じartifact内ではない
+- text hashが一致する
+- 5-gramを共有し、候補上位に入る
+
+現在は、次の順に比較します。
+
+1. exact hash
+2. substring
+3. 5-gram Jaccard
+4. embedding cosineは将来の拡張点
+
+全artifactの総当たりではなく、hash indexとshingle inverted indexから候補を作ります。
+
+## source binding
+
+protected source は、artifactグラフ完成後に接続します。
+
+```text
+source chunk
+  -> exact / substring / shingle
+  -> artifact fragment
+  -> 既存artifact graphを伝播
+```
+
+この構造により、後からsourceを追加してもartifact間比較をやり直す必要がありません。追加sourceとartifact fragmentのseed探索、およびlineageの再計算だけを行います。
+
+seed探索も全artifactとの総当たりにはせず、text hashと5-gram inverted indexから候補を取得します。
+
+ただし、sourceを後から追加した時点でファイル内容が既に変わっており、過去内容もログに残っていない場合、当時のsource内容は復元できません。将来的にはGit blob、read結果、暗号化snapshotなどからresource versionを保持する必要があります。
+
+## lineage の伝播
+
+source bindingを起点に、edge scoreの積を経路scoreとして伝播します。
+
+```text
+path_score =
+  source_binding_score
+  * edge_1_score
+  * edge_2_score
+  * ...
+```
+
+各source chunkとnodeの組み合わせについて、最もscoreが高い経路だけを `lineage_assignments` に保存します。
+
+これにより、次のような分岐も別々の経路として保持できます。
+
+```text
+.env
+├── xx.md
+│   └── search A
+└── yy.md
+    └── search B
+```
+
+search Aとsearch Bのどちらから逆向きにたどっても、同じsource chunkへ到達できます。
+
+## DB構造
+
+主なテーブルは次の通りです。
+
+- `events`
+  - Hook eventの時系列記録
+- `artifacts`
+  - tool input / output全体
+- `artifact_fragments`
+  - 比較用に分割した文字列
+- `information_flow_edges`
+  - source非依存のartifact間・resource間グラフ
+- `resource_versions`
+  - Filesystem adapterが再構成したファイルversion
+- `protected_sources`
+  - 保護対象の設定
+- `source_chunks`
+  - sourceの比較単位
+- `analysis_runs`
+  - source設定と解析条件ごとの実行記録
+- `source_binding_edges`
+  - source chunkからartifact fragmentへの接続
+- `lineage_assignments`
+  - sourceから各nodeへの最良経路
+- `analysis_state`
+  - artifactグラフのfingerprintとdetector version
+
+既存の `flow_edges` は初期実装との互換性のため残していますが、新しい解析では使用しません。
+
+## 再解析
+
+次のコマンドでグラフとlineageを構築します。
+
+```bash
+python3 scripts/rebuild_lineage.py
+```
+
+artifact集合とdetector versionが変わっていなければ、artifact間グラフは再利用されます。protected sourceだけを変更した場合は、source bindingとlineageのみ再計算します。
+
+比較アルゴリズムを変更した場合など、artifact間グラフを強制的に作り直すには次を使います。
+
+```bash
+python3 scripts/rebuild_lineage.py --rebuild-graph
+```
+
+## 現時点の制限
+
+現在の実装は、Hook I/Oの文字列類似度に加え、Filesystem adapterからread/writeのstructured edgeを作るMVPです。
+
+まだ次は実装していません。
+
+- Bash commandの構文解析
+- SearchとMCPのtool adapter
+- user promptと最終回答のnode化
+- embedding backend
+- resource versionとsource snapshot
+- sink判定と漏えい検知
+- warn、redact、block
+
+特に、モデル内部で行われた要約や言い換えは直接観測できません。現段階では前後artifactの類似度から推定します。将来的にはembedding、コード特徴量、tool固有adapterを比較し、推定精度を評価します。
+
+## 次の実装順序
+
+1. 実際のCodex Hook payloadを蓄積し、Filesystem adapterのtool名とkeyを調整する
+2. Search adapterを追加する
+3. Bash adapterを追加する
+4. lineageをCLIまたはGraphvizで可視化する
+5. 正常・危険シナリオでedge精度を評価する
+6. embeddingとコード向け特徴量を追加して比較する
+7. 情報流が十分追跡できてから、第2段階の漏えい検知へ進む

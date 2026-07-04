@@ -5,7 +5,8 @@ import json
 from typing import Any
 
 from hook_monitor.runtime.ids import make_artifact_id, make_event_id
-from hook_monitor.runtime.models import ArtifactRecord, NormalizedEvent
+from hook_monitor.runtime.fragments import build_artifact_fragments
+from hook_monitor.runtime.models import ArtifactFragment, ArtifactRecord, NormalizedEvent
 from hook_monitor.runtime.normalize import estimate_token_count, normalize_text, stringify_content
 
 
@@ -61,6 +62,14 @@ def build_artifacts(event: NormalizedEvent) -> list[ArtifactRecord]:
             )
         )
     return artifacts
+
+
+def build_fragments(artifacts: list[ArtifactRecord]) -> list[ArtifactFragment]:
+    return [
+        fragment
+        for artifact in artifacts
+        for fragment in build_artifact_fragments(artifact)
+    ]
 
 
 def _artifact_fields_for_phase(phase: str) -> list[tuple[str, str]]:
