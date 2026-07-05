@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sqlite3
 import subprocess
 import sys
@@ -22,6 +23,7 @@ from hook_monitor.policy.codex_output import render_codex_hook_output, select_st
 from hook_monitor.policy.engine import evaluate_policy
 from hook_monitor.policy.models import PolicyDecision
 from hook_monitor.runtime.parser import build_artifacts, build_fragments, normalize_event
+from hook_monitor.runtime.stop_policy import evaluate_stop_hook_policy
 from hook_monitor.runtime.models import ProtectedSource, SourceChunk
 from hook_monitor.runtime.storage import EventStore
 
@@ -1173,6 +1175,10 @@ class InformationFlowTest(unittest.TestCase):
         stop_output = render_codex_hook_output(final_answer, "Stop")
         self.assertEqual("block", stop_output["decision"])
         self.assertIn("reason", stop_output)
+        self.assertIn("Protected source content appears in the final answer", stop_output["reason"])
+        self.assertIn("Trace: python3 scripts/trace_lineage.py", stop_output["reason"])
+        self.assertIn("Source: source_chunk:private-source:0", stop_output["reason"])
+        self.assertIn("Sink: final_answer", stop_output["reason"])
 
         final_warning = self._policy_decision(
             action="warn",
@@ -1285,6 +1291,181 @@ class InformationFlowTest(unittest.TestCase):
         payload = json.loads(result.stdout)
         self.assertEqual("block", payload["decision"])
         self.assertIn("reason", payload)
+        self.assertIn("Protected source content appears in the final answer", payload["reason"])
+        self.assertIn(f"Trace: python3 scripts/trace_lineage.py --db {self.db_path}", payload["reason"])
+        self.assertNotIn(SECRET, payload["reason"])
+
+    def test_stop_hook_returns_continue_review_for_final_answer_leak(self) -> None:
+        self._record(
+            "post_tool_use",
+            "read-1",
+            "Read",
+            tool_input={"path": "private.py"},
+            tool_response={"content": SECRET},
+        )
+        self.store.upsert_sources(
+            [self._protected_source("private.py")],
+            [self._source_chunk()],
+        )
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(REPO_ROOT / "hooks" / "monitor_stop.py"),
+            ],
+            input=json.dumps(
+                {
+                    "session_id": "session-1",
+                    "turn_id": "turn-1",
+                    "final_answer": f"The answer includes {SECRET}.",
+                }
+            ),
+            cwd=REPO_ROOT,
+            env={
+                **os.environ,
+                "TOOLUSEPROXY_DB_PATH": str(self.db_path),
+            },
+            check=True,
+            text=True,
+            capture_output=True,
+        )
+        payload = json.loads(result.stdout)
+
+        self.assertEqual("block", payload["decision"])
+        self.assertIn("Protected source content appears in the final answer", payload["reason"])
+        self.assertIn(f"Trace: python3 scripts/trace_lineage.py --db {self.db_path}", payload["reason"])
+        self.assertNotIn(SECRET, payload["reason"])
+        self.assertEqual(1, len(self.store.list_analysis_runs()))
+
+    def test_stop_hook_only_evaluates_current_final_answer(self) -> None:
+        self._record(
+            "post_tool_use",
+            "read-1",
+            "Read",
+            tool_input={"path": "private.py"},
+            tool_response={"content": SECRET},
+        )
+        self.store.upsert_sources(
+            [self._protected_source("private.py")],
+            [self._source_chunk()],
+        )
+        env = {
+            **os.environ,
+            "TOOLUSEPROXY_DB_PATH": str(self.db_path),
+        }
+
+        leaked = subprocess.run(
+            [
+                sys.executable,
+                str(REPO_ROOT / "hooks" / "monitor_stop.py"),
+            ],
+            input=json.dumps(
+                {
+                    "session_id": "session-1",
+                    "turn_id": "turn-1",
+                    "final_answer": f"The answer includes {SECRET}.",
+                }
+            ),
+            cwd=REPO_ROOT,
+            env=env,
+            check=True,
+            text=True,
+            capture_output=True,
+        )
+        clean = subprocess.run(
+            [
+                sys.executable,
+                str(REPO_ROOT / "hooks" / "monitor_stop.py"),
+            ],
+            input=json.dumps(
+                {
+                    "session_id": "session-1",
+                    "turn_id": "turn-2",
+                    "final_answer": "The answer only includes public information.",
+                }
+            ),
+            cwd=REPO_ROOT,
+            env=env,
+            check=True,
+            text=True,
+            capture_output=True,
+        )
+
+        self.assertEqual("block", json.loads(leaked.stdout)["decision"])
+        self.assertEqual("", clean.stdout)
+
+    def test_stop_hook_policy_can_be_disabled(self) -> None:
+        self._record(
+            "post_tool_use",
+            "read-1",
+            "Read",
+            tool_input={"path": "private.py"},
+            tool_response={"content": SECRET},
+        )
+        self.store.upsert_sources(
+            [self._protected_source("private.py")],
+            [self._source_chunk()],
+        )
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(REPO_ROOT / "hooks" / "monitor_stop.py"),
+            ],
+            input=json.dumps(
+                {
+                    "session_id": "session-1",
+                    "turn_id": "turn-1",
+                    "final_answer": f"The answer includes {SECRET}.",
+                }
+            ),
+            cwd=REPO_ROOT,
+            env={
+                **os.environ,
+                "TOOLUSEPROXY_DB_PATH": str(self.db_path),
+                "TOOLUSEPROXY_STOP_POLICY": "0",
+            },
+            check=True,
+            text=True,
+            capture_output=True,
+        )
+
+        self.assertEqual("", result.stdout)
+
+    def test_stop_policy_empty_source_config_does_not_fallback_to_db_sources(self) -> None:
+        self._record(
+            "post_tool_use",
+            "read-1",
+            "Read",
+            tool_input={"path": "private.py"},
+            tool_response={"content": SECRET},
+        )
+        self.store.upsert_sources(
+            [self._protected_source("private.py")],
+            [self._source_chunk()],
+        )
+        event = normalize_event(
+            "stop",
+            {
+                "session_id": "session-1",
+                "turn_id": "turn-1",
+                "final_answer": f"The answer includes {SECRET}.",
+            },
+        )
+        artifacts = build_artifacts(event)
+        self.store.record(event, artifacts, build_fragments(artifacts))
+        Path(self.temporary_directory.name, "protected_sources.json").write_text(
+            '{"sources": []}',
+            encoding="utf-8",
+        )
+
+        output = evaluate_stop_hook_policy(
+            self.store,
+            Path(self.temporary_directory.name),
+            current_event_id=event.event_id,
+        )
+
+        self.assertEqual({}, output)
 
     def _record(
         self,

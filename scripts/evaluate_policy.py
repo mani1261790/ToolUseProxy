@@ -54,7 +54,17 @@ def main() -> int:
     decisions = evaluate_policy(findings)
     if args.hook_output:
         selected = select_strongest_decision(decisions, args.hook_output)
-        print(json.dumps(render_codex_hook_output(selected, args.hook_output), ensure_ascii=False, indent=2))
+        print(
+            json.dumps(
+                render_codex_hook_output(
+                    selected,
+                    args.hook_output,
+                    db_path=args.db,
+                ),
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
         return 0
 
     if args.format == "json":

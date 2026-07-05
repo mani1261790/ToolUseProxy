@@ -147,11 +147,30 @@ Codex の `PreToolUse` では `permissionDecision: "ask"` は現在の安定し�
 
 `Stop` の `decision: "block"` は最終応答を単純に拒否するものではなく、Codexに追加ターンを継続させる動きです。そのため、最終応答の漏えい候補は `continue_review` として扱います。
 
-現在は `hook_monitor/policy/codex_output.py` で、`PolicyDecision` を Codex Hook の stdout JSON へ変換します。
+現在は `hook_monitor/policy/codex_output.py` で、`PolicyDecision` を Codex Hook の stdout JSON へ変換します。Hookに返す文面は、`hook_monitor/policy/explanation.py` の `PolicyExplanation` で組み立てます。
 
 ```python
 select_strongest_decision(decisions, "PreToolUse")
 render_codex_hook_output(decision, "PreToolUse")
+```
+
+`PolicyExplanation` は、判断そのものではなく人間に見せる説明です。説明には次を含めます。
+
+- 何が起きたか
+- source node
+- sink type
+- score / severity
+- `trace_lineage.py` で根拠経路を確認する command
+- 次にどう直すべきか
+
+説明には raw artifact text、protected source text、tool input の生値、final answer の生値は含めません。Hook stdout は漏えいを止めるための出力なので、説明自体が再漏えい経路にならないようにします。
+
+Stop hook の `reason` は、たとえば次のようになります。
+
+```text
+Protected source content appears in the final answer. Revise the final answer to remove protected details, then continue.
+Source: source_chunk:private-source:0; Sink: final_answer; Score: 0.97; Severity: critical
+Trace: python3 scripts/trace_lineage.py --db .tooluseproxy/events.db --node sink_candidate:<id>
 ```
 
 複数decisionがある場合は、次の優先順で最も強いdecisionを選びます。
@@ -221,15 +240,21 @@ JSON output:
 
 - `hook_monitor/policy/models.py`
 - `hook_monitor/policy/engine.py`
+- `hook_monitor/policy/codex_output.py`
+- `hook_monitor/policy/explanation.py`
+- `hook_monitor/runtime/stop_policy.py`
 - `scripts/evaluate_policy.py`
 - `LeakFinding` から `PolicyDecision` への変換
+- `PolicyDecision` から `PolicyExplanation` への説明生成
+- `Stop` hook から `final_answer` の `continue_review` を返す最小接続
+- Stop hook では現在の `Stop` event 由来の `final_answer` sink だけを判断対象にする
 - text / JSON output
 - policy decision のテスト
 
 次に実装すること:
 
-1. Hook runtime から `codex_output.py` を呼び出す
-2. `PreToolUse` / `PermissionRequest` / `Stop` の実Hookで動作確認する
+1. `PreToolUse` / `PermissionRequest` の実Hookで動作確認する
+2. Stop hook 内の再解析を差分化する
 3. redact用のtool別 `updatedInput` 生成を設計する
 
 ## 完了条件
@@ -240,6 +265,9 @@ JSON output:
 - `block` 判断の根拠を `trace_lineage.py` で確認できる
 - Codex Hookへ接続する前にofflineで誤判定を評価できる
 - `PolicyDecision` をCodex Hook stdout JSONへ変換できる
+- `Stop` hook が final answer sink の critical finding を `decision: block` として返せる
+- Hook reason が source / sink / score / severity / trace command を含む
+- Hook reason に raw protected text を含めない
 
 ## 非対象
 
@@ -248,6 +276,7 @@ JSON output:
 - policy rule の設定ファイル化
 - finding DB table への保存
 - policy decision DB table への保存
-- 実行時hook内での重い再解析
+- `PreToolUse` 実Hookでの遮断
+- 実行時hook内での外部APIやembeddingを使う重い再解析
 - Bash / MCP / apply_patch の安全なredact実装
 - ユーザー確認UIの再実装

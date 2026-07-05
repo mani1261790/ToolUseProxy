@@ -95,7 +95,9 @@ Codex Hooks の設定と、そこから呼び出される監視プログラム�
 - `hooks/monitor_post_tool.py`
 - `hooks/monitor_stop.py`
 
-いずれも stdin のHook payloadを受け取り、event、artifact、artifact fragmentをローカルSQLiteへ記録します。漏えい判定や遮断は行いません。
+いずれも stdin のHook payloadを受け取り、event、artifact、artifact fragmentをローカルSQLiteへ記録します。
+
+`PreToolUse` と `PostToolUse` は、現時点では記録だけを行います。`Stop` は最初の実Hook接続として、記録直後に最終応答の `final_answer` sink を評価し、critical な漏えい候補があれば Codex Hook stdout JSON を返します。
 
 ## 使い方
 
@@ -105,7 +107,7 @@ Codex の GUI か設定ファイルで、次の command を指定します。
 - `PostToolUse` -> `python3 /Users/mani/Developer/ToolUseProxy/hooks/monitor_post_tool.py`
 - `Stop` -> `python3 /Users/mani/Developer/ToolUseProxy/hooks/monitor_stop.py`
 
-この段階の目的は、hook から I/O を受け取り、後から情報流を再解析できる観測ログを残すことです。
+この段階の目的は、hook から I/O を受け取り、後から情報流を再解析できる観測ログを残すことです。加えて `Stop` では、最終応答をユーザーへ出す直前の確認点として `continue_review` を返す最小接続を行います。
 
 ## 実装構造
 
@@ -128,6 +130,7 @@ hook_monitor/
     storage.py
     source_config.py
     runner.py
+    stop_policy.py
   analysis/
     adapters/
       base.py
@@ -167,6 +170,7 @@ hook_monitor/
 4. `hook_monitor/runtime/parser.py` が event を内部形式に正規化する
 5. `hook_monitor/runtime/parser.py` が `tool_input` / `tool_response` / `final_answer` から artifact を作る
 6. `hook_monitor/runtime/storage.py` が SQLite に保存する
+7. `Stop` の場合だけ、`hook_monitor/runtime/stop_policy.py` がローカルDBを再解析し、`final_answer` の判断を stdout JSON に変換する
 
 短く書くと、こうです。
 
@@ -177,6 +181,37 @@ Codex
   -> hook_monitor/runtime/parser.py
   -> hook_monitor/runtime/storage.py
   -> .tooluseproxy/events.db
+  -> Stopのみ: hook_monitor/runtime/stop_policy.py
+```
+
+## Stop hook の policy 接続
+
+`Stop` hookでは、最終応答をまず通常のeventとして保存し、その後に同じSQLite DBから次の処理を実行します。判断対象にするのは、今回の `Stop` event から作られた `final_answer` sink だけです。過去の最終応答に漏えい候補が残っていても、現在の最終応答がcleanなら block しません。
+
+```text
+Stop payload
+  -> final_answer artifact
+  -> codex_final_answer adapter
+  -> sink_candidate(final_answer)
+  -> lineage propagation
+  -> LeakFinding
+  -> PolicyDecision(continue_review)
+  -> PolicyExplanation
+  -> Codex Hook stdout JSON
+```
+
+初期実装では `final_answer` だけを対象にし、`PreToolUse` の `permissionDecision: deny` にはまだ接続しません。Codex Hook の未サポートな `permissionDecision: ask` にも依存しません。
+
+この処理は `Stop` 実行中に、現在のローカルDB全体を使って adapter、情報流グラフ、source binding、lineage を再計算します。これは軽量な記録処理より重い処理です。ただし初期実装では、外部APIやembeddingを呼ばず、SQLite上の既存eventと `protected_sources.json` だけを使う同期処理に限定します。実運用でDBが大きくなる場合は、事前にoffline再解析済みのgraphへ差分接続する方式へ移します。
+
+source設定は、`protected_sources.json` が存在する場合はその内容を優先します。空の `sources` は「保護対象なし」として扱い、DBに古いsource定義が残っていてもfallbackしません。`protected_sources.json` が存在しない場合だけ、既存DBのsource定義へfallbackします。
+
+Stop hook が返す `reason` は、source、sink、score、severity、trace command、次の修正指示を含む短い説明です。説明には raw protected text や final answer の本文は含めません。
+
+Stop policy 接続は環境変数で無効化できます。
+
+```bash
+TOOLUSEPROXY_STOP_POLICY=0 python3 /Users/mani/Developer/ToolUseProxy/hooks/monitor_stop.py
 ```
 
 ## 各ファイルの役割
@@ -189,7 +224,7 @@ Codex
   - `run_hook("post_tool_use")` を呼ぶだけです
 - `hooks/monitor_stop.py`
   - `Stop` 用の薄い entrypoint です
-  - `run_hook("stop")` を呼ぶだけです
+  - `run_hook("stop")` を呼び、記録後に `final_answer` の policy 評価を実行します
 - `hook_monitor/runtime/models.py`
   - 内部で扱う「記録の型」を定義します
   - `NormalizedEvent` は event 用です
