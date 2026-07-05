@@ -22,7 +22,7 @@ from hook_monitor.runtime.fragments import build_artifact_fragments
 from hook_monitor.runtime.storage import DEFAULT_DB_PATH, EventStore
 
 
-DETECTOR_VERSION = "artifact-graph-v2-filesystem-adapter"
+DETECTOR_VERSION = "artifact-graph-v5-final-answer-adapter"
 GRAPH_FINGERPRINT_KEY = "artifact_graph_fingerprint"
 GRAPH_VERSION_KEY = "artifact_graph_detector_version"
 
@@ -43,6 +43,7 @@ def main() -> int:
     contexts = store.list_artifact_contexts()
     adapter_result = run_adapters(contexts, REPO_ROOT)
     store.replace_resource_versions(list(adapter_result.resources))
+    store.replace_sink_candidates(list(adapter_result.sinks))
 
     graph_fingerprint = _graph_fingerprint(contexts)
     graph_is_stale = (
@@ -99,6 +100,7 @@ def main() -> int:
                 f"artifact_edges={len(artifact_edges)}",
                 f"adapter_edges={len(adapter_result.edges)}",
                 f"resource_versions={len(adapter_result.resources)}",
+                f"sink_candidates={len(adapter_result.sinks)}",
                 f"sources={len(sources)}",
                 f"source_chunks={len(chunks)}",
                 f"source_bindings={len(source_edges)}",

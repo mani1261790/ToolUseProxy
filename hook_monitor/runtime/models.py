@@ -88,6 +88,18 @@ class ResourceVersion:
 
 
 @dataclass(frozen=True)
+class SinkCandidate:
+    node_id: str
+    sink_type: str
+    label: str
+    tool_name: str | None
+    tool_use_id: str | None
+    session_id: str | None
+    sequence_no: int
+    metadata: dict[str, object]
+
+
+@dataclass(frozen=True)
 class FlowEdge:
     edge_id: str
     src_node_kind: str
@@ -111,3 +123,12 @@ class LineageAssignment:
     best_path_score: float
     predecessor_edge_id: str | None
     hop_count: int
+
+
+@dataclass(frozen=True)
+class AnalysisRun:
+    analysis_run_id: str
+    detector_version: str
+    config_json: str
+    started_at: str
+    completed_at: str | None

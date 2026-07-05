@@ -4,13 +4,19 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
-from hook_monitor.runtime.models import ArtifactContext, FlowEdge, ResourceVersion
+from hook_monitor.runtime.models import (
+    ArtifactContext,
+    FlowEdge,
+    ResourceVersion,
+    SinkCandidate,
+)
 
 
 @dataclass(frozen=True)
 class AdapterResult:
     edges: tuple[FlowEdge, ...]
     resources: tuple[ResourceVersion, ...]
+    sinks: tuple[SinkCandidate, ...] = ()
 
 
 class ToolAdapter(Protocol):

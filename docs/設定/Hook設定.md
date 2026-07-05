@@ -1,6 +1,6 @@
 # Hook Setup
 
-このリポジトリには、Codex の `PreToolUse` / `PostToolUse` に接続するための最小スクリプトだけを置いています。
+このリポジトリには、Codex の `PreToolUse` / `PostToolUse` / `Stop` に接続するための最小スクリプトを置いています。
 
 ## 参考
 
@@ -70,20 +70,32 @@ Codex Hooks の設定と、そこから呼び出される監視プログラム�
           }
         ]
       }
+    ],
+    "Stop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 /Users/mani/Developer/ToolUseProxy/hooks/monitor_stop.py"
+          }
+        ]
+      }
     ]
   }
 }
 ```
 
-`PreToolUse` や `PostToolUse` は Codex が用意している既存イベントです。
-このリポジトリで実装するのは、そこから呼び出される `monitor_pre_tool.py` と `monitor_post_tool.py` の中身です。
+`PreToolUse`、`PostToolUse`、`Stop` は Codex が用意している既存イベントです。
+このリポジトリで実装するのは、そこから呼び出される `monitor_pre_tool.py`、`monitor_post_tool.py`、`monitor_stop.py` の中身です。
 
 ## 置いてあるもの
 
 - `hooks/monitor_pre_tool.py`
 - `hooks/monitor_post_tool.py`
+- `hooks/monitor_stop.py`
 
-どちらも stdin のHook payloadを受け取り、event、artifact、artifact fragmentをローカルSQLiteへ記録します。漏えい判定や遮断は行いません。
+いずれも stdin のHook payloadを受け取り、event、artifact、artifact fragmentをローカルSQLiteへ記録します。漏えい判定や遮断は行いません。
 
 ## 使い方
 
@@ -91,6 +103,7 @@ Codex の GUI か設定ファイルで、次の command を指定します。
 
 - `PreToolUse` -> `python3 /Users/mani/Developer/ToolUseProxy/hooks/monitor_pre_tool.py`
 - `PostToolUse` -> `python3 /Users/mani/Developer/ToolUseProxy/hooks/monitor_post_tool.py`
+- `Stop` -> `python3 /Users/mani/Developer/ToolUseProxy/hooks/monitor_stop.py`
 
 この段階の目的は、hook から I/O を受け取り、後から情報流を再解析できる観測ログを残すことです。
 
@@ -103,6 +116,7 @@ Codex の GUI か設定ファイルで、次の command を指定します。
 hooks/
   monitor_pre_tool.py
   monitor_post_tool.py
+  monitor_stop.py
 
 hook_monitor/
   runtime/
@@ -147,18 +161,18 @@ hook_monitor/
 
 処理の流れは次の通りです。
 
-1. `monitor_pre_tool.py` / `monitor_post_tool.py` が hook の stdin を受ける
+1. `monitor_pre_tool.py` / `monitor_post_tool.py` / `monitor_stop.py` が hook の stdin を受ける
 2. `hook_monitor/runtime/runner.py` が共通処理を呼ぶ
 3. `hook_monitor/runtime/parser.py` が JSON payload を読む
 4. `hook_monitor/runtime/parser.py` が event を内部形式に正規化する
-5. `hook_monitor/runtime/parser.py` が `tool_input` / `tool_response` から artifact を作る
+5. `hook_monitor/runtime/parser.py` が `tool_input` / `tool_response` / `final_answer` から artifact を作る
 6. `hook_monitor/runtime/storage.py` が SQLite に保存する
 
 短く書くと、こうです。
 
 ```text
 Codex
-  -> hooks/monitor_pre_tool.py or hooks/monitor_post_tool.py
+  -> hooks/monitor_pre_tool.py or hooks/monitor_post_tool.py or hooks/monitor_stop.py
   -> hook_monitor/runtime/runner.py
   -> hook_monitor/runtime/parser.py
   -> hook_monitor/runtime/storage.py
@@ -173,6 +187,9 @@ Codex
 - `hooks/monitor_post_tool.py`
   - `PostToolUse` 用の薄い entrypoint です
   - `run_hook("post_tool_use")` を呼ぶだけです
+- `hooks/monitor_stop.py`
+  - `Stop` 用の薄い entrypoint です
+  - `run_hook("stop")` を呼ぶだけです
 - `hook_monitor/runtime/models.py`
   - 内部で扱う「記録の型」を定義します
   - `NormalizedEvent` は event 用です
@@ -192,7 +209,7 @@ Codex
 - `hook_monitor/runtime/parser.py`
   - stdin から来た JSON payload を解釈します
   - `normalize_event()` が hook payload を event に変換します
-  - `build_artifacts()` が phase ごとに `tool_input` / `tool_response` を抽出します
+  - `build_artifacts()` が phase ごとに `tool_input` / `tool_response` / `final_answer` を抽出します
 - `hook_monitor/runtime/fragments.py`
   - artifact全体とJSON内の値を比較用fragmentへ分割します
   - `query`、`path`、`content`、`stdout`などのsemantic roleを付けます
@@ -212,8 +229,8 @@ Codex
   - `.py` は関数や class 単位、テキストは段落単位で分割します
 - `hook_monitor/analysis/adapters/`
   - tool固有のJSONを共通のresourceとedgeへ変換します
-  - 現在はFilesystem read/writeに対応しています
-  - 詳細は [adapters.md](adapters.md) にまとめています
+  - Filesystem read/write、Search、Bash、MCP、Codex最終応答に対応しています
+  - 詳細は [アダプター.md](../設計/アダプター.md) にまとめています
 - `hook_monitor/analysis/similarity.py`
   - 任意の2つの文字列の比較を担当します
   - `exact -> substring -> shingle_jaccard -> embedding_cosine` の順で評価します
@@ -339,7 +356,7 @@ embedding を使って自然言語をベクトル化し、cos 類似度を取る
 4. source chunkをartifactグラフへ接続する
 5. sourceからのlineageを計算する
 
-詳細な設計は [information-flow-design.md](information-flow-design.md) にまとめています。
+詳細な設計は [情報流追跡.md](../設計/情報流追跡.md) にまとめています。
 
 ## なぜ分けているか
 

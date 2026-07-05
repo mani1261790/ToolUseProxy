@@ -77,6 +77,13 @@ def _artifact_fields_for_phase(phase: str) -> list[tuple[str, str]]:
         return [("tool_input", "tool_input")]
     if phase == "post_tool_use":
         return [("tool_input", "tool_input"), ("tool_output", "tool_response")]
+    if phase == "stop":
+        return [
+            ("final_answer", "final_answer"),
+            ("final_answer", "response"),
+            ("final_answer", "assistant_response"),
+            ("final_answer", "message"),
+        ]
     return []
 
 

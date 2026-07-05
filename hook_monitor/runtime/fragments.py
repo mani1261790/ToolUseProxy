@@ -50,11 +50,14 @@ def _walk_scalar_values(value: Any, pointer: str = "") -> list[tuple[str, str, A
 
 
 def _semantic_role(artifact_role: str, key: str) -> str:
+    if artifact_role == "final_answer":
+        return "final_answer"
     lowered = key.lower()
     role_by_key = {
         "command": "command",
         "cmd": "command",
         "query": "query",
+        "search_query": "search_query",
         "path": "path",
         "file_path": "path",
         "filepath": "path",
@@ -62,10 +65,21 @@ def _semantic_role(artifact_role: str, key: str) -> str:
         "contents": "content",
         "data": "content",
         "text": "content",
+        "message": "content",
+        "body": "content",
+        "description": "content",
+        "comment": "content",
+        "title": "content",
         "stdout": "stdout",
         "stderr": "stderr",
         "output": "tool_output",
         "response": "tool_output",
+        "server": "server",
+        "server_name": "server",
+        "mcp_server": "server",
+        "tool": "tool",
+        "tool_name": "tool",
+        "mcp_tool": "tool",
     }
     return role_by_key.get(lowered, artifact_role)
 

@@ -58,13 +58,18 @@ API キーや認証情報のように文字列パターンで判別しやすい�
 
 ## 現在地
 
-現在は第1段階です。Codex の `PreToolUse` / `PostToolUse` Hooks から event と artifact を SQLite に記録し、artifact fragment 間の類似関係から source 非依存の情報流グラフを構築する実装を進めています。漏えい検知と遮断はまだ行いません。
+現在は第2段階の漏えい検知を拡張し、外部tool送信とCodex最終応答をgraph上の出口として扱い、findingをpolicy判断とCodex Hook出力previewへ変換するところまで進んでいます。Codex の `PreToolUse` / `PostToolUse` / `Stop` Hooks から event と artifact を SQLite に記録し、artifact fragment 間の類似関係と adapter が作る structured edge から情報流グラフを構築します。`scripts/detect_leaks.py` は、source lineage が `external_*` の `sink_candidate` に到達した場合に finding を出力します。`scripts/evaluate_policy.py` は、findingを `allow` / `warn` / `block` / `continue_review` の判断へ変換し、`--hook-output` でCodex Hook stdout JSONをpreviewできます。実Hookでの遮断はまだ行いません。
 
-Hook の構成と接続方法は [docs/hook-setup.md](docs/hook-setup.md) にまとめています。
-情報流グラフと lineage の設計は [docs/information-flow-design.md](docs/information-flow-design.md) にまとめています。
-tool固有のI/Oを共通グラフへ変換するadapterは [docs/adapters.md](docs/adapters.md) にまとめています。
-関連文献の整理は [docs/literature-review.md](docs/literature-review.md) にまとめています。
-次に実装するタスクは [docs/implementation-tasks.md](docs/implementation-tasks.md) にまとめています。
+Hook の構成と接続方法は [docs/設定/Hook設定.md](docs/設定/Hook設定.md) にまとめています。
+ドキュメント全体の索引は [docs/索引.md](docs/索引.md) にまとめています。
+情報流グラフと lineage の設計は [docs/設計/情報流追跡.md](docs/設計/情報流追跡.md) にまとめています。
+tool固有のI/Oを共通グラフへ変換するadapterは [docs/設計/アダプター.md](docs/設計/アダプター.md) にまとめています。
+外部流出候補を表す SinkCandidate と adapter の関係は [docs/設計/外部流出候補.md](docs/設計/外部流出候補.md) にまとめています。
+情報流から漏えい候補を検知する設計とCLIは [docs/設計/漏えい検知.md](docs/設計/漏えい検知.md) にまとめています。
+検知結果を実行判断へ変換するpolicy判断は [docs/設計/Policy判断.md](docs/設計/Policy判断.md) にまとめています。
+情報流グラフの経路確認とMermaid/DOT出力は [docs/設計/可視化.md](docs/設計/可視化.md) にまとめています。
+関連文献の整理は [docs/調査/関連文献.md](docs/調査/関連文献.md) にまとめています。
+次に実装するタスクは [docs/運用/実装タスク.md](docs/運用/実装タスク.md) にまとめています。
 
 ## 進捗管理
 
@@ -72,8 +77,8 @@ tool固有のI/Oを共通グラフへ変換するadapterは [docs/adapters.md](d
 
 - [研究Project](https://github.com/users/mani1261790/projects/1)
 - [週次進捗報告](https://github.com/mani1261790/ToolUseProxy/issues?q=label%3Aweekly-report)
-- [進捗管理の運用方法](docs/project-management.md)
-- [実装タスク計画](docs/implementation-tasks.md)
+- [進捗管理の運用方法](docs/運用/進捗管理.md)
+- [実装タスク計画](docs/運用/実装タスク.md)
 
 ## 想定する対象
 

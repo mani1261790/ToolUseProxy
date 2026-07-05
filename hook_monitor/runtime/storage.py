@@ -6,6 +6,7 @@ import uuid
 from pathlib import Path
 
 from hook_monitor.runtime.models import (
+    AnalysisRun,
     ArtifactContext,
     ArtifactFragment,
     ArtifactRecord,
@@ -14,6 +15,7 @@ from hook_monitor.runtime.models import (
     NormalizedEvent,
     ProtectedSource,
     ResourceVersion,
+    SinkCandidate,
     SourceChunk,
 )
 
@@ -184,6 +186,21 @@ class EventStore:
             )
             conn.execute(
                 """
+                CREATE TABLE IF NOT EXISTS sink_candidates (
+                    node_id TEXT PRIMARY KEY,
+                    sink_type TEXT NOT NULL,
+                    label TEXT NOT NULL,
+                    tool_name TEXT,
+                    tool_use_id TEXT,
+                    session_id TEXT,
+                    sequence_no INTEGER NOT NULL,
+                    metadata_json TEXT NOT NULL,
+                    recorded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            conn.execute(
+                """
                 CREATE TABLE IF NOT EXISTS analysis_state (
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL,
@@ -251,6 +268,18 @@ class EventStore:
             )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_resource_versions_path ON resource_versions (path)"
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_sink_candidates_type
+                ON sink_candidates (sink_type)
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_sink_candidates_session_sequence
+                ON sink_candidates (session_id, sequence_no)
+                """
             )
             self._backfill_event_sequence_numbers(conn)
 
@@ -533,6 +562,37 @@ class EventStore:
                 ],
             )
 
+    def replace_sink_candidates(self, sinks: list[SinkCandidate]) -> None:
+        with self._connect() as conn:
+            conn.execute("DELETE FROM sink_candidates")
+            conn.executemany(
+                """
+                INSERT INTO sink_candidates (
+                    node_id,
+                    sink_type,
+                    label,
+                    tool_name,
+                    tool_use_id,
+                    session_id,
+                    sequence_no,
+                    metadata_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        sink.node_id,
+                        sink.sink_type,
+                        sink.label,
+                        sink.tool_name,
+                        sink.tool_use_id,
+                        sink.session_id,
+                        sink.sequence_no,
+                        json.dumps(sink.metadata, ensure_ascii=False, sort_keys=True),
+                    )
+                    for sink in sinks
+                ],
+            )
+
     def upsert_source_binding_edges(
         self,
         analysis_run_id: str,
@@ -603,6 +663,212 @@ class EventStore:
                 method=row[7],
                 score=row[8],
                 reason=row[9],
+            )
+            for row in rows
+        ]
+
+    def list_source_binding_edges(self, analysis_run_id: str) -> list[FlowEdge]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT
+                    edge_id,
+                    src_node_kind,
+                    src_node_id,
+                    dst_node_kind,
+                    dst_node_id,
+                    relation,
+                    evidence_level,
+                    method,
+                    score,
+                    reason
+                FROM source_binding_edges
+                WHERE analysis_run_id = ?
+                """,
+                (analysis_run_id,),
+            ).fetchall()
+        return [
+            FlowEdge(
+                edge_id=row[0],
+                src_node_kind=row[1],
+                src_node_id=row[2],
+                dst_node_kind=row[3],
+                dst_node_id=row[4],
+                relation=row[5],
+                evidence_level=row[6],
+                method=row[7],
+                score=row[8],
+                reason=row[9],
+            )
+            for row in rows
+        ]
+
+    def list_analysis_runs(self) -> list[AnalysisRun]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT
+                    analysis_run_id,
+                    detector_version,
+                    config_json,
+                    started_at,
+                    completed_at
+                FROM analysis_runs
+                ORDER BY started_at DESC, rowid DESC
+                """
+            ).fetchall()
+        return [
+            AnalysisRun(
+                analysis_run_id=row[0],
+                detector_version=row[1],
+                config_json=row[2],
+                started_at=row[3],
+                completed_at=row[4],
+            )
+            for row in rows
+        ]
+
+    def list_lineage_assignments(
+        self,
+        analysis_run_id: str,
+    ) -> list[LineageAssignment]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT
+                    analysis_run_id,
+                    source_node_kind,
+                    source_node_id,
+                    node_kind,
+                    node_id,
+                    best_path_score,
+                    predecessor_edge_id,
+                    hop_count
+                FROM lineage_assignments
+                WHERE analysis_run_id = ?
+                ORDER BY source_node_kind, source_node_id, hop_count, node_kind, node_id
+                """,
+                (analysis_run_id,),
+            ).fetchall()
+        return [
+            LineageAssignment(
+                analysis_run_id=row[0],
+                source_node_kind=row[1],
+                source_node_id=row[2],
+                node_kind=row[3],
+                node_id=row[4],
+                best_path_score=row[5],
+                predecessor_edge_id=row[6],
+                hop_count=row[7],
+            )
+            for row in rows
+        ]
+
+    def list_protected_sources(self) -> list[ProtectedSource]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT source_id, path, source_type, sensitivity, policy_tags_json
+                FROM protected_sources
+                ORDER BY source_id
+                """
+            ).fetchall()
+        return [
+            ProtectedSource(
+                source_id=row[0],
+                path=row[1],
+                source_type=row[2],
+                sensitivity=row[3],
+                policy_tags=tuple(json.loads(row[4])),
+            )
+            for row in rows
+        ]
+
+    def list_source_chunks(self) -> list[SourceChunk]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT
+                    chunk_id,
+                    source_id,
+                    ordinal,
+                    text,
+                    normalized_text,
+                    text_hash,
+                    shingle_fingerprint,
+                    token_count
+                FROM source_chunks
+                ORDER BY source_id, ordinal
+                """
+            ).fetchall()
+        return [
+            SourceChunk(
+                chunk_id=row[0],
+                source_id=row[1],
+                ordinal=row[2],
+                text=row[3],
+                normalized_text=row[4],
+                text_hash=row[5],
+                shingle_fingerprint=row[6],
+                token_count=row[7],
+            )
+            for row in rows
+        ]
+
+    def list_resource_versions(self) -> list[ResourceVersion]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT
+                    node_id,
+                    path,
+                    content_hash,
+                    sequence_no,
+                    session_id,
+                    origin_tool_use_id
+                FROM resource_versions
+                ORDER BY sequence_no, path, node_id
+                """
+            ).fetchall()
+        return [
+            ResourceVersion(
+                node_id=row[0],
+                path=row[1],
+                content_hash=row[2],
+                sequence_no=row[3],
+                session_id=row[4],
+                origin_tool_use_id=row[5],
+            )
+            for row in rows
+        ]
+
+    def list_sink_candidates(self) -> list[SinkCandidate]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT
+                    node_id,
+                    sink_type,
+                    label,
+                    tool_name,
+                    tool_use_id,
+                    session_id,
+                    sequence_no,
+                    metadata_json
+                FROM sink_candidates
+                ORDER BY sequence_no, sink_type, node_id
+                """
+            ).fetchall()
+        return [
+            SinkCandidate(
+                node_id=row[0],
+                sink_type=row[1],
+                label=row[2],
+                tool_name=row[3],
+                tool_use_id=row[4],
+                session_id=row[5],
+                sequence_no=row[6],
+                metadata=json.loads(row[7]),
             )
             for row in rows
         ]
