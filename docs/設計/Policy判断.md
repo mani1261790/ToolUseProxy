@@ -173,6 +173,34 @@ Source: source_chunk:private-source:0; Sink: final_answer; Score: 0.97; Severity
 Trace: python3 scripts/trace_lineage.py --db .tooluseproxy/events.db --node sink_candidate:<id>
 ```
 
+Stop hook runtimeで `block` / `warn` / `continue_review` を返した場合は、同じ判断を `policy_decisions` tableへ保存します。これにより、Codexに返した短い説明が流れた後でも、あとからdecision idで判断を確認できます。
+
+保存する情報:
+
+- decision id / finding id / analysis run id
+- hook event / action / severity
+- source node / sink candidate
+- sink type / score
+- user message / technical summary
+- trace command
+- path summary
+
+保存しない情報:
+
+- raw artifact text
+- protected source text
+- tool input raw value
+- final answer raw value
+
+保存済みdecisionは次のCLIで確認します。
+
+```bash
+python3 scripts/list_policy_decisions.py
+python3 scripts/list_policy_decisions.py --format json
+python3 scripts/list_policy_decisions.py --decision <decision_id>
+python3 scripts/trace_lineage.py --decision <decision_id>
+```
+
 複数decisionがある場合は、次の優先順で最も強いdecisionを選びます。
 
 ```text
@@ -244,8 +272,10 @@ JSON output:
 - `hook_monitor/policy/explanation.py`
 - `hook_monitor/runtime/stop_policy.py`
 - `scripts/evaluate_policy.py`
+- `scripts/list_policy_decisions.py`
 - `LeakFinding` から `PolicyDecision` への変換
 - `PolicyDecision` から `PolicyExplanation` への説明生成
+- Stop hook が返したpolicy decisionのDB保存
 - `Stop` hook から `final_answer` の `continue_review` を返す最小接続
 - Stop hook では現在の `Stop` event 由来の `final_answer` sink だけを判断対象にする
 - text / JSON output
@@ -268,6 +298,8 @@ JSON output:
 - `Stop` hook が final answer sink の critical finding を `decision: block` として返せる
 - Hook reason が source / sink / score / severity / trace command を含む
 - Hook reason に raw protected text を含めない
+- 保存済みdecisionをCLIで一覧・単体表示できる
+- 保存済みdecisionから `trace_lineage.py` で根拠経路を確認できる
 
 ## 非対象
 

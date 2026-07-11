@@ -132,3 +132,24 @@ class AnalysisRun:
     config_json: str
     started_at: str
     completed_at: str | None
+
+
+@dataclass(frozen=True)
+class StoredPolicyDecision:
+    decision_id: str
+    finding_id: str
+    analysis_run_id: str
+    hook_event: str | None
+    action: str
+    severity: str
+    sink_type: str
+    source_node_kind: str
+    source_node_id: str
+    sink_node_id: str
+    path_score: float
+    reason: str
+    user_message: str
+    technical_summary: str
+    trace_command: str
+    path_summary: tuple[str, ...]
+    created_at: str | None = None

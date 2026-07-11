@@ -1336,6 +1336,53 @@ class InformationFlowTest(unittest.TestCase):
         self.assertIn(f"Trace: python3 scripts/trace_lineage.py --db {self.db_path}", payload["reason"])
         self.assertNotIn(SECRET, payload["reason"])
         self.assertEqual(1, len(self.store.list_analysis_runs()))
+        stored_decisions = self.store.list_policy_decisions()
+        self.assertEqual(1, len(stored_decisions))
+        self.assertEqual("continue_review", stored_decisions[0].action)
+        self.assertEqual("final_answer", stored_decisions[0].sink_type)
+        self.assertIn("trace_lineage.py", stored_decisions[0].trace_command)
+        self.assertNotIn(SECRET, stored_decisions[0].user_message)
+
+        list_result = subprocess.run(
+            [
+                sys.executable,
+                str(REPO_ROOT / "scripts" / "list_policy_decisions.py"),
+                "--db",
+                str(self.db_path),
+                "--format",
+                "json",
+            ],
+            cwd=REPO_ROOT,
+            check=True,
+            text=True,
+            capture_output=True,
+        )
+        list_payload = json.loads(list_result.stdout)
+        self.assertEqual(1, len(list_payload["decisions"]))
+        self.assertEqual(
+            stored_decisions[0].decision_id,
+            list_payload["decisions"][0]["decision_id"],
+        )
+        self.assertNotIn(SECRET, list_result.stdout)
+
+        trace_result = subprocess.run(
+            [
+                sys.executable,
+                str(REPO_ROOT / "scripts" / "trace_lineage.py"),
+                "--db",
+                str(self.db_path),
+                "--decision",
+                stored_decisions[0].decision_id,
+                "--no-preview",
+            ],
+            cwd=REPO_ROOT,
+            check=True,
+            text=True,
+            capture_output=True,
+        )
+        self.assertIn(f"decision_id={stored_decisions[0].decision_id}", trace_result.stdout)
+        self.assertIn("sink:final_answer", trace_result.stdout)
+        self.assertNotIn(SECRET, trace_result.stdout)
 
     def test_stop_hook_only_evaluates_current_final_answer(self) -> None:
         self._record(
@@ -1393,6 +1440,7 @@ class InformationFlowTest(unittest.TestCase):
 
         self.assertEqual("block", json.loads(leaked.stdout)["decision"])
         self.assertEqual("", clean.stdout)
+        self.assertEqual(1, len(self.store.list_policy_decisions()))
 
     def test_stop_hook_policy_can_be_disabled(self) -> None:
         self._record(

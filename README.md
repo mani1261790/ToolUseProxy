@@ -58,7 +58,7 @@ API キーや認証情報のように文字列パターンで判別しやすい�
 
 ## 現在地
 
-現在は第2段階の漏えい検知を拡張し、外部tool送信とCodex最終応答をgraph上の出口として扱い、findingをpolicy判断とCodex Hook出力へ変換するところまで進んでいます。Codex の `PreToolUse` / `PostToolUse` / `Stop` Hooks から event と artifact を SQLite に記録し、artifact fragment 間の類似関係と adapter が作る structured edge から情報流グラフを構築します。`scripts/detect_leaks.py` は、source lineage が `external_*` の `sink_candidate` に到達した場合に finding を出力します。`scripts/evaluate_policy.py` は、findingを `allow` / `warn` / `block` / `continue_review` の判断へ変換し、`--hook-output` でCodex Hook stdout JSONをpreviewできます。実Hook接続の最初の実装として、`Stop` hook は記録直後にローカルDBを再解析し、最終応答の `final_answer` 漏えい候補に対して `continue_review` を返せます。`PreToolUse` の実ブロックにはまだ接続していません。
+現在は第2段階の漏えい検知を拡張し、外部tool送信とCodex最終応答をgraph上の出口として扱い、findingをpolicy判断とCodex Hook出力へ変換するところまで進んでいます。Codex の `PreToolUse` / `PostToolUse` / `Stop` Hooks から event と artifact を SQLite に記録し、artifact fragment 間の類似関係と adapter が作る structured edge から情報流グラフを構築します。`scripts/detect_leaks.py` は、source lineage が `external_*` の `sink_candidate` に到達した場合に finding を出力します。`scripts/evaluate_policy.py` は、findingを `allow` / `warn` / `block` / `continue_review` の判断へ変換し、`--hook-output` でCodex Hook stdout JSONをpreviewできます。実Hook接続の最初の実装として、`Stop` hook は記録直後にローカルDBを再解析し、最終応答の `final_answer` 漏えい候補に対して `continue_review` を返せます。Stop hook が返した判断は `policy_decisions` table に保存され、`scripts/list_policy_decisions.py` と `trace_lineage.py --decision` で後から確認できます。`PreToolUse` の実ブロックにはまだ接続していません。
 
 Hook の構成と接続方法は [docs/設定/Hook設定.md](docs/設定/Hook設定.md) にまとめています。
 ドキュメント全体の索引は [docs/索引.md](docs/索引.md) にまとめています。

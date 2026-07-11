@@ -17,6 +17,7 @@ from hook_monitor.runtime.models import (
     ResourceVersion,
     SinkCandidate,
     SourceChunk,
+    StoredPolicyDecision,
 )
 
 
@@ -208,6 +209,30 @@ class EventStore:
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS policy_decisions (
+                    decision_id TEXT PRIMARY KEY,
+                    finding_id TEXT NOT NULL,
+                    analysis_run_id TEXT NOT NULL,
+                    hook_event TEXT,
+                    action TEXT NOT NULL,
+                    severity TEXT NOT NULL,
+                    sink_type TEXT NOT NULL,
+                    source_node_kind TEXT NOT NULL,
+                    source_node_id TEXT NOT NULL,
+                    sink_node_id TEXT NOT NULL,
+                    path_score REAL NOT NULL,
+                    reason TEXT NOT NULL,
+                    user_message TEXT NOT NULL,
+                    technical_summary TEXT NOT NULL,
+                    trace_command TEXT NOT NULL,
+                    path_summary_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (analysis_run_id) REFERENCES analysis_runs (analysis_run_id)
+                )
+                """
+            )
             self._migrate_information_flow_edges(conn)
             conn.execute(
                 """
@@ -279,6 +304,18 @@ class EventStore:
                 """
                 CREATE INDEX IF NOT EXISTS idx_sink_candidates_session_sequence
                 ON sink_candidates (session_id, sequence_no)
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_policy_decisions_created
+                ON policy_decisions (created_at)
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_policy_decisions_analysis_run
+                ON policy_decisions (analysis_run_id)
                 """
             )
             self._backfill_event_sequence_numbers(conn)
@@ -499,6 +536,127 @@ class EventStore:
                 """,
                 (analysis_run_id,),
             )
+
+    def upsert_policy_decision(self, decision: StoredPolicyDecision) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO policy_decisions (
+                    decision_id,
+                    finding_id,
+                    analysis_run_id,
+                    hook_event,
+                    action,
+                    severity,
+                    sink_type,
+                    source_node_kind,
+                    source_node_id,
+                    sink_node_id,
+                    path_score,
+                    reason,
+                    user_message,
+                    technical_summary,
+                    trace_command,
+                    path_summary_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(decision_id) DO UPDATE SET
+                    finding_id = excluded.finding_id,
+                    analysis_run_id = excluded.analysis_run_id,
+                    hook_event = excluded.hook_event,
+                    action = excluded.action,
+                    severity = excluded.severity,
+                    sink_type = excluded.sink_type,
+                    source_node_kind = excluded.source_node_kind,
+                    source_node_id = excluded.source_node_id,
+                    sink_node_id = excluded.sink_node_id,
+                    path_score = excluded.path_score,
+                    reason = excluded.reason,
+                    user_message = excluded.user_message,
+                    technical_summary = excluded.technical_summary,
+                    trace_command = excluded.trace_command,
+                    path_summary_json = excluded.path_summary_json
+                """,
+                (
+                    decision.decision_id,
+                    decision.finding_id,
+                    decision.analysis_run_id,
+                    decision.hook_event,
+                    decision.action,
+                    decision.severity,
+                    decision.sink_type,
+                    decision.source_node_kind,
+                    decision.source_node_id,
+                    decision.sink_node_id,
+                    decision.path_score,
+                    decision.reason,
+                    decision.user_message,
+                    decision.technical_summary,
+                    decision.trace_command,
+                    json.dumps(decision.path_summary, ensure_ascii=False),
+                ),
+            )
+
+    def list_policy_decisions(self, limit: int = 20) -> list[StoredPolicyDecision]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT
+                    decision_id,
+                    finding_id,
+                    analysis_run_id,
+                    hook_event,
+                    action,
+                    severity,
+                    sink_type,
+                    source_node_kind,
+                    source_node_id,
+                    sink_node_id,
+                    path_score,
+                    reason,
+                    user_message,
+                    technical_summary,
+                    trace_command,
+                    path_summary_json,
+                    created_at
+                FROM policy_decisions
+                ORDER BY created_at DESC, decision_id
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [_stored_policy_decision_from_row(row) for row in rows]
+
+    def get_policy_decision(
+        self,
+        decision_id: str,
+    ) -> StoredPolicyDecision | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT
+                    decision_id,
+                    finding_id,
+                    analysis_run_id,
+                    hook_event,
+                    action,
+                    severity,
+                    sink_type,
+                    source_node_kind,
+                    source_node_id,
+                    sink_node_id,
+                    path_score,
+                    reason,
+                    user_message,
+                    technical_summary,
+                    trace_command,
+                    path_summary_json,
+                    created_at
+                FROM policy_decisions
+                WHERE decision_id = ?
+                """,
+                (decision_id,),
+            ).fetchone()
+        return None if row is None else _stored_policy_decision_from_row(row)
 
     def replace_information_flow_edges(self, edges: list[FlowEdge]) -> None:
         with self._connect() as conn:
@@ -1108,3 +1266,25 @@ class EventStore:
 
     def _connect(self) -> sqlite3.Connection:
         return sqlite3.connect(self.db_path)
+
+
+def _stored_policy_decision_from_row(row: tuple) -> StoredPolicyDecision:
+    return StoredPolicyDecision(
+        decision_id=row[0],
+        finding_id=row[1],
+        analysis_run_id=row[2],
+        hook_event=row[3],
+        action=row[4],
+        severity=row[5],
+        sink_type=row[6],
+        source_node_kind=row[7],
+        source_node_id=row[8],
+        sink_node_id=row[9],
+        path_score=row[10],
+        reason=row[11],
+        user_message=row[12],
+        technical_summary=row[13],
+        trace_command=row[14],
+        path_summary=tuple(json.loads(row[15])),
+        created_at=row[16],
+    )

@@ -208,6 +208,13 @@ source設定は、`protected_sources.json` が存在する場合はその内容�
 
 Stop hook が返す `reason` は、source、sink、score、severity、trace command、次の修正指示を含む短い説明です。説明には raw protected text や final answer の本文は含めません。
 
+Stop hook が実際に介入した場合は、`policy_decisions` table に判断を保存します。保存された判断は次のコマンドで確認できます。
+
+```bash
+python3 /Users/mani/Developer/ToolUseProxy/scripts/list_policy_decisions.py
+python3 /Users/mani/Developer/ToolUseProxy/scripts/trace_lineage.py --decision <decision_id>
+```
+
 Stop policy 接続は環境変数で無効化できます。
 
 ```bash

@@ -20,6 +20,7 @@ from hook_monitor.runtime.models import (  # noqa: E402
     ResourceVersion,
     SinkCandidate,
     SourceChunk,
+    StoredPolicyDecision,
 )
 from hook_monitor.runtime.storage import DEFAULT_DB_PATH, EventStore  # noqa: E402
 
@@ -43,7 +44,15 @@ def main() -> int:
     args = _parse_args()
     store = EventStore(args.db)
     store.initialize()
-    analysis_run = _select_analysis_run(store, args.analysis_run)
+    decision = _load_policy_decision(store, args.decision)
+    if args.decision and decision is None:
+        print(f"Policy decision not found: {args.decision}", file=sys.stderr)
+        return 1
+
+    analysis_run_id = args.analysis_run or (
+        decision.analysis_run_id if decision is not None else None
+    )
+    analysis_run = _select_analysis_run(store, analysis_run_id)
     if analysis_run is None:
         if args.analysis_run:
             print(f"Analysis run not found: {args.analysis_run}", file=sys.stderr)
@@ -55,6 +64,8 @@ def main() -> int:
         return 1
 
     data = _load_trace_data(store, analysis_run)
+    if decision is not None:
+        return _print_decision_trace(data, args, decision)
     if args.node:
         return _print_node_trace(data, args)
     if args.source:
@@ -90,6 +101,10 @@ def _parse_args() -> argparse.Namespace:
         help="Show source-to-node paths for a node, formatted as kind:id.",
     )
     parser.add_argument(
+        "--decision",
+        help="Show source-to-sink paths for a stored policy decision id.",
+    )
+    parser.add_argument(
         "--max-depth",
         type=int,
         default=8,
@@ -118,6 +133,15 @@ def _parse_args() -> argparse.Namespace:
         help="Show ids, edge reasons, and full metadata.",
     )
     return parser.parse_args()
+
+
+def _load_policy_decision(
+    store: EventStore,
+    decision_id: str | None,
+) -> StoredPolicyDecision | None:
+    if decision_id is None:
+        return None
+    return store.get_policy_decision(decision_id)
 
 
 def _select_analysis_run(
@@ -245,6 +269,20 @@ def _print_node_trace(data: TraceData, args: argparse.Namespace) -> int:
         if path and path[0][0] != source_key:
             print(f"   source={_node_label(source_key, data, args.preview_chars, args.no_preview)}")
     return 0
+
+
+def _print_decision_trace(
+    data: TraceData,
+    args: argparse.Namespace,
+    decision: StoredPolicyDecision,
+) -> int:
+    print(f"decision_id={decision.decision_id}")
+    print(f"action={decision.action} severity={decision.severity}")
+    print(f"analysis_run_id={decision.analysis_run_id}")
+    print(f"sink={decision.sink_type} sink_candidate:{decision.sink_node_id}")
+    print("")
+    args.node = f"sink_candidate:{decision.sink_node_id}"
+    return _print_node_trace(data, args)
 
 
 def _matching_source_keys(data: TraceData, source: str) -> list[NodeKey]:

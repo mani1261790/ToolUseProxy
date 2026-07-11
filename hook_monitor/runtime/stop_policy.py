@@ -16,8 +16,15 @@ from hook_monitor.policy.codex_output import (
     select_strongest_decision,
 )
 from hook_monitor.policy.engine import evaluate_policy
+from hook_monitor.policy.explanation import build_policy_explanation
+from hook_monitor.policy.models import PolicyDecision
 from hook_monitor.runtime.fragments import build_artifact_fragments
-from hook_monitor.runtime.models import ProtectedSource, SinkCandidate, SourceChunk
+from hook_monitor.runtime.models import (
+    ProtectedSource,
+    SinkCandidate,
+    SourceChunk,
+    StoredPolicyDecision,
+)
 from hook_monitor.runtime.source_config import DEFAULT_CONFIG_PATH
 from hook_monitor.runtime.storage import EventStore
 
@@ -93,10 +100,44 @@ def evaluate_stop_hook_policy(
     )
     decisions = evaluate_policy(findings)
     selected = select_strongest_decision(decisions, "Stop")
+    if selected is not None and selected.action != "allow":
+        store.upsert_policy_decision(
+            _stored_policy_decision(
+                selected,
+                analysis_run_id,
+                store.db_path,
+            )
+        )
     return render_codex_hook_output(
         selected,
         "Stop",
         db_path=store.db_path,
+    )
+
+
+def _stored_policy_decision(
+    decision: PolicyDecision,
+    analysis_run_id: str,
+    db_path: Path,
+) -> StoredPolicyDecision:
+    explanation = build_policy_explanation(decision, db_path=db_path)
+    return StoredPolicyDecision(
+        decision_id=decision.decision_id,
+        finding_id=decision.finding_id,
+        analysis_run_id=analysis_run_id,
+        hook_event=decision.hook_event,
+        action=decision.action,
+        severity=decision.severity,
+        sink_type=decision.sink_type,
+        source_node_kind=decision.source_node_kind,
+        source_node_id=decision.source_node_id,
+        sink_node_id=decision.sink_node_id,
+        path_score=decision.path_score,
+        reason=decision.reason,
+        user_message=explanation.user_message,
+        technical_summary=explanation.technical_summary,
+        trace_command=explanation.trace_command,
+        path_summary=explanation.path_summary,
     )
 
 
