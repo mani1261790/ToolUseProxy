@@ -188,6 +188,18 @@ Codex
 
 `Stop` hookでは、最終応答をまず通常のeventとして保存し、その後に同じSQLite DBから次の処理を実行します。判断対象にするのは、今回の `Stop` event から作られた `final_answer` sink だけです。過去の最終応答に漏えい候補が残っていても、現在の最終応答がcleanなら block しません。
 
+実CodexのStop payloadでは、最終回答本文は`last_assistant_message`、既にStop hookから継続されたturnかどうかは`stop_hook_active`に入ります。runtimeは`last_assistant_message`を`final_answer` artifactへ正規化し、`stop_hook_active`をeventへ保存します。旧形式の`final_answer`、`response`、`assistant_response`、`message`も互換入力として扱います。
+
+```json
+{
+  "hook_event_name": "Stop",
+  "session_id": "...",
+  "turn_id": "...",
+  "stop_hook_active": false,
+  "last_assistant_message": "assistant response"
+}
+```
+
 ```text
 Stop payload
   -> final_answer artifact

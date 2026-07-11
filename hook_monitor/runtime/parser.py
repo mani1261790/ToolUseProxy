@@ -38,6 +38,7 @@ def normalize_event(phase: str, payload: dict[str, Any]) -> NormalizedEvent:
         model=_optional_str(payload, "model"),
         permission_mode=_optional_str(payload, "permission_mode"),
         transcript_path=_optional_str(payload, "transcript_path"),
+        stop_hook_active=_optional_bool(payload, "stop_hook_active"),
         raw_payload=payload,
     )
 
@@ -46,7 +47,7 @@ def build_artifacts(event: NormalizedEvent) -> list[ArtifactRecord]:
     raw_payload = event.raw_payload
     artifacts: list[ArtifactRecord] = []
     for role, field_name in _artifact_fields_for_phase(event.phase):
-        if field_name not in raw_payload:
+        if field_name not in raw_payload or raw_payload[field_name] is None:
             continue
         text = stringify_content(raw_payload.get(field_name))
         normalized = normalize_text(text)
@@ -79,6 +80,7 @@ def _artifact_fields_for_phase(phase: str) -> list[tuple[str, str]]:
         return [("tool_input", "tool_input"), ("tool_output", "tool_response")]
     if phase == "stop":
         return [
+            ("final_answer", "last_assistant_message"),
             ("final_answer", "final_answer"),
             ("final_answer", "response"),
             ("final_answer", "assistant_response"),
@@ -92,3 +94,8 @@ def _optional_str(payload: dict[str, Any], key: str) -> str | None:
     if value is None:
         return None
     return str(value)
+
+
+def _optional_bool(payload: dict[str, Any], key: str) -> bool | None:
+    value = payload.get(key)
+    return value if isinstance(value, bool) else None

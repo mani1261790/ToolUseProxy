@@ -16,6 +16,7 @@ class NormalizedEvent:
     model: str | None
     permission_mode: str | None
     transcript_path: str | None
+    stop_hook_active: bool | None
     raw_payload: dict[str, Any]
 
 

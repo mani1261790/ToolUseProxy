@@ -61,6 +61,34 @@ class InformationFlowTest(unittest.TestCase):
         self.assertIn("path", roles)
         self.assertIn("tool_input", roles)
 
+    def test_real_codex_stop_payload_builds_final_answer(self) -> None:
+        event = normalize_event(
+            "stop",
+            {
+                "hook_event_name": "Stop",
+                "session_id": "session-1",
+                "turn_id": "turn-1",
+                "stop_hook_active": False,
+                "last_assistant_message": SECRET,
+            },
+        )
+        artifacts = build_artifacts(event)
+
+        self.assertFalse(event.stop_hook_active)
+        self.assertEqual(["final_answer"], [artifact.role for artifact in artifacts])
+        self.assertEqual(SECRET, artifacts[0].text)
+
+        empty_event = normalize_event(
+            "stop",
+            {
+                "hook_event_name": "Stop",
+                "stop_hook_active": True,
+                "last_assistant_message": None,
+            },
+        )
+        self.assertTrue(empty_event.stop_hook_active)
+        self.assertEqual([], build_artifacts(empty_event))
+
     def test_multihop_and_branching_lineage_reaches_both_searches(self) -> None:
         self._record(
             "post_tool_use",
@@ -1317,7 +1345,9 @@ class InformationFlowTest(unittest.TestCase):
                 {
                     "session_id": "session-1",
                     "turn_id": "turn-1",
-                    "final_answer": f"The answer includes {SECRET}.",
+                    "hook_event_name": "Stop",
+                    "stop_hook_active": False,
+                    "last_assistant_message": f"The answer includes {SECRET}.",
                 }
             ),
             cwd=REPO_ROOT,
@@ -1335,6 +1365,17 @@ class InformationFlowTest(unittest.TestCase):
         self.assertIn("Protected source content appears in the final answer", payload["reason"])
         self.assertIn(f"Trace: python3 scripts/trace_lineage.py --db {self.db_path}", payload["reason"])
         self.assertNotIn(SECRET, payload["reason"])
+        with sqlite3.connect(self.db_path) as conn:
+            stored_stop = conn.execute(
+                """
+                SELECT stop_hook_active
+                FROM events
+                WHERE phase = 'stop'
+                ORDER BY sequence_no DESC
+                LIMIT 1
+                """
+            ).fetchone()
+        self.assertEqual((0,), stored_stop)
         self.assertEqual(1, len(self.store.list_analysis_runs()))
         stored_decisions = self.store.list_policy_decisions()
         self.assertEqual(1, len(stored_decisions))

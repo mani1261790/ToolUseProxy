@@ -50,6 +50,7 @@ class EventStore:
                 """
             )
             self._ensure_column(conn, "events", "sequence_no", "INTEGER")
+            self._ensure_column(conn, "events", "stop_hook_active", "INTEGER")
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS artifacts (
@@ -349,9 +350,10 @@ class EventStore:
                     model,
                     permission_mode,
                     transcript_path,
+                    stop_hook_active,
                     payload_json,
                     sequence_no
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     event.event_id,
@@ -364,6 +366,11 @@ class EventStore:
                     event.model,
                     event.permission_mode,
                     event.transcript_path,
+                    (
+                        None
+                        if event.stop_hook_active is None
+                        else int(event.stop_hook_active)
+                    ),
                     json.dumps(event.raw_payload, ensure_ascii=False, sort_keys=True),
                     sequence_no,
                 ),
