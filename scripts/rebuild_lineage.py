@@ -22,7 +22,7 @@ from hook_monitor.runtime.fragments import build_artifact_fragments
 from hook_monitor.runtime.storage import DEFAULT_DB_PATH, EventStore
 
 
-DETECTOR_VERSION = "artifact-graph-v5-final-answer-adapter"
+DETECTOR_VERSION = "artifact-graph-v7-apply-patch-resources"
 GRAPH_FINGERPRINT_KEY = "artifact_graph_fingerprint"
 GRAPH_VERSION_KEY = "artifact_graph_detector_version"
 

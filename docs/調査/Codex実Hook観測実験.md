@@ -119,6 +119,18 @@ sink candidates:     0
 
 また、20 contextに対して73 edgeは多い。現在はJSON全体のroot fragmentと`command`などのleaf fragmentを同時に比較し、同じtool callのPre/Post双方も候補にする。このため、実際の情報流を示すedgeに加えて、表現の重複によるedgeが大量に生成されている。
 
+canonical fragment選別の実装後、同じ観測DBを再評価した結果は次の通りだった。
+
+```text
+artifact contexts: 20
+canonical contexts: 8
+similarity edges:    6
+```
+
+JSON container root、PostToolUse側の複製入力、比較対象外roleを除外した一方、`Bash tool_output -> apply_patch command`、先行command/outputから後続Bash outputへの必要な経路は残った。
+
+canonical fragment選別後にもStop継続E2Eを再実行し、secret入り回答で`Stop Blocked`、修正版回答で`Stop Completed`となることを確認した。この実行のanalysis runは`stop-hook-final-answer-v2-canonical-fragments`、policy decisionは`continue_review / critical / final_answer / path_score 1.0`だった。
+
 ## 判明した問題
 
 ### P0: Stop本文を取得できない（修正済み）
@@ -127,19 +139,21 @@ sink candidates:     0
 
 この問題は、`last_assistant_message`をfinal answer入力として追加し、`stop_hook_active`を正規化・DB保存する修正で解消した。旧payloadキーは互換性のため残している。
 
-### P1: 実ファイルI/Oをresourceとして追えていない
+### P1: 実ファイルI/Oをresourceとして追えていない（一部修正済み）
 
 Codex CLIで観測した主要なファイル操作は`Bash`と`apply_patch`だった。現在の`FilesystemAdapter`が想定する専用`Read` / `Write` payloadとは一致しない。
 
 - `cat`などのshell readをpathとstdoutへ分解していない
 - shell redirectなどのwriteをpathと入力内容へ分解していない
-- `apply_patch`をpath、旧内容、新内容へ分解していない
+- `apply_patch`はAdd/Update/Delete/Moveとpathを分解し、成功したPostToolUseをresource versionへ接続するよう修正した
 
 文字列類似による推定は一部機能するが、`protected source -> resource -> tool output`という確定的な経路を作れない。
 
-### P1: fragment重複によりedgeを過生成する
+### P1: fragment重複によりedgeを過生成する（修正済み）
 
 root fragmentとleaf fragment、PreとPostで繰り返される同一入力を広く比較している。これは誤接続と再解析コストの両方を増やす。
+
+graph構築とsource bindingの入口を共通化し、JSON container root、PostToolUse側の複製入力、content-bearingでないroleを比較から除外した。fragment自体は監査用にDBへ残している。また、sessionがある場合は同一session、sessionがない場合は同一turnだけを比較し、両方ないイベントは一般類似度比較へ入れない。
 
 ### P2: 実験対象外の経路が残る
 
@@ -182,13 +196,12 @@ SQLiteでは同一session、同一turnに2件のStopイベントが保存され�
 
 Hook event、`session_id`、`turn_id`、`tool_use_id`、Bash入出力、apply_patch入出力の記録経路は実Codexで動作した。parser修正後は、実Codexでfinal answerの漏えい候補をStopし、追加ターンで修正させる経路も動作した。
 
-ただし、ファイルI/Oのresource接続とfragment重複は未解決である。次は比較単位を整理したうえで、実payloadに合わせた`apply_patch`と`Bash filesystem` adapterを設計する。session差分更新やembeddingは、その後に進める。
+ただし、ファイルI/Oのresource接続は未解決である。次は実payloadに合わせた`apply_patch`と`Bash filesystem` adapterを設計する。session差分更新やembeddingは、その後に進める。
 
 ## 次の検証順序
 
-1. root/leafとPre/Postの重複を除いた比較単位の確定
-2. `apply_patch`のresource version化
-3. Bash filesystem read/writeの限定的な構文解析
-4. Search / MCPの実payload観測
-5. session単位の差分更新
-6. embedding候補検索の評価
+1. Bash filesystem read/writeの限定的な構文解析
+2. Search / MCPの実payload観測
+3. session単位の差分更新
+4. apply_patchのoperation単位fragmentとsnapshot capture
+5. embedding候補検索の評価

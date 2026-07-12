@@ -6,7 +6,8 @@ from collections import defaultdict
 from pathlib import Path
 
 from hook_monitor.analysis.adapters.base import AdapterResult
-from hook_monitor.analysis.adapters.common import make_structured_edge
+from hook_monitor.analysis.adapters.common import make_structured_edge, normalize_tool_name
+from hook_monitor.analysis.patch_parser import PatchOperation, parse_apply_patch
 from hook_monitor.runtime.models import ArtifactContext, FlowEdge, ResourceVersion
 
 
@@ -35,6 +36,7 @@ class FilesystemAdapter:
         "filesystem_write_file",
         "filesystem_write_text_file",
     }
+    _APPLY_PATCH_NAME = "apply_patch"
 
     def analyze(
         self,
@@ -47,6 +49,15 @@ class FilesystemAdapter:
         resources: dict[str, ResourceVersion] = {}
 
         for group in groups:
+            if normalize_tool_name(group[0].tool_name) == self._APPLY_PATCH_NAME:
+                self._analyze_apply_patch(
+                    group,
+                    repo_root,
+                    latest_by_session_path,
+                    resources,
+                    edges,
+                )
+                continue
             operation = self._operation(group[0].tool_name)
             if operation is None:
                 continue
@@ -125,6 +136,124 @@ class FilesystemAdapter:
 
         return AdapterResult(tuple(edges), tuple(resources.values()))
 
+    def _analyze_apply_patch(
+        self,
+        group: list[ArtifactContext],
+        repo_root: Path,
+        latest_by_session_path: dict[tuple[str | None, str], ResourceVersion],
+        resources: dict[str, ResourceVersion],
+        edges: list[FlowEdge],
+    ) -> None:
+        command_context = _select_apply_patch_command(group)
+        if command_context is None or not _apply_patch_succeeded(group):
+            return
+        operations = parse_apply_patch(command_context.fragment.text)
+        if not operations:
+            return
+
+        sequence_no = max(
+            context.sequence_no
+            for context in group
+            if context.phase == "post_tool_use"
+        )
+        session_id = group[0].session_id
+        tool_use_id = group[0].tool_use_id
+        for index, operation in enumerate(operations):
+            self._apply_patch_operation(
+                operation=operation,
+                operation_index=index,
+                command_context=command_context,
+                repo_root=repo_root,
+                sequence_no=sequence_no,
+                session_id=session_id,
+                tool_use_id=tool_use_id,
+                latest_by_session_path=latest_by_session_path,
+                resources=resources,
+                edges=edges,
+            )
+
+    def _apply_patch_operation(
+        self,
+        *,
+        operation: PatchOperation,
+        operation_index: int,
+        command_context: ArtifactContext,
+        repo_root: Path,
+        sequence_no: int,
+        session_id: str | None,
+        tool_use_id: str | None,
+        latest_by_session_path: dict[tuple[str | None, str], ResourceVersion],
+        resources: dict[str, ResourceVersion],
+        edges: list[FlowEdge],
+    ) -> None:
+        source_path = _normalize_path(operation.path, command_context.cwd, repo_root)
+        source_key = (session_id, source_path)
+        previous = latest_by_session_path.get(source_key)
+
+        if operation.operation == "delete":
+            if previous is not None:
+                edges.append(
+                    make_structured_edge(
+                        src_kind="resource_version",
+                        src_id=previous.node_id,
+                        dst_kind="artifact_fragment",
+                        dst_id=command_context.fragment.fragment_id,
+                        relation="deleted_by",
+                        method="apply_patch_delete",
+                        reason=f"apply_patch deleted {source_path}",
+                    )
+                )
+                latest_by_session_path.pop(source_key, None)
+            return
+
+        target_path = _normalize_path(
+            operation.move_to or operation.path,
+            command_context.cwd,
+            repo_root,
+        )
+        target_key = (session_id, target_path)
+        resource = _make_resource_version(
+            path=target_path,
+            content_hash=None,
+            sequence_no=sequence_no,
+            session_id=session_id,
+            tool_use_id=tool_use_id,
+            version_tag=(
+                f"apply_patch:{operation_index}:{operation.operation}:"
+                f"{operation.path}:{operation.move_to or '-'}"
+            ),
+        )
+        resources[resource.node_id] = resource
+        latest_by_session_path[target_key] = resource
+        edges.append(
+            make_structured_edge(
+                src_kind="artifact_fragment",
+                src_id=command_context.fragment.fragment_id,
+                dst_kind="resource_version",
+                dst_id=resource.node_id,
+                relation="written_to",
+                method="apply_patch_write",
+                reason=f"apply_patch wrote {target_path}",
+            )
+        )
+
+        if previous is not None:
+            relation = "moved_to" if operation.move_to is not None else "updated_from"
+            method = "apply_patch_move" if operation.move_to is not None else "apply_patch_update"
+            edges.append(
+                make_structured_edge(
+                    src_kind="resource_version",
+                    src_id=previous.node_id,
+                    dst_kind="resource_version",
+                    dst_id=resource.node_id,
+                    relation=relation,
+                    method=method,
+                    reason=f"apply_patch produced {target_path} from {source_path}",
+                )
+            )
+        if operation.move_to is not None:
+            latest_by_session_path.pop(source_key, None)
+
     def _operation(self, tool_name: str | None) -> str | None:
         if not tool_name:
             return None
@@ -192,6 +321,36 @@ def _select_output_contexts(
     return _prefer_leaf_fragments(candidates)
 
 
+def _select_apply_patch_command(
+    group: list[ArtifactContext],
+) -> ArtifactContext | None:
+    commands = [
+        context
+        for context in group
+        if context.phase == "pre_tool_use"
+        and context.artifact_role == "tool_input"
+        and context.fragment.semantic_role == "command"
+        and context.fragment.json_pointer != "/"
+    ]
+    return min(commands, key=lambda context: context.sequence_no) if commands else None
+
+
+def _apply_patch_succeeded(group: list[ArtifactContext]) -> bool:
+    outputs = _select_output_contexts(group)
+    if not outputs:
+        return False
+    text = "\n".join(context.fragment.text for context in outputs).lower()
+    if re.search(r"exit code:\s*[1-9][0-9]*", text):
+        return False
+    if "failed" in text or "error:" in text:
+        return False
+    return bool(
+        re.search(r"exit code:\s*0\b", text)
+        or "success" in text
+        or "done!" in text
+    )
+
+
 def _prefer_leaf_fragments(
     contexts: list[ArtifactContext],
 ) -> list[ArtifactContext]:
@@ -222,6 +381,7 @@ def _make_resource_version(
     sequence_no: int,
     session_id: str | None,
     tool_use_id: str | None,
+    version_tag: str = "",
 ) -> ResourceVersion:
     identity = "\0".join(
         (
@@ -230,6 +390,7 @@ def _make_resource_version(
             content_hash or "-",
             str(sequence_no),
             tool_use_id or "-",
+            version_tag,
         )
     )
     node_id = hashlib.sha256(identity.encode("utf-8")).hexdigest()

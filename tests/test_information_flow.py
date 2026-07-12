@@ -15,10 +15,12 @@ from hook_monitor.analysis.graph import (
     build_artifact_flow_edges,
     build_protected_source_resource_edges,
     build_source_binding_edges,
+    select_canonical_similarity_contexts,
 )
 from hook_monitor.analysis.adapters.registry import run_adapters
 from hook_monitor.analysis.leak_detection import detect_leaks
 from hook_monitor.analysis.lineage import propagate_lineage
+from hook_monitor.analysis.patch_parser import parse_apply_patch
 from hook_monitor.policy.codex_output import render_codex_hook_output, select_strongest_decision
 from hook_monitor.policy.engine import evaluate_policy
 from hook_monitor.policy.models import PolicyDecision
@@ -88,6 +90,125 @@ class InformationFlowTest(unittest.TestCase):
         )
         self.assertTrue(empty_event.stop_hook_active)
         self.assertEqual([], build_artifacts(empty_event))
+
+    def test_canonical_fragments_remove_transport_duplicates_but_keep_flow(self) -> None:
+        payloads = [
+            (
+                "pre_tool_use",
+                {
+                    "session_id": "session-1",
+                    "turn_id": "turn-1",
+                    "tool_use_id": "bash-1",
+                    "tool_name": "Bash",
+                    "tool_input": {"command": f"printf '{SECRET}'"},
+                },
+            ),
+            (
+                "post_tool_use",
+                {
+                    "session_id": "session-1",
+                    "turn_id": "turn-1",
+                    "tool_use_id": "bash-1",
+                    "tool_name": "Bash",
+                    "tool_input": {"command": f"printf '{SECRET}'"},
+                    "tool_response": SECRET,
+                },
+            ),
+            (
+                "stop",
+                {
+                    "hook_event_name": "Stop",
+                    "session_id": "session-1",
+                    "turn_id": "turn-1",
+                    "stop_hook_active": False,
+                    "last_assistant_message": SECRET,
+                },
+            ),
+        ]
+        for phase, payload in payloads:
+            event = normalize_event(phase, payload)
+            artifacts = build_artifacts(event)
+            self.store.record(event, artifacts, build_fragments(artifacts))
+
+        contexts = self.store.list_artifact_contexts()
+        canonical = select_canonical_similarity_contexts(contexts)
+        canonical_ids = {context.fragment.fragment_id for context in canonical}
+        excluded_ids = {
+            context.fragment.fragment_id
+            for context in contexts
+            if context.fragment.fragment_id not in canonical_ids
+        }
+        edges = build_artifact_flow_edges(contexts)
+
+        self.assertTrue(excluded_ids)
+        self.assertTrue(
+            all(
+                edge.src_node_id not in excluded_ids
+                and edge.dst_node_id not in excluded_ids
+                for edge in edges
+            )
+        )
+        tool_output_ids = {
+            context.fragment.fragment_id
+            for context in canonical
+            if context.fragment.semantic_role == "tool_output"
+        }
+        final_answer_ids = {
+            context.fragment.fragment_id
+            for context in canonical
+            if context.fragment.semantic_role == "final_answer"
+        }
+        self.assertTrue(
+            any(
+                edge.src_node_id in tool_output_ids
+                and edge.dst_node_id in final_answer_ids
+                for edge in edges
+            )
+        )
+
+        source_edges = build_source_binding_edges(
+            [self._source_chunk()],
+            contexts,
+            edges,
+        )
+        self.assertTrue(source_edges)
+        self.assertTrue(
+            all(edge.dst_node_id in canonical_ids for edge in source_edges)
+        )
+
+    def test_similarity_edges_require_a_shared_session_or_turn_scope(self) -> None:
+        payloads = [
+            {
+                "session_id": "session-a",
+                "turn_id": "turn-a",
+                "tool_use_id": "tool-a",
+                "tool_name": "Search",
+                "tool_input": {"query": SECRET},
+            },
+            {
+                "session_id": "session-b",
+                "turn_id": "turn-b",
+                "tool_use_id": "tool-b",
+                "tool_name": "Search",
+                "tool_input": {"query": SECRET},
+            },
+            {
+                "tool_use_id": "tool-unknown-a",
+                "tool_name": "Search",
+                "tool_input": {"query": SECRET},
+            },
+            {
+                "tool_use_id": "tool-unknown-b",
+                "tool_name": "Search",
+                "tool_input": {"query": SECRET},
+            },
+        ]
+        for payload in payloads:
+            event = normalize_event("pre_tool_use", payload)
+            artifacts = build_artifacts(event)
+            self.store.record(event, artifacts, build_fragments(artifacts))
+
+        self.assertEqual([], build_artifact_flow_edges(self.store.list_artifact_contexts()))
 
     def test_multihop_and_branching_lineage_reaches_both_searches(self) -> None:
         self._record(
@@ -323,6 +444,169 @@ class InformationFlowTest(unittest.TestCase):
                     """
                 ).fetchone()[0],
             )
+
+    def test_parse_apply_patch_extracts_file_operations(self) -> None:
+        operations = parse_apply_patch(
+            """*** Begin Patch
+*** Add File: added.txt
++added value
+*** Update File: existing.txt
+*** Move to: moved.txt
+@@
+-old value
++new value
+*** Delete File: removed.txt
+*** End Patch"""
+        )
+
+        self.assertEqual(["add", "update", "delete"], [op.operation for op in operations])
+        self.assertEqual("added.txt", operations[0].path)
+        self.assertEqual("added value", operations[0].added_text)
+        self.assertEqual("moved.txt", operations[1].move_to)
+        self.assertEqual("old value", operations[1].removed_text)
+        self.assertEqual("new value", operations[1].added_text)
+        self.assertEqual([], parse_apply_patch("*** Update File: broken.txt"))
+
+    def test_filesystem_adapter_tracks_successful_apply_patch_versions(self) -> None:
+        cwd = self.temporary_directory.name
+        self._record(
+            "pre_tool_use",
+            "write-1",
+            "Write",
+            tool_input={"path": "tracked.txt", "content": "old value"},
+            cwd=cwd,
+        )
+        patches = [
+            (
+                "patch-update",
+                """*** Begin Patch
+*** Update File: tracked.txt
+@@
+-old value
++new value
+*** End Patch""",
+            ),
+            (
+                "patch-move",
+                """*** Begin Patch
+*** Update File: tracked.txt
+*** Move to: moved.txt
+@@
+-new value
++moved value
+*** End Patch""",
+            ),
+            (
+                "patch-delete",
+                """*** Begin Patch
+*** Delete File: moved.txt
+*** End Patch""",
+            ),
+        ]
+        for tool_use_id, command in patches:
+            self._record(
+                "pre_tool_use",
+                tool_use_id,
+                "apply_patch",
+                tool_input={"command": command},
+                cwd=cwd,
+            )
+            self._record(
+                "post_tool_use",
+                tool_use_id,
+                "apply_patch",
+                tool_input={"command": command},
+                tool_response={"stdout": "Exit code: 0\nSuccess."},
+                cwd=cwd,
+            )
+
+        result = run_adapters(self.store.list_artifact_contexts(), Path(cwd))
+        relations = [edge.relation for edge in result.edges]
+        resources_by_tool = {
+            resource.origin_tool_use_id: resource for resource in result.resources
+        }
+
+        self.assertIn("updated_from", relations)
+        self.assertIn("moved_to", relations)
+        self.assertIn("deleted_by", relations)
+        self.assertEqual(
+            2,
+            sum(
+                edge.relation == "written_to" and edge.method == "apply_patch_write"
+                for edge in result.edges
+            ),
+        )
+        self.assertIsNone(resources_by_tool["patch-update"].content_hash)
+        self.assertEqual(
+            str(Path(cwd, "moved.txt").resolve()),
+            resources_by_tool["patch-move"].path,
+        )
+
+    def test_filesystem_adapter_ignores_failed_apply_patch(self) -> None:
+        command = """*** Begin Patch
+*** Add File: failed.txt
++content
+*** End Patch"""
+        self._record(
+            "pre_tool_use",
+            "patch-failed",
+            "apply_patch",
+            tool_input={"command": command},
+        )
+        self._record(
+            "post_tool_use",
+            "patch-failed",
+            "apply_patch",
+            tool_input={"command": command},
+            tool_response={"stderr": "Exit code: 1\nError: patch failed"},
+        )
+
+        result = run_adapters(
+            self.store.list_artifact_contexts(),
+            Path(self.temporary_directory.name),
+        )
+        self.assertEqual([], list(result.resources))
+        self.assertEqual([], list(result.edges))
+
+    def test_apply_patch_content_propagates_source_lineage_to_resource(self) -> None:
+        command = f"""*** Begin Patch
+*** Add File: derived.txt
++{SECRET}
+*** End Patch"""
+        for phase, response in (
+            ("pre_tool_use", None),
+            ("post_tool_use", {"stdout": "Exit code: 0\nSuccess."}),
+        ):
+            self._record(
+                phase,
+                "patch-secret",
+                "apply_patch",
+                tool_input={"command": command},
+                tool_response=response,
+                cwd=self.temporary_directory.name,
+            )
+
+        contexts = self.store.list_artifact_contexts()
+        adapter_result = run_adapters(contexts, Path(self.temporary_directory.name))
+        artifact_edges = build_artifact_flow_edges(contexts) + list(adapter_result.edges)
+        source_edges = build_source_binding_edges(
+            [self._source_chunk()],
+            contexts,
+            artifact_edges,
+        )
+        assignments = propagate_lineage(
+            "run-patch-secret",
+            source_edges + artifact_edges,
+        )
+        resource_ids = {resource.node_id for resource in adapter_result.resources}
+        reached_resources = {
+            assignment.node_id
+            for assignment in assignments
+            if assignment.node_kind == "resource_version"
+        }
+
+        self.assertEqual(resource_ids, reached_resources)
+        self.assertTrue(resource_ids)
 
     def test_unprotected_filesystem_path_remains_outside_source_lineage(self) -> None:
         public_path = Path(self.temporary_directory.name) / "public.md"
@@ -1563,7 +1847,7 @@ class InformationFlowTest(unittest.TestCase):
         tool_name: str,
         *,
         tool_input: dict[str, object],
-        tool_response: dict[str, object] | None = None,
+        tool_response: object | None = None,
         cwd: str | None = None,
     ) -> None:
         payload: dict[str, object] = {

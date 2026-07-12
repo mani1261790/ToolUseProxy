@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from collections import defaultdict
 from pathlib import Path
 
@@ -17,19 +18,44 @@ from hook_monitor.runtime.models import (
 
 MAX_LEXICAL_CANDIDATES = 50
 MAX_SOURCE_CANDIDATES = 200
+CONTENT_BEARING_ROLES = frozenset(
+    {
+        "command",
+        "query",
+        "search_query",
+        "content",
+        "stdout",
+        "stderr",
+        "tool_output",
+        "final_answer",
+    }
+)
+
+
+def select_canonical_similarity_contexts(
+    contexts: list[ArtifactContext],
+) -> list[ArtifactContext]:
+    """観測fragmentを保持したまま、内容比較に使う代表fragmentだけを選ぶ。"""
+    return [context for context in contexts if _is_similarity_context(context)]
 
 
 def build_artifact_flow_edges(
     contexts: list[ArtifactContext],
 ) -> list[FlowEdge]:
     """source定義とは独立に、時系列上のartifact fragment間の伝播候補を作る。"""
-    ordered = sorted(contexts, key=lambda item: (item.sequence_no, item.fragment.fragment_id))
+    ordered = sorted(
+        select_canonical_similarity_contexts(contexts),
+        key=lambda item: (item.sequence_no, item.fragment.fragment_id),
+    )
     by_id = {item.fragment.fragment_id: item for item in ordered}
-    hash_index: dict[tuple[str | None, str], list[str]] = defaultdict(list)
-    shingle_index: dict[tuple[str | None, str], set[str]] = defaultdict(set)
+    hash_index: dict[tuple[tuple[str, str], str], list[str]] = defaultdict(list)
+    shingle_index: dict[tuple[tuple[str, str], str], set[str]] = defaultdict(set)
     edges: dict[tuple[str, str], FlowEdge] = {}
 
     for current in ordered:
+        scope = _comparison_scope(current)
+        if scope is None:
+            continue
         candidate_ids = _candidate_ids(current, hash_index, shingle_index)
         for candidate_id in candidate_ids:
             previous = by_id[candidate_id]
@@ -40,12 +66,11 @@ def build_artifact_flow_edges(
             if key not in edges or edge.score > edges[key].score:
                 edges[key] = edge
 
-        index_key = current.session_id
-        hash_index[(index_key, current.fragment.text_hash)].append(
+        hash_index[(scope, current.fragment.text_hash)].append(
             current.fragment.fragment_id
         )
         for shingle in make_shingles(current.fragment.normalized_text):
-            shingle_index[(index_key, shingle)].add(current.fragment.fragment_id)
+            shingle_index[(scope, shingle)].add(current.fragment.fragment_id)
 
     return list(edges.values())
 
@@ -56,10 +81,13 @@ def build_source_binding_edges(
     artifact_edges: list[FlowEdge] | None = None,
 ) -> list[FlowEdge]:
     """protected sourceを既存グラフの上流側にある一致nodeへ接続する。"""
-    by_id = {context.fragment.fragment_id: context for context in contexts}
+    canonical_contexts = select_canonical_similarity_contexts(contexts)
+    by_id = {
+        context.fragment.fragment_id: context for context in canonical_contexts
+    }
     hash_index: dict[str, list[str]] = defaultdict(list)
     shingle_index: dict[str, set[str]] = defaultdict(set)
-    for context in contexts:
+    for context in canonical_contexts:
         hash_index[context.fragment.text_hash].append(context.fragment.fragment_id)
         for shingle in make_shingles(context.fragment.normalized_text):
             shingle_index[shingle].add(context.fragment.fragment_id)
@@ -153,15 +181,17 @@ def build_protected_source_resource_edges(
 
 def _candidate_ids(
     current: ArtifactContext,
-    hash_index: dict[tuple[str | None, str], list[str]],
-    shingle_index: dict[tuple[str | None, str], set[str]],
+    hash_index: dict[tuple[tuple[str, str], str], list[str]],
+    shingle_index: dict[tuple[tuple[str, str], str], set[str]],
 ) -> set[str]:
-    session_key = current.session_id
-    candidates = set(hash_index[(session_key, current.fragment.text_hash)])
+    scope = _comparison_scope(current)
+    if scope is None:
+        return set()
+    candidates = set(hash_index[(scope, current.fragment.text_hash)])
 
     overlap_counts: dict[str, int] = defaultdict(int)
     for shingle in make_shingles(current.fragment.normalized_text):
-        for fragment_id in shingle_index[(session_key, shingle)]:
+        for fragment_id in shingle_index[(scope, shingle)]:
             overlap_counts[fragment_id] += 1
 
     ranked = sorted(
@@ -173,6 +203,37 @@ def _candidate_ids(
     return candidates
 
 
+def _is_similarity_context(context: ArtifactContext) -> bool:
+    if (
+        context.phase == "post_tool_use"
+        and context.artifact_role == "tool_input"
+    ):
+        return False
+    if context.fragment.semantic_role not in CONTENT_BEARING_ROLES:
+        return False
+    if context.fragment.json_pointer == "/" and _is_json_container(
+        context.fragment.text
+    ):
+        return False
+    return True
+
+
+def _is_json_container(text: str) -> bool:
+    try:
+        value = json.loads(text)
+    except json.JSONDecodeError:
+        return False
+    return isinstance(value, (dict, list))
+
+
+def _comparison_scope(context: ArtifactContext) -> tuple[str, str] | None:
+    if context.session_id is not None:
+        return ("session", context.session_id)
+    if context.turn_id is not None:
+        return ("turn", context.turn_id)
+    return None
+
+
 def _compare_artifact_pair(
     previous: ArtifactContext,
     current: ArtifactContext,
@@ -181,25 +242,6 @@ def _compare_artifact_pair(
         return None
     if previous.fragment.artifact_id == current.fragment.artifact_id:
         return None
-
-    same_tool_input = (
-        previous.tool_use_id is not None
-        and previous.tool_use_id == current.tool_use_id
-        and previous.fragment.semantic_role == current.fragment.semantic_role
-        and previous.fragment.text_hash == current.fragment.text_hash
-    )
-    if same_tool_input:
-        return _make_edge(
-            src_kind="artifact_fragment",
-            src_id=previous.fragment.fragment_id,
-            dst_kind="artifact_fragment",
-            dst_id=current.fragment.fragment_id,
-            relation="same_content",
-            evidence_level="structured",
-            method="tool_use_identity",
-            score=1.0,
-            reason="same tool_use_id, semantic role, and text hash across hook phases",
-        )
 
     decision = compare_text(
         left_text=previous.fragment.text,
@@ -226,7 +268,6 @@ def _compare_artifact_pair(
 
 def _evidence_level(method: str) -> str:
     return {
-        "tool_use_identity": "structured",
         "exact": "content_exact",
         "substring": "content_lexical",
         "shingle_jaccard": "content_lexical",
