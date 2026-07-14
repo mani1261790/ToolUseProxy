@@ -41,6 +41,9 @@ class ArtifactFragment:
     text_hash: str
     normalized_text: str
     token_count: int
+    fragment_kind: str = "payload"
+    parent_fragment_id: str | None = None
+    operation_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -55,6 +58,27 @@ class ArtifactContext:
     tool_name: str | None
     cwd: str | None
     sequence_no: int
+
+
+@dataclass(frozen=True)
+class ToolOperation:
+    operation_id: str
+    event_id: str
+    artifact_id: str
+    parent_fragment_id: str
+    session_id: str | None
+    tool_use_id: str | None
+    tool_name: str | None
+    adapter: str
+    operation_index: int
+    operation_kind: str
+    source_path: str | None
+    target_path: str | None
+    segment_index: int | None
+    connector: str | None
+    content_fragment_id: str | None
+    outcome: str = "unknown"
+    outcome_evidence: str | None = None
 
 
 @dataclass(frozen=True)

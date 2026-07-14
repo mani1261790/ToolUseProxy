@@ -43,9 +43,11 @@ from hook_monitor.runtime.runner import run_hook
 from hook_monitor.runtime.stop_policy import evaluate_stop_hook_policy
 from hook_monitor.runtime.models import (
     AnalysisCursor,
+    ArtifactFragment,
     NormalizedEvent,
     ProtectedSource,
     SourceChunk,
+    ToolOperation,
 )
 from hook_monitor.runtime.storage import EventStore
 
@@ -82,6 +84,86 @@ class InformationFlowTest(unittest.TestCase):
         self.assertIn("query", roles)
         self.assertIn("path", roles)
         self.assertIn("tool_input", roles)
+
+    def test_operation_metadata_and_derived_fragment_round_trip(self) -> None:
+        event = normalize_event(
+            "pre_tool_use",
+            {
+                "session_id": "session-operation",
+                "turn_id": "turn-operation",
+                "tool_use_id": "patch-operation",
+                "tool_name": "apply_patch",
+                "tool_input": {"command": "*** Begin Patch\n*** End Patch"},
+            },
+        )
+        artifacts = build_artifacts(event)
+        fragments = build_fragments(artifacts)
+        command = next(
+            fragment
+            for fragment in fragments
+            if fragment.semantic_role == "command"
+        )
+        operation_id = "operation-round-trip"
+        content = "operation-specific content"
+        derived = ArtifactFragment(
+            fragment_id="fragment-operation-round-trip",
+            artifact_id=command.artifact_id,
+            json_pointer=command.json_pointer,
+            semantic_role="content",
+            text=content,
+            text_hash=hashlib.sha256(content.encode("utf-8")).hexdigest(),
+            normalized_text=content,
+            token_count=2,
+            fragment_kind="operation_added",
+            parent_fragment_id=command.fragment_id,
+            operation_id=operation_id,
+        )
+        operation = ToolOperation(
+            operation_id=operation_id,
+            event_id=event.event_id,
+            artifact_id=command.artifact_id,
+            parent_fragment_id=command.fragment_id,
+            session_id=event.session_id,
+            tool_use_id=event.tool_use_id,
+            tool_name=event.tool_name,
+            adapter="apply_patch",
+            operation_index=0,
+            operation_kind="add",
+            source_path=None,
+            target_path="derived.txt",
+            segment_index=None,
+            connector=None,
+            content_fragment_id=derived.fragment_id,
+        )
+
+        self.store.record(
+            event,
+            artifacts,
+            fragments + [derived],
+            [operation],
+        )
+
+        stored_operations = self.store.list_tool_operations_for_session(
+            "session-operation"
+        )
+        stored_derived = next(
+            context.fragment
+            for context in self.store.list_artifact_contexts()
+            if context.fragment.fragment_id == derived.fragment_id
+        )
+        self.assertEqual([operation], stored_operations)
+        self.assertEqual("operation_added", stored_derived.fragment_kind)
+        self.assertEqual(command.fragment_id, stored_derived.parent_fragment_id)
+        self.assertEqual(operation_id, stored_derived.operation_id)
+
+        self.store.upsert_artifact_fragments([derived])
+        reloaded = next(
+            context.fragment
+            for context in self.store.list_artifact_contexts()
+            if context.fragment.fragment_id == derived.fragment_id
+        )
+        self.assertEqual("operation_added", reloaded.fragment_kind)
+        self.assertEqual(operation_id, reloaded.operation_id)
 
     def test_real_codex_stop_payload_builds_final_answer(self) -> None:
         event = normalize_event(

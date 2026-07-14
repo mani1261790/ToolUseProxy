@@ -19,6 +19,7 @@ from hook_monitor.runtime.models import (
     SinkCandidate,
     SourceChunk,
     StoredPolicyDecision,
+    ToolOperation,
 )
 
 
@@ -80,6 +81,50 @@ class EventStore:
                     normalized_text TEXT NOT NULL,
                     token_count INTEGER NOT NULL,
                     recorded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (artifact_id) REFERENCES artifacts (artifact_id)
+                )
+                """
+            )
+            self._ensure_column(
+                conn,
+                "artifact_fragments",
+                "fragment_kind",
+                "TEXT NOT NULL DEFAULT 'payload'",
+            )
+            self._ensure_column(
+                conn,
+                "artifact_fragments",
+                "parent_fragment_id",
+                "TEXT",
+            )
+            self._ensure_column(
+                conn,
+                "artifact_fragments",
+                "operation_id",
+                "TEXT",
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS tool_operations (
+                    operation_id TEXT PRIMARY KEY,
+                    event_id TEXT NOT NULL,
+                    artifact_id TEXT NOT NULL,
+                    parent_fragment_id TEXT NOT NULL,
+                    session_id TEXT,
+                    tool_use_id TEXT,
+                    tool_name TEXT,
+                    adapter TEXT NOT NULL,
+                    operation_index INTEGER NOT NULL,
+                    operation_kind TEXT NOT NULL,
+                    source_path TEXT,
+                    target_path TEXT,
+                    segment_index INTEGER,
+                    connector TEXT,
+                    content_fragment_id TEXT,
+                    outcome TEXT NOT NULL DEFAULT 'unknown',
+                    outcome_evidence TEXT,
+                    recorded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (event_id) REFERENCES events (event_id),
                     FOREIGN KEY (artifact_id) REFERENCES artifacts (artifact_id)
                 )
                 """
@@ -351,6 +396,15 @@ class EventStore:
                 "CREATE INDEX IF NOT EXISTS idx_fragments_text_hash ON artifact_fragments (text_hash)"
             )
             conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_fragments_operation_id ON artifact_fragments (operation_id)"
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_tool_operations_session_tool
+                ON tool_operations (session_id, tool_use_id, operation_index)
+                """
+            )
+            conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_source_chunks_source_id ON source_chunks (source_id)"
             )
             conn.execute(
@@ -414,6 +468,7 @@ class EventStore:
         event: NormalizedEvent,
         artifacts: list[ArtifactRecord],
         fragments: list[ArtifactFragment] | None = None,
+        operations: list[ToolOperation] | None = None,
     ) -> None:
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
@@ -489,6 +544,31 @@ class EventStore:
                     for artifact in artifacts
                 ],
             )
+            if operations:
+                conn.executemany(
+                    """
+                    INSERT OR REPLACE INTO tool_operations (
+                        operation_id,
+                        event_id,
+                        artifact_id,
+                        parent_fragment_id,
+                        session_id,
+                        tool_use_id,
+                        tool_name,
+                        adapter,
+                        operation_index,
+                        operation_kind,
+                        source_path,
+                        target_path,
+                        segment_index,
+                        connector,
+                        content_fragment_id,
+                        outcome,
+                        outcome_evidence
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    [_tool_operation_values(operation) for operation in operations],
+                )
             if fragments:
                 conn.executemany(
                     """
@@ -500,8 +580,11 @@ class EventStore:
                         text,
                         text_hash,
                         normalized_text,
-                        token_count
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        token_count,
+                        fragment_kind,
+                        parent_fragment_id,
+                        operation_id
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     [
                         (
@@ -513,10 +596,78 @@ class EventStore:
                             fragment.text_hash,
                             fragment.normalized_text,
                             fragment.token_count,
+                            fragment.fragment_kind,
+                            fragment.parent_fragment_id,
+                            fragment.operation_id,
                         )
                         for fragment in fragments
                     ],
                 )
+
+    def list_tool_operations_for_session(
+        self,
+        session_id: str,
+        *,
+        after_sequence_no: int | None = None,
+        through_sequence_no: int | None = None,
+    ) -> list[ToolOperation]:
+        clause = "WHERE o.session_id = ?"
+        params: tuple[object, ...] = (session_id,)
+        if after_sequence_no is not None:
+            clause += " AND e.sequence_no > ?"
+            params += (after_sequence_no,)
+        if through_sequence_no is not None:
+            clause += " AND e.sequence_no <= ?"
+            params += (through_sequence_no,)
+        return self._list_tool_operations_where(clause, params)
+
+    def list_tool_operations_for_tool_uses(
+        self,
+        session_id: str,
+        tool_use_ids: set[str],
+    ) -> list[ToolOperation]:
+        if not tool_use_ids:
+            return []
+        placeholders = ",".join("?" for _ in tool_use_ids)
+        return self._list_tool_operations_where(
+            f"WHERE o.session_id = ? AND o.tool_use_id IN ({placeholders})",
+            (session_id, *sorted(tool_use_ids)),
+        )
+
+    def _list_tool_operations_where(
+        self,
+        where_clause: str,
+        params: tuple[object, ...],
+    ) -> list[ToolOperation]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT
+                    o.operation_id,
+                    o.event_id,
+                    o.artifact_id,
+                    o.parent_fragment_id,
+                    o.session_id,
+                    o.tool_use_id,
+                    o.tool_name,
+                    o.adapter,
+                    o.operation_index,
+                    o.operation_kind,
+                    o.source_path,
+                    o.target_path,
+                    o.segment_index,
+                    o.connector,
+                    o.content_fragment_id,
+                    o.outcome,
+                    o.outcome_evidence
+                FROM tool_operations AS o
+                JOIN events AS e ON e.event_id = o.event_id
+                {where_clause}
+                ORDER BY e.sequence_no, o.operation_index, o.operation_id
+                """,
+                params,
+            ).fetchall()
+        return [ToolOperation(*row) for row in rows]
 
     def upsert_sources(self, sources: list[ProtectedSource], chunks: list[SourceChunk]) -> None:
         with self._connect() as conn:
@@ -581,8 +732,11 @@ class EventStore:
                     text,
                     text_hash,
                     normalized_text,
-                    token_count
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    token_count,
+                    fragment_kind,
+                    parent_fragment_id,
+                    operation_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
                     (
@@ -594,6 +748,9 @@ class EventStore:
                         fragment.text_hash,
                         fragment.normalized_text,
                         fragment.token_count,
+                        fragment.fragment_kind,
+                        fragment.parent_fragment_id,
+                        fragment.operation_id,
                     )
                     for fragment in fragments
                 ],
@@ -1718,6 +1875,9 @@ class EventStore:
                     f.text_hash,
                     f.normalized_text,
                     f.token_count,
+                    f.fragment_kind,
+                    f.parent_fragment_id,
+                    f.operation_id,
                     a.role,
                     e.event_id,
                     e.phase,
@@ -1746,16 +1906,19 @@ class EventStore:
                     text_hash=row[5],
                     normalized_text=row[6],
                     token_count=row[7],
+                    fragment_kind=row[8],
+                    parent_fragment_id=row[9],
+                    operation_id=row[10],
                 ),
-                artifact_role=row[8],
-                event_id=row[9],
-                phase=row[10],
-                session_id=row[11],
-                turn_id=row[12],
-                tool_use_id=row[13],
-                tool_name=row[14],
-                cwd=row[15],
-                sequence_no=row[16],
+                artifact_role=row[11],
+                event_id=row[12],
+                phase=row[13],
+                session_id=row[14],
+                turn_id=row[15],
+                tool_use_id=row[16],
+                tool_name=row[17],
+                cwd=row[18],
+                sequence_no=row[19],
             )
             for row in rows
         ]
@@ -1908,6 +2071,28 @@ def _resource_values(resource: ResourceVersion) -> tuple[object, ...]:
         resource.sequence_no,
         resource.session_id,
         resource.origin_tool_use_id,
+    )
+
+
+def _tool_operation_values(operation: ToolOperation) -> tuple[object, ...]:
+    return (
+        operation.operation_id,
+        operation.event_id,
+        operation.artifact_id,
+        operation.parent_fragment_id,
+        operation.session_id,
+        operation.tool_use_id,
+        operation.tool_name,
+        operation.adapter,
+        operation.operation_index,
+        operation.operation_kind,
+        operation.source_path,
+        operation.target_path,
+        operation.segment_index,
+        operation.connector,
+        operation.content_fragment_id,
+        operation.outcome,
+        operation.outcome_evidence,
     )
 
 
