@@ -5,12 +5,14 @@ import json
 from pathlib import Path
 
 from hook_monitor.runtime.models import ProtectedSource, SourceChunk
+from hook_monitor.runtime.ids import make_source_chunk_id
 from hook_monitor.runtime.normalize import estimate_token_count, normalize_text
+from hook_monitor.runtime.source_config import resolve_protected_source_path
 
 
 def build_source_chunks(repo_root: Path, source: ProtectedSource) -> list[SourceChunk]:
     # protected source を読み、比較単位に分解して後段の比較器へ渡す。
-    source_path = (repo_root / source.path).resolve()
+    source_path = resolve_protected_source_path(repo_root, source.path)
     text = source_path.read_text(encoding="utf-8")
 
     chunks = _split_chunks(source_path, text)
@@ -20,7 +22,7 @@ def build_source_chunks(repo_root: Path, source: ProtectedSource) -> list[Source
         shingles = _make_shingles(normalized, size=5)
         records.append(
             SourceChunk(
-                chunk_id=_make_chunk_id(source.source_id, ordinal, chunk_text),
+                chunk_id=make_source_chunk_id(source.source_id, ordinal, chunk_text),
                 source_id=source.source_id,
                 ordinal=ordinal,
                 text=chunk_text,
@@ -28,6 +30,7 @@ def build_source_chunks(repo_root: Path, source: ProtectedSource) -> list[Source
                 text_hash=hashlib.sha256(chunk_text.encode("utf-8")).hexdigest(),
                 shingle_fingerprint=json.dumps(shingles, ensure_ascii=False, sort_keys=True),
                 token_count=estimate_token_count(normalized),
+                workspace_id=source.workspace_id,
             )
         )
     return records
@@ -62,11 +65,6 @@ def _split_paragraphs(text: str) -> list[str]:
     # Markdown やメモ類はまず段落単位で扱う。
     chunks = [chunk.strip() for chunk in text.split("\n\n")]
     return [chunk for chunk in chunks if chunk]
-
-
-def _make_chunk_id(source_id: str, ordinal: int, text: str) -> str:
-    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
-    return f"{source_id}:{ordinal}:{digest}"
 
 
 def _make_shingles(text: str, size: int) -> list[str]:

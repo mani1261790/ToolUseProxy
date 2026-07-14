@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -9,7 +10,7 @@ import uuid
 from dataclasses import replace
 from pathlib import Path
 
-from hook_monitor.runtime.ids import make_event_id
+from hook_monitor.runtime.ids import make_event_id, make_source_chunk_id
 
 from hook_monitor.runtime.models import (
     AnalysisCursor,
@@ -33,6 +34,10 @@ from hook_monitor.runtime.workspace import (
     WorkspaceContext,
     make_workspace_id,
     resolve_workspace,
+)
+from hook_monitor.runtime.source_config import (
+    make_scoped_source_id,
+    resolve_protected_source_path,
 )
 
 
@@ -205,6 +210,8 @@ class EventStore:
                 )
                 """
             )
+            self._ensure_column(conn, "protected_sources", "workspace_id", "TEXT")
+            self._ensure_column(conn, "protected_sources", "source_key", "TEXT")
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS resource_snapshots (
@@ -250,6 +257,7 @@ class EventStore:
                 )
                 """
             )
+            self._ensure_column(conn, "source_chunks", "workspace_id", "TEXT")
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS flow_edges (
@@ -513,6 +521,26 @@ class EventStore:
             )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_artifacts_event_id ON artifacts (event_id)"
+            )
+            conn.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_protected_sources_workspace_key
+                ON protected_sources (workspace_id, source_key)
+                WHERE workspace_id IS NOT NULL
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_protected_sources_workspace_id
+                ON protected_sources (workspace_id, source_id)
+                """
+            )
+            conn.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_source_chunks_workspace_ordinal
+                ON source_chunks (workspace_id, source_id, ordinal)
+                WHERE workspace_id IS NOT NULL
+                """
             )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_fragments_artifact_id ON artifact_fragments (artifact_id)"
@@ -1479,55 +1507,204 @@ class EventStore:
         ]
 
     def upsert_sources(self, sources: list[ProtectedSource], chunks: list[SourceChunk]) -> None:
+        if any(
+            source.workspace_id is not None or source.source_key is not None
+            for source in sources
+        ) or any(
+            chunk.workspace_id is not None for chunk in chunks
+        ):
+            raise ValueError(
+                "scoped source catalog requires replace_sources_for_workspace"
+            )
+        _validate_legacy_source_catalog(sources, chunks)
         with self._connect() as conn:
-            conn.executemany(
-                """
-                INSERT OR REPLACE INTO protected_sources (
-                    source_id,
-                    path,
-                    source_type,
-                    sensitivity,
-                    policy_tags_json
-                ) VALUES (?, ?, ?, ?, ?)
-                """,
-                [
-                    (
-                        source.source_id,
-                        source.path,
-                        source.source_type,
-                        source.sensitivity,
-                        json.dumps(source.policy_tags, ensure_ascii=False),
-                    )
-                    for source in sources
-                ],
+            conn.execute("BEGIN IMMEDIATE")
+            self._reject_legacy_source_catalog_collisions(conn, sources, chunks)
+            self._write_sources(conn, sources, chunks)
+
+    def replace_sources_for_workspace(
+        self,
+        workspace_id: str,
+        sources: list[ProtectedSource],
+        chunks: list[SourceChunk],
+    ) -> None:
+        _validate_workspace_source_catalog(workspace_id, sources, chunks)
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            workspace_row = conn.execute(
+                "SELECT canonical_root FROM workspaces WHERE workspace_id = ?",
+                (workspace_id,),
+            ).fetchone()
+            if workspace_row is None:
+                raise ValueError("workspace source catalog requires a registered workspace")
+            workspace_root = workspace_row[0]
+            for source in sources:
+                resolve_protected_source_path(workspace_root, source.path)
+            self._reject_cross_workspace_source_catalog_collisions(
+                conn,
+                workspace_id,
+                sources,
+                chunks,
             )
-            conn.executemany(
-                """
-                INSERT OR REPLACE INTO source_chunks (
-                    chunk_id,
-                    source_id,
-                    ordinal,
-                    text,
-                    normalized_text,
-                    text_hash,
-                    shingle_fingerprint,
-                    token_count
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                [
-                    (
-                        chunk.chunk_id,
-                        chunk.source_id,
-                        chunk.ordinal,
-                        chunk.text,
-                        chunk.normalized_text,
-                        chunk.text_hash,
-                        chunk.shingle_fingerprint,
-                        chunk.token_count,
-                    )
-                    for chunk in chunks
-                ],
+            conn.execute(
+                "DELETE FROM source_chunks WHERE workspace_id = ?",
+                (workspace_id,),
             )
+            conn.execute(
+                "DELETE FROM protected_sources WHERE workspace_id = ?",
+                (workspace_id,),
+            )
+            self._write_sources(conn, sources, chunks)
+
+    def _reject_legacy_source_catalog_collisions(
+        self,
+        conn: sqlite3.Connection,
+        sources: list[ProtectedSource],
+        chunks: list[SourceChunk],
+    ) -> None:
+        source_ids = [source.source_id for source in sources]
+        if source_ids:
+            placeholders = ",".join("?" for _ in source_ids)
+            if conn.execute(
+                f"""
+                SELECT 1
+                FROM protected_sources
+                WHERE source_id IN ({placeholders})
+                  AND workspace_id IS NOT NULL
+                LIMIT 1
+                """,
+                source_ids,
+            ).fetchone() is not None:
+                raise ValueError("legacy source id belongs to a workspace catalog")
+        chunk_ids = [chunk.chunk_id for chunk in chunks]
+        chunk_source_ids = [chunk.source_id for chunk in chunks]
+        if chunk_source_ids:
+            placeholders = ",".join("?" for _ in chunk_source_ids)
+            if conn.execute(
+                f"""
+                SELECT 1
+                FROM protected_sources
+                WHERE source_id IN ({placeholders})
+                  AND workspace_id IS NOT NULL
+                LIMIT 1
+                """,
+                chunk_source_ids,
+            ).fetchone() is not None:
+                raise ValueError(
+                    "legacy source chunk references a workspace catalog"
+                )
+        if chunk_ids:
+            placeholders = ",".join("?" for _ in chunk_ids)
+            if conn.execute(
+                f"""
+                SELECT 1
+                FROM source_chunks
+                WHERE chunk_id IN ({placeholders})
+                  AND workspace_id IS NOT NULL
+                LIMIT 1
+                """,
+                chunk_ids,
+            ).fetchone() is not None:
+                raise ValueError("legacy source chunk id belongs to a workspace catalog")
+
+    def _reject_cross_workspace_source_catalog_collisions(
+        self,
+        conn: sqlite3.Connection,
+        workspace_id: str,
+        sources: list[ProtectedSource],
+        chunks: list[SourceChunk],
+    ) -> None:
+        source_ids = [source.source_id for source in sources]
+        if source_ids:
+            placeholders = ",".join("?" for _ in source_ids)
+            collisions = conn.execute(
+                f"""
+                SELECT source_id
+                FROM protected_sources
+                WHERE source_id IN ({placeholders})
+                  AND workspace_id IS NOT ?
+                LIMIT 1
+                """,
+                (*source_ids, workspace_id),
+            ).fetchone()
+            if collisions is not None:
+                raise ValueError("protected source id belongs to another workspace")
+        chunk_ids = [chunk.chunk_id for chunk in chunks]
+        if chunk_ids:
+            placeholders = ",".join("?" for _ in chunk_ids)
+            collisions = conn.execute(
+                f"""
+                SELECT chunk_id
+                FROM source_chunks
+                WHERE chunk_id IN ({placeholders})
+                  AND workspace_id IS NOT ?
+                LIMIT 1
+                """,
+                (*chunk_ids, workspace_id),
+            ).fetchone()
+            if collisions is not None:
+                raise ValueError("source chunk id belongs to another workspace")
+
+    def _write_sources(
+        self,
+        conn: sqlite3.Connection,
+        sources: list[ProtectedSource],
+        chunks: list[SourceChunk],
+    ) -> None:
+        conn.executemany(
+            """
+            INSERT OR REPLACE INTO protected_sources (
+                source_id,
+                workspace_id,
+                source_key,
+                path,
+                source_type,
+                sensitivity,
+                policy_tags_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    source.source_id,
+                    source.workspace_id,
+                    source.source_key,
+                    source.path,
+                    source.source_type,
+                    source.sensitivity,
+                    json.dumps(source.policy_tags, ensure_ascii=False),
+                )
+                for source in sources
+            ],
+        )
+        conn.executemany(
+            """
+            INSERT OR REPLACE INTO source_chunks (
+                chunk_id,
+                source_id,
+                workspace_id,
+                ordinal,
+                text,
+                normalized_text,
+                text_hash,
+                shingle_fingerprint,
+                token_count
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    chunk.chunk_id,
+                    chunk.source_id,
+                    chunk.workspace_id,
+                    chunk.ordinal,
+                    chunk.text,
+                    chunk.normalized_text,
+                    chunk.text_hash,
+                    chunk.shingle_fingerprint,
+                    chunk.token_count,
+                )
+                for chunk in chunks
+            ],
+        )
 
     def upsert_artifact_fragments(self, fragments: list[ArtifactFragment]) -> None:
         with self._connect() as conn:
@@ -2124,21 +2301,19 @@ class EventStore:
         with self._connect() as conn:
             rows = conn.execute(
                 """
-                SELECT source_id, path, source_type, sensitivity, policy_tags_json
+                SELECT
+                    source_id,
+                    path,
+                    source_type,
+                    sensitivity,
+                    policy_tags_json,
+                    workspace_id,
+                    source_key
                 FROM protected_sources
                 ORDER BY source_id
                 """
             ).fetchall()
-        return [
-            ProtectedSource(
-                source_id=row[0],
-                path=row[1],
-                source_type=row[2],
-                sensitivity=row[3],
-                policy_tags=tuple(json.loads(row[4])),
-            )
-            for row in rows
-        ]
+        return [_protected_source_from_row(row) for row in rows]
 
     def list_source_chunks(self) -> list[SourceChunk]:
         with self._connect() as conn:
@@ -2152,24 +2327,61 @@ class EventStore:
                     normalized_text,
                     text_hash,
                     shingle_fingerprint,
-                    token_count
+                    token_count,
+                    workspace_id
                 FROM source_chunks
                 ORDER BY source_id, ordinal
                 """
             ).fetchall()
-        return [
-            SourceChunk(
-                chunk_id=row[0],
-                source_id=row[1],
-                ordinal=row[2],
-                text=row[3],
-                normalized_text=row[4],
-                text_hash=row[5],
-                shingle_fingerprint=row[6],
-                token_count=row[7],
-            )
-            for row in rows
-        ]
+        return [_source_chunk_from_row(row) for row in rows]
+
+    def list_protected_sources_for_workspace(
+        self,
+        workspace_id: str,
+    ) -> list[ProtectedSource]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT
+                    source_id,
+                    path,
+                    source_type,
+                    sensitivity,
+                    policy_tags_json,
+                    workspace_id,
+                    source_key
+                FROM protected_sources
+                WHERE workspace_id = ?
+                ORDER BY source_key, source_id
+                """,
+                (workspace_id,),
+            ).fetchall()
+        return [_protected_source_from_row(row) for row in rows]
+
+    def list_source_chunks_for_workspace(
+        self,
+        workspace_id: str,
+    ) -> list[SourceChunk]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT
+                    chunk_id,
+                    source_id,
+                    ordinal,
+                    text,
+                    normalized_text,
+                    text_hash,
+                    shingle_fingerprint,
+                    token_count,
+                    workspace_id
+                FROM source_chunks
+                WHERE workspace_id = ?
+                ORDER BY source_id, ordinal
+                """,
+                (workspace_id,),
+            ).fetchall()
+        return [_source_chunk_from_row(row) for row in rows]
 
     def list_resource_versions(self) -> list[ResourceVersion]:
         with self._connect() as conn:
@@ -3167,6 +3379,103 @@ def _enable_wal(conn: sqlite3.Connection) -> None:
             if "locked" not in str(exc).casefold() or time.monotonic() >= deadline:
                 raise
             time.sleep(0.01)
+
+
+def _validate_workspace_source_catalog(
+    workspace_id: str,
+    sources: list[ProtectedSource],
+    chunks: list[SourceChunk],
+) -> None:
+    if not workspace_id:
+        raise ValueError("workspace id is required for source catalog")
+    source_ids: set[str] = set()
+    source_keys: set[str] = set()
+    for source in sources:
+        if source.workspace_id != workspace_id or not source.source_key:
+            raise ValueError("protected source workspace does not match catalog")
+        if source.source_id != make_scoped_source_id(
+            workspace_id,
+            source.source_key,
+        ):
+            raise ValueError("protected source id does not match workspace namespace")
+        if source.source_id in source_ids or source.source_key in source_keys:
+            raise ValueError("duplicate protected source in workspace catalog")
+        source_ids.add(source.source_id)
+        source_keys.add(source.source_key)
+
+    chunk_ids: set[str] = set()
+    source_ordinals: set[tuple[str, int]] = set()
+    for chunk in chunks:
+        if chunk.workspace_id != workspace_id:
+            raise ValueError("source chunk workspace does not match catalog")
+        if chunk.source_id not in source_ids:
+            raise ValueError("source chunk does not belong to workspace source")
+        if chunk.chunk_id != make_source_chunk_id(
+            chunk.source_id,
+            chunk.ordinal,
+            chunk.text,
+        ):
+            raise ValueError("source chunk id does not match source content")
+        if chunk.text_hash != hashlib.sha256(chunk.text.encode("utf-8")).hexdigest():
+            raise ValueError("source chunk hash does not match source content")
+        if chunk.chunk_id in chunk_ids:
+            raise ValueError("duplicate source chunk in workspace catalog")
+        source_ordinal = (chunk.source_id, chunk.ordinal)
+        if source_ordinal in source_ordinals:
+            raise ValueError("duplicate source chunk ordinal in workspace catalog")
+        chunk_ids.add(chunk.chunk_id)
+        source_ordinals.add(source_ordinal)
+
+
+def _validate_legacy_source_catalog(
+    sources: list[ProtectedSource],
+    chunks: list[SourceChunk],
+) -> None:
+    source_ids: set[str] = set()
+    for source in sources:
+        if source.workspace_id is not None or source.source_key is not None:
+            raise ValueError("legacy source catalog cannot contain workspace metadata")
+        if source.source_id in source_ids:
+            raise ValueError("duplicate legacy protected source")
+        source_ids.add(source.source_id)
+    chunk_ids: set[str] = set()
+    source_ordinals: set[tuple[str, int]] = set()
+    for chunk in chunks:
+        if chunk.workspace_id is not None:
+            raise ValueError("legacy source chunk cannot contain workspace metadata")
+        if chunk.chunk_id in chunk_ids:
+            raise ValueError("duplicate legacy source chunk")
+        source_ordinal = (chunk.source_id, chunk.ordinal)
+        if source_ordinal in source_ordinals:
+            raise ValueError("duplicate legacy source chunk ordinal")
+        chunk_ids.add(chunk.chunk_id)
+        source_ordinals.add(source_ordinal)
+
+
+def _protected_source_from_row(row: tuple) -> ProtectedSource:
+    return ProtectedSource(
+        source_id=row[0],
+        path=row[1],
+        source_type=row[2],
+        sensitivity=row[3],
+        policy_tags=tuple(json.loads(row[4])),
+        workspace_id=row[5],
+        source_key=row[6],
+    )
+
+
+def _source_chunk_from_row(row: tuple) -> SourceChunk:
+    return SourceChunk(
+        chunk_id=row[0],
+        source_id=row[1],
+        ordinal=row[2],
+        text=row[3],
+        normalized_text=row[4],
+        text_hash=row[5],
+        shingle_fingerprint=row[6],
+        token_count=row[7],
+        workspace_id=row[8],
+    )
 
 
 def _flow_edge_values(edge: FlowEdge) -> tuple[object, ...]:

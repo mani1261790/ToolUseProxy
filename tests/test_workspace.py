@@ -11,8 +11,11 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
 
+from hook_monitor.analysis.source_index import load_sources_and_chunks
 from hook_monitor.runtime.ids import make_event_id
+from hook_monitor.runtime.models import ProtectedSource, SourceChunk
 from hook_monitor.runtime.parser import build_artifacts, build_fragments, normalize_event
+from hook_monitor.runtime.source_config import load_protected_sources
 from hook_monitor.runtime.storage import EventStore
 from hook_monitor.runtime.workspace import make_workspace_id, resolve_workspace
 
@@ -601,6 +604,365 @@ class WorkspaceIdentityTest(unittest.TestCase):
 
         self.assertEqual(len(event_columns), len(set(event_columns)))
         self.assertEqual(1, marker_count)
+
+    def test_workspace_source_catalogs_coexist_and_replace_independently(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            base = Path(temporary_directory)
+            store = EventStore(base / "events.db")
+            store.initialize()
+            catalogs = {}
+            for label in ("a", "b"):
+                root = base / f"workspace-{label}"
+                root.mkdir()
+                (root / "secret.txt").write_text(
+                    f"secret {label}",
+                    encoding="utf-8",
+                )
+                (root / "protected_sources.json").write_text(
+                    json.dumps(
+                        {
+                            "sources": [
+                                {
+                                    "id": "shared-secret",
+                                    "path": "secret.txt",
+                                    "type": "text",
+                                    "sensitivity": "confidential",
+                                    "policy_tags": ["no_external"],
+                                }
+                            ]
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                event = normalize_event(
+                    "pre_tool_use",
+                    {
+                        "session_id": f"session-{label}",
+                        "tool_use_id": f"tool-{label}",
+                        "tool_name": "Read",
+                        "cwd": str(root),
+                        "tool_input": {"path": "secret.txt"},
+                    },
+                )
+                artifacts = build_artifacts(event)
+                store.record(event, artifacts, build_fragments(artifacts))
+                assert event.workspace_id is not None
+                sources, chunks = load_sources_and_chunks(
+                    root,
+                    workspace_id=event.workspace_id,
+                )
+                store.replace_sources_for_workspace(
+                    event.workspace_id,
+                    sources,
+                    chunks,
+                )
+                catalogs[label] = (event.workspace_id, sources, chunks)
+
+            workspace_a, sources_a, chunks_a = catalogs["a"]
+            workspace_b, sources_b, chunks_b = catalogs["b"]
+
+            self.assertNotEqual(sources_a[0].source_id, sources_b[0].source_id)
+            self.assertNotEqual(chunks_a[0].chunk_id, chunks_b[0].chunk_id)
+            self.assertEqual("shared-secret", sources_a[0].source_key)
+            self.assertEqual(sources_a, store.list_protected_sources_for_workspace(workspace_a))
+            self.assertEqual(chunks_b, store.list_source_chunks_for_workspace(workspace_b))
+
+            forged_a_chunk = replace(
+                chunks_a[0],
+                chunk_id=chunks_b[0].chunk_id,
+            )
+            with self.assertRaisesRegex(ValueError, "chunk id does not match"):
+                store.replace_sources_for_workspace(
+                    workspace_a,
+                    sources_a,
+                    [forged_a_chunk],
+                )
+            self.assertEqual(
+                chunks_b,
+                store.list_source_chunks_for_workspace(workspace_b),
+            )
+
+            forged_legacy_source = replace(
+                sources_a[0],
+                workspace_id=None,
+                source_key=None,
+            )
+            forged_legacy_chunk = replace(chunks_a[0], workspace_id=None)
+            with self.assertRaisesRegex(ValueError, "belongs to a workspace"):
+                store.upsert_sources(
+                    [forged_legacy_source],
+                    [forged_legacy_chunk],
+                )
+            detached_legacy_chunk = replace(
+                chunks_a[0],
+                chunk_id="legacy-chunk-with-new-id",
+                workspace_id=None,
+            )
+            with self.assertRaisesRegex(ValueError, "references a workspace"):
+                store.upsert_sources([], [detached_legacy_chunk])
+            self.assertEqual(
+                sources_a,
+                store.list_protected_sources_for_workspace(workspace_a),
+            )
+            self.assertEqual(
+                chunks_b,
+                store.list_source_chunks_for_workspace(workspace_b),
+            )
+
+            store.replace_sources_for_workspace(workspace_a, [], [])
+
+            self.assertEqual([], store.list_protected_sources_for_workspace(workspace_a))
+            self.assertEqual(sources_b, store.list_protected_sources_for_workspace(workspace_b))
+
+    def test_workspace_source_catalog_rejects_mismatch_without_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory) / "workspace"
+            root.mkdir()
+            (root / "secret.txt").write_text("secret", encoding="utf-8")
+            (root / "protected_sources.json").write_text(
+                json.dumps(
+                    {
+                        "sources": [
+                            {
+                                "id": "secret",
+                                "path": "secret.txt",
+                                "type": "text",
+                                "sensitivity": "confidential",
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            store = EventStore(Path(temporary_directory) / "events.db")
+            store.initialize()
+            event = normalize_event(
+                "pre_tool_use",
+                {
+                    "session_id": "source-catalog-session",
+                    "tool_use_id": "source-catalog-tool",
+                    "tool_name": "Read",
+                    "cwd": str(root),
+                    "tool_input": {"path": "secret.txt"},
+                },
+            )
+            artifacts = build_artifacts(event)
+            store.record(event, artifacts, build_fragments(artifacts))
+            assert event.workspace_id is not None
+            sources, chunks = load_sources_and_chunks(
+                root,
+                workspace_id=event.workspace_id,
+            )
+            store.replace_sources_for_workspace(event.workspace_id, sources, chunks)
+            forged_chunk = replace(
+                chunks[0],
+                source_id="protected_source_v1_forged",
+            )
+
+            with self.assertRaisesRegex(ValueError, "does not belong"):
+                store.replace_sources_for_workspace(
+                    event.workspace_id,
+                    sources,
+                    [forged_chunk],
+                )
+            with self.assertRaisesRegex(ValueError, "workspace does not match"):
+                store.replace_sources_for_workspace(
+                    "ws_v1_other",
+                    sources,
+                    chunks,
+                )
+            outside = root.parent / "outside.txt"
+            outside.write_text("outside", encoding="utf-8")
+            forged_path = replace(sources[0], path="../outside.txt")
+            with self.assertRaisesRegex(ValueError, "inside workspace"):
+                store.replace_sources_for_workspace(
+                    event.workspace_id,
+                    [forged_path],
+                    chunks,
+                )
+
+            self.assertEqual(
+                sources,
+                store.list_protected_sources_for_workspace(event.workspace_id),
+            )
+            self.assertEqual(
+                chunks,
+                store.list_source_chunks_for_workspace(event.workspace_id),
+            )
+
+    def test_legacy_sources_are_not_visible_in_workspace_catalog(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            store = EventStore(Path(temporary_directory) / "events.db")
+            store.initialize()
+            source = ProtectedSource(
+                source_id="legacy-source",
+                path="legacy.txt",
+                source_type="text",
+                sensitivity="confidential",
+                policy_tags=(),
+            )
+            chunk = SourceChunk(
+                chunk_id="legacy-source:0:hash",
+                source_id=source.source_id,
+                ordinal=0,
+                text="legacy",
+                normalized_text="legacy",
+                text_hash="hash",
+                shingle_fingerprint="[]",
+                token_count=1,
+            )
+            store.upsert_sources([source], [chunk])
+
+            self.assertEqual([source], store.list_protected_sources())
+            self.assertEqual([], store.list_protected_sources_for_workspace("ws_v1_any"))
+            self.assertEqual([], store.list_source_chunks_for_workspace("ws_v1_any"))
+
+    def test_legacy_source_schema_is_quarantined_during_migration(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            db_path = Path(temporary_directory) / "events.db"
+            with sqlite3.connect(db_path) as connection:
+                connection.execute(
+                    """
+                    CREATE TABLE protected_sources (
+                        source_id TEXT PRIMARY KEY,
+                        path TEXT NOT NULL,
+                        source_type TEXT NOT NULL,
+                        sensitivity TEXT NOT NULL,
+                        policy_tags_json TEXT NOT NULL,
+                        recorded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                    )
+                    """
+                )
+                connection.execute(
+                    """
+                    CREATE TABLE source_chunks (
+                        chunk_id TEXT PRIMARY KEY,
+                        source_id TEXT NOT NULL,
+                        ordinal INTEGER NOT NULL,
+                        text TEXT NOT NULL,
+                        normalized_text TEXT NOT NULL,
+                        text_hash TEXT NOT NULL,
+                        shingle_fingerprint TEXT NOT NULL,
+                        token_count INTEGER NOT NULL,
+                        recorded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                    )
+                    """
+                )
+                connection.execute(
+                    """
+                    INSERT INTO protected_sources (
+                        source_id,
+                        path,
+                        source_type,
+                        sensitivity,
+                        policy_tags_json
+                    ) VALUES ('legacy', 'legacy.txt', 'text', 'confidential', '[]')
+                    """
+                )
+                connection.execute(
+                    """
+                    INSERT INTO source_chunks (
+                        chunk_id,
+                        source_id,
+                        ordinal,
+                        text,
+                        normalized_text,
+                        text_hash,
+                        shingle_fingerprint,
+                        token_count
+                    ) VALUES ('legacy:0:hash', 'legacy', 0, 'legacy', 'legacy', 'hash', '[]', 1)
+                    """
+                )
+
+            store = EventStore(db_path)
+            store.initialize()
+            legacy_source = store.list_protected_sources()[0]
+            legacy_chunk = store.list_source_chunks()[0]
+            scoped_sources = store.list_protected_sources_for_workspace("ws_v1_any")
+
+        self.assertIsNone(legacy_source.workspace_id)
+        self.assertIsNone(legacy_source.source_key)
+        self.assertIsNone(legacy_chunk.workspace_id)
+        self.assertEqual([], scoped_sources)
+
+    def test_workspace_source_path_cannot_escape_root(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            base = Path(temporary_directory)
+            root = base / "workspace"
+            root.mkdir()
+            outside = base / "outside.txt"
+            outside.write_text("outside", encoding="utf-8")
+            (root / "protected_sources.json").write_text(
+                json.dumps(
+                    {
+                        "sources": [
+                            {
+                                "id": "outside",
+                                "path": "../outside.txt",
+                                "type": "text",
+                                "sensitivity": "confidential",
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "inside workspace"):
+                load_sources_and_chunks(root, workspace_id="ws_v1_test")
+
+            (root / "outside-link.txt").symlink_to(outside)
+            (root / "protected_sources.json").write_text(
+                json.dumps(
+                    {
+                        "sources": [
+                            {
+                                "id": "outside-link",
+                                "path": "outside-link.txt",
+                                "type": "text",
+                                "sensitivity": "confidential",
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "inside workspace"):
+                load_sources_and_chunks(root, workspace_id="ws_v1_test")
+
+    def test_scoped_source_ids_are_stable_across_manifest_order(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            base = Path(temporary_directory)
+            entries = [
+                {
+                    "id": source_key,
+                    "path": f"{source_key}.txt",
+                    "type": "text",
+                    "sensitivity": "confidential",
+                }
+                for source_key in ("alpha", "beta")
+            ]
+            first = base / "first.json"
+            second = base / "second.json"
+            first.write_text(json.dumps({"sources": entries}), encoding="utf-8")
+            second.write_text(
+                json.dumps({"sources": list(reversed(entries))}, indent=2),
+                encoding="utf-8",
+            )
+
+            first_sources = load_protected_sources(
+                first,
+                workspace_id="ws_v1_stable",
+            )
+            second_sources = load_protected_sources(
+                second,
+                workspace_id="ws_v1_stable",
+            )
+
+        self.assertEqual(
+            {source.source_key: source.source_id for source in first_sources},
+            {source.source_key: source.source_id for source in second_sources},
+        )
 
 
 if __name__ == "__main__":

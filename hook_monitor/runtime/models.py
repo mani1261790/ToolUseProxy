@@ -119,6 +119,8 @@ class ProtectedSource:
     source_type: str
     sensitivity: str
     policy_tags: tuple[str, ...]
+    workspace_id: str | None = None
+    source_key: str | None = None
 
 
 @dataclass(frozen=True)
@@ -131,6 +133,7 @@ class SourceChunk:
     text_hash: str
     shingle_fingerprint: str
     token_count: int
+    workspace_id: str | None = None
 
 
 @dataclass(frozen=True)

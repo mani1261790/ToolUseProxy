@@ -35,6 +35,11 @@ def make_artifact_id(event_id: str, role: str, text: str) -> str:
     return f"{event_id}:{role}:{digest}"
 
 
+def make_source_chunk_id(source_id: str, ordinal: int, text: str) -> str:
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+    return f"{source_id}:{ordinal}:{digest}"
+
+
 def _stable_json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
