@@ -252,10 +252,36 @@ PreToolUseとPostToolUseは同じ`session_id`、`turn_id`、`tool_use_id`を持�
 
 native Web Searchは`codex --search`のJSONLに`type: "web_search"`として現れたが、`matcher: "*"`でもHook DBは作られなかった。現行Codexではnative Web SearchをPreToolUse / PostToolUseから捕捉できない。Search adapterはsynthetic / imported event解析には残すが、native Searchの実行前遮断へは接続しない。
 
+## MCP PreToolUse遮断E2E
+
+2026-07-14にローカルstdio MCP serverを一時的に登録し、`publish_text(content)`とread-onlyの`read_status()`で実行前介入を検証した。Hookは`TOOLUSEPROXY_PRE_TOOL_POLICY=1`と`TOOLUSEPROXY_PRE_TOOL_MCP_POLICY=1`を設定し、MCP serverだけに一致するmatcherを使用した。
+
+denyケースでは、protected sourceと同じダミー文字列を`publish_text`へ渡した。
+
+- Codex routerは`Tool call blocked by PreToolUse hook`を返した
+- DBには対象callのPreToolUseだけが保存され、PostToolUseはなかった
+- `policy_decisions`へ`block / critical / external_api_call / 1.0`を1件保存した
+- MCP serverの`tools/call`ログは作られず、副作用前で停止した
+- Hookのuser messageとtechnical summaryにraw protected textは含まれなかった
+
+allowケースでは`PUBLIC_MCP_E2E_DATA`を`publish_text`へ渡した。
+
+- PreToolUseとPostToolUseが保存された
+- MCP serverの`tools/call`ログは1件だった
+- 新しいblock decisionは保存されなかった
+
+read-onlyケースでは`read_status()`を呼び出した。
+
+- PreToolUseとPostToolUseが保存された
+- MCP serverの`tools/call`ログは1件だった
+- sink candidateとpolicy decisionは作られなかった
+
+最初のdeny試行ではmodelがtoolを呼ばず、DBもMCP server logも作られなかった。これは遮断成功として数えず、read-only callでserverとHookのロードを確認してから、tool呼出しを必須にしたpromptでdenyを再検証した。実験用project config、Hook設定、MCP server、source設定、ダミーファイルは実験後に削除した。検証DBとCodex JSONLは`/private/tmp/tooluseproxy-mcp-*`へ残している。
+
 ## 次の検証順序
 
-1. Search / MCPの実payload観測
-2. MCP external sinkのPreToolUse接続
-3. apply_patch/Bashのoperation単位fragmentとsnapshot capture
-4. 複数workspaceのsource / cursor分離
+1. apply_patch/Bashのoperation単位fragmentとsnapshot capture
+2. 複数workspaceのsource / cursor分離
+3. MCP server固有のwrite/read分類fixture
+4. PermissionRequestと安全なredactの評価
 5. embedding候補検索の評価

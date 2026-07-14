@@ -281,11 +281,13 @@ JSON output:
 - text / JSON output
 - policy decision のテスト
 
-次に実装すること:
+実Hookへ接続済みの範囲:
 
-1. Bash external sinkを`PreToolUse`の`permissionDecision: deny`へ接続する
-2. MCP実payloadを観測してからMCPのPreToolUse接続を追加する
-3. redact用のtool別 `updatedInput` 生成を設計する
+1. Bash external sinkを`PreToolUse`の`permissionDecision: deny`へ接続
+2. 実CodexのMCP tool名とraw argumentsをadapterへ接続
+3. 二段階opt-inでMCP external sinkを`PreToolUse` denyへ接続
+
+次に設計するのは、apply_patch/Bashのoperation単位fragmentとsnapshot capture、複数workspaceのsource/cursor分離です。tool別`updatedInput`を使うredactは、構造を壊さず安全に書き換えられる条件を定義してから実装します。
 
 Stop hook内の解析はsession差分更新へ移行済みです。初回または解析条件変更時は`session-full`、通常時は`session-incremental`としてanalysis runへ記録します。Hook内ではlocal DB、static adapter、indexed lexical候補、差分lineageだけを扱い、embeddingやnetwork accessは行いません。
 
@@ -309,8 +311,6 @@ Stop hook内の解析はsession差分更新へ移行済みです。初回また�
 
 - policy rule の設定ファイル化
 - finding DB table への保存
-- policy decision DB table への保存
-- `PreToolUse` 実Hookでの遮断
 - 実行時hook内での外部APIやembeddingを使う重い再解析
 - Bash / MCP / apply_patch の安全なredact実装
 - ユーザー確認UIの再実装

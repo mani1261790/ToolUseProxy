@@ -97,7 +97,7 @@ Codex Hooks の設定と、そこから呼び出される監視プログラム�
 
 いずれも stdin のHook payloadを受け取り、event、artifact、artifact fragmentをローカルSQLiteへ記録します。
 
-`PostToolUse`は記録だけを行います。`Stop`は最終応答の`final_answer` sinkを評価します。`PreToolUse`は既定では記録だけですが、`TOOLUSEPROXY_PRE_TOOL_POLICY=1`を設定すると、実payloadを確認済みの`Bash`だけを実行前に評価します。
+`PostToolUse`は記録だけを行います。`Stop`は最終応答の`final_answer` sinkを評価します。`PreToolUse`は既定では記録だけですが、`TOOLUSEPROXY_PRE_TOOL_POLICY=1`を設定すると、実payloadを確認済みの`Bash`を実行前に評価します。MCPはさらに`TOOLUSEPROXY_PRE_TOOL_MCP_POLICY=1`を設定した場合だけ評価します。
 
 ## 使い方
 
@@ -244,7 +244,15 @@ PreToolUse policyはopt-inです。Hook commandに次の環境変数を追加し
 TOOLUSEPROXY_PRE_TOOL_POLICY=1 python3 /Users/mani/Developer/ToolUseProxy/hooks/monitor_pre_tool.py
 ```
 
-対象は正規化後のtool名が`bash`である実payloadだけです。現在eventの`event_id`、`sequence_no`、`tool_use_id`、`adapter: bash`が一致するexternal sinkだけを評価します。
+この設定で対象になるのは、実payloadを確認済みの`Bash`です。MCPも対象にする場合は、影響範囲を明示するために二つ目のopt-inを追加します。
+
+```text
+TOOLUSEPROXY_PRE_TOOL_POLICY=1 TOOLUSEPROXY_PRE_TOOL_MCP_POLICY=1 python3 /Users/mani/Developer/ToolUseProxy/hooks/monitor_pre_tool.py
+```
+
+MCP Hookのmatcherは、たとえば`^mcp__.*$`、または対象を絞った`^mcp__github__.*$`を使用します。実CodexのMCP payloadは`tool_name: mcp__<server>__<tool>`で、`tool_input`にはMCP toolへ渡すraw argumentsが入ります。adapterが外部送信と分類するwrite-like toolだけがsinkとなり、read-only toolは記録して通過させます。
+
+現在eventの`event_id`、`sequence_no`、`tool_use_id`、adapter種別が一致するexternal sinkだけを評価します。過去eventの未解消findingを理由に現在の呼出しを止めません。
 
 - critical: `permissionDecision: deny`
 - high: `additionalContext`を返して実行継続
@@ -253,13 +261,15 @@ TOOLUSEPROXY_PRE_TOOL_POLICY=1 python3 /Users/mani/Developer/ToolUseProxy/hooks/
 
 未サポートの`permissionDecision: ask`と`continue: false`には依存しません。Hook内ではSQLite、静的adapter、indexed lexical candidate、差分lineageだけを使い、network、embedding、全DB再解析は行いません。
 
+native Web SearchはCodex CLI `0.142.5`で`matcher: "*"`を使ってもPreToolUse / PostToolUseに現れなかったため、実行前遮断へは接続していません。Search adapterはsynthetic / imported eventのoffline解析用に残します。
+
 現時点のsource設定基準はToolUseProxy repository rootです。複数workspaceを同じDBで分離するsource ID / cursor schemaは別作業とします。
 
 ## 各ファイルの役割
 
 - `hooks/monitor_pre_tool.py`
   - `PreToolUse` 用の薄い entrypoint です
-  - `run_hook("pre_tool_use")`を呼び、opt-in時はBash external sinkを評価します
+  - `run_hook("pre_tool_use")`を呼び、opt-in時はBashとMCPのexternal sinkを評価します
 - `hooks/monitor_post_tool.py`
   - `PostToolUse` 用の薄い entrypoint です
   - `run_hook("post_tool_use")` を呼ぶだけです
