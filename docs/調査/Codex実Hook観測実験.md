@@ -198,12 +198,14 @@ SQLiteでは同一session、同一turnに2件のStopイベントが保存され�
 
 Hook event、`session_id`、`turn_id`、`tool_use_id`、Bash入出力、apply_patch入出力の記録経路は実Codexで動作した。parser修正後は、実Codexでfinal answerの漏えい候補をStopし、追加ターンで修正させる経路も動作した。
 
-ただし、ファイルI/Oのresource接続は未解決である。次は実payloadに合わせた`apply_patch`と`Bash filesystem` adapterを設計する。session差分更新やembeddingは、その後に進める。
+その後、実payloadに合わせて`apply_patch`と静的なBash `cat` / redirectionをresource versionへ接続した。Stop runtimeもsession差分更新へ移行し、通常のStopでは全artifact・fragmentを読み直さず、未処理sequenceとindexed candidateだけを解析する。
+
+合成1,002イベントでの開発環境計測では、初回`session-full`が約1.97秒、次のStopの`session-incremental`が約244msだった。この値は正式なbenchmarkではないが、通常経路がsession全件再解析から差分更新へ切り替わったことを確認する回帰指標として使う。
 
 ## 次の検証順序
 
-1. Search / MCPの実payload観測
-2. session単位の差分更新
-3. PreToolUseでexternal sinkを遮断する実接続
+1. Bash external sinkをPreToolUseで遮断する実接続
+2. Search / MCPの実payload観測
+3. MCP external sinkのPreToolUse接続
 4. apply_patch/Bashのoperation単位fragmentとsnapshot capture
 5. embedding候補検索の評価

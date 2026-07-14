@@ -283,9 +283,11 @@ JSON output:
 
 次に実装すること:
 
-1. `PreToolUse` / `PermissionRequest` の実Hookで動作確認する
-2. Stop hook 内の再解析を差分化する
+1. Bash external sinkを`PreToolUse`の`permissionDecision: deny`へ接続する
+2. MCP実payloadを観測してからMCPのPreToolUse接続を追加する
 3. redact用のtool別 `updatedInput` 生成を設計する
+
+Stop hook内の解析はsession差分更新へ移行済みです。初回または解析条件変更時は`session-full`、通常時は`session-incremental`としてanalysis runへ記録します。Hook内ではlocal DB、static adapter、indexed lexical候補、差分lineageだけを扱い、embeddingやnetwork accessは行いません。
 
 ## 完了条件
 
