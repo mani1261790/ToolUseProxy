@@ -22,6 +22,7 @@ from hook_monitor.analysis.graph import (
 )
 from hook_monitor.analysis.bash_file_parser import parse_bash_file_operations
 from hook_monitor.analysis.adapters.registry import run_adapters
+from hook_monitor.analysis.adapters.mcp import parse_mcp_tool_name
 from hook_monitor.analysis.leak_detection import detect_leaks
 from hook_monitor.analysis.lineage import propagate_lineage
 from hook_monitor.analysis.similarity import make_shingles
@@ -1116,6 +1117,50 @@ class InformationFlowTest(unittest.TestCase):
             sink_types,
         )
         self.assertEqual(3, len(result.sinks))
+
+    def test_mcp_adapter_parses_real_codex_tool_names_and_raw_arguments(self) -> None:
+        slack_event = self._record(
+            "pre_tool_use",
+            "slack-real",
+            "mcp__slack__send_message",
+            tool_input={"channel": "security", "text": SECRET},
+        )
+        self._record(
+            "pre_tool_use",
+            "github-real",
+            "mcp__github__create_issue",
+            tool_input={"owner": "example", "repo": "repo", "body": SECRET},
+        )
+        fixture = json.loads(
+            (REPO_ROOT / "tests/fixtures/codex_hooks/mcp_pre_tool_use.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        event = normalize_event("pre_tool_use", fixture)
+        artifacts = build_artifacts(event)
+        self.store.record(event, artifacts, build_fragments(artifacts))
+
+        result = run_adapters(
+            self.store.list_artifact_contexts(),
+            Path(self.temporary_directory.name),
+        )
+
+        self.assertEqual(
+            ("openaiDeveloperDocs", "search_openai_docs"),
+            parse_mcp_tool_name(fixture["tool_name"]),
+        )
+        self.assertEqual(
+            {"external_message", "external_git_publish"},
+            {sink.sink_type for sink in result.sinks},
+        )
+        self.assertTrue(
+            any(
+                sink.metadata.get("event_id") == slack_event.event_id
+                and sink.metadata.get("server") == "slack"
+                and sink.metadata.get("tool") == "send_message"
+                for sink in result.sinks
+            )
+        )
 
     def test_external_adapter_sinks_receive_source_lineage(self) -> None:
         self._record(
