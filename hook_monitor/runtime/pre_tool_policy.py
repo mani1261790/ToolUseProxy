@@ -84,6 +84,7 @@ def evaluate_pre_tool_hook_policy(
         selected,
         "PreToolUse",
         db_path=store.db_path,
+        analysis_run_id=runtime_result.analysis_run.analysis_run_id,
     )
 
 

@@ -327,6 +327,85 @@ class EventStore:
             )
             conn.execute(
                 """
+                CREATE TABLE IF NOT EXISTS analysis_run_graphs (
+                    analysis_run_id TEXT PRIMARY KEY,
+                    workspace_id TEXT NOT NULL,
+                    coverage TEXT NOT NULL DEFAULT 'full',
+                    recorded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (analysis_run_id)
+                        REFERENCES analysis_runs (analysis_run_id),
+                    FOREIGN KEY (workspace_id) REFERENCES workspaces (workspace_id)
+                )
+                """
+            )
+            self._ensure_column(
+                conn,
+                "analysis_run_graphs",
+                "coverage",
+                "TEXT NOT NULL DEFAULT 'full'",
+            )
+            self._ensure_column(
+                conn,
+                "analysis_run_graphs",
+                "node_snapshot_version",
+                "TEXT",
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS analysis_run_flow_edges (
+                    analysis_run_id TEXT NOT NULL,
+                    edge_id TEXT NOT NULL,
+                    src_node_kind TEXT NOT NULL,
+                    src_node_id TEXT NOT NULL,
+                    dst_node_kind TEXT NOT NULL,
+                    dst_node_id TEXT NOT NULL,
+                    relation TEXT NOT NULL,
+                    evidence_level TEXT NOT NULL,
+                    method TEXT NOT NULL,
+                    score REAL NOT NULL,
+                    reason TEXT NOT NULL,
+                    recorded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (analysis_run_id, edge_id),
+                    FOREIGN KEY (analysis_run_id)
+                        REFERENCES analysis_run_graphs (analysis_run_id)
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS analysis_node_snapshots (
+                    workspace_id TEXT NOT NULL,
+                    snapshot_hash TEXT NOT NULL,
+                    node_kind TEXT NOT NULL,
+                    node_id TEXT NOT NULL,
+                    metadata_json TEXT NOT NULL,
+                    recorded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (workspace_id, snapshot_hash),
+                    FOREIGN KEY (workspace_id) REFERENCES workspaces (workspace_id)
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS analysis_run_nodes (
+                    analysis_run_id TEXT NOT NULL,
+                    workspace_id TEXT NOT NULL,
+                    node_kind TEXT NOT NULL,
+                    node_id TEXT NOT NULL,
+                    snapshot_hash TEXT NOT NULL,
+                    PRIMARY KEY (analysis_run_id, node_kind, node_id),
+                    FOREIGN KEY (analysis_run_id)
+                        REFERENCES analysis_run_graphs (analysis_run_id),
+                    FOREIGN KEY (workspace_id, snapshot_hash)
+                        REFERENCES analysis_node_snapshots (
+                            workspace_id,
+                            snapshot_hash
+                        )
+                )
+                """
+            )
+            conn.execute(
+                """
                 CREATE TABLE IF NOT EXISTS resource_versions (
                     node_id TEXT PRIMARY KEY,
                     path TEXT NOT NULL,
@@ -733,6 +812,22 @@ class EventStore:
                     session_id,
                     started_at,
                     analysis_run_id
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_analysis_run_graphs_workspace
+                ON analysis_run_graphs (workspace_id, analysis_run_id)
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_analysis_run_nodes_workspace
+                ON analysis_run_nodes (
+                    workspace_id,
+                    analysis_run_id,
+                    node_kind
                 )
                 """
             )
@@ -1168,6 +1263,18 @@ class EventStore:
             outcome_through_sequence_no=through_sequence_no,
         )
 
+    def list_tool_operations_for_workspace(
+        self,
+        workspace_id: str,
+    ) -> list[ToolOperation]:
+        return self._list_tool_operations_where(
+            """
+            WHERE e.workspace_id = ?
+              AND e.workspace_status = 'ready'
+            """,
+            (workspace_id,),
+        )
+
     def list_tool_operations(self) -> list[ToolOperation]:
         return self._list_tool_operations_where("", ())
 
@@ -1564,6 +1671,18 @@ class EventStore:
             clause += " AND e.sequence_no <= ?"
             params += (through_sequence_no,)
         return self._list_resource_snapshots_where(clause, params)
+
+    def list_resource_snapshots_for_workspace(
+        self,
+        workspace_id: str,
+    ) -> list[ResourceSnapshot]:
+        return self._list_resource_snapshots_where(
+            """
+            WHERE e.workspace_id = ?
+              AND e.workspace_status = 'ready'
+            """,
+            (workspace_id,),
+        )
 
     def list_resource_snapshots(self) -> list[ResourceSnapshot]:
         return self._list_resource_snapshots_where("", ())
@@ -1979,8 +2098,183 @@ class EventStore:
             )
         return analysis_run_id
 
+    def start_workspace_analysis_run(
+        self,
+        detector_version: str,
+        config: dict[str, object],
+        *,
+        workspace_id: str,
+    ) -> str:
+        analysis_run_id = uuid.uuid4().hex
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            self._validate_registered_workspace(conn, workspace_id)
+            conn.execute(
+                """
+                INSERT INTO analysis_runs (
+                    analysis_run_id,
+                    detector_version,
+                    config_json,
+                    workspace_id,
+                    session_id
+                ) VALUES (?, ?, ?, ?, NULL)
+                """,
+                (
+                    analysis_run_id,
+                    detector_version,
+                    json.dumps(config, ensure_ascii=False, sort_keys=True),
+                    workspace_id,
+                ),
+            )
+        return analysis_run_id
+
     def complete_analysis_run(self, analysis_run_id: str) -> None:
         with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                """
+                SELECT workspace_id, session_id, completed_at
+                FROM analysis_runs
+                WHERE analysis_run_id = ?
+                """,
+                (analysis_run_id,),
+            ).fetchone()
+            if row is None:
+                raise ValueError("analysis run does not exist")
+            if row[2] is not None:
+                return
+            workspace_id = row[0]
+            if workspace_id is not None:
+                self._validate_registered_workspace(conn, workspace_id)
+            if workspace_id is not None and row[1] is None:
+                graph = conn.execute(
+                    """
+                    SELECT 1
+                    FROM analysis_run_graphs
+                    WHERE analysis_run_id = ?
+                      AND workspace_id = ?
+                      AND node_snapshot_version = 'v1'
+                    """,
+                    (analysis_run_id, workspace_id),
+                ).fetchone()
+                if graph is None:
+                    raise ValueError(
+                        "offline analysis run requires an immutable graph snapshot"
+                    )
+                missing_node = conn.execute(
+                    """
+                    SELECT node_kind, node_id
+                    FROM (
+                        SELECT src_node_kind AS node_kind, src_node_id AS node_id
+                        FROM analysis_run_flow_edges
+                        WHERE analysis_run_id = ?
+                        UNION
+                        SELECT dst_node_kind AS node_kind, dst_node_id AS node_id
+                        FROM analysis_run_flow_edges
+                        WHERE analysis_run_id = ?
+                        UNION
+                        SELECT src_node_kind AS node_kind, src_node_id AS node_id
+                        FROM source_binding_edges
+                        WHERE analysis_run_id = ?
+                        UNION
+                        SELECT dst_node_kind AS node_kind, dst_node_id AS node_id
+                        FROM source_binding_edges
+                        WHERE analysis_run_id = ?
+                        UNION
+                        SELECT source_node_kind AS node_kind,
+                               source_node_id AS node_id
+                        FROM lineage_assignments
+                        WHERE analysis_run_id = ?
+                        UNION
+                        SELECT node_kind, node_id
+                        FROM lineage_assignments
+                        WHERE analysis_run_id = ?
+                    ) AS referenced
+                    WHERE NOT EXISTS (
+                        SELECT 1
+                        FROM analysis_run_nodes AS member
+                        WHERE member.analysis_run_id = ?
+                          AND member.workspace_id = ?
+                          AND member.node_kind = referenced.node_kind
+                          AND member.node_id = referenced.node_id
+                    )
+                    LIMIT 1
+                    """,
+                    (
+                        analysis_run_id,
+                        analysis_run_id,
+                        analysis_run_id,
+                        analysis_run_id,
+                        analysis_run_id,
+                        analysis_run_id,
+                        analysis_run_id,
+                        workspace_id,
+                    ),
+                ).fetchone()
+                if missing_node is not None:
+                    raise ValueError(
+                        "offline analysis run references an unsnapshotted node"
+                    )
+                snapshot_rows = conn.execute(
+                    """
+                    SELECT
+                        member.node_kind,
+                        member.node_id,
+                        member.snapshot_hash,
+                        snapshot.node_kind,
+                        snapshot.node_id,
+                        snapshot.metadata_json
+                    FROM analysis_run_nodes AS member
+                    LEFT JOIN analysis_node_snapshots AS snapshot
+                      ON snapshot.workspace_id = member.workspace_id
+                     AND snapshot.snapshot_hash = member.snapshot_hash
+                    WHERE member.analysis_run_id = ?
+                      AND member.workspace_id = ?
+                    """,
+                    (analysis_run_id, workspace_id),
+                ).fetchall()
+                for (
+                    member_kind,
+                    member_id,
+                    snapshot_hash,
+                    snapshot_kind,
+                    snapshot_id,
+                    metadata_json,
+                ) in snapshot_rows:
+                    if (
+                        snapshot_kind != member_kind
+                        or snapshot_id != member_id
+                        or metadata_json is None
+                        or hashlib.sha256(
+                            (
+                                f"{member_kind}\0{member_id}\0{metadata_json}"
+                            ).encode("utf-8")
+                        ).hexdigest()
+                        != snapshot_hash
+                    ):
+                        raise ValueError(
+                            "offline analysis run node snapshot is invalid"
+                        )
+                missing_edge = conn.execute(
+                    """
+                    SELECT predecessor_edge_id
+                    FROM lineage_assignments AS assignment
+                    WHERE assignment.analysis_run_id = ?
+                      AND assignment.predecessor_edge_id IS NOT NULL
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM analysis_run_flow_edges AS edge
+                          WHERE edge.analysis_run_id = assignment.analysis_run_id
+                            AND edge.edge_id = assignment.predecessor_edge_id
+                      )
+                    LIMIT 1
+                    """,
+                    (analysis_run_id,),
+                ).fetchone()
+                if missing_edge is not None:
+                    raise ValueError(
+                        "offline analysis run references an unsnapshotted edge"
+                    )
             conn.execute(
                 """
                 UPDATE analysis_runs
@@ -1989,6 +2283,717 @@ class EventStore:
                 """,
                 (analysis_run_id,),
             )
+
+    def replace_analysis_run_graph(
+        self,
+        analysis_run_id: str,
+        edges: list[FlowEdge],
+        *,
+        coverage: str = "full",
+    ) -> None:
+        if coverage not in {"full", "lineage"}:
+            raise ValueError("analysis run graph coverage is invalid")
+        batch: dict[str, tuple[object, ...]] = {}
+        for edge in edges:
+            if not isinstance(edge.edge_id, str) or not edge.edge_id:
+                raise ValueError("analysis run graph contains an invalid edge id")
+            values = _flow_edge_values(edge)[1:]
+            previous = batch.get(edge.edge_id)
+            if previous is not None and previous != values:
+                raise ValueError("analysis run edge has conflicting batch payloads")
+            batch[edge.edge_id] = values
+
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            run = conn.execute(
+                """
+                SELECT workspace_id, completed_at
+                FROM analysis_runs
+                WHERE analysis_run_id = ?
+                """,
+                (analysis_run_id,),
+            ).fetchone()
+            if run is None or run[0] is None:
+                raise ValueError("analysis run graph requires a workspace-scoped run")
+            if run[1] is not None:
+                raise ValueError("completed analysis run graph is immutable")
+            workspace_id = run[0]
+            self._validate_registered_workspace(conn, workspace_id)
+            marker = conn.execute(
+                """
+                SELECT workspace_id
+                FROM analysis_run_graphs
+                WHERE analysis_run_id = ?
+                """,
+                (analysis_run_id,),
+            ).fetchone()
+            if marker is not None and marker[0] != workspace_id:
+                raise ValueError("analysis run graph belongs to another workspace")
+            self._validate_analysis_run_graph_node_owners(
+                conn,
+                workspace_id,
+                edges,
+            )
+            node_snapshots = self._load_analysis_node_snapshot_payloads(
+                conn,
+                workspace_id,
+                edges,
+            )
+            self._validate_analysis_run_graph_live_edges(
+                conn,
+                workspace_id,
+                batch,
+            )
+            conn.execute(
+                """
+                INSERT INTO analysis_run_graphs (
+                    analysis_run_id,
+                    workspace_id,
+                    coverage,
+                    node_snapshot_version
+                ) VALUES (?, ?, ?, 'v1')
+                ON CONFLICT(analysis_run_id) DO UPDATE SET
+                    workspace_id = excluded.workspace_id,
+                    coverage = excluded.coverage,
+                    node_snapshot_version = excluded.node_snapshot_version,
+                    recorded_at = CURRENT_TIMESTAMP
+                """,
+                (analysis_run_id, workspace_id, coverage),
+            )
+            for (node_kind, node_id), metadata_json in sorted(
+                node_snapshots.items()
+            ):
+                snapshot_hash = hashlib.sha256(
+                    (
+                        f"{node_kind}\0{node_id}\0{metadata_json}"
+                    ).encode("utf-8")
+                ).hexdigest()
+                existing = conn.execute(
+                    """
+                    SELECT node_kind, node_id, metadata_json
+                    FROM analysis_node_snapshots
+                    WHERE workspace_id = ? AND snapshot_hash = ?
+                    """,
+                    (workspace_id, snapshot_hash),
+                ).fetchone()
+                if existing is not None and existing != (
+                    node_kind,
+                    node_id,
+                    metadata_json,
+                ):
+                    raise ValueError("analysis node snapshot hash collision")
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO analysis_node_snapshots (
+                        workspace_id,
+                        snapshot_hash,
+                        node_kind,
+                        node_id,
+                        metadata_json
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        workspace_id,
+                        snapshot_hash,
+                        node_kind,
+                        node_id,
+                        metadata_json,
+                    ),
+                )
+            conn.execute(
+                """
+                DELETE FROM analysis_run_nodes
+                WHERE analysis_run_id = ?
+                """,
+                (analysis_run_id,),
+            )
+            conn.executemany(
+                """
+                INSERT INTO analysis_run_nodes (
+                    analysis_run_id,
+                    workspace_id,
+                    node_kind,
+                    node_id,
+                    snapshot_hash
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        analysis_run_id,
+                        workspace_id,
+                        node_kind,
+                        node_id,
+                        hashlib.sha256(
+                            (
+                                f"{node_kind}\0{node_id}\0"
+                                f"{node_snapshots[(node_kind, node_id)]}"
+                            ).encode("utf-8")
+                        ).hexdigest(),
+                    )
+                    for node_kind, node_id in sorted(node_snapshots)
+                ],
+            )
+            conn.execute(
+                """
+                DELETE FROM analysis_run_flow_edges
+                WHERE analysis_run_id = ?
+                """,
+                (analysis_run_id,),
+            )
+            conn.executemany(
+                """
+                INSERT INTO analysis_run_flow_edges (
+                    analysis_run_id,
+                    edge_id,
+                    src_node_kind,
+                    src_node_id,
+                    dst_node_kind,
+                    dst_node_id,
+                    relation,
+                    evidence_level,
+                    method,
+                    score,
+                    reason
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (analysis_run_id, edge_id, *values)
+                    for edge_id, values in sorted(batch.items())
+                ],
+            )
+
+    def _validate_analysis_run_graph_node_owners(
+        self,
+        conn: sqlite3.Connection,
+        workspace_id: str,
+        edges: list[FlowEdge],
+    ) -> None:
+        self._validate_analysis_node_owners(
+            conn,
+            workspace_id,
+            [
+                node
+                for edge in edges
+                for node in (
+                    (edge.src_node_kind, edge.src_node_id),
+                    (edge.dst_node_kind, edge.dst_node_id),
+                )
+            ],
+        )
+
+    def _validate_analysis_node_owners(
+        self,
+        conn: sqlite3.Connection,
+        workspace_id: str,
+        nodes: list[tuple[str, str]],
+    ) -> None:
+        node_ids_by_kind: dict[str, set[str]] = {
+            "artifact_fragment": set(),
+            "protected_source": set(),
+            "source_chunk": set(),
+            "resource_version": set(),
+            "sink_candidate": set(),
+        }
+        for node_kind, node_id in nodes:
+            if node_kind not in node_ids_by_kind:
+                raise ValueError("analysis run graph contains an unknown node kind")
+            if not isinstance(node_id, str) or not node_id:
+                raise ValueError("analysis run graph contains an invalid node id")
+            node_ids_by_kind[node_kind].add(node_id)
+
+        ownership_queries = {
+            "artifact_fragment": """
+                SELECT f.fragment_id
+                FROM artifact_fragments AS f
+                JOIN artifacts AS a ON a.artifact_id = f.artifact_id
+                JOIN events AS e ON e.event_id = a.event_id
+                WHERE f.fragment_id IN ({placeholders})
+                  AND e.workspace_id = ?
+                  AND e.workspace_status = 'ready'
+            """,
+            "protected_source": """
+                SELECT source_id
+                FROM protected_sources
+                WHERE source_id IN ({placeholders})
+                  AND workspace_id = ?
+            """,
+            "source_chunk": """
+                SELECT c.chunk_id
+                FROM source_chunks AS c
+                JOIN protected_sources AS source
+                  ON source.source_id = c.source_id
+                WHERE c.chunk_id IN ({placeholders})
+                  AND c.workspace_id = ?
+                  AND source.workspace_id = ?
+            """,
+            "resource_version": """
+                SELECT node_id
+                FROM resource_versions
+                WHERE node_id IN ({placeholders})
+                  AND workspace_id = ?
+            """,
+            "sink_candidate": """
+                SELECT node_id
+                FROM sink_candidates
+                WHERE node_id IN ({placeholders})
+                  AND workspace_id = ?
+            """,
+        }
+        multi_owner_tables = {
+            "resource_version": "resource_versions",
+            "sink_candidate": "sink_candidates",
+        }
+        for node_kind, node_ids in node_ids_by_kind.items():
+            ordered_ids = sorted(node_ids)
+            for start in range(0, len(ordered_ids), 300):
+                current_ids = ordered_ids[start:start + 300]
+                placeholders = ",".join("?" for _ in current_ids)
+                query = ownership_queries[node_kind].format(
+                    placeholders=placeholders,
+                )
+                params: tuple[object, ...] = (*current_ids, workspace_id)
+                if node_kind == "source_chunk":
+                    params += (workspace_id,)
+                found = {
+                    row[0]
+                    for row in conn.execute(query, params).fetchall()
+                }
+                if found != set(current_ids):
+                    raise ValueError(
+                        "analysis run graph node is missing or belongs to "
+                        "another workspace"
+                    )
+                owner_table = multi_owner_tables.get(node_kind)
+                if owner_table is not None:
+                    collision = conn.execute(
+                        f"""
+                        SELECT 1
+                        FROM {owner_table}
+                        WHERE node_id IN ({placeholders})
+                          AND workspace_id IS NOT ?
+                        LIMIT 1
+                        """,
+                        (*current_ids, workspace_id),
+                    ).fetchone()
+                    if collision is not None:
+                        raise ValueError(
+                            "analysis run graph node has multiple workspace owners"
+                        )
+
+    def _load_analysis_node_snapshot_payloads(
+        self,
+        conn: sqlite3.Connection,
+        workspace_id: str,
+        edges: list[FlowEdge],
+    ) -> dict[tuple[str, str], str]:
+        node_ids_by_kind: dict[str, set[str]] = {}
+        for edge in edges:
+            for node_kind, node_id in (
+                (edge.src_node_kind, edge.src_node_id),
+                (edge.dst_node_kind, edge.dst_node_id),
+            ):
+                node_ids_by_kind.setdefault(node_kind, set()).add(node_id)
+
+        source_chunk_ids = sorted(node_ids_by_kind.get("source_chunk", set()))
+        for start in range(0, len(source_chunk_ids), 300):
+            current_ids = source_chunk_ids[start:start + 300]
+            placeholders = ",".join("?" for _ in current_ids)
+            parent_source_ids = {
+                row[0]
+                for row in conn.execute(
+                    f"""
+                    SELECT source_id
+                    FROM source_chunks
+                    WHERE chunk_id IN ({placeholders})
+                      AND workspace_id = ?
+                    """,
+                    (*current_ids, workspace_id),
+                ).fetchall()
+            }
+            node_ids_by_kind.setdefault("protected_source", set()).update(
+                parent_source_ids
+            )
+
+        snapshots: dict[tuple[str, str], str] = {}
+        for node_kind, node_ids in node_ids_by_kind.items():
+            ordered_ids = sorted(node_ids)
+            for start in range(0, len(ordered_ids), 300):
+                current_ids = ordered_ids[start:start + 300]
+                placeholders = ",".join("?" for _ in current_ids)
+                if node_kind == "artifact_fragment":
+                    rows = conn.execute(
+                        f"""
+                        SELECT
+                            f.fragment_id,
+                            f.artifact_id,
+                            f.json_pointer,
+                            f.semantic_role,
+                            f.text,
+                            f.text_hash,
+                            f.normalized_text,
+                            f.token_count,
+                            f.fragment_kind,
+                            f.parent_fragment_id,
+                            f.operation_id,
+                            a.role,
+                            e.event_id,
+                            e.phase,
+                            e.session_id,
+                            e.turn_id,
+                            e.tool_use_id,
+                            e.tool_name,
+                            e.cwd,
+                            e.sequence_no,
+                            e.workspace_id,
+                            e.workspace_root,
+                            e.workspace_lexical_root,
+                            e.workspace_execution_cwd,
+                            e.workspace_status
+                        FROM artifact_fragments AS f
+                        JOIN artifacts AS a ON a.artifact_id = f.artifact_id
+                        JOIN events AS e ON e.event_id = a.event_id
+                        WHERE f.fragment_id IN ({placeholders})
+                          AND e.workspace_id = ?
+                          AND e.workspace_status = 'ready'
+                        """,
+                        (*current_ids, workspace_id),
+                    ).fetchall()
+                    payloads = [
+                        (
+                            row[0],
+                            {
+                                "fragment": {
+                                    "fragment_id": row[0],
+                                    "artifact_id": row[1],
+                                    "json_pointer": row[2],
+                                    "semantic_role": row[3],
+                                    "text": row[4],
+                                    "text_hash": row[5],
+                                    "normalized_text": row[6],
+                                    "token_count": row[7],
+                                    "fragment_kind": row[8],
+                                    "parent_fragment_id": row[9],
+                                    "operation_id": row[10],
+                                },
+                                "artifact_role": row[11],
+                                "event_id": row[12],
+                                "phase": row[13],
+                                "session_id": row[14],
+                                "turn_id": row[15],
+                                "tool_use_id": row[16],
+                                "tool_name": row[17],
+                                "cwd": row[18],
+                                "sequence_no": row[19],
+                                "workspace_id": row[20],
+                                "workspace_root": row[21],
+                                "workspace_lexical_root": row[22],
+                                "workspace_execution_cwd": row[23],
+                                "workspace_status": row[24],
+                            },
+                        )
+                        for row in rows
+                    ]
+                elif node_kind == "protected_source":
+                    rows = conn.execute(
+                        f"""
+                        SELECT source_id, path, source_type, sensitivity,
+                               policy_tags_json, workspace_id, source_key
+                        FROM protected_sources
+                        WHERE source_id IN ({placeholders})
+                          AND workspace_id = ?
+                        """,
+                        (*current_ids, workspace_id),
+                    ).fetchall()
+                    payloads = [
+                        (
+                            row[0],
+                            {
+                                "source_id": row[0],
+                                "path": row[1],
+                                "source_type": row[2],
+                                "sensitivity": row[3],
+                                "policy_tags": json.loads(row[4]),
+                                "workspace_id": row[5],
+                                "source_key": row[6],
+                            },
+                        )
+                        for row in rows
+                    ]
+                elif node_kind == "source_chunk":
+                    rows = conn.execute(
+                        f"""
+                        SELECT chunk_id, source_id, ordinal, text,
+                               normalized_text, text_hash, shingle_fingerprint,
+                               token_count, workspace_id
+                        FROM source_chunks
+                        WHERE chunk_id IN ({placeholders})
+                          AND workspace_id = ?
+                        """,
+                        (*current_ids, workspace_id),
+                    ).fetchall()
+                    payloads = [
+                        (
+                            row[0],
+                            {
+                                "chunk_id": row[0],
+                                "source_id": row[1],
+                                "ordinal": row[2],
+                                "text": row[3],
+                                "normalized_text": row[4],
+                                "text_hash": row[5],
+                                "shingle_fingerprint": row[6],
+                                "token_count": row[7],
+                                "workspace_id": row[8],
+                            },
+                        )
+                        for row in rows
+                    ]
+                elif node_kind == "resource_version":
+                    rows = conn.execute(
+                        f"""
+                        SELECT node_id, path, content_hash, sequence_no,
+                               session_id, origin_tool_use_id, operation_id,
+                               operation_index, snapshot_id, resource_state,
+                               workspace_id
+                        FROM resource_versions
+                        WHERE node_id IN ({placeholders})
+                          AND workspace_id = ?
+                        """,
+                        (*current_ids, workspace_id),
+                    ).fetchall()
+                    payloads = [
+                        (
+                            row[0],
+                            {
+                                "node_id": row[0],
+                                "path": row[1],
+                                "content_hash": row[2],
+                                "sequence_no": row[3],
+                                "session_id": row[4],
+                                "origin_tool_use_id": row[5],
+                                "operation_id": row[6],
+                                "operation_index": row[7],
+                                "snapshot_id": row[8],
+                                "resource_state": row[9],
+                                "workspace_id": row[10],
+                            },
+                        )
+                        for row in rows
+                    ]
+                elif node_kind == "sink_candidate":
+                    rows = conn.execute(
+                        f"""
+                        SELECT node_id, sink_type, label, tool_name,
+                               tool_use_id, session_id, sequence_no,
+                               metadata_json, workspace_id
+                        FROM sink_candidates
+                        WHERE node_id IN ({placeholders})
+                          AND workspace_id = ?
+                        """,
+                        (*current_ids, workspace_id),
+                    ).fetchall()
+                    payloads = [
+                        (
+                            row[0],
+                            {
+                                "node_id": row[0],
+                                "sink_type": row[1],
+                                "label": row[2],
+                                "tool_name": row[3],
+                                "tool_use_id": row[4],
+                                "session_id": row[5],
+                                "sequence_no": row[6],
+                                "metadata": json.loads(row[7]),
+                                "workspace_id": row[8],
+                            },
+                        )
+                        for row in rows
+                    ]
+                else:
+                    raise ValueError("analysis run graph contains an unknown node kind")
+
+                for node_id, payload in payloads:
+                    snapshots[(node_kind, node_id)] = json.dumps(
+                        payload,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    )
+
+        expected = {
+            (node_kind, node_id)
+            for node_kind, node_ids in node_ids_by_kind.items()
+            for node_id in node_ids
+        }
+        if set(snapshots) != expected:
+            raise ValueError("analysis run node snapshot is incomplete")
+        return snapshots
+
+    def _validate_analysis_run_graph_live_edges(
+        self,
+        conn: sqlite3.Connection,
+        workspace_id: str,
+        batch: dict[str, tuple[object, ...]],
+    ) -> None:
+        edge_ids = sorted(batch)
+        for start in range(0, len(edge_ids), 300):
+            current_ids = edge_ids[start:start + 300]
+            placeholders = ",".join("?" for _ in current_ids)
+            rows = conn.execute(
+                f"""
+                SELECT
+                    edge_id,
+                    workspace_id,
+                    src_node_kind,
+                    src_node_id,
+                    dst_node_kind,
+                    dst_node_id,
+                    relation,
+                    evidence_level,
+                    method,
+                    score,
+                    reason
+                FROM information_flow_edges
+                WHERE edge_id IN ({placeholders})
+                """,
+                current_ids,
+            ).fetchall()
+            for row in rows:
+                edge_id = row[0]
+                if row[1] != workspace_id:
+                    raise ValueError("analysis run edge belongs to another workspace")
+                if tuple(row[2:]) != batch[edge_id]:
+                    raise ValueError("analysis run edge conflicts with live graph payload")
+
+    def has_analysis_run_graph(self, analysis_run_id: str) -> bool:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT 1
+                FROM analysis_run_graphs AS graph
+                JOIN analysis_runs AS run
+                  ON run.analysis_run_id = graph.analysis_run_id
+                 AND run.workspace_id = graph.workspace_id
+                WHERE graph.analysis_run_id = ?
+                  AND run.workspace_id IS NOT NULL
+                """,
+                (analysis_run_id,),
+            ).fetchone()
+        return row is not None
+
+    def get_analysis_run_graph_coverage(
+        self,
+        analysis_run_id: str,
+    ) -> str | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT graph.coverage
+                FROM analysis_run_graphs AS graph
+                JOIN analysis_runs AS run
+                  ON run.analysis_run_id = graph.analysis_run_id
+                 AND run.workspace_id = graph.workspace_id
+                WHERE graph.analysis_run_id = ?
+                  AND run.workspace_id IS NOT NULL
+                """,
+                (analysis_run_id,),
+            ).fetchone()
+        return None if row is None else row[0]
+
+    def has_analysis_run_node_snapshot(self, analysis_run_id: str) -> bool:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT 1
+                FROM analysis_run_graphs AS graph
+                JOIN analysis_runs AS run
+                  ON run.analysis_run_id = graph.analysis_run_id
+                 AND run.workspace_id = graph.workspace_id
+                WHERE graph.analysis_run_id = ?
+                  AND graph.node_snapshot_version = 'v1'
+                  AND run.workspace_id IS NOT NULL
+                """,
+                (analysis_run_id,),
+            ).fetchone()
+        return row is not None
+
+    def list_analysis_run_node_snapshots(
+        self,
+        analysis_run_id: str,
+        node_kind: str,
+    ) -> list[dict[str, object]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT
+                    member.node_kind,
+                    member.node_id,
+                    member.snapshot_hash,
+                    snapshot.metadata_json
+                FROM analysis_run_nodes AS member
+                JOIN analysis_run_graphs AS graph
+                  ON graph.analysis_run_id = member.analysis_run_id
+                 AND graph.workspace_id = member.workspace_id
+                JOIN analysis_runs AS run
+                  ON run.analysis_run_id = graph.analysis_run_id
+                 AND run.workspace_id = graph.workspace_id
+                JOIN analysis_node_snapshots AS snapshot
+                  ON snapshot.workspace_id = member.workspace_id
+                 AND snapshot.snapshot_hash = member.snapshot_hash
+                 AND snapshot.node_kind = member.node_kind
+                 AND snapshot.node_id = member.node_id
+                WHERE member.analysis_run_id = ?
+                  AND member.node_kind = ?
+                  AND graph.node_snapshot_version = 'v1'
+                  AND run.workspace_id IS NOT NULL
+                ORDER BY member.node_id
+                """,
+                (analysis_run_id, node_kind),
+            ).fetchall()
+        payloads: list[dict[str, object]] = []
+        for stored_kind, node_id, snapshot_hash, metadata_json in rows:
+            expected_hash = hashlib.sha256(
+                f"{stored_kind}\0{node_id}\0{metadata_json}".encode("utf-8")
+            ).hexdigest()
+            if expected_hash != snapshot_hash:
+                raise ValueError("analysis node snapshot hash does not match payload")
+            payload = json.loads(metadata_json)
+            if not isinstance(payload, dict):
+                raise ValueError("analysis node snapshot payload is invalid")
+            payloads.append(payload)
+        return payloads
+
+    def list_analysis_run_flow_edges(
+        self,
+        analysis_run_id: str,
+    ) -> list[FlowEdge]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT
+                    edge.edge_id,
+                    edge.src_node_kind,
+                    edge.src_node_id,
+                    edge.dst_node_kind,
+                    edge.dst_node_id,
+                    edge.relation,
+                    edge.evidence_level,
+                    edge.method,
+                    edge.score,
+                    edge.reason
+                FROM analysis_run_flow_edges AS edge
+                JOIN analysis_run_graphs AS graph
+                  ON graph.analysis_run_id = edge.analysis_run_id
+                JOIN analysis_runs AS run
+                  ON run.analysis_run_id = graph.analysis_run_id
+                 AND run.workspace_id = graph.workspace_id
+                WHERE edge.analysis_run_id = ?
+                  AND run.workspace_id IS NOT NULL
+                ORDER BY edge.edge_id
+                """,
+                (analysis_run_id,),
+            ).fetchall()
+        return [_flow_edge_from_row(row) for row in rows]
 
     def upsert_policy_decision(self, decision: StoredPolicyDecision) -> None:
         with self._connect() as conn:
@@ -2175,6 +3180,67 @@ class EventStore:
                 ],
             )
 
+    def replace_information_flow_edges_for_workspace(
+        self,
+        workspace_id: str,
+        edges: list[FlowEdge],
+    ) -> None:
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            self._validate_registered_workspace(conn, workspace_id)
+            self._reject_cross_workspace_flow_edge_collisions(
+                conn,
+                workspace_id,
+                edges,
+            )
+            self._validate_analysis_run_graph_node_owners(
+                conn,
+                workspace_id,
+                edges,
+            )
+            for table in (
+                "information_flow_edge_scopes",
+                "analysis_cursors",
+                "runtime_lineage_state",
+                "runtime_source_binding_edges",
+                "information_flow_edges",
+            ):
+                conn.execute(
+                    f"DELETE FROM {table} WHERE workspace_id = ?",
+                    (workspace_id,),
+                )
+            conn.executemany(
+                """
+                INSERT INTO information_flow_edges (
+                    workspace_id,
+                    edge_id,
+                    src_node_kind,
+                    src_node_id,
+                    dst_node_kind,
+                    dst_node_id,
+                    relation,
+                    evidence_level,
+                    method,
+                    score,
+                    reason
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(workspace_id, edge_id) DO UPDATE SET
+                    src_node_kind = excluded.src_node_kind,
+                    src_node_id = excluded.src_node_id,
+                    dst_node_kind = excluded.dst_node_kind,
+                    dst_node_id = excluded.dst_node_id,
+                    relation = excluded.relation,
+                    evidence_level = excluded.evidence_level,
+                    method = excluded.method,
+                    score = excluded.score,
+                    reason = excluded.reason
+                """,
+                [
+                    (workspace_id, *_flow_edge_values(edge))
+                    for edge in edges
+                ],
+            )
+
     def upsert_information_flow_edges_for_session(
         self,
         session_id: str,
@@ -2297,6 +3363,36 @@ class EventStore:
             if other_session is not None:
                 raise ValueError("flow edge id belongs to another session")
 
+    def _reject_cross_workspace_flow_edge_collisions(
+        self,
+        conn: sqlite3.Connection,
+        workspace_id: str,
+        edges: list[FlowEdge],
+    ) -> None:
+        batch: dict[str, tuple[object, ...]] = {}
+        for edge in edges:
+            values = _flow_edge_values(edge)[1:]
+            previous = batch.get(edge.edge_id)
+            if previous is not None and previous != values:
+                raise ValueError("flow edge id has conflicting batch payloads")
+            batch[edge.edge_id] = values
+        edge_ids = sorted(batch)
+        for start in range(0, len(edge_ids), 400):
+            current_ids = edge_ids[start:start + 400]
+            placeholders = ",".join("?" for _ in current_ids)
+            collision = conn.execute(
+                f"""
+                SELECT 1
+                FROM information_flow_edges
+                WHERE edge_id IN ({placeholders})
+                  AND workspace_id != ?
+                LIMIT 1
+                """,
+                (*current_ids, workspace_id),
+            ).fetchone()
+            if collision is not None:
+                raise ValueError("flow edge id belongs to another workspace")
+
     def replace_resource_versions(
         self,
         resources: list[ResourceVersion],
@@ -2349,6 +3445,49 @@ class EventStore:
                     )
                     for resource in resources
                 ],
+            )
+
+    def replace_resource_versions_for_workspace(
+        self,
+        workspace_id: str,
+        resources: list[ResourceVersion],
+    ) -> None:
+        if any(resource.workspace_id != workspace_id for resource in resources):
+            raise ValueError("resource version workspace does not match replace scope")
+        nodes = [
+            (resource.node_id, resource.workspace_id)
+            for resource in resources
+        ]
+        _validate_node_workspace_owners(nodes)
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            self._validate_registered_workspace(conn, workspace_id)
+            self._reject_cross_workspace_node_collisions(
+                conn,
+                "resource_versions",
+                [(node_id, workspace_id) for node_id, _ in nodes],
+            )
+            conn.execute(
+                "DELETE FROM resource_versions WHERE workspace_id = ?",
+                (workspace_id,),
+            )
+            conn.executemany(
+                """
+                INSERT INTO resource_versions (
+                    node_id,
+                    workspace_id,
+                    path,
+                    content_hash,
+                    sequence_no,
+                    session_id,
+                    origin_tool_use_id,
+                    operation_id,
+                    operation_index,
+                    snapshot_id,
+                    resource_state
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [_resource_values(resource) for resource in resources],
             )
 
     def upsert_resource_versions(
@@ -2457,6 +3596,47 @@ class EventStore:
                     )
                     for sink in sinks
                 ],
+            )
+
+    def replace_sink_candidates_for_workspace(
+        self,
+        workspace_id: str,
+        sinks: list[SinkCandidate],
+    ) -> None:
+        if any(sink.workspace_id != workspace_id for sink in sinks):
+            raise ValueError("sink candidate workspace does not match replace scope")
+        nodes = [
+            (sink.node_id, sink.workspace_id)
+            for sink in sinks
+        ]
+        _validate_node_workspace_owners(nodes)
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            self._validate_registered_workspace(conn, workspace_id)
+            self._reject_cross_workspace_node_collisions(
+                conn,
+                "sink_candidates",
+                [(node_id, workspace_id) for node_id, _ in nodes],
+            )
+            conn.execute(
+                "DELETE FROM sink_candidates WHERE workspace_id = ?",
+                (workspace_id,),
+            )
+            conn.executemany(
+                """
+                INSERT INTO sink_candidates (
+                    node_id,
+                    workspace_id,
+                    sink_type,
+                    label,
+                    tool_name,
+                    tool_use_id,
+                    session_id,
+                    sequence_no,
+                    metadata_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [_sink_values(sink) for sink in sinks],
             )
 
     def upsert_sink_candidates(
@@ -2573,6 +3753,26 @@ class EventStore:
         if row is None:
             raise ValueError("runtime analysis scope is not registered")
 
+    def _validate_registered_workspace(
+        self,
+        conn: sqlite3.Connection,
+        workspace_id: str,
+    ) -> None:
+        row = conn.execute(
+            """
+            SELECT canonical_root
+            FROM workspaces
+            WHERE workspace_id = ?
+            """,
+            (workspace_id,),
+        ).fetchone()
+        if (
+            row is None
+            or not row[0]
+            or make_workspace_id(row[0]) != workspace_id
+        ):
+            raise ValueError("workspace analysis requires a registered workspace")
+
     def _validate_runtime_analysis_run_owner(
         self,
         conn: sqlite3.Connection,
@@ -2591,12 +3791,79 @@ class EventStore:
         if row != (workspace_id, session_id):
             raise ValueError("analysis run does not match runtime scope")
 
+    def _validate_mutable_analysis_run(
+        self,
+        conn: sqlite3.Connection,
+        analysis_run_id: str,
+    ) -> tuple[str | None, str | None]:
+        row = conn.execute(
+            """
+            SELECT workspace_id, session_id, completed_at
+            FROM analysis_runs
+            WHERE analysis_run_id = ?
+            """,
+            (analysis_run_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError("analysis run does not exist")
+        if row[2] is not None:
+            raise ValueError("completed analysis run is immutable")
+        workspace_id = row[0]
+        session_id = row[1]
+        if workspace_id is not None:
+            self._validate_registered_workspace(conn, workspace_id)
+        return workspace_id, session_id
+
     def upsert_source_binding_edges(
         self,
         analysis_run_id: str,
         edges: list[FlowEdge],
     ) -> None:
+        batch: dict[str, tuple[object, ...]] = {}
+        for edge in edges:
+            if not isinstance(edge.edge_id, str) or not edge.edge_id:
+                raise ValueError("source binding edge id is invalid")
+            values = _flow_edge_values(edge)[1:]
+            previous = batch.get(edge.edge_id)
+            if previous is not None and previous != values:
+                raise ValueError("source binding edge has conflicting batch payloads")
+            batch[edge.edge_id] = values
         with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            workspace_id, session_id = self._validate_mutable_analysis_run(
+                conn,
+                analysis_run_id,
+            )
+            if workspace_id is not None:
+                self._validate_analysis_run_graph_node_owners(
+                    conn,
+                    workspace_id,
+                    edges,
+                )
+            if workspace_id is not None and session_id is None and batch:
+                edge_ids = sorted(batch)
+                for start in range(0, len(edge_ids), 300):
+                    current_ids = edge_ids[start:start + 300]
+                    placeholders = ",".join("?" for _ in current_ids)
+                    rows = conn.execute(
+                        f"""
+                        SELECT edge_id, src_node_kind, src_node_id,
+                               dst_node_kind, dst_node_id, relation,
+                               evidence_level, method, score, reason
+                        FROM analysis_run_flow_edges
+                        WHERE analysis_run_id = ?
+                          AND edge_id IN ({placeholders})
+                        """,
+                        (analysis_run_id, *current_ids),
+                    ).fetchall()
+                    found = {row[0]: tuple(row[1:]) for row in rows}
+                    if set(found) != set(current_ids) or any(
+                        found[edge_id] != batch[edge_id]
+                        for edge_id in current_ids
+                    ):
+                        raise ValueError(
+                            "source binding edge is not in the immutable run graph"
+                        )
             conn.executemany(
                 """
                 INSERT OR REPLACE INTO source_binding_edges (
@@ -2614,20 +3881,8 @@ class EventStore:
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
-                    (
-                        analysis_run_id,
-                        edge.edge_id,
-                        edge.src_node_kind,
-                        edge.src_node_id,
-                        edge.dst_node_kind,
-                        edge.dst_node_id,
-                        edge.relation,
-                        edge.evidence_level,
-                        edge.method,
-                        edge.score,
-                        edge.reason,
-                    )
-                    for edge in edges
+                    (analysis_run_id, edge_id, *values)
+                    for edge_id, values in sorted(batch.items())
                 ],
             )
 
@@ -2664,6 +3919,32 @@ class EventStore:
             )
             for row in rows
         ]
+
+    def list_information_flow_edges_for_workspace(
+        self,
+        workspace_id: str,
+    ) -> list[FlowEdge]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT
+                    edge_id,
+                    src_node_kind,
+                    src_node_id,
+                    dst_node_kind,
+                    dst_node_id,
+                    relation,
+                    evidence_level,
+                    method,
+                    score,
+                    reason
+                FROM information_flow_edges
+                WHERE workspace_id = ?
+                ORDER BY edge_id
+                """,
+                (workspace_id,),
+            ).fetchall()
+        return [_flow_edge_from_row(row) for row in rows]
 
     def list_information_flow_edges_for_session(
         self,
@@ -2836,6 +4117,33 @@ class EventStore:
             )
             for row in rows
         ]
+
+    def list_analysis_runs_for_workspace(
+        self,
+        workspace_id: str,
+        *,
+        completed_only: bool = False,
+    ) -> list[AnalysisRun]:
+        completed_clause = "AND completed_at IS NOT NULL" if completed_only else ""
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT
+                    analysis_run_id,
+                    detector_version,
+                    config_json,
+                    started_at,
+                    completed_at,
+                    workspace_id,
+                    session_id
+                FROM analysis_runs
+                WHERE workspace_id = ?
+                  {completed_clause}
+                ORDER BY started_at DESC, rowid DESC
+                """,
+                (workspace_id,),
+            ).fetchall()
+        return [AnalysisRun(*row) for row in rows]
 
     def get_analysis_run(self, analysis_run_id: str) -> AnalysisRun | None:
         with self._connect() as conn:
@@ -3041,6 +4349,48 @@ class EventStore:
             for row in rows
         ]
 
+    def list_resource_versions_for_workspace(
+        self,
+        workspace_id: str,
+    ) -> list[ResourceVersion]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT
+                    node_id,
+                    workspace_id,
+                    path,
+                    content_hash,
+                    sequence_no,
+                    session_id,
+                    origin_tool_use_id,
+                    operation_id,
+                    operation_index,
+                    snapshot_id,
+                    resource_state
+                FROM resource_versions
+                WHERE workspace_id = ?
+                ORDER BY sequence_no, COALESCE(operation_index, -1), path, node_id
+                """,
+                (workspace_id,),
+            ).fetchall()
+        return [
+            ResourceVersion(
+                node_id=row[0],
+                workspace_id=_model_derived_workspace_id(row[1]),
+                path=row[2],
+                content_hash=row[3],
+                sequence_no=row[4],
+                session_id=row[5],
+                origin_tool_use_id=row[6],
+                operation_id=row[7],
+                operation_index=row[8],
+                snapshot_id=row[9],
+                resource_state=row[10],
+            )
+            for row in rows
+        ]
+
     def list_resource_versions_for_session(
         self,
         session_id: str,
@@ -3093,6 +4443,44 @@ class EventStore:
                 FROM sink_candidates
                 ORDER BY sequence_no, sink_type, node_id
                 """
+            ).fetchall()
+        return [
+            SinkCandidate(
+                node_id=row[0],
+                workspace_id=_model_derived_workspace_id(row[1]),
+                sink_type=row[2],
+                label=row[3],
+                tool_name=row[4],
+                tool_use_id=row[5],
+                session_id=row[6],
+                sequence_no=row[7],
+                metadata=json.loads(row[8]),
+            )
+            for row in rows
+        ]
+
+    def list_sink_candidates_for_workspace(
+        self,
+        workspace_id: str,
+    ) -> list[SinkCandidate]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT
+                    node_id,
+                    workspace_id,
+                    sink_type,
+                    label,
+                    tool_name,
+                    tool_use_id,
+                    session_id,
+                    sequence_no,
+                    metadata_json
+                FROM sink_candidates
+                WHERE workspace_id = ?
+                ORDER BY sequence_no, sink_type, node_id
+                """,
+                (workspace_id,),
             ).fetchall()
         return [
             SinkCandidate(
@@ -3558,7 +4946,36 @@ class EventStore:
         self,
         assignments: list[LineageAssignment],
     ) -> None:
+        if not assignments:
+            return
+        analysis_run_ids = {
+            assignment.analysis_run_id for assignment in assignments
+        }
+        if len(analysis_run_ids) != 1:
+            raise ValueError("lineage assignments span multiple analysis runs")
+        analysis_run_id = next(iter(analysis_run_ids))
         with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            workspace_id, _ = self._validate_mutable_analysis_run(
+                conn,
+                analysis_run_id,
+            )
+            if workspace_id is not None:
+                self._validate_analysis_node_owners(
+                    conn,
+                    workspace_id,
+                    [
+                        node
+                        for assignment in assignments
+                        for node in (
+                            (
+                                assignment.source_node_kind,
+                                assignment.source_node_id,
+                            ),
+                            (assignment.node_kind, assignment.node_id),
+                        )
+                    ],
+                )
             conn.executemany(
                 """
                 INSERT OR REPLACE INTO lineage_assignments (
@@ -3609,8 +5026,45 @@ class EventStore:
             for row in rows
         ]
 
+    def list_artifacts_for_workspace(
+        self,
+        workspace_id: str,
+    ) -> list[ArtifactRecord]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT
+                    a.artifact_id,
+                    a.event_id,
+                    a.role,
+                    a.text,
+                    a.text_hash,
+                    a.normalized_text,
+                    a.token_count
+                FROM artifacts AS a
+                JOIN events AS e ON e.event_id = a.event_id
+                WHERE e.workspace_id = ?
+                  AND e.workspace_status = 'ready'
+                ORDER BY e.sequence_no, a.recorded_at, a.artifact_id
+                """,
+                (workspace_id,),
+            ).fetchall()
+        return [ArtifactRecord(*row) for row in rows]
+
     def list_artifact_contexts(self) -> list[ArtifactContext]:
         return self._list_artifact_contexts_where("", ())
+
+    def list_artifact_contexts_for_workspace(
+        self,
+        workspace_id: str,
+    ) -> list[ArtifactContext]:
+        return self._list_artifact_contexts_where(
+            """
+            WHERE e.workspace_id = ?
+              AND e.workspace_status = 'ready'
+            """,
+            (workspace_id,),
+        )
 
     def list_artifact_contexts_for_session(
         self,
@@ -3772,6 +5226,41 @@ class EventStore:
             status=row[4],
             discovered_by=row[5] or "legacy_unscoped",
         )
+
+    def get_workspace(self, workspace_id: str) -> WorkspaceContext | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT
+                    workspace_id,
+                    canonical_root,
+                    lexical_root,
+                    discovered_by
+                FROM workspaces
+                WHERE workspace_id = ?
+                """,
+                (workspace_id,),
+            ).fetchone()
+        return None if row is None else _workspace_context_from_registry_row(row)
+
+    def get_workspace_by_canonical_root(
+        self,
+        canonical_root: str,
+    ) -> WorkspaceContext | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT
+                    workspace_id,
+                    canonical_root,
+                    lexical_root,
+                    discovered_by
+                FROM workspaces
+                WHERE canonical_root = ?
+                """,
+                (canonical_root,),
+            ).fetchone()
+        return None if row is None else _workspace_context_from_registry_row(row)
 
     def get_runtime_analysis_scope(self, event_id: str) -> RuntimeAnalysisScope:
         with self._connect() as conn:
@@ -4686,6 +6175,17 @@ def _model_derived_workspace_id(workspace_id: str) -> str | None:
     if workspace_id == LEGACY_DERIVED_WORKSPACE_ID:
         return None
     return workspace_id
+
+
+def _workspace_context_from_registry_row(row: tuple) -> WorkspaceContext:
+    return WorkspaceContext(
+        workspace_id=row[0],
+        canonical_root=row[1],
+        lexical_root=row[2],
+        execution_cwd=row[1],
+        status="ready",
+        discovered_by=row[3],
+    )
 
 
 def _protected_source_from_row(row: tuple) -> ProtectedSource:

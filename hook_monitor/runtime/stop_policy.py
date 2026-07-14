@@ -64,6 +64,7 @@ def evaluate_stop_hook_policy(
         selected,
         "Stop",
         db_path=store.db_path,
+        analysis_run_id=analysis_run.analysis_run_id,
     )
 
 

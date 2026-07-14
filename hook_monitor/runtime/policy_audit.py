@@ -11,7 +11,11 @@ def store_policy_decision(
     decision: PolicyDecision,
     analysis_run_id: str,
 ) -> None:
-    explanation = build_policy_explanation(decision, db_path=store.db_path)
+    explanation = build_policy_explanation(
+        decision,
+        db_path=store.db_path,
+        analysis_run_id=analysis_run_id,
+    )
     store.upsert_policy_decision(
         StoredPolicyDecision(
             decision_id=decision.decision_id,

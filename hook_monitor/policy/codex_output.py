@@ -35,19 +35,20 @@ def render_codex_hook_output(
     hook_event: str,
     *,
     db_path: Path | None = None,
+    analysis_run_id: str | None = None,
 ) -> dict[str, object]:
     if decision is None or decision.action == "allow":
         return {}
     if decision.action == "redact":
         raise NotImplementedError("redact requires tool-specific updatedInput handling")
     if hook_event == "PreToolUse":
-        return _render_pre_tool_use(decision, db_path)
+        return _render_pre_tool_use(decision, db_path, analysis_run_id)
     if hook_event == "PermissionRequest":
-        return _render_permission_request(decision, db_path)
+        return _render_permission_request(decision, db_path, analysis_run_id)
     if hook_event == "PostToolUse":
-        return _render_post_tool_use(decision, db_path)
+        return _render_post_tool_use(decision, db_path, analysis_run_id)
     if hook_event == "Stop":
-        return _render_stop(decision, db_path)
+        return _render_stop(decision, db_path, analysis_run_id)
     raise ValueError(f"unsupported Codex hook event: {hook_event}")
 
 
@@ -65,20 +66,25 @@ def _can_project_decision_to_hook(
 def _render_pre_tool_use(
     decision: PolicyDecision,
     db_path: Path | None,
+    analysis_run_id: str | None,
 ) -> dict[str, object]:
     if decision.action == "block":
         return {
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
                 "permissionDecision": "deny",
-                "permissionDecisionReason": _message(decision, db_path),
+                "permissionDecisionReason": _message(
+                    decision,
+                    db_path,
+                    analysis_run_id,
+                ),
             }
         }
     if decision.action == "warn":
         return {
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
-                "additionalContext": _message(decision, db_path),
+                "additionalContext": _message(decision, db_path, analysis_run_id),
             }
         }
     return {}
@@ -87,6 +93,7 @@ def _render_pre_tool_use(
 def _render_permission_request(
     decision: PolicyDecision,
     db_path: Path | None,
+    analysis_run_id: str | None,
 ) -> dict[str, object]:
     if decision.action == "block":
         return {
@@ -94,7 +101,7 @@ def _render_permission_request(
                 "hookEventName": "PermissionRequest",
                 "decision": {
                     "behavior": "deny",
-                    "message": _message(decision, db_path),
+                    "message": _message(decision, db_path, analysis_run_id),
                 },
             }
         }
@@ -111,9 +118,10 @@ def _render_permission_request(
 def _render_post_tool_use(
     decision: PolicyDecision,
     db_path: Path | None,
+    analysis_run_id: str | None,
 ) -> dict[str, object]:
     if decision.action == "block":
-        message = _message(decision, db_path)
+        message = _message(decision, db_path, analysis_run_id)
         return {
             "decision": "block",
             "reason": message,
@@ -126,7 +134,7 @@ def _render_post_tool_use(
         return {
             "hookSpecificOutput": {
                 "hookEventName": "PostToolUse",
-                "additionalContext": _message(decision, db_path),
+                "additionalContext": _message(decision, db_path, analysis_run_id),
             }
         }
     return {}
@@ -135,24 +143,30 @@ def _render_post_tool_use(
 def _render_stop(
     decision: PolicyDecision,
     db_path: Path | None,
+    analysis_run_id: str | None,
 ) -> dict[str, object]:
     if decision.action == "continue_review":
         return {
             "decision": "block",
-            "reason": _message(decision, db_path),
+            "reason": _message(decision, db_path, analysis_run_id),
         }
     if decision.action == "warn":
         return {
-            "systemMessage": _message(decision, db_path),
+            "systemMessage": _message(decision, db_path, analysis_run_id),
         }
     return {}
 
 
-def _message(decision: PolicyDecision, db_path: Path | None) -> str:
+def _message(
+    decision: PolicyDecision,
+    db_path: Path | None,
+    analysis_run_id: str | None,
+) -> str:
     return render_hook_message(
         build_policy_explanation(
             decision,
             db_path=db_path,
+            analysis_run_id=analysis_run_id,
         )
     )
 

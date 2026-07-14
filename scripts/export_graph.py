@@ -12,6 +12,12 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from hook_monitor.analysis.query import (  # noqa: E402
+    AnalysisRunScope,
+    AnalysisScopeError,
+    matching_source_keys,
+    select_analysis_run_scope,
+)
 from hook_monitor.runtime.models import (  # noqa: E402
     AnalysisRun,
     ArtifactContext,
@@ -44,18 +50,24 @@ def main() -> int:
     args = _parse_args()
     store = EventStore(args.db)
     store.initialize()
-    analysis_run = _select_analysis_run(store, args.analysis_run)
-    if analysis_run is None:
-        if args.analysis_run:
-            print(f"Analysis run not found: {args.analysis_run}", file=sys.stderr)
-        else:
-            print(
-                "No analysis runs found. Run scripts/rebuild_lineage.py first.",
-                file=sys.stderr,
-            )
+    try:
+        scope = select_analysis_run_scope(
+            store,
+            analysis_run_id=args.analysis_run,
+            workspace_root=args.workspace_root,
+            latest=args.latest,
+        )
+    except AnalysisScopeError as exc:
+        print(str(exc), file=sys.stderr)
         return 1
 
-    data = _load_graph_data(store, analysis_run)
+    if args.all_edges and scope.graph_coverage != "full":
+        print(
+            "--all-edges requires a full offline analysis graph snapshot",
+            file=sys.stderr,
+        )
+        return 1
+    data = _load_graph_data(store, scope)
     selected_nodes, selected_edges = _select_graph(data, args)
     if args.format == "mermaid":
         output = _render_mermaid(
@@ -99,12 +111,17 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--analysis-run",
-        help="Analysis run id to inspect. Defaults to the latest completed run.",
+        help="Completed workspace-scoped analysis run id to inspect.",
+    )
+    parser.add_argument(
+        "--workspace-root",
+        type=Path,
+        help="Registered workspace root. Requires --latest.",
     )
     parser.add_argument(
         "--latest",
         action="store_true",
-        help="Inspect the latest completed analysis run. This is the default.",
+        help="Inspect the latest completed offline run for --workspace-root.",
     )
     parser.add_argument(
         "--format",
@@ -152,35 +169,28 @@ def _parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _select_analysis_run(
-    store: EventStore,
-    analysis_run_id: str | None,
-) -> AnalysisRun | None:
-    runs = store.list_analysis_runs()
-    if analysis_run_id is not None:
-        return next((run for run in runs if run.analysis_run_id == analysis_run_id), None)
-    completed = [run for run in runs if run.completed_at is not None]
-    return completed[0] if completed else (runs[0] if runs else None)
-
-
-def _load_graph_data(store: EventStore, analysis_run: AnalysisRun) -> GraphData:
-    artifact_edges = store.list_information_flow_edges()
-    source_edges = store.list_source_binding_edges(analysis_run.analysis_run_id)
+def _load_graph_data(store: EventStore, scope: AnalysisRunScope) -> GraphData:
+    analysis_run = scope.analysis_run
     return GraphData(
         analysis_run=analysis_run,
-        edges=source_edges + artifact_edges,
+        edges=scope.list_information_flow_edges(store),
         artifact_contexts={
             context.fragment.fragment_id: context
-            for context in store.list_artifact_contexts()
+            for context in scope.list_artifact_contexts(store)
         },
         protected_sources={
-            source.source_id: source for source in store.list_protected_sources()
+            source.source_id: source for source in scope.list_protected_sources(store)
         },
-        source_chunks={chunk.chunk_id: chunk for chunk in store.list_source_chunks()},
+        source_chunks={
+            chunk.chunk_id: chunk for chunk in scope.list_source_chunks(store)
+        },
         resource_versions={
-            resource.node_id: resource for resource in store.list_resource_versions()
+            resource.node_id: resource
+            for resource in scope.list_resource_versions(store)
         },
-        sink_candidates={sink.node_id: sink for sink in store.list_sink_candidates()},
+        sink_candidates={
+            sink.node_id: sink for sink in scope.list_sink_candidates(store)
+        },
         assignments=store.list_lineage_assignments(analysis_run.analysis_run_id),
     )
 
@@ -263,23 +273,15 @@ def _lineage_nodes(assignments: list[LineageAssignment]) -> set[NodeKey]:
 
 
 def _matching_source_keys(data: GraphData, source: str) -> list[NodeKey]:
-    all_keys = {
-        (assignment.source_node_kind, assignment.source_node_id)
-        for assignment in data.assignments
-    }
-    matches: set[NodeKey] = set()
-    for key in all_keys:
-        kind, node_id = key
-        if node_id == source or f"{kind}:{node_id}" == source:
-            matches.add(key)
-            continue
-        if kind == "source_chunk":
-            chunk = data.source_chunks.get(node_id)
-            if chunk and chunk.source_id == source:
-                matches.add(key)
-    if source in data.protected_sources and ("protected_source", source) in all_keys:
-        matches.add(("protected_source", source))
-    return sorted(matches)
+    return matching_source_keys(
+        source_keys={
+            (assignment.source_node_kind, assignment.source_node_id)
+            for assignment in data.assignments
+        },
+        protected_sources=data.protected_sources,
+        source_chunks=data.source_chunks,
+        source=source,
+    )
 
 
 def _render_mermaid(
@@ -358,6 +360,11 @@ def _render_json(
             "detector_version": data.analysis_run.detector_version,
             "started_at": data.analysis_run.started_at,
             "completed_at": data.analysis_run.completed_at,
+            "workspace_id": data.analysis_run.workspace_id,
+            "session_id": data.analysis_run.session_id,
+            "scope_kind": (
+                "session" if data.analysis_run.session_id else "workspace"
+            ),
         },
         "nodes": [
             {
@@ -401,13 +408,19 @@ def _node_label(
         source = data.protected_sources.get(node_id)
         if source is None:
             return f"protected_source:{_short_id(node_id)}"
-        return f"protected_source:{source.source_id}\\n{source.path}"
+        return f"protected_source:{source.source_key or source.source_id}\\n{source.path}"
     if kind == "source_chunk":
         chunk = data.source_chunks.get(node_id)
         if chunk is None:
             return f"source_chunk:{_short_id(node_id)}"
+        source = data.protected_sources.get(chunk.source_id)
+        source_label = (
+            source.source_key
+            if source is not None and source.source_key is not None
+            else chunk.source_id
+        )
         return _join_label_parts(
-            f"source_chunk:{chunk.source_id}#{chunk.ordinal}",
+            f"source_chunk:{source_label}#{chunk.ordinal}",
             _preview(chunk.text, preview_chars, no_preview),
         )
     if kind == "resource_version":

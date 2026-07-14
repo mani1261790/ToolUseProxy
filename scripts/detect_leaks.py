@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shlex
 import sys
 from pathlib import Path
 
@@ -11,7 +12,13 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from hook_monitor.analysis.leak_detection import LeakFinding, detect_leaks  # noqa: E402
-from hook_monitor.runtime.models import AnalysisRun, LineageAssignment, ProtectedSource, SourceChunk  # noqa: E402
+from hook_monitor.analysis.query import (  # noqa: E402
+    AnalysisRunScope,
+    AnalysisScopeError,
+    matching_source_keys,
+    select_analysis_run_scope,
+)
+from hook_monitor.runtime.models import AnalysisRun, LineageAssignment  # noqa: E402
 from hook_monitor.runtime.storage import DEFAULT_DB_PATH, EventStore  # noqa: E402
 
 
@@ -22,19 +29,20 @@ def main() -> int:
     args = _parse_args()
     store = EventStore(args.db)
     store.initialize()
-    analysis_run = _select_analysis_run(store, args.analysis_run)
-    if analysis_run is None:
-        if args.analysis_run:
-            print(f"Analysis run not found: {args.analysis_run}", file=sys.stderr)
-        else:
-            print(
-                "No analysis runs found. Run scripts/rebuild_lineage.py first.",
-                file=sys.stderr,
-            )
+    try:
+        scope = select_analysis_run_scope(
+            store,
+            analysis_run_id=args.analysis_run,
+            workspace_root=args.workspace_root,
+            latest=args.latest,
+        )
+    except AnalysisScopeError as exc:
+        print(str(exc), file=sys.stderr)
         return 1
+    analysis_run = scope.analysis_run
 
     assignments = store.list_lineage_assignments(analysis_run.analysis_run_id)
-    source_filter = _source_filter(store, assignments, args.source)
+    source_filter = _source_filter(store, scope, assignments, args.source)
     if args.source and not source_filter:
         print(f"No lineage source matched: {args.source}", file=sys.stderr)
         return 1
@@ -42,7 +50,7 @@ def main() -> int:
     findings = detect_leaks(
         analysis_run=analysis_run,
         assignments=assignments,
-        sink_candidates=store.list_sink_candidates(),
+        sink_candidates=scope.list_sink_candidates(store),
         min_score=args.min_score,
         sink_types=set(args.sink_type or []) or None,
         included_sink_types=_included_sink_types(args),
@@ -70,12 +78,17 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--analysis-run",
-        help="Analysis run id to inspect. Defaults to the latest completed run.",
+        help="Completed workspace-scoped analysis run id to inspect.",
+    )
+    parser.add_argument(
+        "--workspace-root",
+        type=Path,
+        help="Registered workspace root. Requires --latest.",
     )
     parser.add_argument(
         "--latest",
         action="store_true",
-        help="Inspect the latest completed analysis run. This is the default.",
+        help="Inspect the latest completed offline run for --workspace-root.",
     )
     parser.add_argument(
         "--format",
@@ -113,64 +126,31 @@ def _included_sink_types(args: argparse.Namespace) -> set[str] | None:
     return included or None
 
 
-def _select_analysis_run(
-    store: EventStore,
-    analysis_run_id: str | None,
-) -> AnalysisRun | None:
-    runs = store.list_analysis_runs()
-    if analysis_run_id is not None:
-        return next((run for run in runs if run.analysis_run_id == analysis_run_id), None)
-    completed = [run for run in runs if run.completed_at is not None]
-    return completed[0] if completed else (runs[0] if runs else None)
-
-
 def _source_filter(
     store: EventStore,
+    scope: AnalysisRunScope,
     assignments: list[LineageAssignment],
     source: str | None,
 ) -> set[NodeKey] | None:
     if source is None:
         return None
     return set(
-        _matching_source_keys(
-            assignments=assignments,
+        matching_source_keys(
+            source_keys={
+                (assignment.source_node_kind, assignment.source_node_id)
+                for assignment in assignments
+            },
             protected_sources={
                 protected.source_id: protected
-                for protected in store.list_protected_sources()
+                for protected in scope.list_protected_sources(store)
             },
             source_chunks={
                 chunk.chunk_id: chunk
-                for chunk in store.list_source_chunks()
+                for chunk in scope.list_source_chunks(store)
             },
             source=source,
         )
     )
-
-
-def _matching_source_keys(
-    *,
-    assignments: list[LineageAssignment],
-    protected_sources: dict[str, ProtectedSource],
-    source_chunks: dict[str, SourceChunk],
-    source: str,
-) -> list[NodeKey]:
-    all_keys = {
-        (assignment.source_node_kind, assignment.source_node_id)
-        for assignment in assignments
-    }
-    matches: set[NodeKey] = set()
-    for key in all_keys:
-        kind, node_id = key
-        if node_id == source or f"{kind}:{node_id}" == source:
-            matches.add(key)
-            continue
-        if kind == "source_chunk":
-            chunk = source_chunks.get(node_id)
-            if chunk and chunk.source_id == source:
-                matches.add(key)
-    if source in protected_sources and ("protected_source", source) in all_keys:
-        matches.add(("protected_source", source))
-    return sorted(matches)
 
 
 def _render_text(
@@ -180,6 +160,9 @@ def _render_text(
 ) -> str:
     lines = [
         f"analysis_run_id={analysis_run.analysis_run_id}",
+        f"workspace_id={analysis_run.workspace_id}",
+        f"session_id={analysis_run.session_id or '-'}",
+        f"scope_kind={'session' if analysis_run.session_id else 'workspace'}",
         f"detector_version={analysis_run.detector_version}",
         f"min_score={args.min_score:.2f}",
         f"findings={len(findings)}",
@@ -214,6 +197,9 @@ def _render_json(
             "detector_version": analysis_run.detector_version,
             "started_at": analysis_run.started_at,
             "completed_at": analysis_run.completed_at,
+            "workspace_id": analysis_run.workspace_id,
+            "session_id": analysis_run.session_id,
+            "scope_kind": "session" if analysis_run.session_id else "workspace",
         },
         "summary": {
             "findings": len(findings),
@@ -249,10 +235,17 @@ def _finding_to_dict(finding: LeakFinding, db_path: Path) -> dict[str, object]:
 
 
 def _trace_command(db_path: Path, finding: LeakFinding) -> str:
-    return (
-        "python3 scripts/trace_lineage.py "
-        f"--db {db_path} "
-        f"--node sink_candidate:{finding.sink_node_id}"
+    return shlex.join(
+        (
+            "python3",
+            "scripts/trace_lineage.py",
+            "--db",
+            str(db_path),
+            "--analysis-run",
+            finding.analysis_run_id,
+            "--node",
+            f"sink_candidate:{finding.sink_node_id}",
+        )
     )
 
 

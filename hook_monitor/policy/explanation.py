@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shlex
 from pathlib import Path
 
 from hook_monitor.policy.models import PolicyDecision, PolicyExplanation
@@ -9,10 +10,11 @@ def build_policy_explanation(
     decision: PolicyDecision,
     *,
     db_path: Path | None = None,
+    analysis_run_id: str | None = None,
 ) -> PolicyExplanation:
     source_label = f"{decision.source_node_kind}:{decision.source_node_id}"
     sink_label = f"sink_candidate:{decision.sink_node_id}"
-    trace_command = _trace_command(decision, db_path)
+    trace_command = _trace_command(decision, db_path, analysis_run_id)
     return PolicyExplanation(
         decision_id=decision.decision_id,
         finding_id=decision.finding_id,
@@ -65,9 +67,15 @@ def _user_message(decision: PolicyDecision) -> str:
     )
 
 
-def _trace_command(decision: PolicyDecision, db_path: Path | None) -> str:
+def _trace_command(
+    decision: PolicyDecision,
+    db_path: Path | None,
+    analysis_run_id: str | None,
+) -> str:
     parts = ["python3", "scripts/trace_lineage.py"]
     if db_path is not None:
         parts.extend(("--db", str(db_path)))
+    if analysis_run_id is not None:
+        parts.extend(("--analysis-run", analysis_run_id))
     parts.extend(("--node", f"sink_candidate:{decision.sink_node_id}"))
-    return " ".join(parts)
+    return shlex.join(parts)

@@ -11,6 +11,12 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from hook_monitor.analysis.query import (  # noqa: E402
+    AnalysisRunScope,
+    AnalysisScopeError,
+    matching_source_keys,
+    select_analysis_run_scope,
+)
 from hook_monitor.runtime.models import (  # noqa: E402
     AnalysisRun,
     ArtifactContext,
@@ -49,22 +55,45 @@ def main() -> int:
         print(f"Policy decision not found: {args.decision}", file=sys.stderr)
         return 1
 
-    analysis_run_id = args.analysis_run or (
-        decision.analysis_run_id if decision is not None else None
-    )
-    analysis_run = _select_analysis_run(store, analysis_run_id)
-    if analysis_run is None:
-        if args.analysis_run:
-            print(f"Analysis run not found: {args.analysis_run}", file=sys.stderr)
-        else:
+    if decision is not None:
+        if args.workspace_root is not None or args.latest:
             print(
-                "No analysis runs found. Run scripts/rebuild_lineage.py first.",
+                "--decision cannot be combined with --workspace-root or --latest",
                 file=sys.stderr,
             )
+            return 1
+        if (
+            args.analysis_run is not None
+            and args.analysis_run != decision.analysis_run_id
+        ):
+            print(
+                "Policy decision analysis run does not match --analysis-run: "
+                f"{decision.analysis_run_id} != {args.analysis_run}",
+                file=sys.stderr,
+            )
+            return 1
+        selected_run_id = decision.analysis_run_id
+    else:
+        selected_run_id = args.analysis_run
+    try:
+        scope = select_analysis_run_scope(
+            store,
+            analysis_run_id=selected_run_id,
+            workspace_root=args.workspace_root,
+            latest=args.latest,
+        )
+    except AnalysisScopeError as exc:
+        print(str(exc), file=sys.stderr)
         return 1
 
-    data = _load_trace_data(store, analysis_run)
+    data = _load_trace_data(store, scope)
     if decision is not None:
+        if not _decision_matches_run(data, decision):
+            print(
+                "Policy decision source and sink are not present in its analysis run",
+                file=sys.stderr,
+            )
+            return 1
         return _print_decision_trace(data, args, decision)
     if args.node:
         return _print_node_trace(data, args)
@@ -85,12 +114,17 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--analysis-run",
-        help="Analysis run id to inspect. Defaults to the latest completed run.",
+        help="Completed workspace-scoped analysis run id to inspect.",
+    )
+    parser.add_argument(
+        "--workspace-root",
+        type=Path,
+        help="Registered workspace root. Requires --latest.",
     )
     parser.add_argument(
         "--latest",
         action="store_true",
-        help="Inspect the latest completed analysis run. This is the default.",
+        help="Inspect the latest completed offline run for --workspace-root.",
     )
     parser.add_argument(
         "--source",
@@ -144,37 +178,43 @@ def _load_policy_decision(
     return store.get_policy_decision(decision_id)
 
 
-def _select_analysis_run(
-    store: EventStore,
-    analysis_run_id: str | None,
-) -> AnalysisRun | None:
-    runs = store.list_analysis_runs()
-    if analysis_run_id is not None:
-        return next((run for run in runs if run.analysis_run_id == analysis_run_id), None)
-    completed = [run for run in runs if run.completed_at is not None]
-    return completed[0] if completed else (runs[0] if runs else None)
-
-
-def _load_trace_data(store: EventStore, analysis_run: AnalysisRun) -> TraceData:
-    artifact_edges = store.list_information_flow_edges()
-    source_edges = store.list_source_binding_edges(analysis_run.analysis_run_id)
-    edges = artifact_edges + source_edges
+def _load_trace_data(store: EventStore, scope: AnalysisRunScope) -> TraceData:
+    analysis_run = scope.analysis_run
+    edges = scope.list_information_flow_edges(store)
     return TraceData(
         analysis_run=analysis_run,
         edges_by_id={edge.edge_id: edge for edge in edges},
         artifact_contexts={
             context.fragment.fragment_id: context
-            for context in store.list_artifact_contexts()
+            for context in scope.list_artifact_contexts(store)
         },
         protected_sources={
-            source.source_id: source for source in store.list_protected_sources()
+            source.source_id: source for source in scope.list_protected_sources(store)
         },
-        source_chunks={chunk.chunk_id: chunk for chunk in store.list_source_chunks()},
+        source_chunks={
+            chunk.chunk_id: chunk for chunk in scope.list_source_chunks(store)
+        },
         resource_versions={
-            resource.node_id: resource for resource in store.list_resource_versions()
+            resource.node_id: resource
+            for resource in scope.list_resource_versions(store)
         },
-        sink_candidates={sink.node_id: sink for sink in store.list_sink_candidates()},
+        sink_candidates={
+            sink.node_id: sink for sink in scope.list_sink_candidates(store)
+        },
         assignments=store.list_lineage_assignments(analysis_run.analysis_run_id),
+    )
+
+
+def _decision_matches_run(
+    data: TraceData,
+    decision: StoredPolicyDecision,
+) -> bool:
+    return any(
+        assignment.source_node_kind == decision.source_node_kind
+        and assignment.source_node_id == decision.source_node_id
+        and assignment.node_kind == "sink_candidate"
+        and assignment.node_id == decision.sink_node_id
+        for assignment in data.assignments
     )
 
 
@@ -187,6 +227,11 @@ def _print_summary(data: TraceData) -> int:
         (assignment.node_kind, assignment.node_id) for assignment in data.assignments
     }
     print(f"analysis_run_id={data.analysis_run.analysis_run_id}")
+    print(f"workspace_id={data.analysis_run.workspace_id}")
+    print(f"session_id={data.analysis_run.session_id or '-'}")
+    print(
+        f"scope_kind={'session' if data.analysis_run.session_id else 'workspace'}"
+    )
     print(f"detector_version={data.analysis_run.detector_version}")
     print(f"started_at={data.analysis_run.started_at}")
     print(f"completed_at={data.analysis_run.completed_at or '-'}")
@@ -279,6 +324,8 @@ def _print_decision_trace(
     print(f"decision_id={decision.decision_id}")
     print(f"action={decision.action} severity={decision.severity}")
     print(f"analysis_run_id={decision.analysis_run_id}")
+    print(f"workspace_id={data.analysis_run.workspace_id}")
+    print(f"session_id={data.analysis_run.session_id or '-'}")
     print(f"sink={decision.sink_type} sink_candidate:{decision.sink_node_id}")
     print("")
     args.node = f"sink_candidate:{decision.sink_node_id}"
@@ -286,23 +333,15 @@ def _print_decision_trace(
 
 
 def _matching_source_keys(data: TraceData, source: str) -> list[NodeKey]:
-    all_keys = {
+    return matching_source_keys(
+        source_keys={
         (assignment.source_node_kind, assignment.source_node_id)
         for assignment in data.assignments
-    }
-    matches: set[NodeKey] = set()
-    for key in all_keys:
-        kind, node_id = key
-        if node_id == source or f"{kind}:{node_id}" == source:
-            matches.add(key)
-            continue
-        if kind == "source_chunk":
-            chunk = data.source_chunks.get(node_id)
-            if chunk and chunk.source_id == source:
-                matches.add(key)
-    if source in data.protected_sources and ("protected_source", source) in all_keys:
-        matches.add(("protected_source", source))
-    return sorted(matches)
+        },
+        protected_sources=data.protected_sources,
+        source_chunks=data.source_chunks,
+        source=source,
+    )
 
 
 def _children_for_source(
@@ -432,15 +471,22 @@ def _node_label(
         source = data.protected_sources.get(node_id)
         if source is None:
             return f"protected_source:{_short_id(node_id)}"
+        source_label = source.source_key or source.source_id
         return (
-            f"protected_source:{source.source_id} path={source.path} "
+            f"protected_source:{source_label} path={source.path} "
             f"sensitivity={source.sensitivity}"
         )
     if kind == "source_chunk":
         chunk = data.source_chunks.get(node_id)
         if chunk is None:
             return f"source_chunk:{_short_id(node_id)}"
-        label = f"source_chunk:{chunk.source_id}#{chunk.ordinal}"
+        source = data.protected_sources.get(chunk.source_id)
+        source_label = (
+            source.source_key
+            if source is not None and source.source_key is not None
+            else chunk.source_id
+        )
+        label = f"source_chunk:{source_label}#{chunk.ordinal}"
         preview = _preview(chunk.text, preview_chars, no_preview)
         return f"{label} {preview}".rstrip()
     if kind == "resource_version":
