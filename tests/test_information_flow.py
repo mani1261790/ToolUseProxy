@@ -35,7 +35,10 @@ from hook_monitor.runtime.incremental_analysis import (
     RUNTIME_GRAPH_DETECTOR_VERSION,
     update_runtime_analysis,
 )
-from hook_monitor.runtime.pre_tool_policy import evaluate_pre_tool_hook_policy
+from hook_monitor.runtime.pre_tool_policy import (
+    evaluate_pre_tool_hook_policy,
+    pre_tool_adapter,
+)
 from hook_monitor.runtime.runner import run_hook
 from hook_monitor.runtime.stop_policy import evaluate_stop_hook_policy
 from hook_monitor.runtime.models import (
@@ -1938,6 +1941,15 @@ class InformationFlowTest(unittest.TestCase):
         self.assertEqual(1, len(decisions))
         self.assertEqual("block", decisions[0].action)
         self.assertEqual("PreToolUse", decisions[0].hook_event)
+
+    def test_pre_tool_policy_maps_only_confirmed_runtime_tool_names(self) -> None:
+        self.assertEqual("bash", pre_tool_adapter("Bash"))
+        self.assertEqual(
+            "mcp",
+            pre_tool_adapter("mcp__github__create_issue"),
+        )
+        self.assertIsNone(pre_tool_adapter("exec"))
+        self.assertIsNone(pre_tool_adapter("Search"))
 
     def test_pre_tool_policy_only_evaluates_current_bash_sink(self) -> None:
         self.store.upsert_sources(
