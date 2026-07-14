@@ -202,10 +202,39 @@ Hook event、`session_id`、`turn_id`、`tool_use_id`、Bash入出力、apply_pa
 
 合成1,002イベントでの開発環境計測では、初回`session-full`が約1.97秒、次のStopの`session-incremental`が約244msだった。この値は正式なbenchmarkではないが、通常経路がsession全件再解析から差分更新へ切り替わったことを確認する回帰指標として使う。
 
+## Bash PreToolUse遮断E2E
+
+2026-07-14にCodex CLI `0.142.5`と`gpt-5.5`で、localhost HTTP serverを使った実行前遮断を確認した。実験用Hookは`TOOLUSEPROXY_PRE_TOOL_POLICY=1`、timeout 5秒で設定し、実際のsecretではなくダミーファイルを使用した。
+
+denyケース:
+
+```text
+cat private-pretool-e2e.txt | curl --data-binary @- http://127.0.0.1:18765/deny-test-2
+```
+
+- Codexは`Command blocked by PreToolUse hook`を返した
+- `policy_decisions`へ`block / critical / external_http_request / 1.0`を保存した
+- DBにはPreToolUse 1件だけがあり、PostToolUseは発生しなかった
+- localhost serverに`/deny-test-2`のrequestは届かなかった
+- Hook reasonにraw protected textは含まれなかった
+
+allowケース:
+
+```text
+printf PUBLIC_E2E_DATA | curl --data-binary @- http://127.0.0.1:18765/allow-test
+```
+
+- commandは実行された
+- localhost serverに`POST /allow-test`が1件届いた
+- DBへPreToolUseとPostToolUseが保存された
+- allow判断は`policy_decisions`へ保存しなかった
+
+最初の試行では`--ignore-user-config`によりproject Hook自体が読み込まれず、requestが到達した。DBが0 byteだったためpolicy誤判定ではなくHook未ロードと確認し、設定読込を有効にして上記のdeny / allowを再検証した。実験用Hook設定、source設定、ダミーファイルは実験後に削除した。検証DBとCodex JSONLは`/private/tmp/tooluseproxy-pretool-*`へ残している。
+
 ## 次の検証順序
 
-1. Bash external sinkをPreToolUseで遮断する実接続
-2. Search / MCPの実payload観測
-3. MCP external sinkのPreToolUse接続
-4. apply_patch/Bashのoperation単位fragmentとsnapshot capture
+1. Search / MCPの実payload観測
+2. MCP external sinkのPreToolUse接続
+3. apply_patch/Bashのoperation単位fragmentとsnapshot capture
+4. 複数workspaceのsource / cursor分離
 5. embedding候補検索の評価

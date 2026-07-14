@@ -97,7 +97,7 @@ Codex Hooks の設定と、そこから呼び出される監視プログラム�
 
 いずれも stdin のHook payloadを受け取り、event、artifact、artifact fragmentをローカルSQLiteへ記録します。
 
-`PreToolUse` と `PostToolUse` は、現時点では記録だけを行います。`Stop` は最初の実Hook接続として、記録直後に最終応答の `final_answer` sink を評価し、critical な漏えい候補があれば Codex Hook stdout JSON を返します。
+`PostToolUse`は記録だけを行います。`Stop`は最終応答の`final_answer` sinkを評価します。`PreToolUse`は既定では記録だけですが、`TOOLUSEPROXY_PRE_TOOL_POLICY=1`を設定すると、実payloadを確認済みの`Bash`だけを実行前に評価します。
 
 ## 使い方
 
@@ -130,6 +130,9 @@ hook_monitor/
     storage.py
     source_config.py
     runner.py
+    incremental_analysis.py
+    policy_audit.py
+    pre_tool_policy.py
     stop_policy.py
   analysis/
     adapters/
@@ -170,7 +173,8 @@ hook_monitor/
 4. `hook_monitor/runtime/parser.py` が event を内部形式に正規化する
 5. `hook_monitor/runtime/parser.py` が `tool_input` / `tool_response` / `final_answer` から artifact を作る
 6. `hook_monitor/runtime/storage.py` が SQLite に保存する
-7. `Stop` の場合だけ、`hook_monitor/runtime/stop_policy.py` がローカルDBを再解析し、`final_answer` の判断を stdout JSON に変換する
+7. 有効な`PreToolUse`または`Stop`ではsession差分解析を更新する
+8. `pre_tool_policy.py`または`stop_policy.py`が現在eventのsinkだけを評価し、stdout JSONへ変換する
 
 短く書くと、こうです。
 
@@ -181,7 +185,8 @@ Codex
   -> hook_monitor/runtime/parser.py
   -> hook_monitor/runtime/storage.py
   -> .tooluseproxy/events.db
-  -> Stopのみ: hook_monitor/runtime/stop_policy.py
+  -> PreToolUse: hook_monitor/runtime/pre_tool_policy.py
+  -> Stop: hook_monitor/runtime/stop_policy.py
 ```
 
 ## Stop hook の policy 接続
@@ -212,9 +217,7 @@ Stop payload
   -> Codex Hook stdout JSON
 ```
 
-初期実装では `final_answer` だけを対象にし、`PreToolUse` の `permissionDecision: deny` にはまだ接続しません。Codex Hook の未サポートな `permissionDecision: ask` にも依存しません。
-
-この処理は `Stop` 実行中に、現在のローカルDB全体を使って adapter、情報流グラフ、source binding、lineage を再計算します。これは軽量な記録処理より重い処理です。ただし初期実装では、外部APIやembeddingを呼ばず、SQLite上の既存eventと `protected_sources.json` だけを使う同期処理に限定します。実運用でDBが大きくなる場合は、事前にoffline再解析済みのgraphへ差分接続する方式へ移します。
+StopとPreToolUseは同じruntime graph detector versionを使います。初回、detector変更、source manifest変更、cursor不整合時だけ同一sessionを`session-full`で再構築し、通常は未処理sequenceだけを`session-incremental`で追加します。source manifestが変わらない場合、protected source本文は再読込しません。
 
 source設定は、`protected_sources.json` が存在する場合はその内容を優先します。空の `sources` は「保護対象なし」として扱い、DBに古いsource定義が残っていてもfallbackしません。`protected_sources.json` が存在しない場合だけ、既存DBのsource定義へfallbackします。
 
@@ -233,11 +236,30 @@ Stop policy 接続は環境変数で無効化できます。
 TOOLUSEPROXY_STOP_POLICY=0 python3 /Users/mani/Developer/ToolUseProxy/hooks/monitor_stop.py
 ```
 
+## PreToolUse hook の policy 接続
+
+PreToolUse policyはopt-inです。Hook commandに次の環境変数を追加します。
+
+```text
+TOOLUSEPROXY_PRE_TOOL_POLICY=1 python3 /Users/mani/Developer/ToolUseProxy/hooks/monitor_pre_tool.py
+```
+
+対象は正規化後のtool名が`bash`である実payloadだけです。現在eventの`event_id`、`sequence_no`、`tool_use_id`、`adapter: bash`が一致するexternal sinkだけを評価します。
+
+- critical: `permissionDecision: deny`
+- high: `additionalContext`を返して実行継続
+- medium以下またはfindingなし: stdoutなしで実行継続
+- session ID欠落、policy無効、解析例外: fail-open
+
+未サポートの`permissionDecision: ask`と`continue: false`には依存しません。Hook内ではSQLite、静的adapter、indexed lexical candidate、差分lineageだけを使い、network、embedding、全DB再解析は行いません。
+
+現時点のsource設定基準はToolUseProxy repository rootです。複数workspaceを同じDBで分離するsource ID / cursor schemaは別作業とします。
+
 ## 各ファイルの役割
 
 - `hooks/monitor_pre_tool.py`
   - `PreToolUse` 用の薄い entrypoint です
-  - `run_hook("pre_tool_use")` を呼ぶだけです
+  - `run_hook("pre_tool_use")`を呼び、opt-in時はBash external sinkを評価します
 - `hooks/monitor_post_tool.py`
   - `PostToolUse` 用の薄い entrypoint です
   - `run_hook("post_tool_use")` を呼ぶだけです
