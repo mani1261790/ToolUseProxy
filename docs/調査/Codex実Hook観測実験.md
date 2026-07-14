@@ -147,6 +147,8 @@ Codex CLIで観測した主要なファイル操作は`Bash`と`apply_patch`だ�
 - shell redirectなどのwriteをpathと入力内容へ分解していない
 - `apply_patch`はAdd/Update/Delete/Moveとpathを分解し、成功したPostToolUseをresource versionへ接続するよう修正した
 
+その後、Bash filesystem recognizerを追加し、静的な`cat`と`>` / `>>` redirectionをresource versionへ接続した。最初の実Codex観測DBを再利用した確認では、Bash redirectionから1件のresource versionが作られ、2回の`cat`からそれぞれ`read_by`と`read_from`が生成された。resourceの`content_hash`はsnapshotを取得していないため`None`である。
+
 文字列類似による推定は一部機能するが、`protected source -> resource -> tool output`という確定的な経路を作れない。
 
 ### P1: fragment重複によりedgeを過生成する（修正済み）
@@ -200,8 +202,8 @@ Hook event、`session_id`、`turn_id`、`tool_use_id`、Bash入出力、apply_pa
 
 ## 次の検証順序
 
-1. Bash filesystem read/writeの限定的な構文解析
-2. Search / MCPの実payload観測
-3. session単位の差分更新
-4. apply_patchのoperation単位fragmentとsnapshot capture
+1. Search / MCPの実payload観測
+2. session単位の差分更新
+3. PreToolUseでexternal sinkを遮断する実接続
+4. apply_patch/Bashのoperation単位fragmentとsnapshot capture
 5. embedding候補検索の評価

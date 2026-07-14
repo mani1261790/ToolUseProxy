@@ -29,7 +29,7 @@ from hook_monitor.runtime.source_config import DEFAULT_CONFIG_PATH
 from hook_monitor.runtime.storage import EventStore
 
 
-DETECTOR_VERSION = "stop-hook-final-answer-v3-apply-patch-resources"
+DETECTOR_VERSION = "stop-hook-final-answer-v4-bash-filesystem"
 
 
 def evaluate_stop_hook_policy(

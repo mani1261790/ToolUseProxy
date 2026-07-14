@@ -7,6 +7,7 @@ from pathlib import Path
 
 from hook_monitor.analysis.adapters.base import AdapterResult
 from hook_monitor.analysis.adapters.common import make_structured_edge, normalize_tool_name
+from hook_monitor.analysis.bash_file_parser import parse_bash_file_operations
 from hook_monitor.analysis.patch_parser import PatchOperation, parse_apply_patch
 from hook_monitor.runtime.models import ArtifactContext, FlowEdge, ResourceVersion
 
@@ -37,6 +38,14 @@ class FilesystemAdapter:
         "filesystem_write_text_file",
     }
     _APPLY_PATCH_NAME = "apply_patch"
+    _BASH_NAMES = {
+        "bash",
+        "shell",
+        "exec",
+        "command",
+        "terminal",
+        "run_command",
+    }
 
     def analyze(
         self,
@@ -49,8 +58,18 @@ class FilesystemAdapter:
         resources: dict[str, ResourceVersion] = {}
 
         for group in groups:
-            if normalize_tool_name(group[0].tool_name) == self._APPLY_PATCH_NAME:
+            normalized_tool_name = normalize_tool_name(group[0].tool_name)
+            if normalized_tool_name == self._APPLY_PATCH_NAME:
                 self._analyze_apply_patch(
+                    group,
+                    repo_root,
+                    latest_by_session_path,
+                    resources,
+                    edges,
+                )
+                continue
+            if normalized_tool_name in self._BASH_NAMES:
+                self._analyze_bash_filesystem(
                     group,
                     repo_root,
                     latest_by_session_path,
@@ -135,6 +154,113 @@ class FilesystemAdapter:
             )
 
         return AdapterResult(tuple(edges), tuple(resources.values()))
+
+    def _analyze_bash_filesystem(
+        self,
+        group: list[ArtifactContext],
+        repo_root: Path,
+        latest_by_session_path: dict[tuple[str | None, str], ResourceVersion],
+        resources: dict[str, ResourceVersion],
+        edges: list[FlowEdge],
+    ) -> None:
+        command_context = _select_command_context(group)
+        if command_context is None:
+            return
+        operations = parse_bash_file_operations(command_context.fragment.text)
+        if not operations:
+            return
+
+        session_id = group[0].session_id
+        tool_use_id = group[0].tool_use_id
+        pre_sequence_no = command_context.sequence_no
+        succeeded = _bash_succeeded(group)
+        outputs = _select_output_contexts(group) if succeeded else []
+
+        for index, operation in enumerate(operations):
+            path = _normalize_path(operation.path, command_context.cwd, repo_root)
+            resource_key = (session_id, path)
+            previous = latest_by_session_path.get(resource_key)
+
+            if operation.operation == "read":
+                resource = previous or _make_resource_version(
+                    path=path,
+                    content_hash=None,
+                    sequence_no=pre_sequence_no,
+                    session_id=session_id,
+                    tool_use_id=tool_use_id,
+                    version_tag=f"bash_read:{index}:{operation.path}",
+                )
+                resources[resource.node_id] = resource
+                latest_by_session_path[resource_key] = resource
+                edges.append(
+                    make_structured_edge(
+                        src_kind="resource_version",
+                        src_id=resource.node_id,
+                        dst_kind="artifact_fragment",
+                        dst_id=command_context.fragment.fragment_id,
+                        relation="read_by",
+                        method="bash_file_read",
+                        reason=f"Bash command reads {path}",
+                    )
+                )
+                if operation.output_is_file_content:
+                    edges.extend(
+                        make_structured_edge(
+                            src_kind="resource_version",
+                            src_id=resource.node_id,
+                            dst_kind="artifact_fragment",
+                            dst_id=output.fragment.fragment_id,
+                            relation="read_from",
+                            method="bash_cat_output",
+                            reason=f"Bash cat output reads {path}",
+                        )
+                        for output in outputs
+                    )
+                continue
+
+            if not succeeded:
+                continue
+            post_sequence_no = max(
+                context.sequence_no
+                for context in group
+                if context.phase == "post_tool_use"
+            )
+            resource = _make_resource_version(
+                path=path,
+                content_hash=None,
+                sequence_no=post_sequence_no,
+                session_id=session_id,
+                tool_use_id=tool_use_id,
+                version_tag=(
+                    f"bash_{operation.operation}:{index}:{operation.path}:"
+                    f"fd={operation.file_descriptor}"
+                ),
+            )
+            resources[resource.node_id] = resource
+            latest_by_session_path[resource_key] = resource
+            edges.append(
+                make_structured_edge(
+                    src_kind="artifact_fragment",
+                    src_id=command_context.fragment.fragment_id,
+                    dst_kind="resource_version",
+                    dst_id=resource.node_id,
+                    relation="written_to",
+                    method=f"bash_{operation.operation}",
+                    reason=f"Bash command writes {path}",
+                )
+            )
+            if operation.operation == "append" and previous is not None:
+                edges.append(
+                    make_structured_edge(
+                        src_kind="resource_version",
+                        src_id=previous.node_id,
+                        dst_kind="resource_version",
+                        dst_id=resource.node_id,
+                        relation="updated_from",
+                        method="bash_append",
+                        reason=f"Bash append preserves previous content of {path}",
+                    )
+                )
 
     def _analyze_apply_patch(
         self,
@@ -335,6 +461,22 @@ def _select_apply_patch_command(
     return min(commands, key=lambda context: context.sequence_no) if commands else None
 
 
+def _select_command_context(
+    group: list[ArtifactContext],
+) -> ArtifactContext | None:
+    commands = [
+        context
+        for context in group
+        if context.phase == "pre_tool_use"
+        and context.artifact_role == "tool_input"
+        and context.fragment.semantic_role == "command"
+        and context.fragment.json_pointer != "/"
+    ]
+    if not commands:
+        return None
+    return min(commands, key=lambda context: context.sequence_no)
+
+
 def _apply_patch_succeeded(group: list[ArtifactContext]) -> bool:
     outputs = _select_output_contexts(group)
     if not outputs:
@@ -349,6 +491,20 @@ def _apply_patch_succeeded(group: list[ArtifactContext]) -> bool:
         or "success" in text
         or "done!" in text
     )
+
+
+def _bash_succeeded(group: list[ArtifactContext]) -> bool:
+    post_outputs = [
+        context
+        for context in group
+        if context.phase == "post_tool_use" and context.artifact_role == "tool_output"
+    ]
+    if not post_outputs:
+        return False
+    text = "\n".join(context.fragment.text for context in post_outputs).lower()
+    if re.search(r"exit code:\s*[1-9][0-9]*", text):
+        return False
+    return "command failed" not in text and "execution failed" not in text
 
 
 def _prefer_leaf_fragments(
