@@ -453,9 +453,9 @@ PreToolUse
 
 ## 次の検証順序
 
-1. tool形状を壊さないredactの必要条件、監査、fallbackを設計する
-2. offline staging/promoteとruntime履歴snapshotの必要性を評価する
-3. MCP server固有のwrite/read分類fixture
+1. redact前提となるMCP server/tool固有field profileとfixtureを作る
+2. critical findingをblockしたままredaction preview planを検証する
+3. offline staging/promoteとruntime履歴snapshotの必要性を評価する
 4. embedding候補検索の評価
 
-PermissionRequestは評価を完了し、汎用runtime接続を見送った。次はBash、apply_patch、MCPごとに、安全に意味と構造を維持できる範囲だけを対象にredactを設計する。未サポートの`permissionDecision: ask`には依存しない。
+PermissionRequestは評価を完了し、汎用runtime接続を見送った。redactも書換契約を設計したが、複数PreToolUse Hookでは最後に完了したrewriteだけが採用され、rewrite後のPreToolUse再検査もない。production Stop境界へは接続せず、MCPのexplicit profile、call内全findingのaggregate plan、hash-only auditをpreviewで検証する。未サポートの`permissionDecision: ask`には依存しない。

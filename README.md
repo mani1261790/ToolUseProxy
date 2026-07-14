@@ -62,7 +62,7 @@ API キーや認証情報のように文字列パターンで判別しやすい�
 
 `scripts/detect_leaks.py`はsource lineageが`sink_candidate`へ到達した場合にfindingを出し、`scripts/evaluate_policy.py`は`allow` / `warn` / `block` / `continue_review`へ変換します。実Hookでは、Stopが`final_answer`漏えい候補を`continue_review`で差し戻し、opt-inのBashとMCP PreToolUseがcriticalなexternal sinkを`permissionDecision: deny`で実行前遮断します。MCPは追加のopt-inを必要とし、write-like toolだけを対象にします。両方ともworkspace・session単位の差分解析を共有し、介入判断は`policy_decisions`へ保存します。
 
-複数workspaceの分離も実装済みです。明示したcanonical workspace rootをidentityとし、event、source、cursor、resource、edge、解析runをworkspaceごとに分離します。runtimeは現在eventのworkspaceとsessionだけを更新し、offline CLIは`--analysis-run ID`または`--workspace-root PATH --latest`の明示を必須にします。completed offline runはedgeだけでなくnode metadataもcontent-addressed snapshotとして保持するため、後からlive DBのnodeが変わっても過去runを再現できます。`PermissionRequest`は実payload、公式実装、実Codexのdeny / allowを検証した結果、PreToolUseの代替にならず、現時点では汎用runtime接続を追加しないと判断しました。次はtool形状を壊さないredactの書換契約を設計します。
+複数workspaceの分離も実装済みです。明示したcanonical workspace rootをidentityとし、event、source、cursor、resource、edge、解析runをworkspaceごとに分離します。runtimeは現在eventのworkspaceとsessionだけを更新し、offline CLIは`--analysis-run ID`または`--workspace-root PATH --latest`の明示を必須にします。completed offline runはedgeだけでなくnode metadataもcontent-addressed snapshotとして保持するため、後からlive DBのnodeが変わっても過去runを再現できます。`PermissionRequest`は実payload、公式実装、実Codexのdeny / allowを検証した結果、PreToolUseの代替にならず、現時点では汎用runtime接続を追加しないと判断しました。redactは現行Codexの複数rewrite競合を考慮し、runtimeへ即接続せず、MCP tool profileと実行しないpreview plannerから始める設計にしています。
 
 Hook の構成と接続方法は [docs/設定/Hook設定.md](docs/設定/Hook設定.md) にまとめています。
 ドキュメント全体の索引は [docs/索引.md](docs/索引.md) にまとめています。
@@ -71,6 +71,7 @@ tool固有のI/Oを共通グラフへ変換するadapterは [docs/設計/アダ�
 外部流出候補を表す SinkCandidate と adapter の関係は [docs/設計/外部流出候補.md](docs/設計/外部流出候補.md) にまとめています。
 情報流から漏えい候補を検知する設計とCLIは [docs/設計/漏えい検知.md](docs/設計/漏えい検知.md) にまとめています。
 検知結果を実行判断へ変換するpolicy判断は [docs/設計/Policy判断.md](docs/設計/Policy判断.md) にまとめています。
+tool inputの安全な書換境界とpreview-first rolloutは [docs/設計/Redact.md](docs/設計/Redact.md) にまとめています。
 情報流グラフの経路確認とMermaid/DOT出力は [docs/設計/可視化.md](docs/設計/可視化.md) にまとめています。
 関連文献の整理は [docs/調査/関連文献.md](docs/調査/関連文献.md) にまとめています。
 次に実装するタスクは [docs/運用/実装タスク.md](docs/運用/実装タスク.md) にまとめています。

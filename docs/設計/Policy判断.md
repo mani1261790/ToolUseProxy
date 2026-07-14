@@ -118,7 +118,7 @@ medium / low
   -> allow
 ```
 
-`redact` は初期実装では判断modelだけに置きます。安全なredactは tool input の構造ごとに異なるため、Bash、MCP、apply_patch などの個別対応が必要です。
+`redact` は現在も判断modelだけに置き、runtimeへは接続していません。安全なredactはtool inputの構造ごとに異なり、複数PreToolUse Hookのrewrite競合もあるためです。tool別の適格条件、audit、fallback、実装gateは [Redact設計](Redact.md) に分けています。
 
 ## Codex Hookとの対応
 
@@ -293,7 +293,7 @@ JSON output:
 2. 実CodexのMCP tool名とraw argumentsをadapterへ接続
 3. 二段階opt-inでMCP external sinkを`PreToolUse` denyへ接続
 
-operation単位fragment、snapshot capture、複数workspaceのsource/cursor/resource分離は実装済みです。`PermissionRequest`は公式source、実payload、deny / allow E2Eを検証し、汎用runtime接続を追加しないと判断しました。次はtool別`updatedInput`を使うredactについて、構造を壊さず安全に書き換えられる条件を定義します。
+operation単位fragment、snapshot capture、複数workspaceのsource/cursor/resource分離は実装済みです。`PermissionRequest`は公式source、実payload、deny / allow E2Eを検証し、汎用runtime接続を追加しないと判断しました。redactは書換契約を設計済みですが、現行Codexでは複数matching Hookの最後に完了したrewriteだけが採用されるため、まずMCP profileと実行しないpreview plannerを作り、critical findingのblockを維持します。
 
 Stop hook内の解析はsession差分更新へ移行済みです。初回または解析条件変更時は`session-full`、通常時は`session-incremental`としてanalysis runへ記録します。Hook内ではlocal DB、static adapter、indexed lexical候補、差分lineageだけを扱い、embeddingやnetwork accessは行いません。
 
@@ -318,5 +318,6 @@ Stop hook内の解析はsession差分更新へ移行済みです。初回また�
 - policy rule の設定ファイル化
 - finding DB table への保存
 - 実行時hook内での外部APIやembeddingを使う重い再解析
-- Bash / MCP / apply_patch の安全なredact実装
+- MCP redaction previewとenforcement gate、Bashの限定allowlist redaction
+- apply_patchのhidden automatic redact
 - ユーザー確認UIの再実装
