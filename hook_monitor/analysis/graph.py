@@ -48,8 +48,8 @@ def build_artifact_flow_edges(
         key=lambda item: (item.sequence_no, item.fragment.fragment_id),
     )
     by_id = {item.fragment.fragment_id: item for item in ordered}
-    hash_index: dict[tuple[tuple[str, str], str], list[str]] = defaultdict(list)
-    shingle_index: dict[tuple[tuple[str, str], str], set[str]] = defaultdict(set)
+    hash_index: dict[tuple[tuple[str, str, str], str], list[str]] = defaultdict(list)
+    shingle_index: dict[tuple[tuple[str, str, str], str], set[str]] = defaultdict(set)
     edges: dict[tuple[str, str], FlowEdge] = {}
 
     for current in ordered:
@@ -97,12 +97,16 @@ def build_source_binding_edges(
     by_id = {
         context.fragment.fragment_id: context for context in canonical_contexts
     }
-    hash_index: dict[str, list[str]] = defaultdict(list)
-    shingle_index: dict[str, set[str]] = defaultdict(set)
+    hash_index: dict[tuple[str | None, str], list[str]] = defaultdict(list)
+    shingle_index: dict[tuple[str | None, str], set[str]] = defaultdict(set)
     for context in canonical_contexts:
-        hash_index[context.fragment.text_hash].append(context.fragment.fragment_id)
+        hash_index[(context.workspace_id, context.fragment.text_hash)].append(
+            context.fragment.fragment_id
+        )
         for shingle in make_shingles(context.fragment.normalized_text):
-            shingle_index[shingle].add(context.fragment.fragment_id)
+            shingle_index[(context.workspace_id, shingle)].add(
+                context.fragment.fragment_id
+            )
 
     incoming_from_artifact: dict[str, set[str]] = defaultdict(set)
     for edge in artifact_edges or []:
@@ -114,10 +118,18 @@ def build_source_binding_edges(
 
     edges: list[FlowEdge] = []
     for chunk in source_chunks:
-        candidate_ids = set(hash_index[chunk.text_hash])
+        chunk_workspace_id = _legacy_compatible_workspace_id(
+            chunk.workspace_id,
+            {context.workspace_id for context in canonical_contexts},
+        )
+        if chunk_workspace_id is _AMBIGUOUS_WORKSPACE:
+            continue
+        candidate_ids = set(
+            hash_index[(chunk_workspace_id, chunk.text_hash)]
+        )
         overlap_counts: dict[str, int] = defaultdict(int)
         for shingle in make_shingles(chunk.normalized_text):
-            for fragment_id in shingle_index[shingle]:
+            for fragment_id in shingle_index[(chunk_workspace_id, shingle)]:
                 overlap_counts[fragment_id] += 1
         ranked = sorted(
             overlap_counts,
@@ -169,16 +181,26 @@ def build_protected_source_resource_edges(
     repo_root: Path,
 ) -> list[FlowEdge]:
     """protected sourceのpathと一致するresource versionを確定的に接続する。"""
-    resources_by_path: dict[str, list[ResourceVersion]] = defaultdict(list)
+    resources_by_path: dict[
+        tuple[str | None, str],
+        list[ResourceVersion],
+    ] = defaultdict(list)
     for resource in resources:
         if resource.resource_state in {"deleted", "missing"}:
             continue
-        resources_by_path[resource.path].append(resource)
+        resources_by_path[(resource.workspace_id, resource.path)].append(resource)
 
     edges: list[FlowEdge] = []
+    resource_workspaces = {resource.workspace_id for resource in resources}
     for source in sources:
+        source_workspace_id = _legacy_compatible_workspace_id(
+            source.workspace_id,
+            resource_workspaces,
+        )
+        if source_workspace_id is _AMBIGUOUS_WORKSPACE:
+            continue
         source_path = str((repo_root / source.path).expanduser().resolve(strict=False))
-        for resource in resources_by_path[source_path]:
+        for resource in resources_by_path[(source_workspace_id, source_path)]:
             edges.append(
                 make_structured_edge(
                     src_kind="protected_source",
@@ -195,8 +217,8 @@ def build_protected_source_resource_edges(
 
 def _candidate_ids(
     current: ArtifactContext,
-    hash_index: dict[tuple[tuple[str, str], str], list[str]],
-    shingle_index: dict[tuple[tuple[str, str], str], set[str]],
+    hash_index: dict[tuple[tuple[str, str, str], str], list[str]],
+    shingle_index: dict[tuple[tuple[str, str, str], str], set[str]],
 ) -> set[str]:
     scope = _comparison_scope(current)
     if scope is None:
@@ -246,12 +268,28 @@ def _is_json_container(text: str) -> bool:
     return isinstance(value, (dict, list))
 
 
-def _comparison_scope(context: ArtifactContext) -> tuple[str, str] | None:
+def _comparison_scope(context: ArtifactContext) -> tuple[str, str, str] | None:
+    workspace_id = context.workspace_id or "legacy-unscoped"
     if context.session_id is not None:
-        return ("session", context.session_id)
+        return (workspace_id, "session", context.session_id)
     if context.turn_id is not None:
-        return ("turn", context.turn_id)
+        return (workspace_id, "turn", context.turn_id)
     return None
+
+
+_AMBIGUOUS_WORKSPACE = object()
+
+
+def _legacy_compatible_workspace_id(
+    explicit_workspace_id: str | None,
+    observed_workspace_ids: set[str | None],
+) -> str | None | object:
+    """Unscoped legacy evidence is usable only inside one unambiguous workspace."""
+    if explicit_workspace_id is not None:
+        return explicit_workspace_id
+    if len(observed_workspace_ids) == 1:
+        return next(iter(observed_workspace_ids))
+    return _AMBIGUOUS_WORKSPACE
 
 
 def _compare_artifact_pair(

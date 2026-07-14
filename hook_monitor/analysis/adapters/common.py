@@ -44,10 +44,13 @@ def normalize_tool_name(tool_name: str | None) -> str | None:
 def group_tool_calls(
     contexts: list[ArtifactContext],
 ) -> list[list[ArtifactContext]]:
-    grouped: dict[tuple[str | None, str], list[ArtifactContext]] = defaultdict(list)
+    grouped: dict[
+        tuple[str | None, str | None, str],
+        list[ArtifactContext],
+    ] = defaultdict(list)
     for context in contexts:
         identity = context.tool_use_id or context.event_id
-        grouped[(context.session_id, identity)].append(context)
+        grouped[(context.workspace_id, context.session_id, identity)].append(context)
     return sorted(
         grouped.values(),
         key=lambda group: min(context.sequence_no for context in group),
@@ -80,7 +83,8 @@ def make_sink_candidate(
 ) -> SinkCandidate:
     identity = "\0".join(
         (
-            "sink_candidate",
+            "sink_candidate_v2",
+            context.workspace_id or "legacy-unscoped",
             sink_type,
             context.session_id or "-",
             context.tool_use_id or context.event_id,
@@ -97,6 +101,7 @@ def make_sink_candidate(
         session_id=context.session_id,
         sequence_no=context.sequence_no,
         metadata=metadata,
+        workspace_id=context.workspace_id,
     )
 
 

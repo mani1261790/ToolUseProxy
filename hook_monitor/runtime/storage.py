@@ -348,6 +348,7 @@ class EventStore:
                 "resource_state",
                 "TEXT NOT NULL DEFAULT 'present'",
             )
+            self._ensure_column(conn, "resource_versions", "workspace_id", "TEXT")
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS sink_candidates (
@@ -363,6 +364,7 @@ class EventStore:
                 )
                 """
             )
+            self._ensure_column(conn, "sink_candidates", "workspace_id", "TEXT")
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS analysis_state (
@@ -633,6 +635,19 @@ class EventStore:
             )
             conn.execute(
                 """
+                CREATE INDEX IF NOT EXISTS idx_resource_versions_workspace_session
+                ON resource_versions (
+                    workspace_id,
+                    session_id,
+                    sequence_no,
+                    operation_index,
+                    path,
+                    node_id
+                )
+                """
+            )
+            conn.execute(
+                """
                 CREATE INDEX IF NOT EXISTS idx_sink_candidates_type
                 ON sink_candidates (sink_type)
                 """
@@ -641,6 +656,18 @@ class EventStore:
                 """
                 CREATE INDEX IF NOT EXISTS idx_sink_candidates_session_sequence
                 ON sink_candidates (session_id, sequence_no)
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_sink_candidates_workspace_session
+                ON sink_candidates (
+                    workspace_id,
+                    session_id,
+                    sequence_no,
+                    sink_type,
+                    node_id
+                )
                 """
             )
             conn.execute(
@@ -1975,6 +2002,7 @@ class EventStore:
                 """
                 INSERT INTO resource_versions (
                     node_id,
+                    workspace_id,
                     path,
                     content_hash,
                     sequence_no,
@@ -1984,11 +2012,12 @@ class EventStore:
                     operation_index,
                     snapshot_id,
                     resource_state
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
                     (
                         resource.node_id,
+                        resource.workspace_id,
                         resource.path,
                         resource.content_hash,
                         resource.sequence_no,
@@ -2006,14 +2035,22 @@ class EventStore:
     def upsert_resource_versions(self, resources: list[ResourceVersion]) -> None:
         if not resources:
             return
+        nodes = [(resource.node_id, resource.workspace_id) for resource in resources]
+        _validate_node_workspace_owners(nodes)
         with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            self._reject_cross_workspace_node_collisions(
+                conn,
+                "resource_versions",
+                nodes,
+            )
             conn.executemany(
                 """
                 INSERT OR REPLACE INTO resource_versions (
-                    node_id, path, content_hash, sequence_no, session_id,
+                    node_id, workspace_id, path, content_hash, sequence_no, session_id,
                     origin_tool_use_id, operation_id, operation_index,
                     snapshot_id, resource_state
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [_resource_values(resource) for resource in resources],
             )
@@ -2025,6 +2062,7 @@ class EventStore:
                 """
                 INSERT INTO sink_candidates (
                     node_id,
+                    workspace_id,
                     sink_type,
                     label,
                     tool_name,
@@ -2032,11 +2070,12 @@ class EventStore:
                     session_id,
                     sequence_no,
                     metadata_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
                     (
                         sink.node_id,
+                        sink.workspace_id,
                         sink.sink_type,
                         sink.label,
                         sink.tool_name,
@@ -2052,16 +2091,38 @@ class EventStore:
     def upsert_sink_candidates(self, sinks: list[SinkCandidate]) -> None:
         if not sinks:
             return
+        nodes = [(sink.node_id, sink.workspace_id) for sink in sinks]
+        _validate_node_workspace_owners(nodes)
         with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            self._reject_cross_workspace_node_collisions(
+                conn,
+                "sink_candidates",
+                nodes,
+            )
             conn.executemany(
                 """
                 INSERT OR REPLACE INTO sink_candidates (
-                    node_id, sink_type, label, tool_name, tool_use_id, session_id,
+                    node_id, workspace_id, sink_type, label, tool_name, tool_use_id, session_id,
                     sequence_no, metadata_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [_sink_values(sink) for sink in sinks],
             )
+
+    def _reject_cross_workspace_node_collisions(
+        self,
+        conn: sqlite3.Connection,
+        table: str,
+        nodes: list[tuple[str, str | None]],
+    ) -> None:
+        for node_id, workspace_id in nodes:
+            row = conn.execute(
+                f"SELECT workspace_id FROM {table} WHERE node_id = ?",
+                (node_id,),
+            ).fetchone()
+            if row is not None and row[0] != workspace_id:
+                raise ValueError("derived node id belongs to another workspace")
 
     def upsert_source_binding_edges(
         self,
@@ -2389,6 +2450,7 @@ class EventStore:
                 """
                 SELECT
                     node_id,
+                    workspace_id,
                     path,
                     content_hash,
                     sequence_no,
@@ -2405,15 +2467,16 @@ class EventStore:
         return [
             ResourceVersion(
                 node_id=row[0],
-                path=row[1],
-                content_hash=row[2],
-                sequence_no=row[3],
-                session_id=row[4],
-                origin_tool_use_id=row[5],
-                operation_id=row[6],
-                operation_index=row[7],
-                snapshot_id=row[8],
-                resource_state=row[9],
+                workspace_id=row[1],
+                path=row[2],
+                content_hash=row[3],
+                sequence_no=row[4],
+                session_id=row[5],
+                origin_tool_use_id=row[6],
+                operation_id=row[7],
+                operation_index=row[8],
+                snapshot_id=row[9],
+                resource_state=row[10],
             )
             for row in rows
         ]
@@ -2427,14 +2490,29 @@ class EventStore:
                 """
                 SELECT node_id, path, content_hash, sequence_no, session_id,
                        origin_tool_use_id, operation_id, operation_index,
-                       snapshot_id, resource_state
+                       snapshot_id, resource_state, workspace_id
                 FROM resource_versions
                 WHERE session_id = ?
                 ORDER BY sequence_no, COALESCE(operation_index, -1), path, node_id
                 """,
                 (session_id,),
             ).fetchall()
-        return [ResourceVersion(*row) for row in rows]
+        return [
+            ResourceVersion(
+                node_id=row[0],
+                path=row[1],
+                content_hash=row[2],
+                sequence_no=row[3],
+                session_id=row[4],
+                origin_tool_use_id=row[5],
+                operation_id=row[6],
+                operation_index=row[7],
+                snapshot_id=row[8],
+                resource_state=row[9],
+                workspace_id=row[10],
+            )
+            for row in rows
+        ]
 
     def list_sink_candidates(self) -> list[SinkCandidate]:
         with self._connect() as conn:
@@ -2442,6 +2520,7 @@ class EventStore:
                 """
                 SELECT
                     node_id,
+                    workspace_id,
                     sink_type,
                     label,
                     tool_name,
@@ -2456,13 +2535,14 @@ class EventStore:
         return [
             SinkCandidate(
                 node_id=row[0],
-                sink_type=row[1],
-                label=row[2],
-                tool_name=row[3],
-                tool_use_id=row[4],
-                session_id=row[5],
-                sequence_no=row[6],
-                metadata=json.loads(row[7]),
+                workspace_id=row[1],
+                sink_type=row[2],
+                label=row[3],
+                tool_name=row[4],
+                tool_use_id=row[5],
+                session_id=row[6],
+                sequence_no=row[7],
+                metadata=json.loads(row[8]),
             )
             for row in rows
         ]
@@ -2475,7 +2555,7 @@ class EventStore:
             rows = conn.execute(
                 """
                 SELECT node_id, sink_type, label, tool_name, tool_use_id,
-                       session_id, sequence_no, metadata_json
+                       session_id, sequence_no, metadata_json, workspace_id
                 FROM sink_candidates
                 WHERE session_id = ?
                 ORDER BY sequence_no, sink_type, node_id
@@ -2492,6 +2572,7 @@ class EventStore:
                 session_id=row[5],
                 sequence_no=row[6],
                 metadata=json.loads(row[7]),
+                workspace_id=row[8],
             )
             for row in rows
         ]
@@ -2977,7 +3058,12 @@ class EventStore:
                     e.tool_use_id,
                     e.tool_name,
                     e.cwd,
-                    e.sequence_no
+                    e.sequence_no,
+                    e.workspace_id,
+                    e.workspace_root,
+                    e.workspace_lexical_root,
+                    e.workspace_execution_cwd,
+                    e.workspace_status
                 FROM artifact_fragments AS f
                 JOIN artifacts AS a ON a.artifact_id = f.artifact_id
                 JOIN events AS e ON e.event_id = a.event_id
@@ -3010,6 +3096,11 @@ class EventStore:
                 tool_name=row[17],
                 cwd=row[18],
                 sequence_no=row[19],
+                workspace_id=row[20],
+                workspace_root=row[21],
+                workspace_lexical_root=row[22],
+                workspace_execution_cwd=row[23],
+                workspace_status=row[24],
             )
             for row in rows
         ]
@@ -3452,6 +3543,16 @@ def _validate_legacy_source_catalog(
         source_ordinals.add(source_ordinal)
 
 
+def _validate_node_workspace_owners(
+    nodes: list[tuple[str, str | None]],
+) -> None:
+    owners: dict[str, str | None] = {}
+    for node_id, workspace_id in nodes:
+        if node_id in owners and owners[node_id] != workspace_id:
+            raise ValueError("derived node id has conflicting workspace owners")
+        owners[node_id] = workspace_id
+
+
 def _protected_source_from_row(row: tuple) -> ProtectedSource:
     return ProtectedSource(
         source_id=row[0],
@@ -3511,6 +3612,7 @@ def _flow_edge_from_row(row: tuple) -> FlowEdge:
 def _resource_values(resource: ResourceVersion) -> tuple[object, ...]:
     return (
         resource.node_id,
+        resource.workspace_id,
         resource.path,
         resource.content_hash,
         resource.sequence_no,
@@ -3579,6 +3681,7 @@ def _resource_snapshot_values(snapshot: ResourceSnapshot) -> tuple[object, ...]:
 def _sink_values(sink: SinkCandidate) -> tuple[object, ...]:
     return (
         sink.node_id,
+        sink.workspace_id,
         sink.sink_type,
         sink.label,
         sink.tool_name,

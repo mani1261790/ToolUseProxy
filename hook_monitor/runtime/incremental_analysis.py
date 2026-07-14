@@ -38,7 +38,7 @@ from hook_monitor.runtime.source_config import (
 from hook_monitor.runtime.storage import EventStore
 
 
-RUNTIME_GRAPH_DETECTOR_VERSION = "runtime-graph-v9-snapshots"
+RUNTIME_GRAPH_DETECTOR_VERSION = "runtime-graph-v10-workspace-inputs"
 
 
 @dataclass(frozen=True)

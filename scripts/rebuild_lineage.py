@@ -22,7 +22,8 @@ from hook_monitor.runtime.fragments import build_artifact_fragments
 from hook_monitor.runtime.storage import DEFAULT_DB_PATH, EventStore
 
 
-DETECTOR_VERSION = "artifact-graph-v11-snapshots"
+DETECTOR_VERSION = "artifact-graph-v12-workspace-inputs"
+GRAPH_IDENTITY_VERSION = "workspace-graph-v1"
 GRAPH_FINGERPRINT_KEY = "artifact_graph_fingerprint"
 GRAPH_VERSION_KEY = "artifact_graph_detector_version"
 
@@ -138,10 +139,18 @@ def _parse_args() -> argparse.Namespace:
 
 def _graph_fingerprint(contexts, operations=(), snapshots=()) -> str:
     digest = hashlib.sha256()
+    digest.update(GRAPH_IDENTITY_VERSION.encode("ascii"))
+    digest.update(b"\n")
     for context in contexts:
         digest.update(context.fragment.fragment_id.encode("utf-8"))
         digest.update(b"\0")
         digest.update(str(context.sequence_no).encode("ascii"))
+        digest.update(b"\0")
+        digest.update((context.workspace_id or "-").encode("utf-8"))
+        digest.update(b"\0")
+        digest.update((context.workspace_root or "-").encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(context.workspace_status.encode("utf-8"))
         digest.update(b"\n")
     for operation in sorted(operations, key=lambda item: item.operation_id):
         for value in (

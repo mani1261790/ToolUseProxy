@@ -3920,6 +3920,7 @@ class InformationFlowTest(unittest.TestCase):
             "Read",
             tool_input={"path": "private.py"},
             tool_response={"content": SECRET},
+            cwd=str(REPO_ROOT),
         )
         self.store.upsert_sources(
             [self._protected_source("private.py")],
@@ -4517,6 +4518,7 @@ class InformationFlowTest(unittest.TestCase):
             "Read",
             tool_input={"path": "private.py"},
             tool_response={"content": SECRET},
+            cwd=str(REPO_ROOT),
         )
         self.store.upsert_sources(
             [self._protected_source("private.py")],
@@ -4769,7 +4771,10 @@ class InformationFlowTest(unittest.TestCase):
             tool_response=SECRET,
             cwd=str(repo_root),
         )
-        first_stop = self._record_stop_event(final_answer=SECRET)
+        first_stop = self._record_stop_event(
+            final_answer=SECRET,
+            cwd=str(repo_root),
+        )
 
         first = update_runtime_analysis(
             self.store,
@@ -4794,7 +4799,10 @@ class InformationFlowTest(unittest.TestCase):
             )
         )
 
-        second_stop = self._record_stop_event(final_answer=SECRET)
+        second_stop = self._record_stop_event(
+            final_answer=SECRET,
+            cwd=str(repo_root),
+        )
         with patch(
             "hook_monitor.runtime.incremental_analysis.load_sources_and_chunks",
             side_effect=AssertionError("unchanged sources must not be reread"),
@@ -5275,14 +5283,22 @@ class InformationFlowTest(unittest.TestCase):
     def _record_stop(self, *, final_answer: str) -> None:
         self._record_stop_event(final_answer=final_answer)
 
-    def _record_stop_event(self, *, final_answer: str):
+    def _record_stop_event(
+        self,
+        *,
+        final_answer: str,
+        cwd: str | None = None,
+    ):
+        payload: dict[str, object] = {
+            "session_id": "session-1",
+            "turn_id": "turn-1",
+            "final_answer": final_answer,
+        }
+        if cwd is not None:
+            payload["cwd"] = cwd
         event = normalize_event(
             "stop",
-            {
-                "session_id": "session-1",
-                "turn_id": "turn-1",
-                "final_answer": final_answer,
-            },
+            payload,
         )
         artifacts = build_artifacts(event)
         self.store.record(event, artifacts, build_fragments(artifacts))

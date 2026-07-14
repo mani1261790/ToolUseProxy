@@ -65,6 +65,11 @@ class ArtifactContext:
     tool_name: str | None
     cwd: str | None
     sequence_no: int
+    workspace_id: str | None = None
+    workspace_root: str | None = None
+    workspace_lexical_root: str | None = None
+    workspace_execution_cwd: str | None = None
+    workspace_status: str = "legacy_unscoped"
 
 
 @dataclass(frozen=True)
@@ -148,6 +153,7 @@ class ResourceVersion:
     operation_index: int | None = None
     snapshot_id: str | None = None
     resource_state: str = "present"
+    workspace_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -160,6 +166,7 @@ class SinkCandidate:
     session_id: str | None
     sequence_no: int
     metadata: dict[str, object]
+    workspace_id: str | None = None
 
 
 @dataclass(frozen=True)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sqlite3
@@ -12,8 +13,18 @@ from dataclasses import replace
 from pathlib import Path
 
 from hook_monitor.analysis.source_index import load_sources_and_chunks
-from hook_monitor.runtime.ids import make_event_id
-from hook_monitor.runtime.models import ProtectedSource, SourceChunk
+from hook_monitor.analysis.adapters.registry import run_adapters
+from hook_monitor.analysis.graph import (
+    build_artifact_flow_edges,
+    build_source_binding_edges,
+)
+from hook_monitor.runtime.ids import make_event_id, make_source_chunk_id
+from hook_monitor.runtime.models import (
+    ProtectedSource,
+    ResourceSnapshot,
+    SourceChunk,
+)
+from hook_monitor.runtime.operations import extract_tool_operations
 from hook_monitor.runtime.parser import build_artifacts, build_fragments, normalize_event
 from hook_monitor.runtime.source_config import load_protected_sources
 from hook_monitor.runtime.storage import EventStore
@@ -885,6 +896,85 @@ class WorkspaceIdentityTest(unittest.TestCase):
         self.assertIsNone(legacy_chunk.workspace_id)
         self.assertEqual([], scoped_sources)
 
+    def test_legacy_resource_and_sink_rows_keep_null_workspace(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            db_path = Path(temporary_directory) / "events.db"
+            with sqlite3.connect(db_path) as connection:
+                connection.execute(
+                    """
+                    CREATE TABLE resource_versions (
+                        node_id TEXT PRIMARY KEY,
+                        path TEXT NOT NULL,
+                        content_hash TEXT,
+                        sequence_no INTEGER NOT NULL,
+                        session_id TEXT,
+                        origin_tool_use_id TEXT,
+                        recorded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                    )
+                    """
+                )
+                connection.execute(
+                    """
+                    INSERT INTO resource_versions (
+                        node_id,
+                        path,
+                        content_hash,
+                        sequence_no,
+                        session_id,
+                        origin_tool_use_id
+                    ) VALUES ('legacy-resource', '/legacy.txt', 'hash', 1, 's', 't')
+                    """
+                )
+                connection.execute(
+                    """
+                    CREATE TABLE sink_candidates (
+                        node_id TEXT PRIMARY KEY,
+                        sink_type TEXT NOT NULL,
+                        label TEXT NOT NULL,
+                        tool_name TEXT,
+                        tool_use_id TEXT,
+                        session_id TEXT,
+                        sequence_no INTEGER NOT NULL,
+                        metadata_json TEXT NOT NULL,
+                        recorded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                    )
+                    """
+                )
+                connection.execute(
+                    """
+                    INSERT INTO sink_candidates (
+                        node_id,
+                        sink_type,
+                        label,
+                        tool_name,
+                        tool_use_id,
+                        session_id,
+                        sequence_no,
+                        metadata_json
+                    ) VALUES (
+                        'legacy-sink',
+                        'external_search',
+                        'Search',
+                        'Search',
+                        't',
+                        's',
+                        1,
+                        '{}'
+                    )
+                    """
+                )
+
+            store = EventStore(db_path)
+            store.initialize()
+            resource = store.list_resource_versions()[0]
+            sink = store.list_sink_candidates()[0]
+
+        self.assertEqual("legacy-resource", resource.node_id)
+        self.assertIsNone(resource.workspace_id)
+        self.assertEqual("present", resource.resource_state)
+        self.assertEqual("legacy-sink", sink.node_id)
+        self.assertIsNone(sink.workspace_id)
+
     def test_workspace_source_path_cannot_escape_root(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             base = Path(temporary_directory)
@@ -929,6 +1019,346 @@ class WorkspaceIdentityTest(unittest.TestCase):
             )
             with self.assertRaisesRegex(ValueError, "inside workspace"):
                 load_sources_and_chunks(root, workspace_id="ws_v1_test")
+
+    def test_graph_sources_and_sinks_are_partitioned_by_workspace(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            base = Path(temporary_directory)
+            store = EventStore(base / "events.db")
+            store.initialize()
+            query = "workspace scoped secret phrase"
+            workspace_ids: dict[str, str] = {}
+            for label in ("a", "b"):
+                root = base / f"workspace-{label}"
+                root.mkdir()
+                event = normalize_event(
+                    "pre_tool_use",
+                    {
+                        "session_id": "shared-session",
+                        "turn_id": "shared-turn",
+                        "tool_use_id": "shared-tool",
+                        "tool_name": "Search",
+                        "cwd": str(root),
+                        "tool_input": {"query": query},
+                    },
+                )
+                artifacts = build_artifacts(event)
+                store.record(event, artifacts, build_fragments(artifacts))
+                assert event.workspace_id is not None
+                workspace_ids[label] = event.workspace_id
+
+            contexts = store.list_artifact_contexts_for_session("shared-session")
+            self.assertEqual(
+                set(workspace_ids.values()),
+                {context.workspace_id for context in contexts},
+            )
+            self.assertTrue(
+                all(context.workspace_status == "ready" for context in contexts)
+            )
+            self.assertEqual([], build_artifact_flow_edges(contexts))
+
+            adapter_result = run_adapters(contexts, base)
+            self.assertEqual(2, len(adapter_result.sinks))
+            self.assertEqual(
+                set(workspace_ids.values()),
+                {sink.workspace_id for sink in adapter_result.sinks},
+            )
+            self.assertEqual(
+                2,
+                len({sink.node_id for sink in adapter_result.sinks}),
+            )
+
+            source_id = "protected-source-a"
+            chunk = SourceChunk(
+                chunk_id=make_source_chunk_id(source_id, 0, query),
+                source_id=source_id,
+                ordinal=0,
+                text=query,
+                normalized_text=query,
+                text_hash=hashlib.sha256(query.encode("utf-8")).hexdigest(),
+                shingle_fingerprint="[]",
+                token_count=4,
+                workspace_id=workspace_ids["a"],
+            )
+            source_edges = build_source_binding_edges([chunk], contexts)
+            context_by_fragment = {
+                context.fragment.fragment_id: context for context in contexts
+            }
+            self.assertTrue(source_edges)
+            self.assertEqual(
+                {workspace_ids["a"]},
+                {
+                    context_by_fragment[edge.dst_node_id].workspace_id
+                    for edge in source_edges
+                },
+            )
+
+            sinks = list(adapter_result.sinks)
+            store.upsert_sink_candidates(sinks)
+            stored_by_id = {
+                sink.node_id: sink for sink in store.list_sink_candidates()
+            }
+            self.assertEqual(
+                {sink.node_id: sink.workspace_id for sink in sinks},
+                {
+                    node_id: sink.workspace_id
+                    for node_id, sink in stored_by_id.items()
+                },
+            )
+            sink_a = next(
+                sink for sink in sinks if sink.workspace_id == workspace_ids["a"]
+            )
+            forged = replace(sink_a, workspace_id=workspace_ids["b"])
+            with self.assertRaisesRegex(ValueError, "another workspace"):
+                store.upsert_sink_candidates([forged])
+            self.assertEqual(
+                sink_a,
+                next(
+                    sink
+                    for sink in store.list_sink_candidates()
+                    if sink.node_id == sink_a.node_id
+                ),
+            )
+
+    def test_filesystem_resources_use_execution_cwd_and_workspace_boundary(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            base = Path(temporary_directory)
+            root = base / "workspace"
+            nested = root / "packages" / "app"
+            outside = base / "outside"
+            nested.mkdir(parents=True)
+            outside.mkdir()
+            store = EventStore(base / "events.db")
+            store.initialize()
+
+            def record_write(tool_use_id: str, path: str) -> str:
+                event = normalize_event(
+                    "pre_tool_use",
+                    {
+                        "session_id": "filesystem-session",
+                        "tool_use_id": tool_use_id,
+                        "tool_name": "Write",
+                        "cwd": str(nested),
+                        "tool_input": {
+                            "path": path,
+                            "content": "workspace content",
+                        },
+                    },
+                    workspace_root=str(root),
+                )
+                artifacts = build_artifacts(event)
+                store.record(event, artifacts, build_fragments(artifacts))
+                return event.event_id
+
+            inside_event_id = record_write("inside-write", "result.txt")
+            inside_contexts = [
+                context
+                for context in store.list_artifact_contexts()
+                if context.event_id == inside_event_id
+            ]
+            result = run_adapters(inside_contexts, root)
+            self.assertEqual(1, len(result.resources))
+            resource = result.resources[0]
+            self.assertEqual(str(nested.resolve() / "result.txt"), resource.path)
+            self.assertEqual(inside_contexts[0].workspace_id, resource.workspace_id)
+
+            cloned_contexts = [
+                replace(context, workspace_id="ws_v1_other")
+                for context in inside_contexts
+            ]
+            cloned_result = run_adapters(inside_contexts + cloned_contexts, root)
+            self.assertEqual(2, len(cloned_result.resources))
+            self.assertEqual(
+                2,
+                len({item.node_id for item in cloned_result.resources}),
+            )
+
+            store.upsert_resource_versions([resource])
+            forged = replace(resource, workspace_id="ws_v1_other")
+            with self.assertRaisesRegex(ValueError, "another workspace"):
+                store.upsert_resource_versions([forged])
+            self.assertEqual(
+                resource,
+                next(
+                    item
+                    for item in store.list_resource_versions()
+                    if item.node_id == resource.node_id
+                ),
+            )
+
+            outside_event_id = record_write("outside-write", "../../../escape.txt")
+            outside_contexts = [
+                context
+                for context in store.list_artifact_contexts()
+                if context.event_id == outside_event_id
+            ]
+            self.assertEqual((), run_adapters(outside_contexts, root).resources)
+
+            sibling_event_id = record_write(
+                "absolute-sibling-write",
+                str(root / "sibling.txt"),
+            )
+            sibling_contexts = [
+                context
+                for context in store.list_artifact_contexts()
+                if context.event_id == sibling_event_id
+            ]
+            sibling_result = run_adapters(sibling_contexts, root)
+            self.assertEqual(1, len(sibling_result.resources))
+            self.assertEqual(
+                str(root.resolve() / "sibling.txt"),
+                sibling_result.resources[0].path,
+            )
+
+            link = nested / "outside-link"
+            link.symlink_to(outside, target_is_directory=True)
+            symlink_event_id = record_write("symlink-write", "outside-link/leak.txt")
+            symlink_contexts = [
+                context
+                for context in store.list_artifact_contexts()
+                if context.event_id == symlink_event_id
+            ]
+            self.assertEqual((), run_adapters(symlink_contexts, root).resources)
+
+    def test_filesystem_rejects_snapshot_from_wrong_workspace_or_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            base = Path(temporary_directory)
+            root = base / "workspace"
+            nested = root / "nested"
+            other = base / "other"
+            nested.mkdir(parents=True)
+            other.mkdir()
+            store = EventStore(base / "events.db")
+            store.initialize()
+            command = (
+                "*** Begin Patch\n"
+                "*** Add File: result.txt\n"
+                "+workspace content\n"
+                "*** End Patch\n"
+            )
+            payload = {
+                "session_id": "snapshot-session",
+                "tool_use_id": "snapshot-tool",
+                "tool_name": "apply_patch",
+                "cwd": str(nested),
+                "tool_input": {"command": command},
+            }
+            pre = normalize_event(
+                "pre_tool_use",
+                payload,
+                workspace_root=str(root),
+            )
+            pre_artifacts = build_artifacts(pre)
+            pre_fragments = build_fragments(pre_artifacts)
+            extraction = extract_tool_operations(
+                pre,
+                pre_artifacts,
+                pre_fragments,
+            )
+            pre_fragments.extend(extraction.fragments)
+            store.record(
+                pre,
+                pre_artifacts,
+                pre_fragments,
+                list(extraction.operations),
+            )
+            post = normalize_event(
+                "post_tool_use",
+                {**payload, "tool_response": {"content": "Done!"}},
+                workspace_root=str(root),
+            )
+            post_artifacts = build_artifacts(post)
+            store.record(post, post_artifacts, build_fragments(post_artifacts))
+            contexts = store.list_artifact_contexts_for_session("snapshot-session")
+            operations = tuple(
+                store.list_tool_operations_for_session("snapshot-session")
+            )
+            baseline = run_adapters(
+                contexts,
+                root,
+                operations=operations,
+            )
+            self.assertEqual(1, len(baseline.resources))
+            operation = operations[0]
+
+            def snapshot(
+                workspace_root: str,
+                lexical_path: str,
+                requested_path: str = "result.txt",
+            ) -> ResourceSnapshot:
+                identity = "\0".join(
+                    (workspace_root, lexical_path, requested_path)
+                )
+                return ResourceSnapshot(
+                    snapshot_id=(
+                        "snapshot-"
+                        f"{hashlib.sha256(identity.encode()).hexdigest()}"
+                    ),
+                    post_event_id=post.event_id,
+                    operation_id=operation.operation_id,
+                    session_id=post.session_id,
+                    tool_use_id=post.tool_use_id,
+                    path_role="target",
+                    requested_path=requested_path,
+                    workspace_root=workspace_root,
+                    lexical_path=lexical_path,
+                    resource_state="present",
+                    capture_status="captured_hash_only",
+                    file_kind="regular",
+                    byte_size=17,
+                    captured_bytes=17,
+                    content_sha256="f" * 64,
+                    encoding="utf-8",
+                    body_text=None,
+                    error_code=None,
+                    duration_ms=0.1,
+                )
+
+            context = contexts[0]
+            assert context.workspace_root is not None
+            assert context.workspace_execution_cwd is not None
+            expected_path = str(
+                Path(context.workspace_execution_cwd) / "result.txt"
+            )
+            valid = snapshot(context.workspace_root, expected_path)
+            valid_result = run_adapters(
+                contexts,
+                root,
+                operations=operations,
+                snapshots=(valid,),
+            )
+            self.assertEqual(1, len(valid_result.resources))
+            self.assertEqual("f" * 64, valid_result.resources[0].content_hash)
+
+            wrong_root = snapshot(str(other.resolve()), expected_path)
+            outside_path = snapshot(
+                context.workspace_root,
+                str(other.resolve() / "result.txt"),
+            )
+            wrong_inside_path = snapshot(
+                context.workspace_root,
+                str(Path(context.workspace_execution_cwd) / "different.txt"),
+            )
+            wrong_requested_path = snapshot(
+                context.workspace_root,
+                expected_path,
+                requested_path="different.txt",
+            )
+            missing_lexical_path = replace(valid, lexical_path=None)
+            for forged in (
+                wrong_root,
+                outside_path,
+                wrong_inside_path,
+                wrong_requested_path,
+                missing_lexical_path,
+            ):
+                with self.subTest(snapshot_id=forged.snapshot_id):
+                    result = run_adapters(
+                        contexts,
+                        root,
+                        operations=operations,
+                        snapshots=(forged,),
+                    )
+                    self.assertEqual((), result.resources)
 
     def test_scoped_source_ids_are_stable_across_manifest_order(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
