@@ -17,6 +17,12 @@ class NormalizedEvent:
     permission_mode: str | None
     transcript_path: str | None
     stop_hook_active: bool | None
+    workspace_id: str | None
+    workspace_root: str | None
+    workspace_lexical_root: str | None
+    workspace_execution_cwd: str | None
+    workspace_status: str
+    workspace_source: str
     raw_payload: dict[str, Any]
 
 

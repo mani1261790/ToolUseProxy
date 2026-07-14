@@ -5,7 +5,12 @@ import json
 from typing import Any
 
 
-def make_event_id(phase: str, payload: dict[str, Any]) -> str:
+def make_event_id(
+    phase: str,
+    payload: dict[str, Any],
+    *,
+    workspace_id: str | None = None,
+) -> str:
     parts = [
         phase,
         _optional_str(payload.get("session_id")),
@@ -13,7 +18,15 @@ def make_event_id(phase: str, payload: dict[str, Any]) -> str:
         _optional_str(payload.get("tool_use_id")),
         _optional_str(payload.get("tool_name")),
     ]
-    digest = hashlib.sha256(_stable_json(payload).encode("utf-8")).hexdigest()[:16]
+    identity_payload: Any = payload
+    if workspace_id is not None:
+        identity_payload = {
+            "workspace_id": workspace_id,
+            "payload": payload,
+        }
+    digest = hashlib.sha256(
+        _stable_json(identity_payload).encode("utf-8")
+    ).hexdigest()[:16]
     return ":".join(parts + [digest])
 
 

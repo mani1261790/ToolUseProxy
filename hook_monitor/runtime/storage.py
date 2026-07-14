@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import sqlite3
 import uuid
 from dataclasses import replace
 from pathlib import Path
+
+from hook_monitor.runtime.ids import make_event_id
 
 from hook_monitor.runtime.models import (
     AnalysisCursor,
@@ -25,6 +28,11 @@ from hook_monitor.runtime.models import (
     ToolOperation,
 )
 from hook_monitor.runtime.snapshot_capture import workspace_root_from_cwd
+from hook_monitor.runtime.workspace import (
+    WorkspaceContext,
+    make_workspace_id,
+    resolve_workspace,
+)
 
 
 DEFAULT_DB_PATH = Path(".tooluseproxy/events.db")
@@ -38,6 +46,19 @@ class EventStore:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as conn:
             conn.execute("PRAGMA journal_mode = WAL")
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS workspaces (
+                    workspace_id TEXT PRIMARY KEY,
+                    canonical_root TEXT NOT NULL UNIQUE,
+                    lexical_root TEXT NOT NULL,
+                    discovered_by TEXT NOT NULL,
+                    first_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    last_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS events (
@@ -58,6 +79,22 @@ class EventStore:
             )
             self._ensure_column(conn, "events", "sequence_no", "INTEGER")
             self._ensure_column(conn, "events", "stop_hook_active", "INTEGER")
+            self._ensure_column(conn, "events", "workspace_id", "TEXT")
+            self._ensure_column(conn, "events", "workspace_root", "TEXT")
+            self._ensure_column(conn, "events", "workspace_lexical_root", "TEXT")
+            self._ensure_column(
+                conn,
+                "events",
+                "workspace_execution_cwd",
+                "TEXT",
+            )
+            self._ensure_column(
+                conn,
+                "events",
+                "workspace_status",
+                "TEXT NOT NULL DEFAULT 'legacy_unscoped'",
+            )
+            self._ensure_column(conn, "events", "workspace_source", "TEXT")
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS artifacts (
@@ -456,6 +493,18 @@ class EventStore:
                 """
             )
             conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_events_workspace_session_sequence
+                ON events (workspace_id, session_id, sequence_no, event_id)
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_events_workspace_status
+                ON events (workspace_status, sequence_no, event_id)
+                """
+            )
+            conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_artifacts_event_id ON artifacts (event_id)"
             )
             conn.execute(
@@ -584,6 +633,7 @@ class EventStore:
                 """
             )
             self._backfill_event_sequence_numbers(conn)
+            self._backfill_event_workspaces(conn)
             self._backfill_tool_operation_outcomes(conn)
 
     def record(
@@ -596,6 +646,7 @@ class EventStore:
         post_outcome: tuple[str, str] | None = None,
         resource_snapshots: list[ResourceSnapshot] | None = None,
     ) -> None:
+        _validate_event_workspace(event)
         if resource_snapshots and any(
             snapshot.post_event_id != event.event_id
             for snapshot in resource_snapshots
@@ -603,6 +654,7 @@ class EventStore:
             raise ValueError("resource snapshot post_event_id does not match event")
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
+            self._upsert_workspace_for_event(conn, event)
             existing = conn.execute(
                 "SELECT sequence_no FROM events WHERE event_id = ?",
                 (event.event_id,),
@@ -626,9 +678,15 @@ class EventStore:
                     permission_mode,
                     transcript_path,
                     stop_hook_active,
+                    workspace_id,
+                    workspace_root,
+                    workspace_lexical_root,
+                    workspace_execution_cwd,
+                    workspace_status,
+                    workspace_source,
                     payload_json,
                     sequence_no
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     event.event_id,
@@ -646,6 +704,12 @@ class EventStore:
                         if event.stop_hook_active is None
                         else int(event.stop_hook_active)
                     ),
+                    event.workspace_id,
+                    event.workspace_root,
+                    event.workspace_lexical_root,
+                    event.workspace_execution_cwd,
+                    event.workspace_status,
+                    event.workspace_source,
                     json.dumps(event.raw_payload, ensure_ascii=False, sort_keys=True),
                     sequence_no,
                 ),
@@ -2372,6 +2436,33 @@ class EventStore:
             raise KeyError(f"event not found: {event_id}")
         return row[0]
 
+    def get_event_workspace_context(self, event_id: str) -> WorkspaceContext:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT
+                    workspace_id,
+                    workspace_root,
+                    workspace_lexical_root,
+                    workspace_execution_cwd,
+                    workspace_status,
+                    workspace_source
+                FROM events
+                WHERE event_id = ?
+                """,
+                (event_id,),
+            ).fetchone()
+        if row is None:
+            raise KeyError(f"event not found: {event_id}")
+        return WorkspaceContext(
+            workspace_id=row[0],
+            canonical_root=row[1],
+            lexical_root=row[2],
+            execution_cwd=row[3],
+            status=row[4],
+            discovered_by=row[5] or "legacy_unscoped",
+        )
+
     def list_event_execution_contexts(
         self,
         event_ids: set[str],
@@ -2556,6 +2647,132 @@ class EventStore:
                 (next_sequence + offset, event_id),
             )
 
+    def _backfill_event_workspaces(self, conn: sqlite3.Connection) -> None:
+        migration_key = "migration.workspace_identity.v1"
+        migration_complete = conn.execute(
+            "SELECT 1 FROM analysis_state WHERE key = ?",
+            (migration_key,),
+        ).fetchone() is not None
+        if migration_complete:
+            has_legacy_rows = conn.execute(
+                """
+                SELECT 1
+                FROM events
+                WHERE workspace_status = 'legacy_unscoped'
+                LIMIT 1
+                """
+            ).fetchone()
+            if has_legacy_rows is None:
+                return
+        rows = conn.execute(
+            """
+            SELECT event_id, cwd
+            FROM events
+            WHERE workspace_status = 'legacy_unscoped'
+            ORDER BY sequence_no, event_id
+            """
+        ).fetchall()
+        resolved_by_cwd: dict[str | None, WorkspaceContext] = {}
+        for event_id, cwd in rows:
+            workspace = resolved_by_cwd.get(cwd)
+            if workspace is None:
+                workspace = resolve_workspace(
+                    cwd,
+                    discovered_by="legacy_cwd",
+                )
+                resolved_by_cwd[cwd] = workspace
+            self._upsert_workspace(conn, workspace)
+            conn.execute(
+                """
+                UPDATE events
+                SET workspace_id = ?,
+                    workspace_root = ?,
+                    workspace_lexical_root = ?,
+                    workspace_execution_cwd = ?,
+                    workspace_status = ?,
+                    workspace_source = ?
+                WHERE event_id = ?
+                """,
+                (
+                    workspace.workspace_id,
+                    workspace.canonical_root,
+                    workspace.lexical_root,
+                    workspace.execution_cwd,
+                    workspace.status,
+                    workspace.discovered_by,
+                    event_id,
+                ),
+            )
+        conn.execute(
+            """
+            INSERT INTO analysis_state (key, value)
+            VALUES (?, ?)
+            ON CONFLICT(key) DO UPDATE SET
+                value = excluded.value,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (migration_key, "complete"),
+        )
+
+    def _upsert_workspace_for_event(
+        self,
+        conn: sqlite3.Connection,
+        event: NormalizedEvent,
+    ) -> None:
+        self._upsert_workspace(
+            conn,
+            WorkspaceContext(
+                workspace_id=event.workspace_id,
+                canonical_root=event.workspace_root,
+                lexical_root=event.workspace_lexical_root,
+                execution_cwd=event.workspace_execution_cwd,
+                status=event.workspace_status,
+                discovered_by=event.workspace_source,
+            ),
+        )
+
+    def _upsert_workspace(
+        self,
+        conn: sqlite3.Connection,
+        workspace: WorkspaceContext,
+    ) -> None:
+        if workspace.workspace_id is None:
+            return
+        assert workspace.canonical_root is not None
+        assert workspace.lexical_root is not None
+        existing_id = conn.execute(
+            "SELECT canonical_root FROM workspaces WHERE workspace_id = ?",
+            (workspace.workspace_id,),
+        ).fetchone()
+        if existing_id is not None and existing_id[0] != workspace.canonical_root:
+            raise ValueError("workspace id maps to a different canonical root")
+        existing_root = conn.execute(
+            "SELECT workspace_id FROM workspaces WHERE canonical_root = ?",
+            (workspace.canonical_root,),
+        ).fetchone()
+        if existing_root is not None and existing_root[0] != workspace.workspace_id:
+            raise ValueError("workspace root maps to a different workspace id")
+        conn.execute(
+            """
+            INSERT INTO workspaces (
+                workspace_id,
+                canonical_root,
+                lexical_root,
+                discovered_by
+            ) VALUES (?, ?, ?, ?)
+            ON CONFLICT(workspace_id) DO UPDATE SET
+                lexical_root = excluded.lexical_root,
+                discovered_by = excluded.discovered_by,
+                last_seen_at = CURRENT_TIMESTAMP
+            """,
+            (
+                workspace.workspace_id,
+                workspace.canonical_root,
+                workspace.lexical_root,
+                workspace.discovered_by,
+            ),
+        )
+
     def _backfill_tool_operation_outcomes(self, conn: sqlite3.Connection) -> None:
         """旧DBの可変outcomeを、対応する最新Postへ保守的に移す。"""
         migration_key = "migration.tool_operation_outcomes.v1"
@@ -2610,6 +2827,72 @@ class EventStore:
         conn = sqlite3.connect(self.db_path, timeout=5.0)
         conn.execute("PRAGMA busy_timeout = 5000")
         return conn
+
+
+def _validate_event_workspace(event: NormalizedEvent) -> None:
+    event_identity_workspace_id = (
+        event.workspace_id if event.workspace_source == "configured_root" else None
+    )
+    expected_event_id = make_event_id(
+        event.phase,
+        event.raw_payload,
+        workspace_id=event_identity_workspace_id,
+    )
+    if event.event_id != expected_event_id:
+        raise ValueError("event id does not match payload and workspace identity")
+    if not event.workspace_status:
+        raise ValueError("workspace status is required")
+    if not event.workspace_source:
+        raise ValueError("workspace source is required")
+    fields = (
+        event.workspace_id,
+        event.workspace_root,
+        event.workspace_lexical_root,
+        event.workspace_execution_cwd,
+    )
+    if event.workspace_status == "ready":
+        if any(value is None for value in fields):
+            raise ValueError("ready workspace event is missing identity fields")
+        assert event.workspace_id is not None and event.workspace_root is not None
+        if make_workspace_id(event.workspace_root) != event.workspace_id:
+            raise ValueError("workspace id does not match canonical root")
+        if event.workspace_source not in {"configured_root", "hook_cwd"}:
+            raise ValueError("ready workspace event has an invalid source")
+        assert event.workspace_execution_cwd is not None
+        if not os.path.isabs(event.workspace_root) or not os.path.isabs(
+            event.workspace_execution_cwd
+        ):
+            raise ValueError("workspace paths must be absolute")
+        try:
+            inside_workspace = (
+                os.path.commonpath(
+                    (event.workspace_root, event.workspace_execution_cwd)
+                )
+                == event.workspace_root
+            )
+        except ValueError:
+            inside_workspace = False
+        if not inside_workspace:
+            raise ValueError("workspace execution cwd is outside canonical root")
+        configured_root = (
+            event.workspace_lexical_root
+            if event.workspace_source == "configured_root"
+            else None
+        )
+        expected_workspace = resolve_workspace(event.cwd, configured_root)
+        stored_workspace = WorkspaceContext(
+            workspace_id=event.workspace_id,
+            canonical_root=event.workspace_root,
+            lexical_root=event.workspace_lexical_root,
+            execution_cwd=event.workspace_execution_cwd,
+            status=event.workspace_status,
+            discovered_by=event.workspace_source,
+        )
+        if expected_workspace != stored_workspace:
+            raise ValueError("workspace context does not match current filesystem state")
+        return
+    if any(value is not None for value in fields):
+        raise ValueError("unresolved workspace event must not carry identity fields")
 
 
 def _flow_edge_values(edge: FlowEdge) -> tuple[object, ...]:

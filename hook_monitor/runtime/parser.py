@@ -8,6 +8,7 @@ from hook_monitor.runtime.ids import make_artifact_id, make_event_id
 from hook_monitor.runtime.fragments import build_artifact_fragments
 from hook_monitor.runtime.models import ArtifactFragment, ArtifactRecord, NormalizedEvent
 from hook_monitor.runtime.normalize import estimate_token_count, normalize_text, stringify_content
+from hook_monitor.runtime.workspace import resolve_workspace
 
 
 class HookPayloadError(ValueError):
@@ -26,19 +27,41 @@ def parse_hook_payload(raw_bytes: bytes) -> dict[str, Any]:
     return payload
 
 
-def normalize_event(phase: str, payload: dict[str, Any]) -> NormalizedEvent:
+def normalize_event(
+    phase: str,
+    payload: dict[str, Any],
+    *,
+    workspace_root: str | None = None,
+) -> NormalizedEvent:
+    cwd = _optional_str(payload, "cwd")
+    workspace = resolve_workspace(cwd, workspace_root)
+    event_identity_workspace_id = (
+        workspace.workspace_id
+        if workspace.discovered_by == "configured_root"
+        else None
+    )
     return NormalizedEvent(
-        event_id=make_event_id(phase, payload),
+        event_id=make_event_id(
+            phase,
+            payload,
+            workspace_id=event_identity_workspace_id,
+        ),
         phase=phase,
         session_id=_optional_str(payload, "session_id"),
         turn_id=_optional_str(payload, "turn_id"),
         tool_use_id=_optional_str(payload, "tool_use_id"),
         tool_name=_optional_str(payload, "tool_name"),
-        cwd=_optional_str(payload, "cwd"),
+        cwd=cwd,
         model=_optional_str(payload, "model"),
         permission_mode=_optional_str(payload, "permission_mode"),
         transcript_path=_optional_str(payload, "transcript_path"),
         stop_hook_active=_optional_bool(payload, "stop_hook_active"),
+        workspace_id=workspace.workspace_id,
+        workspace_root=workspace.canonical_root,
+        workspace_lexical_root=workspace.lexical_root,
+        workspace_execution_cwd=workspace.execution_cwd,
+        workspace_status=workspace.status,
+        workspace_source=workspace.discovered_by,
         raw_payload=payload,
     )
 
