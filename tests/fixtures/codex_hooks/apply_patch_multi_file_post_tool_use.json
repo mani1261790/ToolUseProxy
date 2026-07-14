@@ -1,0 +1,15 @@
+{
+  "session_id": "session-snapshot-fixture",
+  "turn_id": "turn-snapshot-fixture",
+  "hook_event_name": "PostToolUse",
+  "tool_use_id": "call-apply-patch-fixture",
+  "tool_name": "apply_patch",
+  "cwd": "/workspace/snapshot-e2e",
+  "permission_mode": "bypassPermissions",
+  "model": "gpt-5.5",
+  "transcript_path": null,
+  "tool_input": {
+    "command": "*** Begin Patch\n*** Add File: alpha.txt\n+ALPHA_OPERATION_CONTENT\n*** Add File: beta.txt\n+BETA_OPERATION_CONTENT\n*** End Patch\n"
+  },
+  "tool_response": "Exit code: 0\nWall time: 0 seconds\nOutput:\nSuccess. Updated the following files:\nA alpha.txt\nA beta.txt\n"
+}

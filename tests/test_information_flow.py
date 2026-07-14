@@ -272,6 +272,104 @@ class InformationFlowTest(unittest.TestCase):
                     classify_post_tool_outcome(event).status,
                 )
 
+    def test_real_codex_operation_and_outcome_fixtures(self) -> None:
+        fixture_root = REPO_ROOT / "tests" / "fixtures" / "codex_hooks"
+
+        def load_fixture(name: str, phase: str) -> NormalizedEvent:
+            payload = json.loads((fixture_root / name).read_text(encoding="utf-8"))
+            return normalize_event(phase, payload)
+
+        apply_pre = load_fixture(
+            "apply_patch_multi_file_pre_tool_use.json",
+            "pre_tool_use",
+        )
+        apply_artifacts = build_artifacts(apply_pre)
+        apply_fragments = build_fragments(apply_artifacts)
+        apply_extraction = extract_tool_operations(
+            apply_pre,
+            apply_artifacts,
+            apply_fragments,
+        )
+        apply_fragment_by_id = {
+            fragment.fragment_id: fragment
+            for fragment in apply_extraction.fragments
+        }
+        apply_content_by_path = {
+            operation.target_path: apply_fragment_by_id[
+                operation.content_fragment_id
+            ].text
+            for operation in apply_extraction.operations
+            if operation.content_fragment_id is not None
+        }
+
+        self.assertEqual(
+            ["add", "add"],
+            [operation.operation_kind for operation in apply_extraction.operations],
+        )
+        self.assertEqual(
+            {
+                "alpha.txt": "ALPHA_OPERATION_CONTENT",
+                "beta.txt": "BETA_OPERATION_CONTENT",
+            },
+            apply_content_by_path,
+        )
+
+        bash_pre = load_fixture("bash_segments_pre_tool_use.json", "pre_tool_use")
+        bash_artifacts = build_artifacts(bash_pre)
+        bash_fragments = build_fragments(bash_artifacts)
+        bash_extraction = extract_tool_operations(
+            bash_pre,
+            bash_artifacts,
+            bash_fragments,
+        )
+        bash_fragment_by_id = {
+            fragment.fragment_id: fragment
+            for fragment in bash_extraction.fragments
+        }
+        self.assertEqual(
+            [("overwrite", 0), ("append", 1)],
+            [
+                (operation.operation_kind, operation.segment_index)
+                for operation in bash_extraction.operations
+            ],
+        )
+        self.assertEqual(
+            [
+                "printf 'GAMMA_A' > gamma.txt",
+                "printf 'GAMMA_B' >> gamma.txt",
+            ],
+            [
+                bash_fragment_by_id[operation.content_fragment_id].text
+                for operation in bash_extraction.operations
+                if operation.content_fragment_id is not None
+            ],
+        )
+
+        apply_post = load_fixture(
+            "apply_patch_multi_file_post_tool_use.json",
+            "post_tool_use",
+        )
+        bash_success_post = load_fixture(
+            "bash_segments_post_tool_use.json",
+            "post_tool_use",
+        )
+        bash_failure_post = load_fixture(
+            "bash_failure_post_tool_use.json",
+            "post_tool_use",
+        )
+
+        self.assertEqual("succeeded", classify_post_tool_outcome(apply_post).status)
+        # Codex CLI 0.142.5ではno-output Bashの成功・失敗がどちらも空文字列。
+        # stdout文字列をstatus証拠にせず、両方unknownのままにする。
+        self.assertEqual(
+            "unknown",
+            classify_post_tool_outcome(bash_success_post).status,
+        )
+        self.assertEqual(
+            "unknown",
+            classify_post_tool_outcome(bash_failure_post).status,
+        )
+
     def test_bounded_snapshot_capture_records_hash_body_and_safety_statuses(self) -> None:
         cwd = Path(self.temporary_directory.name)
         target = cwd / "captured.txt"

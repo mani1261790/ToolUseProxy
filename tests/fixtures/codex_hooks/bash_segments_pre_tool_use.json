@@ -1,0 +1,14 @@
+{
+  "session_id": "session-snapshot-fixture",
+  "turn_id": "turn-snapshot-fixture",
+  "hook_event_name": "PreToolUse",
+  "tool_use_id": "call-bash-segments-fixture",
+  "tool_name": "Bash",
+  "cwd": "/workspace/snapshot-e2e",
+  "permission_mode": "bypassPermissions",
+  "model": "gpt-5.5",
+  "transcript_path": null,
+  "tool_input": {
+    "command": "printf 'GAMMA_A' > gamma.txt; printf 'GAMMA_B' >> gamma.txt"
+  }
+}
