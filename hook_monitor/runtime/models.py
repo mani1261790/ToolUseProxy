@@ -23,6 +23,7 @@ class NormalizedEvent:
     workspace_execution_cwd: str | None
     workspace_status: str
     workspace_source: str
+    workspace_namespace_id: str | None
     raw_payload: dict[str, Any]
 
 

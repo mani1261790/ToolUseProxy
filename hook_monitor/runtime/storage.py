@@ -4,6 +4,7 @@ import json
 import os
 import re
 import sqlite3
+import time
 import uuid
 from dataclasses import replace
 from pathlib import Path
@@ -27,8 +28,8 @@ from hook_monitor.runtime.models import (
     StoredPolicyDecision,
     ToolOperation,
 )
-from hook_monitor.runtime.snapshot_capture import workspace_root_from_cwd
 from hook_monitor.runtime.workspace import (
+    WORKSPACE_CONFIGURED_NAMESPACE_VERSION,
     WorkspaceContext,
     make_workspace_id,
     resolve_workspace,
@@ -45,7 +46,7 @@ class EventStore:
     def initialize(self) -> None:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as conn:
-            conn.execute("PRAGMA journal_mode = WAL")
+            _enable_wal(conn)
             conn.execute("BEGIN IMMEDIATE")
             conn.execute(
                 """
@@ -95,6 +96,12 @@ class EventStore:
                 "TEXT NOT NULL DEFAULT 'legacy_unscoped'",
             )
             self._ensure_column(conn, "events", "workspace_source", "TEXT")
+            self._ensure_column(
+                conn,
+                "events",
+                "workspace_namespace_id",
+                "TEXT",
+            )
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS artifacts (
@@ -644,14 +651,22 @@ class EventStore:
         operations: list[ToolOperation] | None = None,
         *,
         post_outcome: tuple[str, str] | None = None,
+        post_operation_ids: tuple[str, ...] = (),
         resource_snapshots: list[ResourceSnapshot] | None = None,
     ) -> None:
         _validate_event_workspace(event)
+        validated_operation_ids = tuple(sorted(set(post_operation_ids)))
+        if post_outcome is not None and not validated_operation_ids:
+            raise ValueError("post outcome requires validated operation ids")
         if resource_snapshots and any(
             snapshot.post_event_id != event.event_id
             for snapshot in resource_snapshots
         ):
             raise ValueError("resource snapshot post_event_id does not match event")
+        if resource_snapshots and not {
+            snapshot.operation_id for snapshot in resource_snapshots
+        }.issubset(validated_operation_ids):
+            raise ValueError("resource snapshot operation is not validated for PostToolUse")
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             self._upsert_workspace_for_event(conn, event)
@@ -684,9 +699,10 @@ class EventStore:
                     workspace_execution_cwd,
                     workspace_status,
                     workspace_source,
+                    workspace_namespace_id,
                     payload_json,
                     sequence_no
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     event.event_id,
@@ -710,6 +726,7 @@ class EventStore:
                     event.workspace_execution_cwd,
                     event.workspace_status,
                     event.workspace_source,
+                    event.workspace_namespace_id,
                     json.dumps(event.raw_payload, ensure_ascii=False, sort_keys=True),
                     sequence_no,
                 ),
@@ -813,12 +830,15 @@ class EventStore:
                         for fragment in fragments
                     ],
                 )
-            if (
-                post_outcome is not None
-                and event.session_id is not None
-                and event.tool_use_id is not None
-            ):
-                conn.execute(
+            if validated_operation_ids:
+                self._validate_post_operation_owners(
+                    conn,
+                    event,
+                    validated_operation_ids,
+                )
+            if post_outcome is not None:
+                assert event.session_id is not None and event.tool_use_id is not None
+                conn.executemany(
                     """
                     INSERT OR REPLACE INTO tool_operation_outcomes (
                         post_event_id,
@@ -827,30 +847,31 @@ class EventStore:
                         tool_use_id,
                         outcome,
                         outcome_evidence
-                    )
-                    SELECT ?, operation_id, session_id, tool_use_id, ?, ?
-                    FROM tool_operations
-                    WHERE session_id = ? AND tool_use_id = ?
+                    ) VALUES (?, ?, ?, ?, ?, ?)
                     """,
-                    (
-                        event.event_id,
-                        post_outcome[0],
-                        post_outcome[1],
-                        event.session_id,
-                        event.tool_use_id,
-                    ),
+                    [
+                        (
+                            event.event_id,
+                            operation_id,
+                            event.session_id,
+                            event.tool_use_id,
+                            post_outcome[0],
+                            post_outcome[1],
+                        )
+                        for operation_id in validated_operation_ids
+                    ],
                 )
+                placeholders = ",".join("?" for _ in validated_operation_ids)
                 conn.execute(
-                    """
+                    f"""
                     UPDATE tool_operations
                     SET outcome = ?, outcome_evidence = ?
-                    WHERE session_id = ? AND tool_use_id = ?
+                    WHERE operation_id IN ({placeholders})
                     """,
                     (
                         post_outcome[0],
                         post_outcome[1],
-                        event.session_id,
-                        event.tool_use_id,
+                        *validated_operation_ids,
                     ),
                 )
             if resource_snapshots:
@@ -862,51 +883,9 @@ class EventStore:
                     raise ValueError(
                         "resource snapshot session/tool_use does not match event"
                     )
-                snapshot_operation_ids = sorted(
-                    {snapshot.operation_id for snapshot in resource_snapshots}
-                )
-                placeholders = ",".join("?" for _ in snapshot_operation_ids)
-                owner_rows = conn.execute(
-                        f"""
-                        SELECT
-                            operation.operation_id,
-                            owner.phase,
-                            owner.tool_name,
-                            owner.cwd
-                        FROM tool_operations AS operation
-                        JOIN events AS owner ON owner.event_id = operation.event_id
-                        WHERE operation.operation_id IN ({placeholders})
-                          AND operation.session_id = ?
-                          AND operation.tool_use_id = ?
-                        """,
-                        (
-                            *snapshot_operation_ids,
-                            event.session_id,
-                            event.tool_use_id,
-                        ),
-                    ).fetchall()
-                owners = {
-                    operation_id: (phase, tool_name, cwd)
-                    for operation_id, phase, tool_name, cwd in owner_rows
-                }
-                if set(owners) != set(snapshot_operation_ids):
-                    raise ValueError(
-                        "resource snapshot operation does not belong to event tool use"
-                    )
-                event_workspace = workspace_root_from_cwd(event.cwd)
-                if event.phase != "post_tool_use":
-                    raise ValueError("resource snapshots require a PostToolUse event")
                 for snapshot in resource_snapshots:
-                    owner_phase, owner_tool_name, owner_cwd = owners[
-                        snapshot.operation_id
-                    ]
-                    owner_workspace = workspace_root_from_cwd(owner_cwd)
                     if (
-                        owner_phase != "pre_tool_use"
-                        or _normalized_tool_name(owner_tool_name)
-                        != _normalized_tool_name(event.tool_name)
-                        or owner_workspace != event_workspace
-                        or snapshot.workspace_root != owner_workspace
+                        snapshot.workspace_root != event.workspace_root
                     ):
                         raise ValueError(
                             "resource snapshot execution context does not match operation owner"
@@ -940,6 +919,110 @@ class EventStore:
                         for snapshot in resource_snapshots
                     ],
                 )
+
+    def _validate_post_operation_owners(
+        self,
+        conn: sqlite3.Connection,
+        event: NormalizedEvent,
+        operation_ids: tuple[str, ...],
+    ) -> None:
+        if (
+            event.phase != "post_tool_use"
+            or event.workspace_status != "ready"
+            or event.workspace_id is None
+            or event.workspace_root is None
+            or event.workspace_execution_cwd is None
+            or event.session_id is None
+            or event.tool_use_id is None
+        ):
+            raise ValueError("PostToolUse operation owner requires a ready workspace")
+        stored_post = conn.execute(
+            """
+            SELECT
+                phase,
+                session_id,
+                tool_use_id,
+                tool_name,
+                workspace_id,
+                workspace_root,
+                workspace_execution_cwd,
+                workspace_status
+            FROM events
+            WHERE event_id = ?
+            """,
+            (event.event_id,),
+        ).fetchone()
+        expected_post = (
+            event.phase,
+            event.session_id,
+            event.tool_use_id,
+            event.tool_name,
+            event.workspace_id,
+            event.workspace_root,
+            event.workspace_execution_cwd,
+            event.workspace_status,
+        )
+        if stored_post != expected_post:
+            raise ValueError("stored PostToolUse event context does not match")
+        placeholders = ",".join("?" for _ in operation_ids)
+        rows = conn.execute(
+            f"""
+            SELECT
+                operation.operation_id,
+                operation.event_id,
+                operation.session_id,
+                operation.tool_use_id,
+                operation.tool_name,
+                owner.phase,
+                owner.session_id,
+                owner.tool_use_id,
+                owner.tool_name,
+                owner.workspace_id,
+                owner.workspace_root,
+                owner.workspace_execution_cwd,
+                owner.workspace_status
+            FROM tool_operations AS operation
+            JOIN events AS owner ON owner.event_id = operation.event_id
+            WHERE operation.operation_id IN ({placeholders})
+            """,
+            operation_ids,
+        ).fetchall()
+        if {row[0] for row in rows} != set(operation_ids):
+            raise ValueError("PostToolUse operation does not exist")
+        if len({row[1] for row in rows}) != 1:
+            raise ValueError("PostToolUse operation owner is ambiguous")
+        for row in rows:
+            (
+                _,
+                _,
+                operation_session_id,
+                operation_tool_use_id,
+                operation_tool_name,
+                owner_phase,
+                owner_session_id,
+                owner_tool_use_id,
+                owner_tool_name,
+                owner_workspace_id,
+                owner_workspace_root,
+                owner_execution_cwd,
+                owner_workspace_status,
+            ) = row
+            if (
+                owner_phase != "pre_tool_use"
+                or owner_workspace_status != "ready"
+                or owner_workspace_id != event.workspace_id
+                or owner_workspace_root != event.workspace_root
+                or owner_execution_cwd != event.workspace_execution_cwd
+                or owner_session_id != event.session_id
+                or owner_tool_use_id != event.tool_use_id
+                or operation_session_id != owner_session_id
+                or operation_tool_use_id != owner_tool_use_id
+                or _normalized_tool_name(operation_tool_name)
+                != _normalized_tool_name(owner_tool_name)
+                or _normalized_tool_name(owner_tool_name)
+                != _normalized_tool_name(event.tool_name)
+            ):
+                raise ValueError("PostToolUse operation owner does not match event")
 
     def list_tool_operations_for_session(
         self,
@@ -986,6 +1069,39 @@ class EventStore:
             outcome_through_sequence_no=through_sequence_no,
         )
 
+    def list_tool_operations_for_post_event(
+        self,
+        event: NormalizedEvent,
+    ) -> list[ToolOperation]:
+        if (
+            event.phase != "post_tool_use"
+            or event.workspace_status != "ready"
+            or event.workspace_id is None
+            or event.workspace_root is None
+            or event.workspace_execution_cwd is None
+            or event.session_id is None
+            or event.tool_use_id is None
+        ):
+            return []
+        return self._list_tool_operations_where(
+            """
+            WHERE e.phase = 'pre_tool_use'
+              AND e.workspace_status = 'ready'
+              AND e.workspace_id = ?
+              AND e.workspace_root = ?
+              AND e.workspace_execution_cwd = ?
+              AND o.session_id = ?
+              AND o.tool_use_id = ?
+            """,
+            (
+                event.workspace_id,
+                event.workspace_root,
+                event.workspace_execution_cwd,
+                event.session_id,
+                event.tool_use_id,
+            ),
+        )
+
     def _list_tool_operations_where(
         self,
         where_clause: str,
@@ -1029,7 +1145,7 @@ class EventStore:
             outcome_clause = ""
             outcome_params: tuple[object, ...] = tuple(operation_ids)
             if outcome_through_sequence_no is not None:
-                outcome_clause = "AND event.sequence_no <= ?"
+                outcome_clause = "AND post.sequence_no <= ?"
                 outcome_params += (outcome_through_sequence_no,)
             outcome_rows = conn.execute(
                 f"""
@@ -1037,34 +1153,67 @@ class EventStore:
                     history.operation_id,
                     history.outcome,
                     history.outcome_evidence,
-                    history.post_event_id
+                    history.post_event_id,
+                    owned_operation.tool_name,
+                    owner.tool_name,
+                    post.tool_name
                 FROM tool_operation_outcomes AS history
-                JOIN events AS event ON event.event_id = history.post_event_id
+                JOIN tool_operations AS owned_operation
+                  ON owned_operation.operation_id = history.operation_id
+                JOIN events AS owner ON owner.event_id = owned_operation.event_id
+                JOIN events AS post ON post.event_id = history.post_event_id
                 WHERE history.operation_id IN ({placeholders})
+                  AND owner.phase = 'pre_tool_use'
+                  AND post.phase = 'post_tool_use'
+                  AND owner.workspace_status = 'ready'
+                  AND post.workspace_status = 'ready'
+                  AND owner.workspace_id = post.workspace_id
+                  AND owner.workspace_root = post.workspace_root
+                  AND owner.workspace_execution_cwd = post.workspace_execution_cwd
+                  AND owner.session_id IS post.session_id
+                  AND owner.tool_use_id IS post.tool_use_id
+                  AND owned_operation.session_id IS owner.session_id
+                  AND owned_operation.tool_use_id IS owner.tool_use_id
+                  AND history.session_id IS owner.session_id
+                  AND history.tool_use_id IS owner.tool_use_id
                   {outcome_clause}
-                ORDER BY event.sequence_no DESC, history.post_event_id DESC
+                ORDER BY post.sequence_no DESC, history.post_event_id DESC
                 """,
                 outcome_params,
             ).fetchall()
         latest_outcomes: dict[str, tuple[str, str | None, str]] = {}
-        for operation_id, outcome, evidence, post_event_id in outcome_rows:
+        for (
+            operation_id,
+            outcome,
+            evidence,
+            post_event_id,
+            operation_tool_name,
+            owner_tool_name,
+            post_tool_name,
+        ) in outcome_rows:
+            if (
+                _normalized_tool_name(operation_tool_name)
+                != _normalized_tool_name(owner_tool_name)
+                or _normalized_tool_name(owner_tool_name)
+                != _normalized_tool_name(post_tool_name)
+            ):
+                continue
             latest_outcomes.setdefault(
                 operation_id,
                 (outcome, evidence, post_event_id),
             )
-        bounded = outcome_through_sequence_no is not None
         return [
             replace(
                 operation,
                 outcome=(
                     latest_outcomes[operation.operation_id][0]
                     if operation.operation_id in latest_outcomes
-                    else "unknown" if bounded else operation.outcome
+                    else "unknown"
                 ),
                 outcome_evidence=(
                     latest_outcomes[operation.operation_id][1]
                     if operation.operation_id in latest_outcomes
-                    else None if bounded else operation.outcome_evidence
+                    else None
                 ),
                 outcome_event_id=(
                     latest_outcomes[operation.operation_id][2]
@@ -1077,53 +1226,125 @@ class EventStore:
 
     def update_tool_operation_outcome(
         self,
-        session_id: str,
-        tool_use_id: str,
+        event: NormalizedEvent,
+        operation_ids: tuple[str, ...],
         *,
         outcome: str,
         evidence: str,
-        post_event_id: str | None = None,
+        resource_snapshots: list[ResourceSnapshot] | None = None,
     ) -> None:
+        normalized_operation_ids = tuple(sorted(set(operation_ids)))
+        if not normalized_operation_ids:
+            raise ValueError("post outcome requires validated operation ids")
+        snapshots = resource_snapshots or []
+        if not {snapshot.operation_id for snapshot in snapshots}.issubset(
+            normalized_operation_ids
+        ):
+            raise ValueError("resource snapshot operation is not validated for PostToolUse")
+        if any(
+            snapshot.post_event_id != event.event_id
+            or snapshot.session_id != event.session_id
+            or snapshot.tool_use_id != event.tool_use_id
+            or snapshot.workspace_root != event.workspace_root
+            for snapshot in snapshots
+        ):
+            raise ValueError("resource snapshot execution context does not match event")
         with self._connect() as conn:
-            if post_event_id is not None:
-                conn.execute(
+            conn.execute("BEGIN IMMEDIATE")
+            self._validate_post_operation_owners(
+                conn,
+                event,
+                normalized_operation_ids,
+            )
+            assert event.session_id is not None and event.tool_use_id is not None
+            conn.executemany(
+                """
+                INSERT OR REPLACE INTO tool_operation_outcomes (
+                    post_event_id,
+                    operation_id,
+                    session_id,
+                    tool_use_id,
+                    outcome,
+                    outcome_evidence
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        event.event_id,
+                        operation_id,
+                        event.session_id,
+                        event.tool_use_id,
+                        outcome,
+                        evidence,
+                    )
+                    for operation_id in normalized_operation_ids
+                ],
+            )
+            placeholders = ",".join("?" for _ in normalized_operation_ids)
+            conn.execute(
+                f"""
+                UPDATE tool_operations
+                SET outcome = ?, outcome_evidence = ?
+                WHERE operation_id IN ({placeholders})
+                """,
+                (outcome, evidence, *normalized_operation_ids),
+            )
+            if snapshots:
+                conn.executemany(
                     """
-                    INSERT OR REPLACE INTO tool_operation_outcomes (
+                    INSERT OR REPLACE INTO resource_snapshots (
+                        snapshot_id,
                         post_event_id,
                         operation_id,
                         session_id,
                         tool_use_id,
-                        outcome,
-                        outcome_evidence
-                    )
-                    SELECT ?, operation_id, session_id, tool_use_id, ?, ?
-                    FROM tool_operations
-                    WHERE session_id = ? AND tool_use_id = ?
+                        path_role,
+                        requested_path,
+                        workspace_root,
+                        lexical_path,
+                        resource_state,
+                        capture_status,
+                        file_kind,
+                        byte_size,
+                        captured_bytes,
+                        content_sha256,
+                        encoding,
+                        body_text,
+                        error_code,
+                        duration_ms
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (
-                        post_event_id,
-                        outcome,
-                        evidence,
-                        session_id,
-                        tool_use_id,
-                    ),
+                    [_resource_snapshot_values(snapshot) for snapshot in snapshots],
                 )
-            conn.execute(
-                """
-                UPDATE tool_operations
-                SET outcome = ?, outcome_evidence = ?
-                WHERE session_id = ? AND tool_use_id = ?
-                """,
-                (outcome, evidence, session_id, tool_use_id),
-            )
 
     def upsert_resource_snapshots(
         self,
+        event: NormalizedEvent,
+        operation_ids: tuple[str, ...],
         snapshots: list[ResourceSnapshot],
     ) -> None:
         if not snapshots:
             return
+        normalized_operation_ids = tuple(sorted(set(operation_ids)))
+        if not {snapshot.operation_id for snapshot in snapshots}.issubset(
+            normalized_operation_ids
+        ):
+            raise ValueError("resource snapshot operation is not validated for PostToolUse")
+        if any(
+            snapshot.post_event_id != event.event_id
+            or snapshot.session_id != event.session_id
+            or snapshot.tool_use_id != event.tool_use_id
+            or snapshot.workspace_root != event.workspace_root
+            for snapshot in snapshots
+        ):
+            raise ValueError("resource snapshot execution context does not match event")
         with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            self._validate_post_operation_owners(
+                conn,
+                event,
+                normalized_operation_ids,
+            )
             conn.executemany(
                 """
                 INSERT OR REPLACE INTO resource_snapshots (
@@ -1193,6 +1414,27 @@ class EventStore:
         where_clause: str,
         params: tuple[object, ...],
     ) -> list[ResourceSnapshot]:
+        ownership_clause = """
+            owner.phase = 'pre_tool_use'
+            AND e.phase = 'post_tool_use'
+            AND owner.workspace_status = 'ready'
+            AND e.workspace_status = 'ready'
+            AND owner.workspace_id = e.workspace_id
+            AND owner.workspace_root = e.workspace_root
+            AND owner.workspace_execution_cwd = e.workspace_execution_cwd
+            AND owner.session_id IS e.session_id
+            AND owner.tool_use_id IS e.tool_use_id
+            AND operation.session_id IS owner.session_id
+            AND operation.tool_use_id IS owner.tool_use_id
+            AND s.session_id IS owner.session_id
+            AND s.tool_use_id IS owner.tool_use_id
+            AND s.workspace_root = owner.workspace_root
+        """
+        scoped_where_clause = (
+            f"{where_clause} AND {ownership_clause}"
+            if where_clause
+            else f"WHERE {ownership_clause}"
+        )
         with self._connect() as conn:
             rows = conn.execute(
                 f"""
@@ -1215,15 +1457,26 @@ class EventStore:
                     s.encoding,
                     s.body_text,
                     s.error_code,
-                    s.duration_ms
+                    s.duration_ms,
+                    operation.tool_name,
+                    owner.tool_name,
+                    e.tool_name
                 FROM resource_snapshots AS s
                 JOIN events AS e ON e.event_id = s.post_event_id
-                {where_clause}
+                JOIN tool_operations AS operation
+                  ON operation.operation_id = s.operation_id
+                JOIN events AS owner ON owner.event_id = operation.event_id
+                {scoped_where_clause}
                 ORDER BY e.sequence_no, s.operation_id, s.path_role
                 """,
                 params,
             ).fetchall()
-        return [ResourceSnapshot(*row) for row in rows]
+        return [
+            ResourceSnapshot(*row[:19])
+            for row in rows
+            if _normalized_tool_name(row[19]) == _normalized_tool_name(row[20])
+            and _normalized_tool_name(row[20]) == _normalized_tool_name(row[21])
+        ]
 
     def upsert_sources(self, sources: list[ProtectedSource], chunks: list[SourceChunk]) -> None:
         with self._connect() as conn:
@@ -2830,13 +3083,10 @@ class EventStore:
 
 
 def _validate_event_workspace(event: NormalizedEvent) -> None:
-    event_identity_workspace_id = (
-        event.workspace_id if event.workspace_source == "configured_root" else None
-    )
     expected_event_id = make_event_id(
         event.phase,
         event.raw_payload,
-        workspace_id=event_identity_workspace_id,
+        workspace_namespace_id=event.workspace_namespace_id,
     )
     if event.event_id != expected_event_id:
         raise ValueError("event id does not match payload and workspace identity")
@@ -2844,6 +3094,18 @@ def _validate_event_workspace(event: NormalizedEvent) -> None:
         raise ValueError("workspace status is required")
     if not event.workspace_source:
         raise ValueError("workspace source is required")
+    if event.workspace_source == "configured_root":
+        if event.workspace_namespace_id is None:
+            raise ValueError("configured workspace namespace is required")
+        if event.workspace_status == "ready":
+            if event.workspace_namespace_id != event.workspace_id:
+                raise ValueError("ready workspace namespace must match workspace id")
+        elif not event.workspace_namespace_id.startswith(
+            f"{WORKSPACE_CONFIGURED_NAMESPACE_VERSION}_"
+        ):
+            raise ValueError("unresolved configured workspace namespace is invalid")
+    elif event.workspace_namespace_id is not None:
+        raise ValueError("hook cwd workspace must not have a namespace salt")
     fields = (
         event.workspace_id,
         event.workspace_root,
@@ -2893,6 +3155,18 @@ def _validate_event_workspace(event: NormalizedEvent) -> None:
         return
     if any(value is not None for value in fields):
         raise ValueError("unresolved workspace event must not carry identity fields")
+
+
+def _enable_wal(conn: sqlite3.Connection) -> None:
+    deadline = time.monotonic() + 5.0
+    while True:
+        try:
+            conn.execute("PRAGMA journal_mode = WAL")
+            return
+        except sqlite3.OperationalError as exc:
+            if "locked" not in str(exc).casefold() or time.monotonic() >= deadline:
+                raise
+            time.sleep(0.01)
 
 
 def _flow_edge_values(edge: FlowEdge) -> tuple[object, ...]:

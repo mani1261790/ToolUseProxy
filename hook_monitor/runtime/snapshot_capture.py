@@ -105,8 +105,19 @@ def capture_operation_snapshots(
     max_records = max(1, limits.max_paths * 2)
     if len(operations) > max_records:
         return []
-    workspace_root = workspace_root_from_cwd(event.cwd)
-    specs = _snapshot_specs(operations, workspace_root=workspace_root)
+    workspace_root = (
+        event.workspace_root if event.workspace_status == "ready" else None
+    )
+    execution_cwd = (
+        event.workspace_execution_cwd
+        if event.workspace_status == "ready"
+        else None
+    )
+    specs = _snapshot_specs(
+        operations,
+        workspace_root=workspace_root,
+        execution_cwd=execution_cwd,
+    )
     if not specs or len(specs) > max_records:
         return []
     budget = _Budget(
@@ -190,7 +201,11 @@ def capture_operation_snapshots(
             if len(results) >= max_records:
                 break
             started = time.monotonic()
-            path_identity = _path_identity(workspace_root, spec.requested_path)
+            path_identity = _path_identity(
+                workspace_root,
+                execution_cwd,
+                spec.requested_path,
+            )
             cache_key = (path_identity, spec.expected_missing)
             if not spec.capture_allowed:
                 captured = _CaptureResult(
@@ -204,6 +219,7 @@ def capture_operation_snapshots(
                 if workspace_root is not None:
                     lexical_path, _ = _lexical_path(
                         workspace_root,
+                        execution_cwd,
                         spec.requested_path,
                     )
                 captured = replace(root_error, lexical_path=lexical_path)
@@ -229,6 +245,7 @@ def capture_operation_snapshots(
                 captured = _capture_path(
                     root_fd,
                     workspace_root,
+                    execution_cwd,
                     spec,
                     limits,
                     budget,
@@ -273,6 +290,7 @@ def _snapshot_specs(
     operations: list[ToolOperation],
     *,
     workspace_root: str | None,
+    execution_cwd: str | None,
 ) -> list[_SnapshotSpec]:
     specs: list[_SnapshotSpec] = []
     for operation in sorted(
@@ -328,7 +346,11 @@ def _snapshot_specs(
     for index, spec in enumerate(specs):
         if spec.path_role == "target":
             target_indexes_by_path.setdefault(
-                _path_identity(workspace_root, spec.requested_path),
+                _path_identity(
+                    workspace_root,
+                    execution_cwd,
+                    spec.requested_path,
+                ),
                 [],
             ).append(index)
 
@@ -357,9 +379,17 @@ def _snapshot_specs(
     return normalized
 
 
-def _path_identity(workspace_root: str | None, requested_path: str) -> str:
-    if workspace_root is not None:
-        lexical_path, _ = _lexical_path(workspace_root, requested_path)
+def _path_identity(
+    workspace_root: str | None,
+    execution_cwd: str | None,
+    requested_path: str,
+) -> str:
+    if workspace_root is not None and execution_cwd is not None:
+        lexical_path, _ = _lexical_path(
+            workspace_root,
+            execution_cwd,
+            requested_path,
+        )
         if lexical_path is not None:
             return lexical_path
     return os.path.normpath(str(Path(requested_path).expanduser()))
@@ -368,6 +398,7 @@ def _path_identity(workspace_root: str | None, requested_path: str) -> str:
 def _capture_path(
     root_fd: int,
     workspace_root: str,
+    execution_cwd: str | None,
     spec: _SnapshotSpec,
     limits: SnapshotCaptureLimits,
     budget: _Budget,
@@ -376,6 +407,7 @@ def _capture_path(
 ) -> _CaptureResult:
     lexical_path, relative_parts = _lexical_path(
         workspace_root,
+        execution_cwd,
         spec.requested_path,
     )
     if lexical_path is None or relative_parts is None:
@@ -633,11 +665,14 @@ def _ensure_time_remaining(deadline: float) -> None:
 
 def _lexical_path(
     workspace_root: str,
+    execution_cwd: str | None,
     requested_path: str,
 ) -> tuple[str | None, tuple[str, ...] | None]:
     candidate = Path(requested_path).expanduser()
     if not candidate.is_absolute():
-        candidate = Path(workspace_root) / candidate
+        if execution_cwd is None:
+            return None, None
+        candidate = Path(execution_cwd) / candidate
     lexical = os.path.abspath(os.path.normpath(str(candidate)))
     try:
         if os.path.commonpath((workspace_root, lexical)) != workspace_root:
@@ -649,21 +684,6 @@ def _lexical_path(
     if any(part == ".." for part in parts):
         return lexical, None
     return lexical, parts
-
-
-def workspace_root_from_cwd(cwd: str | None) -> str | None:
-    if cwd is None:
-        return None
-    candidate = Path(cwd).expanduser()
-    if not candidate.is_absolute():
-        return None
-    lexical = os.path.abspath(os.path.normpath(str(candidate)))
-    try:
-        if stat.S_ISLNK(os.lstat(lexical).st_mode):
-            return lexical
-    except OSError:
-        pass
-    return os.path.realpath(lexical)
 
 
 def _resource_snapshot(

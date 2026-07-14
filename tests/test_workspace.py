@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -165,9 +167,183 @@ class WorkspaceIdentityTest(unittest.TestCase):
         self.assertNotEqual(root_scoped.event_id, nested_scoped.event_id)
         self.assertEqual(root_scoped.event_id, repeated.event_id)
         self.assertEqual(
+            root_scoped.workspace_id,
+            root_scoped.workspace_namespace_id,
+        )
+        self.assertEqual(
             make_event_id("pre_tool_use", payload),
             default_scoped.event_id,
         )
+
+    def test_invalid_configured_roots_have_stable_distinct_namespaces(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            cwd = Path(temporary_directory) / "cwd"
+            cwd.mkdir()
+            payload = {
+                "session_id": "session-invalid-root",
+                "turn_id": "turn-invalid-root",
+                "tool_use_id": "tool-invalid-root",
+                "tool_name": "Bash",
+                "cwd": str(cwd),
+                "tool_input": {"command": "printf ok"},
+            }
+            unset = normalize_event("pre_tool_use", payload)
+            empty = normalize_event("pre_tool_use", payload, workspace_root="")
+            missing_a = normalize_event(
+                "pre_tool_use",
+                payload,
+                workspace_root=str(cwd / "missing-a"),
+            )
+            repeated_a = normalize_event(
+                "pre_tool_use",
+                payload,
+                workspace_root=str(cwd / "missing-a"),
+            )
+            missing_b = normalize_event(
+                "pre_tool_use",
+                payload,
+                workspace_root=str(cwd / "missing-b"),
+            )
+
+        self.assertIsNone(unset.workspace_namespace_id)
+        self.assertEqual(missing_a.workspace_namespace_id, repeated_a.workspace_namespace_id)
+        self.assertEqual(missing_a.event_id, repeated_a.event_id)
+        self.assertEqual(4, len({unset.event_id, empty.event_id, missing_a.event_id, missing_b.event_id}))
+        self.assertTrue((empty.workspace_namespace_id or "").startswith("ws_cfg_v1_"))
+        self.assertNotEqual(missing_a.workspace_namespace_id, missing_b.workspace_namespace_id)
+
+    def test_runner_uses_configured_workspace_root_for_nested_cwd(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory) / "workspace"
+            nested = root / "packages" / "app"
+            nested.mkdir(parents=True)
+            db_path = Path(temporary_directory) / "events.db"
+            payload = {
+                "session_id": "session-runner-workspace",
+                "turn_id": "turn-runner-workspace",
+                "tool_use_id": "tool-runner-workspace",
+                "tool_name": "Bash",
+                "cwd": str(nested),
+                "tool_input": {"command": "printf ok"},
+            }
+            environment = os.environ.copy()
+            environment.update(
+                {
+                    "TOOLUSEPROXY_DB_PATH": str(db_path),
+                    "TOOLUSEPROXY_PRE_TOOL_POLICY": "0",
+                    "TOOLUSEPROXY_WORKSPACE_ROOT": str(root),
+                }
+            )
+
+            result = subprocess.run(
+                [sys.executable, str(Path(__file__).resolve().parents[1] / "hooks" / "monitor_pre_tool.py")],
+                input=json.dumps(payload),
+                text=True,
+                capture_output=True,
+                cwd=nested,
+                env=environment,
+                check=False,
+            )
+            with sqlite3.connect(db_path) as connection:
+                row = connection.execute(
+                    """
+                    SELECT
+                        workspace_id,
+                        workspace_root,
+                        workspace_execution_cwd,
+                        workspace_status,
+                        workspace_source,
+                        workspace_namespace_id
+                    FROM events
+                    """
+                ).fetchone()
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual(make_workspace_id(str(root.resolve())), row[0])
+        self.assertEqual(str(root.resolve()), row[1])
+        self.assertEqual(str(nested.resolve()), row[2])
+        self.assertEqual("ready", row[3])
+        self.assertEqual("configured_root", row[4])
+        self.assertEqual(row[0], row[5])
+
+    def test_unresolved_configured_root_records_raw_operations_without_post_evidence(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            cwd = Path(temporary_directory) / "cwd"
+            cwd.mkdir()
+            missing_root = Path(temporary_directory) / "missing-root"
+            db_path = Path(temporary_directory) / "events.db"
+            command = """*** Begin Patch
+*** Add File: target.txt
++content
+*** End Patch"""
+            base_payload = {
+                "session_id": "session-unresolved-runner",
+                "turn_id": "turn-unresolved-runner",
+                "tool_use_id": "tool-unresolved-runner",
+                "tool_name": "apply_patch",
+                "cwd": str(cwd),
+                "tool_input": {"command": command},
+            }
+            environment = os.environ.copy()
+            environment.update(
+                {
+                    "TOOLUSEPROXY_DB_PATH": str(db_path),
+                    "TOOLUSEPROXY_WORKSPACE_ROOT": str(missing_root),
+                }
+            )
+            hook_root = Path(__file__).resolve().parents[1] / "hooks"
+            pre = subprocess.run(
+                [sys.executable, str(hook_root / "monitor_pre_tool.py")],
+                input=json.dumps(base_payload),
+                text=True,
+                capture_output=True,
+                cwd=cwd,
+                env=environment,
+                check=False,
+            )
+            post = subprocess.run(
+                [sys.executable, str(hook_root / "monitor_post_tool.py")],
+                input=json.dumps(
+                    {
+                        **base_payload,
+                        "tool_response": {"exit_code": 0},
+                    }
+                ),
+                text=True,
+                capture_output=True,
+                cwd=cwd,
+                env=environment,
+                check=False,
+            )
+            with sqlite3.connect(db_path) as connection:
+                event_rows = connection.execute(
+                    """
+                    SELECT workspace_status, workspace_namespace_id, payload_json
+                    FROM events
+                    ORDER BY sequence_no
+                    """
+                ).fetchall()
+                operation = connection.execute(
+                    "SELECT outcome, outcome_evidence FROM tool_operations"
+                ).fetchone()
+                outcome_count = connection.execute(
+                    "SELECT COUNT(*) FROM tool_operation_outcomes"
+                ).fetchone()[0]
+                snapshot_count = connection.execute(
+                    "SELECT COUNT(*) FROM resource_snapshots"
+                ).fetchone()[0]
+
+        self.assertEqual(0, pre.returncode, pre.stderr)
+        self.assertEqual(0, post.returncode, post.stderr)
+        self.assertEqual(2, len(event_rows))
+        self.assertTrue(all(row[0] == "workspace_root_path_missing" for row in event_rows))
+        self.assertTrue(all((row[1] or "").startswith("ws_cfg_v1_") for row in event_rows))
+        self.assertEqual(base_payload, json.loads(event_rows[0][2]))
+        self.assertEqual(("unknown", None), operation)
+        self.assertEqual(0, outcome_count)
+        self.assertEqual(0, snapshot_count)
 
     def test_record_persists_workspace_and_rejects_forged_identity(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -205,7 +381,7 @@ class WorkspaceIdentityTest(unittest.TestCase):
                 event_id=make_event_id(
                     event.phase,
                     event.raw_payload,
-                    workspace_id=forged_workspace_id,
+                    workspace_namespace_id=None,
                 ),
                 workspace_id=forged_workspace_id,
             )
@@ -224,16 +400,15 @@ class WorkspaceIdentityTest(unittest.TestCase):
                 )
 
             with sqlite3.connect(store.db_path) as connection:
-                forged_count = connection.execute(
-                    "SELECT COUNT(*) FROM events WHERE event_id = ?",
-                    (forged.event_id,),
+                event_count_after_rejections = connection.execute(
+                    "SELECT COUNT(*) FROM events"
                 ).fetchone()[0]
 
         self.assertTrue(stored.ready)
         self.assertEqual(event.workspace_id, stored.workspace_id)
         self.assertEqual(1, workspace_count)
         self.assertEqual(event.raw_payload, json.loads(raw_payload))
-        self.assertEqual(0, forged_count)
+        self.assertEqual(1, event_count_after_rejections)
 
     def test_same_session_and_tool_use_in_two_roots_do_not_replace_events(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

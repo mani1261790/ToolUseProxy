@@ -9,6 +9,7 @@ from pathlib import Path
 
 
 WORKSPACE_ID_VERSION = "ws_v1"
+WORKSPACE_CONFIGURED_NAMESPACE_VERSION = "ws_cfg_v1"
 WORKSPACE_READY = "ready"
 WORKSPACE_ROOT_ENV = "TOOLUSEPROXY_WORKSPACE_ROOT"
 
@@ -32,6 +33,19 @@ def make_workspace_id(canonical_root: str) -> str:
         canonical_root.encode("utf-8", errors="surrogateescape")
     ).hexdigest()
     return f"{WORKSPACE_ID_VERSION}_{digest}"
+
+
+def make_configured_workspace_namespace(configured_root: str) -> str:
+    identity = b"\0".join(
+        (
+            WORKSPACE_CONFIGURED_NAMESPACE_VERSION.encode("ascii"),
+            configured_root.encode("utf-8", errors="surrogateescape"),
+        )
+    )
+    return (
+        f"{WORKSPACE_CONFIGURED_NAMESPACE_VERSION}_"
+        f"{hashlib.sha256(identity).hexdigest()}"
+    )
 
 
 def resolve_workspace(

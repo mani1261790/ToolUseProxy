@@ -8,7 +8,10 @@ from hook_monitor.runtime.ids import make_artifact_id, make_event_id
 from hook_monitor.runtime.fragments import build_artifact_fragments
 from hook_monitor.runtime.models import ArtifactFragment, ArtifactRecord, NormalizedEvent
 from hook_monitor.runtime.normalize import estimate_token_count, normalize_text, stringify_content
-from hook_monitor.runtime.workspace import resolve_workspace
+from hook_monitor.runtime.workspace import (
+    make_configured_workspace_namespace,
+    resolve_workspace,
+)
 
 
 class HookPayloadError(ValueError):
@@ -35,16 +38,19 @@ def normalize_event(
 ) -> NormalizedEvent:
     cwd = _optional_str(payload, "cwd")
     workspace = resolve_workspace(cwd, workspace_root)
-    event_identity_workspace_id = (
-        workspace.workspace_id
-        if workspace.discovered_by == "configured_root"
-        else None
-    )
+    workspace_namespace_id: str | None = None
+    if workspace.discovered_by == "configured_root":
+        assert workspace_root is not None
+        workspace_namespace_id = (
+            workspace.workspace_id
+            if workspace.ready
+            else make_configured_workspace_namespace(workspace_root)
+        )
     return NormalizedEvent(
         event_id=make_event_id(
             phase,
             payload,
-            workspace_id=event_identity_workspace_id,
+            workspace_namespace_id=workspace_namespace_id,
         ),
         phase=phase,
         session_id=_optional_str(payload, "session_id"),
@@ -62,6 +68,7 @@ def normalize_event(
         workspace_execution_cwd=workspace.execution_cwd,
         workspace_status=workspace.status,
         workspace_source=workspace.discovered_by,
+        workspace_namespace_id=workspace_namespace_id,
         raw_payload=payload,
     )
 

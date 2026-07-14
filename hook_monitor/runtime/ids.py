@@ -9,7 +9,7 @@ def make_event_id(
     phase: str,
     payload: dict[str, Any],
     *,
-    workspace_id: str | None = None,
+    workspace_namespace_id: str | None = None,
 ) -> str:
     parts = [
         phase,
@@ -19,9 +19,9 @@ def make_event_id(
         _optional_str(payload.get("tool_name")),
     ]
     identity_payload: Any = payload
-    if workspace_id is not None:
+    if workspace_namespace_id is not None:
         identity_payload = {
-            "workspace_id": workspace_id,
+            "workspace_namespace_id": workspace_namespace_id,
             "payload": payload,
         }
     digest = hashlib.sha256(

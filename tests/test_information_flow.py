@@ -645,6 +645,7 @@ class InformationFlowTest(unittest.TestCase):
                 artifacts,
                 build_fragments(artifacts),
                 post_outcome=("succeeded", "exit_code:0"),
+                post_operation_ids=(operation.operation_id,),
                 resource_snapshots=[replace(snapshot, session_id="other-session")],
             )
 
@@ -744,8 +745,8 @@ class InformationFlowTest(unittest.TestCase):
         )
 
         self.assertEqual("unknown", operation.outcome)
-        self.assertEqual("post_operation_owner_mismatch", operation.outcome_evidence)
-        self.assertEqual(post.event_id, operation.outcome_event_id)
+        self.assertIsNone(operation.outcome_evidence)
+        self.assertIsNone(operation.outcome_event_id)
         self.assertEqual([], self.store.list_resource_snapshots_for_session("session-1"))
         self.assertEqual([], list(result.resources))
         with sqlite3.connect(self.db_path) as connection:
@@ -753,6 +754,397 @@ class InformationFlowTest(unittest.TestCase):
                 "SELECT body_text FROM resource_snapshots WHERE body_text IS NOT NULL"
             ).fetchall()
         self.assertEqual([], stored_bodies)
+
+    def test_post_evidence_isolated_by_configured_workspace(self) -> None:
+        base = Path(self.temporary_directory.name)
+        roots = {
+            "a": base / "workspace-a",
+            "b": base / "workspace-b",
+        }
+        command = """*** Begin Patch
+*** Add File: target.txt
++workspace content
+*** End Patch"""
+        pre_events: dict[str, NormalizedEvent] = {}
+        for label, root in roots.items():
+            root.mkdir()
+            (root / "target.txt").write_text(label, encoding="utf-8")
+            pre_events[label] = self._record(
+                "pre_tool_use",
+                "shared-tool-use",
+                "apply_patch",
+                tool_input={"command": command},
+                cwd=str(root),
+                workspace_root=str(root),
+            )
+
+        post_a = self._record(
+            "post_tool_use",
+            "shared-tool-use",
+            "apply_patch",
+            tool_input={"command": command},
+            tool_response={"exit_code": 0},
+            cwd=str(roots["a"]),
+            workspace_root=str(roots["a"]),
+        )
+        _capture_post_tool_evidence(self.store, post_a)
+
+        operations = {
+            operation.event_id: operation
+            for operation in self.store.list_tool_operations_for_session("session-1")
+        }
+        self.assertEqual("succeeded", operations[pre_events["a"].event_id].outcome)
+        self.assertEqual("unknown", operations[pre_events["b"].event_id].outcome)
+        snapshots = self.store.list_resource_snapshots_for_session("session-1")
+        self.assertEqual(1, len(snapshots))
+        self.assertEqual(str(roots["a"].resolve()), snapshots[0].workspace_root)
+
+        post_b = self._record(
+            "post_tool_use",
+            "shared-tool-use",
+            "apply_patch",
+            tool_input={"command": command},
+            tool_response={"exit_code": 0},
+            cwd=str(roots["b"]),
+            workspace_root=str(roots["b"]),
+        )
+        _capture_post_tool_evidence(self.store, post_b)
+
+        operations = self.store.list_tool_operations_for_session("session-1")
+        self.assertEqual({"succeeded"}, {operation.outcome for operation in operations})
+        self.assertEqual(
+            {str(root.resolve()) for root in roots.values()},
+            {
+                snapshot.workspace_root
+                for snapshot in self.store.list_resource_snapshots_for_session("session-1")
+            },
+        )
+
+    def test_configured_workspace_snapshot_uses_execution_cwd_as_relative_base(
+        self,
+    ) -> None:
+        root = Path(self.temporary_directory.name) / "workspace"
+        nested = root / "packages" / "app"
+        nested.mkdir(parents=True)
+        target = nested / "target.txt"
+        target.write_text("nested content", encoding="utf-8")
+        command = """*** Begin Patch
+*** Add File: target.txt
++nested content
+*** End Patch"""
+        self._record(
+            "pre_tool_use",
+            "nested-snapshot",
+            "apply_patch",
+            tool_input={"command": command},
+            cwd=str(nested),
+            workspace_root=str(root),
+        )
+        post = self._record(
+            "post_tool_use",
+            "nested-snapshot",
+            "apply_patch",
+            tool_input={"command": command},
+            tool_response={"exit_code": 0},
+            cwd=str(nested),
+            workspace_root=str(root),
+        )
+
+        _capture_post_tool_evidence(self.store, post)
+        snapshot = self.store.list_resource_snapshots_for_session("session-1")[0]
+
+        self.assertEqual(str(root.resolve()), snapshot.workspace_root)
+        self.assertEqual(str(target.resolve()), snapshot.lexical_path)
+        self.assertEqual(
+            hashlib.sha256(target.read_bytes()).hexdigest(),
+            snapshot.content_sha256,
+        )
+        operation = self.store.list_tool_operations_for_tool_uses(
+            "session-1",
+            {"nested-snapshot"},
+        )[0]
+        shared = root / "shared.txt"
+        outside = root.parent / "outside.txt"
+        shared.write_text("shared", encoding="utf-8")
+        outside.write_text("outside", encoding="utf-8")
+        traversal_snapshots = capture_operation_snapshots(
+            post,
+            [
+                replace(
+                    operation,
+                    operation_id="nested-inside-parent",
+                    target_path="../../shared.txt",
+                ),
+                replace(
+                    operation,
+                    operation_id="nested-outside-parent",
+                    operation_index=1,
+                    target_path="../../../outside.txt",
+                ),
+            ],
+        )
+        by_operation = {
+            item.operation_id: item for item in traversal_snapshots
+        }
+        self.assertEqual(
+            "captured_hash_only",
+            by_operation["nested-inside-parent"].capture_status,
+        )
+        self.assertEqual(
+            str(shared.resolve()),
+            by_operation["nested-inside-parent"].lexical_path,
+        )
+        self.assertEqual(
+            "outside_workspace",
+            by_operation["nested-outside-parent"].capture_status,
+        )
+
+    def test_post_does_not_associate_same_workspace_different_execution_cwd(
+        self,
+    ) -> None:
+        root = Path(self.temporary_directory.name) / "workspace"
+        cwd_a = root / "a"
+        cwd_b = root / "b"
+        cwd_a.mkdir(parents=True)
+        cwd_b.mkdir()
+        command = """*** Begin Patch
+*** Add File: target.txt
++content
+*** End Patch"""
+        pre_events = []
+        for cwd in (cwd_a, cwd_b):
+            (cwd / "target.txt").write_text("content", encoding="utf-8")
+            pre_events.append(
+                self._record(
+                    "pre_tool_use",
+                    "shared-cwd-tool",
+                    "apply_patch",
+                    tool_input={"command": command},
+                    cwd=str(cwd),
+                    workspace_root=str(root),
+                )
+            )
+        post = self._record(
+            "post_tool_use",
+            "shared-cwd-tool",
+            "apply_patch",
+            tool_input={"command": command},
+            tool_response={"exit_code": 0},
+            cwd=str(cwd_a),
+            workspace_root=str(root),
+        )
+
+        _capture_post_tool_evidence(self.store, post)
+        operations = {
+            operation.event_id: operation
+            for operation in self.store.list_tool_operations_for_session("session-1")
+        }
+
+        self.assertEqual("succeeded", operations[pre_events[0].event_id].outcome)
+        self.assertEqual("unknown", operations[pre_events[1].event_id].outcome)
+
+    def test_same_context_multiple_pre_events_are_ambiguous_post_owners(self) -> None:
+        root = Path(self.temporary_directory.name)
+        commands = (
+            "*** Begin Patch\n*** Add File: a.txt\n+a\n*** End Patch",
+            "*** Begin Patch\n*** Add File: b.txt\n+b\n*** End Patch",
+        )
+        for command in commands:
+            self._record(
+                "pre_tool_use",
+                "ambiguous-owner",
+                "apply_patch",
+                tool_input={"command": command},
+                cwd=str(root),
+            )
+        post = self._record(
+            "post_tool_use",
+            "ambiguous-owner",
+            "apply_patch",
+            tool_input={"command": commands[0]},
+            tool_response={"exit_code": 0},
+            cwd=str(root),
+        )
+
+        _capture_post_tool_evidence(self.store, post)
+        operations = self.store.list_tool_operations_for_session("session-1")
+
+        self.assertEqual(2, len(operations))
+        self.assertTrue(all(operation.outcome == "unknown" for operation in operations))
+        self.assertTrue(all(operation.outcome_event_id is None for operation in operations))
+
+    def test_post_tool_name_mismatch_does_not_claim_operation(self) -> None:
+        root = Path(self.temporary_directory.name)
+        command = """*** Begin Patch
+*** Add File: target.txt
++content
+*** End Patch"""
+        self._record(
+            "pre_tool_use",
+            "tool-name-owner",
+            "apply_patch",
+            tool_input={"command": command},
+            cwd=str(root),
+        )
+        post = self._record(
+            "post_tool_use",
+            "tool-name-owner",
+            "Bash",
+            tool_input={"command": "printf ok"},
+            tool_response={"exit_code": 0},
+            cwd=str(root),
+        )
+
+        _capture_post_tool_evidence(self.store, post)
+        operation = self.store.list_tool_operations_for_session("session-1")[0]
+
+        self.assertEqual("unknown", operation.outcome)
+        self.assertIsNone(operation.outcome_event_id)
+
+    def test_storage_rejects_cross_workspace_post_owner_and_ignores_legacy_history(
+        self,
+    ) -> None:
+        base = Path(self.temporary_directory.name)
+        root_a = base / "workspace-a"
+        root_b = base / "workspace-b"
+        root_a.mkdir()
+        root_b.mkdir()
+        command = """*** Begin Patch
+*** Add File: target.txt
++content
+*** End Patch"""
+        self._record(
+            "pre_tool_use",
+            "cross-owner",
+            "apply_patch",
+            tool_input={"command": command},
+            cwd=str(root_a),
+            workspace_root=str(root_a),
+        )
+        pre_b = self._record(
+            "pre_tool_use",
+            "cross-owner",
+            "apply_patch",
+            tool_input={"command": command},
+            cwd=str(root_b),
+            workspace_root=str(root_b),
+        )
+        post_a = self._record(
+            "post_tool_use",
+            "cross-owner",
+            "apply_patch",
+            tool_input={"command": command},
+            tool_response={"exit_code": 0},
+            cwd=str(root_a),
+            workspace_root=str(root_a),
+        )
+        operation_b = next(
+            operation
+            for operation in self.store.list_tool_operations_for_session("session-1")
+            if operation.event_id == pre_b.event_id
+        )
+        with sqlite3.connect(self.db_path) as connection:
+            connection.execute(
+                """
+                INSERT INTO tool_operation_outcomes (
+                    post_event_id,
+                    operation_id,
+                    session_id,
+                    tool_use_id,
+                    outcome,
+                    outcome_evidence
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    post_a.event_id,
+                    operation_b.operation_id,
+                    "session-1",
+                    "cross-owner",
+                    "succeeded",
+                    "legacy_session_only_update",
+                ),
+            )
+            connection.execute(
+                """
+                UPDATE tool_operations
+                SET outcome = 'succeeded',
+                    outcome_evidence = 'legacy_session_only_update'
+                WHERE operation_id = ?
+                """,
+                (operation_b.operation_id,),
+            )
+            connection.execute(
+                """
+                INSERT INTO resource_snapshots (
+                    snapshot_id,
+                    post_event_id,
+                    operation_id,
+                    session_id,
+                    tool_use_id,
+                    path_role,
+                    requested_path,
+                    workspace_root,
+                    resource_state,
+                    capture_status,
+                    file_kind,
+                    captured_bytes,
+                    duration_ms
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "legacy-cross-workspace-snapshot",
+                    post_a.event_id,
+                    operation_b.operation_id,
+                    "session-1",
+                    "cross-owner",
+                    "target",
+                    "target.txt",
+                    str(root_b.resolve()),
+                    "present",
+                    "captured_hash_only",
+                    "regular",
+                    0,
+                    0.0,
+                ),
+            )
+
+        reloaded_b = next(
+            operation
+            for operation in self.store.list_tool_operations_for_session("session-1")
+            if operation.operation_id == operation_b.operation_id
+        )
+        self.assertEqual("unknown", reloaded_b.outcome)
+        self.assertIsNone(reloaded_b.outcome_evidence)
+        self.assertEqual([], self.store.list_resource_snapshots_for_session("session-1"))
+
+        forged_post = normalize_event(
+            "post_tool_use",
+            {
+                "session_id": "session-1",
+                "turn_id": "turn-forged-cross-owner",
+                "tool_use_id": "cross-owner",
+                "tool_name": "apply_patch",
+                "cwd": str(root_a),
+                "tool_input": {"command": command},
+                "tool_response": {"exit_code": 0, "stdout": "new event"},
+            },
+            workspace_root=str(root_a),
+        )
+        artifacts = build_artifacts(forged_post)
+        with self.assertRaisesRegex(ValueError, "owner does not match"):
+            self.store.record(
+                forged_post,
+                artifacts,
+                build_fragments(artifacts),
+                post_outcome=("succeeded", "exit_code:0"),
+                post_operation_ids=(operation_b.operation_id,),
+            )
+        with sqlite3.connect(self.db_path) as connection:
+            forged_event_count = connection.execute(
+                "SELECT COUNT(*) FROM events WHERE event_id = ?",
+                (forged_post.event_id,),
+            ).fetchone()[0]
+        self.assertEqual(0, forged_event_count)
 
     def test_snapshot_capture_records_move_and_delete_state(self) -> None:
         cwd = Path(self.temporary_directory.name)
@@ -1186,7 +1578,7 @@ class InformationFlowTest(unittest.TestCase):
         )
 
         self.assertEqual(1, len(snapshots))
-        self.assertEqual("symlink_rejected", snapshots[0].capture_status)
+        self.assertEqual("invalid_workspace", snapshots[0].capture_status)
         self.assertNotEqual(str(linked_cwd), snapshots[0].lexical_path)
         self.assertEqual(
             {str(linked_cwd / "one.txt"), str(linked_cwd / "two.txt")},
@@ -3545,6 +3937,7 @@ class InformationFlowTest(unittest.TestCase):
                     "turn_id": "turn-1",
                     "hook_event_name": "Stop",
                     "stop_hook_active": False,
+                    "cwd": str(REPO_ROOT),
                     "last_assistant_message": f"The answer includes {SECRET}.",
                 }
             ),
@@ -4066,6 +4459,57 @@ class InformationFlowTest(unittest.TestCase):
         self.assertIn("RuntimeError", stderr.getvalue())
         self.assertNotIn(SECRET, stderr.getvalue())
 
+    def test_configured_workspace_policy_waits_for_workspace_scoped_analysis(
+        self,
+    ) -> None:
+        root = Path(self.temporary_directory.name) / "workspace"
+        nested = root / "nested"
+        nested.mkdir(parents=True)
+        environment = {
+            "TOOLUSEPROXY_DB_PATH": str(self.db_path),
+            "TOOLUSEPROXY_WORKSPACE_ROOT": str(root),
+            "TOOLUSEPROXY_PRE_TOOL_POLICY": "1",
+        }
+        pre_payload = {
+            "session_id": "configured-policy-session",
+            "turn_id": "configured-policy-turn",
+            "tool_use_id": "configured-policy-tool",
+            "tool_name": "Bash",
+            "cwd": str(nested),
+            "tool_input": {"command": "curl https://example.invalid"},
+        }
+        pre_stdin = io.TextIOWrapper(
+            io.BytesIO(json.dumps(pre_payload).encode("utf-8"))
+        )
+        with (
+            patch("sys.stdin", pre_stdin),
+            patch.dict(os.environ, environment),
+            patch(
+                "hook_monitor.runtime.runner.evaluate_pre_tool_hook_policy"
+            ) as pre_policy,
+        ):
+            self.assertEqual(0, run_hook("pre_tool_use"))
+        pre_policy.assert_not_called()
+
+        stop_payload = {
+            "session_id": "configured-policy-session",
+            "turn_id": "configured-policy-turn",
+            "cwd": str(nested),
+            "final_answer": SECRET,
+        }
+        stop_stdin = io.TextIOWrapper(
+            io.BytesIO(json.dumps(stop_payload).encode("utf-8"))
+        )
+        with (
+            patch("sys.stdin", stop_stdin),
+            patch.dict(os.environ, environment),
+            patch(
+                "hook_monitor.runtime.runner.evaluate_stop_hook_policy"
+            ) as stop_policy,
+        ):
+            self.assertEqual(0, run_hook("stop"))
+        stop_policy.assert_not_called()
+
     def test_stop_hook_only_evaluates_current_final_answer(self) -> None:
         self._record(
             "post_tool_use",
@@ -4092,6 +4536,7 @@ class InformationFlowTest(unittest.TestCase):
                 {
                     "session_id": "session-1",
                     "turn_id": "turn-1",
+                    "cwd": str(REPO_ROOT),
                     "final_answer": f"The answer includes {SECRET}.",
                 }
             ),
@@ -4110,6 +4555,7 @@ class InformationFlowTest(unittest.TestCase):
                 {
                     "session_id": "session-1",
                     "turn_id": "turn-2",
+                    "cwd": str(REPO_ROOT),
                     "final_answer": "The answer only includes public information.",
                 }
             ),
@@ -4796,6 +5242,7 @@ class InformationFlowTest(unittest.TestCase):
         tool_input: dict[str, object],
         tool_response: object | None = None,
         cwd: str | None = None,
+        workspace_root: str | None = None,
     ) -> NormalizedEvent:
         payload: dict[str, object] = {
             "session_id": "session-1",
@@ -4808,7 +5255,11 @@ class InformationFlowTest(unittest.TestCase):
             payload["cwd"] = cwd
         if tool_response is not None:
             payload["tool_response"] = tool_response
-        event = normalize_event(phase, payload)
+        event = normalize_event(
+            phase,
+            payload,
+            workspace_root=workspace_root,
+        )
         artifacts = build_artifacts(event)
         fragments = build_fragments(artifacts)
         extraction = extract_tool_operations(event, artifacts, fragments)
