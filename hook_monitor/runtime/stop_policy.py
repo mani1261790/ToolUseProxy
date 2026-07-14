@@ -19,7 +19,10 @@ from hook_monitor.policy.engine import evaluate_policy
 from hook_monitor.policy.explanation import build_policy_explanation
 from hook_monitor.policy.models import PolicyDecision
 from hook_monitor.runtime.fragments import build_artifact_fragments
-from hook_monitor.runtime.incremental_analysis import update_runtime_analysis
+from hook_monitor.runtime.incremental_analysis import (
+    RUNTIME_GRAPH_DETECTOR_VERSION,
+    update_runtime_analysis,
+)
 from hook_monitor.runtime.models import (
     ProtectedSource,
     SinkCandidate,
@@ -28,9 +31,6 @@ from hook_monitor.runtime.models import (
 )
 from hook_monitor.runtime.source_config import DEFAULT_CONFIG_PATH
 from hook_monitor.runtime.storage import EventStore
-
-
-DETECTOR_VERSION = "stop-hook-final-answer-v5-session-incremental"
 
 
 def evaluate_stop_hook_policy(
@@ -48,7 +48,7 @@ def evaluate_stop_hook_policy(
             repo_root,
             session_id=session_id,
             current_event_id=current_event_id,
-            detector_version=DETECTOR_VERSION,
+            detector_version=RUNTIME_GRAPH_DETECTOR_VERSION,
             minimum_path_score=minimum_path_score,
         )
         analysis_run = runtime_result.analysis_run
@@ -121,7 +121,7 @@ def _evaluate_without_session(
     )
 
     analysis_run_id = store.start_analysis_run(
-        detector_version=DETECTOR_VERSION,
+        detector_version=RUNTIME_GRAPH_DETECTOR_VERSION,
         config={
             "minimum_path_score": minimum_path_score,
             "leak_min_score": leak_min_score,

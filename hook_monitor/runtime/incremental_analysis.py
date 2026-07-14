@@ -38,6 +38,9 @@ from hook_monitor.runtime.source_config import (
 from hook_monitor.runtime.storage import EventStore
 
 
+RUNTIME_GRAPH_DETECTOR_VERSION = "runtime-graph-v5-session-incremental"
+
+
 @dataclass(frozen=True)
 class RuntimeAnalysisResult:
     analysis_run: AnalysisRun

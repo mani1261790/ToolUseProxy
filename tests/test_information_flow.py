@@ -28,7 +28,10 @@ from hook_monitor.policy.codex_output import render_codex_hook_output, select_st
 from hook_monitor.policy.engine import evaluate_policy
 from hook_monitor.policy.models import PolicyDecision
 from hook_monitor.runtime.parser import build_artifacts, build_fragments, normalize_event
-from hook_monitor.runtime.incremental_analysis import update_runtime_analysis
+from hook_monitor.runtime.incremental_analysis import (
+    RUNTIME_GRAPH_DETECTOR_VERSION,
+    update_runtime_analysis,
+)
 from hook_monitor.runtime.stop_policy import evaluate_stop_hook_policy
 from hook_monitor.runtime.models import AnalysisCursor, ProtectedSource, SourceChunk
 from hook_monitor.runtime.storage import EventStore
@@ -1799,6 +1802,10 @@ class InformationFlowTest(unittest.TestCase):
             ).fetchone()
         self.assertEqual((0,), stored_stop)
         self.assertEqual(1, len(self.store.list_analysis_runs()))
+        self.assertEqual(
+            RUNTIME_GRAPH_DETECTOR_VERSION,
+            self.store.list_analysis_runs()[0].detector_version,
+        )
         stored_decisions = self.store.list_policy_decisions()
         self.assertEqual(1, len(stored_decisions))
         self.assertEqual("continue_review", stored_decisions[0].action)
