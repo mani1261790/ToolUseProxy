@@ -153,12 +153,11 @@ def _report_policy_failure(policy_name: str, exc: Exception) -> None:
 
 
 def _runtime_policy_workspace_enabled(event: NormalizedEvent) -> bool:
-    # Workspace-scoped graph/source/cursor migrationが完了するまでは、明示rootを
-    # evidence captureにだけ使い、deny policyはfail-openに保つ。
     return (
         event.workspace_status == "ready"
-        and event.workspace_source == "hook_cwd"
+        and event.workspace_id is not None
         and event.workspace_root is not None
+        and event.workspace_execution_cwd is not None
     )
 
 
