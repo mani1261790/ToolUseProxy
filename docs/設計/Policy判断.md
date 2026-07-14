@@ -198,7 +198,7 @@ Stop hook runtimeで `block` / `warn` / `continue_review` を返した場合は�
 python3 scripts/list_policy_decisions.py
 python3 scripts/list_policy_decisions.py --format json
 python3 scripts/list_policy_decisions.py --decision <decision_id>
-python3 scripts/trace_lineage.py --decision <decision_id>
+python3 scripts/trace_lineage.py --decision "$DECISION_ID"
 ```
 
 複数decisionがある場合は、次の優先順で最も強いdecisionを選びます。
@@ -220,9 +220,9 @@ allow
 ```bash
 python3 scripts/evaluate_policy.py --workspace-root "$PWD" --latest
 python3 scripts/evaluate_policy.py --workspace-root "$PWD" --latest --include-final-answer
-python3 scripts/evaluate_policy.py --analysis-run <analysis_run_id> --format json
-python3 scripts/evaluate_policy.py --analysis-run <analysis_run_id> --hook-output PreToolUse
-python3 scripts/evaluate_policy.py --analysis-run <analysis_run_id> --include-final-answer --hook-output Stop
+python3 scripts/evaluate_policy.py --analysis-run "$ANALYSIS_RUN_ID" --format json
+python3 scripts/evaluate_policy.py --analysis-run "$ANALYSIS_RUN_ID" --hook-output PreToolUse
+python3 scripts/evaluate_policy.py --analysis-run "$ANALYSIS_RUN_ID" --include-final-answer --hook-output Stop
 ```
 
 `--analysis-run ID`と`--workspace-root PATH --latest`は排他的です。後者は指定workspaceのcompleted offline runだけを選び、global latestやruntime runへfallbackしません。

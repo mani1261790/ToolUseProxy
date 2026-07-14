@@ -309,7 +309,7 @@ Stop hook が実際に介入した場合は、`policy_decisions` table に判断
 
 ```bash
 python3 /Users/mani/Developer/ToolUseProxy/scripts/list_policy_decisions.py
-python3 /Users/mani/Developer/ToolUseProxy/scripts/trace_lineage.py --decision <decision_id>
+python3 /Users/mani/Developer/ToolUseProxy/scripts/trace_lineage.py --decision "$DECISION_ID"
 ```
 
 Stop policy 接続は環境変数で無効化できます。
