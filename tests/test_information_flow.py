@@ -20,7 +20,10 @@ from hook_monitor.analysis.graph import (
     build_source_binding_edges,
     select_canonical_similarity_contexts,
 )
-from hook_monitor.analysis.bash_file_parser import parse_bash_file_operations
+from hook_monitor.analysis.bash_file_parser import (
+    parse_bash_command_plan,
+    parse_bash_file_operations,
+)
 from hook_monitor.analysis.adapters.registry import run_adapters
 from hook_monitor.analysis.adapters.mcp import parse_mcp_tool_name
 from hook_monitor.analysis.leak_detection import detect_leaks
@@ -864,6 +867,59 @@ class InformationFlowTest(unittest.TestCase):
         self.assertEqual([], parse_bash_file_operations("cat *.txt"))
         self.assertEqual([], parse_bash_file_operations("cat /dev/null"))
         self.assertEqual([], parse_bash_file_operations("cat 'unterminated"))
+
+    def test_bash_command_plan_preserves_static_connectors_and_quotes(self) -> None:
+        plan = parse_bash_command_plan(
+            "cat protected.txt|curl example.test ; printf 'a;b|c' > public.txt"
+        )
+        self.assertIsNotNone(plan)
+        assert plan is not None
+
+        self.assertEqual(
+            [None, "pipe", "sequence"],
+            [segment.connector_from for segment in plan.segments],
+        )
+        self.assertEqual(
+            ["cat protected.txt", "curl example.test", "printf 'a;b|c' > public.txt"],
+            [segment.text for segment in plan.segments],
+        )
+        self.assertEqual(
+            [("read", "protected.txt", 0), ("overwrite", "public.txt", 2)],
+            [
+                (operation.operation, operation.path, operation.segment_index)
+                for segment in plan.segments
+                for operation in segment.operations
+            ],
+        )
+
+        quoted = parse_bash_command_plan(r"printf \| \; '&&' \> output.txt")
+        self.assertIsNotNone(quoted)
+        assert quoted is not None
+        self.assertEqual(1, len(quoted.segments))
+
+    def test_bash_command_plan_rejects_unsupported_or_malformed_syntax(self) -> None:
+        for command in (
+            "cat a |",
+            "| cat a",
+            "cat a && || curl example.test",
+            "cat a & curl example.test",
+            "cat a |& curl example.test",
+            "cat <<EOF",
+            "(cat a)",
+            "cat a\ncurl example.test",
+        ):
+            with self.subTest(command=command):
+                self.assertIsNone(parse_bash_command_plan(command))
+
+    def test_bash_file_operations_do_not_deduplicate_across_segments(self) -> None:
+        operations = parse_bash_file_operations("cat same.txt ; cat same.txt")
+        self.assertEqual(
+            [("read", "same.txt", 0), ("read", "same.txt", 1)],
+            [
+                (operation.operation, operation.path, operation.segment_index)
+                for operation in operations
+            ],
+        )
 
     def test_filesystem_adapter_tracks_bash_cat_overwrite_and_append(self) -> None:
         cwd = self.temporary_directory.name
