@@ -13,12 +13,19 @@ from hook_monitor.runtime.parser import (
     parse_hook_payload,
 )
 from hook_monitor.runtime.operations import extract_tool_operations
+from hook_monitor.runtime.models import NormalizedEvent
 from hook_monitor.runtime.pre_tool_policy import (
     evaluate_pre_tool_hook_policy,
     pre_tool_adapter,
 )
 from hook_monitor.runtime.storage import DEFAULT_DB_PATH, EventStore
+from hook_monitor.runtime.snapshot_capture import (
+    capture_operation_snapshots,
+    limits_from_environment,
+    plaintext_snapshots_enabled,
+)
 from hook_monitor.runtime.stop_policy import evaluate_stop_hook_policy
+from hook_monitor.runtime.tool_outcome import classify_post_tool_outcome
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -40,6 +47,11 @@ def run_hook(phase: str) -> int:
     store = EventStore(_resolve_db_path())
     store.initialize()
     store.record(event, artifacts, fragments, list(extraction.operations))
+    if phase == "post_tool_use":
+        try:
+            _capture_post_tool_evidence(store, event)
+        except Exception as exc:  # pragma: no cover - defensive hook boundary
+            _report_policy_failure("post-tool snapshot", exc)
     enabled_pre_tool_adapters = _enabled_pre_tool_adapters()
     if phase == "pre_tool_use" and pre_tool_adapter(
         event.tool_name
@@ -109,3 +121,33 @@ def _report_policy_failure(policy_name: str, exc: Exception) -> None:
         f"{policy_name} policy evaluation failed: {type(exc).__name__}",
         file=sys.stderr,
     )
+
+
+def _capture_post_tool_evidence(
+    store: EventStore,
+    event: NormalizedEvent,
+) -> None:
+    if event.session_id is None or event.tool_use_id is None:
+        return
+    operations = store.list_tool_operations_for_tool_uses(
+        event.session_id,
+        {event.tool_use_id},
+    )
+    if not operations:
+        return
+    outcome = classify_post_tool_outcome(event)
+    store.update_tool_operation_outcome(
+        event.session_id,
+        event.tool_use_id,
+        outcome=outcome.status,
+        evidence=outcome.evidence,
+    )
+    if outcome.status != "succeeded":
+        return
+    snapshots = capture_operation_snapshots(
+        event,
+        operations,
+        limits=limits_from_environment(),
+        store_plaintext=plaintext_snapshots_enabled(),
+    )
+    store.upsert_resource_snapshots(snapshots)

@@ -43,8 +43,13 @@ from hook_monitor.runtime.pre_tool_policy import (
     evaluate_pre_tool_hook_policy,
     pre_tool_adapter,
 )
-from hook_monitor.runtime.runner import run_hook
+from hook_monitor.runtime.runner import _capture_post_tool_evidence, run_hook
+from hook_monitor.runtime.snapshot_capture import (
+    SnapshotCaptureLimits,
+    capture_operation_snapshots,
+)
 from hook_monitor.runtime.stop_policy import evaluate_stop_hook_policy
+from hook_monitor.runtime.tool_outcome import classify_post_tool_outcome
 from hook_monitor.runtime.models import (
     AnalysisCursor,
     ArtifactFragment,
@@ -168,6 +173,267 @@ class InformationFlowTest(unittest.TestCase):
         )
         self.assertEqual("operation_added", reloaded.fragment_kind)
         self.assertEqual(operation_id, reloaded.operation_id)
+
+    def test_post_tool_outcome_classifies_success_failure_and_unknown(self) -> None:
+        cases = (
+            ({"tool_response": {"exit_code": 0}}, "succeeded"),
+            ({"tool_response": "Exit code: 7\nCommand failed"}, "failed"),
+            ({}, "unknown"),
+        )
+        for extra, expected in cases:
+            with self.subTest(expected=expected):
+                event = normalize_event(
+                    "post_tool_use",
+                    {
+                        "session_id": "session-outcome",
+                        "tool_use_id": "tool-outcome",
+                        "tool_name": "Bash",
+                        "tool_input": {"command": "printf ok"},
+                        **extra,
+                    },
+                )
+                self.assertEqual(
+                    expected,
+                    classify_post_tool_outcome(event).status,
+                )
+
+    def test_bounded_snapshot_capture_records_hash_body_and_safety_statuses(self) -> None:
+        cwd = Path(self.temporary_directory.name)
+        target = cwd / "captured.txt"
+        target.write_text("captured text", encoding="utf-8")
+        command = """*** Begin Patch
+*** Add File: captured.txt
++captured text
+*** End Patch"""
+        self._record(
+            "pre_tool_use",
+            "snapshot-add",
+            "apply_patch",
+            tool_input={"command": command},
+            cwd=str(cwd),
+        )
+        operation = self.store.list_tool_operations_for_tool_uses(
+            "session-1",
+            {"snapshot-add"},
+        )[0]
+        post_event = normalize_event(
+            "post_tool_use",
+            {
+                "session_id": "session-1",
+                "turn_id": "turn-1",
+                "tool_use_id": "snapshot-add",
+                "tool_name": "apply_patch",
+                "cwd": str(cwd),
+                "tool_input": {"command": command},
+                "tool_response": {"stdout": "Exit code: 0\nSuccess."},
+            },
+        )
+
+        hash_only = capture_operation_snapshots(post_event, [operation])
+        plaintext = capture_operation_snapshots(
+            post_event,
+            [operation],
+            store_plaintext=True,
+        )
+
+        self.assertEqual("captured_hash_only", hash_only[0].capture_status)
+        self.assertEqual(
+            hashlib.sha256(b"captured text").hexdigest(),
+            hash_only[0].content_sha256,
+        )
+        self.assertIsNone(hash_only[0].body_text)
+        self.assertEqual("captured_text", plaintext[0].capture_status)
+        self.assertEqual("captured text", plaintext[0].body_text)
+
+        outside = replace(operation, target_path="../outside.txt")
+        outside_result = capture_operation_snapshots(post_event, [outside])[0]
+        self.assertEqual("outside_workspace", outside_result.capture_status)
+
+        symlink = cwd / "linked.txt"
+        symlink.symlink_to(target)
+        symlink_operation = replace(operation, target_path="linked.txt")
+        symlink_result = capture_operation_snapshots(
+            post_event,
+            [symlink_operation],
+        )[0]
+        self.assertEqual("symlink_rejected", symlink_result.capture_status)
+
+        binary = cwd / "binary.dat"
+        binary.write_bytes(b"binary\0payload")
+        binary_operation = replace(operation, target_path="binary.dat")
+        binary_result = capture_operation_snapshots(
+            post_event,
+            [binary_operation],
+        )[0]
+        self.assertEqual("binary_hash_only", binary_result.capture_status)
+        self.assertIsNone(binary_result.body_text)
+
+        large = cwd / "large.txt"
+        large.write_bytes(b"12345")
+        large_operation = replace(operation, target_path="large.txt")
+        large_result = capture_operation_snapshots(
+            post_event,
+            [large_operation],
+            limits=SnapshotCaptureLimits(
+                max_file_bytes=4,
+                max_tool_bytes=16,
+                max_paths=4,
+                time_budget_ms=250,
+            ),
+        )[0]
+        self.assertEqual("file_too_large", large_result.capture_status)
+        self.assertIsNone(large_result.content_sha256)
+
+    def test_post_tool_snapshot_evidence_is_saved_only_after_success(self) -> None:
+        cwd = Path(self.temporary_directory.name)
+        target = cwd / "saved.txt"
+        target.write_text("saved", encoding="utf-8")
+        command = """*** Begin Patch
+*** Add File: saved.txt
++saved
+*** End Patch"""
+        self._record(
+            "pre_tool_use",
+            "snapshot-saved",
+            "apply_patch",
+            tool_input={"command": command},
+            cwd=str(cwd),
+        )
+        success = self._record(
+            "post_tool_use",
+            "snapshot-saved",
+            "apply_patch",
+            tool_input={"command": command},
+            tool_response={"stdout": "Exit code: 0\nSuccess."},
+            cwd=str(cwd),
+        )
+        _capture_post_tool_evidence(self.store, success)
+
+        snapshots = self.store.list_resource_snapshots_for_session("session-1")
+        operation = self.store.list_tool_operations_for_tool_uses(
+            "session-1",
+            {"snapshot-saved"},
+        )[0]
+        self.assertEqual(1, len(snapshots))
+        self.assertEqual("succeeded", operation.outcome)
+        self.assertEqual("captured_hash_only", snapshots[0].capture_status)
+
+        self._record(
+            "pre_tool_use",
+            "snapshot-saved",
+            "apply_patch",
+            tool_input={"command": command},
+            cwd=str(cwd),
+        )
+        rerecorded = self.store.list_tool_operations_for_tool_uses(
+            "session-1",
+            {"snapshot-saved"},
+        )[0]
+        self.assertEqual("succeeded", rerecorded.outcome)
+
+        failed_command = """*** Begin Patch
+*** Add File: failed-snapshot.txt
++failed
+*** End Patch"""
+        self._record(
+            "pre_tool_use",
+            "snapshot-failed",
+            "apply_patch",
+            tool_input={"command": failed_command},
+            cwd=str(cwd),
+        )
+        failed = self._record(
+            "post_tool_use",
+            "snapshot-failed",
+            "apply_patch",
+            tool_input={"command": failed_command},
+            tool_response={"stderr": "Exit code: 1\nPatch failed"},
+            cwd=str(cwd),
+        )
+        _capture_post_tool_evidence(self.store, failed)
+
+        self.assertEqual(
+            1,
+            len(self.store.list_resource_snapshots_for_session("session-1")),
+        )
+        failed_operation = self.store.list_tool_operations_for_tool_uses(
+            "session-1",
+            {"snapshot-failed"},
+        )[0]
+        self.assertEqual("failed", failed_operation.outcome)
+
+    def test_snapshot_capture_records_move_and_delete_state(self) -> None:
+        cwd = Path(self.temporary_directory.name)
+        (cwd / "moved.txt").write_text("moved value", encoding="utf-8")
+        move_command = """*** Begin Patch
+*** Update File: old.txt
+*** Move to: moved.txt
+@@
+-old value
++moved value
+*** End Patch"""
+        self._record(
+            "pre_tool_use",
+            "snapshot-move",
+            "apply_patch",
+            tool_input={"command": move_command},
+            cwd=str(cwd),
+        )
+        move_operation = self.store.list_tool_operations_for_tool_uses(
+            "session-1",
+            {"snapshot-move"},
+        )[0]
+        move_event = normalize_event(
+            "post_tool_use",
+            {
+                "session_id": "session-1",
+                "tool_use_id": "snapshot-move",
+                "tool_name": "apply_patch",
+                "cwd": str(cwd),
+                "tool_input": {"command": move_command},
+                "tool_response": "Done!",
+            },
+        )
+        move_snapshots = capture_operation_snapshots(
+            move_event,
+            [move_operation],
+        )
+
+        by_role = {snapshot.path_role: snapshot for snapshot in move_snapshots}
+        self.assertEqual("deleted", by_role["source"].capture_status)
+        self.assertEqual("deleted", by_role["source"].resource_state)
+        self.assertEqual("captured_hash_only", by_role["target"].capture_status)
+
+        delete_command = """*** Begin Patch
+*** Delete File: removed.txt
+*** End Patch"""
+        self._record(
+            "pre_tool_use",
+            "snapshot-delete",
+            "apply_patch",
+            tool_input={"command": delete_command},
+            cwd=str(cwd),
+        )
+        delete_operation = self.store.list_tool_operations_for_tool_uses(
+            "session-1",
+            {"snapshot-delete"},
+        )[0]
+        delete_event = normalize_event(
+            "post_tool_use",
+            {
+                "session_id": "session-1",
+                "tool_use_id": "snapshot-delete",
+                "tool_name": "apply_patch",
+                "cwd": str(cwd),
+                "tool_input": {"command": delete_command},
+                "tool_response": "Done!",
+            },
+        )
+        delete_snapshot = capture_operation_snapshots(
+            delete_event,
+            [delete_operation],
+        )[0]
+        self.assertEqual("deleted", delete_snapshot.capture_status)
 
     def test_real_codex_stop_payload_builds_final_answer(self) -> None:
         event = normalize_event(

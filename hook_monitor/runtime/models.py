@@ -82,6 +82,29 @@ class ToolOperation:
 
 
 @dataclass(frozen=True)
+class ResourceSnapshot:
+    snapshot_id: str
+    post_event_id: str
+    operation_id: str
+    session_id: str | None
+    tool_use_id: str | None
+    path_role: str
+    requested_path: str
+    workspace_root: str | None
+    lexical_path: str | None
+    resource_state: str
+    capture_status: str
+    file_kind: str
+    byte_size: int | None
+    captured_bytes: int
+    content_sha256: str | None
+    encoding: str | None
+    body_text: str | None
+    error_code: str | None
+    duration_ms: float
+
+
+@dataclass(frozen=True)
 class ProtectedSource:
     source_id: str
     path: str

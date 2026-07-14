@@ -16,6 +16,7 @@ from hook_monitor.runtime.models import (
     NormalizedEvent,
     ProtectedSource,
     ResourceVersion,
+    ResourceSnapshot,
     SinkCandidate,
     SourceChunk,
     StoredPolicyDecision,
@@ -138,6 +139,35 @@ class EventStore:
                     sensitivity TEXT NOT NULL,
                     policy_tags_json TEXT NOT NULL,
                     recorded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS resource_snapshots (
+                    snapshot_id TEXT PRIMARY KEY,
+                    post_event_id TEXT NOT NULL,
+                    operation_id TEXT NOT NULL,
+                    session_id TEXT,
+                    tool_use_id TEXT,
+                    path_role TEXT NOT NULL,
+                    requested_path TEXT NOT NULL,
+                    workspace_root TEXT,
+                    lexical_path TEXT,
+                    resource_state TEXT NOT NULL,
+                    capture_status TEXT NOT NULL,
+                    file_kind TEXT NOT NULL,
+                    byte_size INTEGER,
+                    captured_bytes INTEGER NOT NULL,
+                    content_sha256 TEXT,
+                    encoding TEXT,
+                    body_text TEXT,
+                    error_code TEXT,
+                    duration_ms REAL NOT NULL,
+                    recorded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE (post_event_id, operation_id, path_role),
+                    FOREIGN KEY (post_event_id) REFERENCES events (event_id),
+                    FOREIGN KEY (operation_id) REFERENCES tool_operations (operation_id)
                 )
                 """
             )
@@ -411,6 +441,12 @@ class EventStore:
                 """
             )
             conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_resource_snapshots_session_sequence
+                ON resource_snapshots (session_id, post_event_id, operation_id)
+                """
+            )
+            conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_source_chunks_source_id ON source_chunks (source_id)"
             )
             conn.execute(
@@ -553,7 +589,7 @@ class EventStore:
             if operations:
                 conn.executemany(
                     """
-                    INSERT OR REPLACE INTO tool_operations (
+                    INSERT INTO tool_operations (
                         operation_id,
                         event_id,
                         artifact_id,
@@ -572,6 +608,21 @@ class EventStore:
                         outcome,
                         outcome_evidence
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(operation_id) DO UPDATE SET
+                        event_id = excluded.event_id,
+                        artifact_id = excluded.artifact_id,
+                        parent_fragment_id = excluded.parent_fragment_id,
+                        session_id = excluded.session_id,
+                        tool_use_id = excluded.tool_use_id,
+                        tool_name = excluded.tool_name,
+                        adapter = excluded.adapter,
+                        operation_index = excluded.operation_index,
+                        operation_kind = excluded.operation_kind,
+                        source_path = excluded.source_path,
+                        target_path = excluded.target_path,
+                        segment_index = excluded.segment_index,
+                        connector = excluded.connector,
+                        content_fragment_id = excluded.content_fragment_id
                     """,
                     [_tool_operation_values(operation) for operation in operations],
                 )
@@ -674,6 +725,125 @@ class EventStore:
                 params,
             ).fetchall()
         return [ToolOperation(*row) for row in rows]
+
+    def update_tool_operation_outcome(
+        self,
+        session_id: str,
+        tool_use_id: str,
+        *,
+        outcome: str,
+        evidence: str,
+    ) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE tool_operations
+                SET outcome = ?, outcome_evidence = ?
+                WHERE session_id = ? AND tool_use_id = ?
+                """,
+                (outcome, evidence, session_id, tool_use_id),
+            )
+
+    def upsert_resource_snapshots(
+        self,
+        snapshots: list[ResourceSnapshot],
+    ) -> None:
+        if not snapshots:
+            return
+        with self._connect() as conn:
+            conn.executemany(
+                """
+                INSERT OR REPLACE INTO resource_snapshots (
+                    snapshot_id,
+                    post_event_id,
+                    operation_id,
+                    session_id,
+                    tool_use_id,
+                    path_role,
+                    requested_path,
+                    workspace_root,
+                    lexical_path,
+                    resource_state,
+                    capture_status,
+                    file_kind,
+                    byte_size,
+                    captured_bytes,
+                    content_sha256,
+                    encoding,
+                    body_text,
+                    error_code,
+                    duration_ms
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [_resource_snapshot_values(snapshot) for snapshot in snapshots],
+            )
+
+    def list_resource_snapshots_for_session(
+        self,
+        session_id: str,
+        *,
+        after_sequence_no: int | None = None,
+        through_sequence_no: int | None = None,
+    ) -> list[ResourceSnapshot]:
+        clause = "WHERE s.session_id = ?"
+        params: tuple[object, ...] = (session_id,)
+        if after_sequence_no is not None:
+            clause += " AND e.sequence_no > ?"
+            params += (after_sequence_no,)
+        if through_sequence_no is not None:
+            clause += " AND e.sequence_no <= ?"
+            params += (through_sequence_no,)
+        return self._list_resource_snapshots_where(clause, params)
+
+    def list_resource_snapshots_for_tool_uses(
+        self,
+        session_id: str,
+        tool_use_ids: set[str],
+    ) -> list[ResourceSnapshot]:
+        if not tool_use_ids:
+            return []
+        placeholders = ",".join("?" for _ in tool_use_ids)
+        return self._list_resource_snapshots_where(
+            f"WHERE s.session_id = ? AND s.tool_use_id IN ({placeholders})",
+            (session_id, *sorted(tool_use_ids)),
+        )
+
+    def _list_resource_snapshots_where(
+        self,
+        where_clause: str,
+        params: tuple[object, ...],
+    ) -> list[ResourceSnapshot]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT
+                    s.snapshot_id,
+                    s.post_event_id,
+                    s.operation_id,
+                    s.session_id,
+                    s.tool_use_id,
+                    s.path_role,
+                    s.requested_path,
+                    s.workspace_root,
+                    s.lexical_path,
+                    s.resource_state,
+                    s.capture_status,
+                    s.file_kind,
+                    s.byte_size,
+                    s.captured_bytes,
+                    s.content_sha256,
+                    s.encoding,
+                    s.body_text,
+                    s.error_code,
+                    s.duration_ms
+                FROM resource_snapshots AS s
+                JOIN events AS e ON e.event_id = s.post_event_id
+                {where_clause}
+                ORDER BY e.sequence_no, s.operation_id, s.path_role
+                """,
+                params,
+            ).fetchall()
+        return [ResourceSnapshot(*row) for row in rows]
 
     def upsert_sources(self, sources: list[ProtectedSource], chunks: list[SourceChunk]) -> None:
         with self._connect() as conn:
@@ -2099,6 +2269,30 @@ def _tool_operation_values(operation: ToolOperation) -> tuple[object, ...]:
         operation.content_fragment_id,
         operation.outcome,
         operation.outcome_evidence,
+    )
+
+
+def _resource_snapshot_values(snapshot: ResourceSnapshot) -> tuple[object, ...]:
+    return (
+        snapshot.snapshot_id,
+        snapshot.post_event_id,
+        snapshot.operation_id,
+        snapshot.session_id,
+        snapshot.tool_use_id,
+        snapshot.path_role,
+        snapshot.requested_path,
+        snapshot.workspace_root,
+        snapshot.lexical_path,
+        snapshot.resource_state,
+        snapshot.capture_status,
+        snapshot.file_kind,
+        snapshot.byte_size,
+        snapshot.captured_bytes,
+        snapshot.content_sha256,
+        snapshot.encoding,
+        snapshot.body_text,
+        snapshot.error_code,
+        snapshot.duration_ms,
     )
 
 
