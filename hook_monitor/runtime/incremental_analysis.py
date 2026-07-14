@@ -359,14 +359,10 @@ def _update_session_delta(
         session_id=session_id,
     )
 
-    all_artifact_edges = store.list_information_flow_edges_for_session(
-        session_id,
-        workspace_id=workspace_id,
-    )
     source_edges = build_source_binding_edges(
         chunks,
         delta_contexts,
-        all_artifact_edges,
+        artifact_edges,
     )
     source_edges += build_protected_source_resource_edges(
         sources,

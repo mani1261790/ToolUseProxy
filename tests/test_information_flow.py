@@ -5800,9 +5800,18 @@ class InformationFlowTest(unittest.TestCase):
             final_answer=SECRET,
             cwd=str(repo_root),
         )
-        with patch(
-            "hook_monitor.runtime.incremental_analysis.load_sources_and_chunks",
-            side_effect=AssertionError("unchanged sources must not be reread"),
+        with (
+            patch(
+                "hook_monitor.runtime.incremental_analysis.load_sources_and_chunks",
+                side_effect=AssertionError("unchanged sources must not be reread"),
+            ),
+            patch.object(
+                self.store,
+                "list_information_flow_edges_for_session",
+                side_effect=AssertionError(
+                    "incremental source binding must not load the full session graph"
+                ),
+            ),
         ):
             second = update_runtime_analysis(
                 self.store,
