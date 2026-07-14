@@ -170,7 +170,7 @@ Stop hook の `reason` は、たとえば次のようになります。
 ```text
 Protected source content appears in the final answer. Revise the final answer to remove protected details, then continue.
 Source: source_chunk:private-source:0; Sink: final_answer; Score: 0.97; Severity: critical
-Trace: python3 scripts/trace_lineage.py --db .tooluseproxy/events.db --node sink_candidate:<id>
+Trace: python3 scripts/trace_lineage.py --db .tooluseproxy/events.db --analysis-run <analysis_run_id> --node sink_candidate:<id>
 ```
 
 Stop hook runtimeで `block` / `warn` / `continue_review` を返した場合は、同じ判断を `policy_decisions` tableへ保存します。これにより、Codexに返した短い説明が流れた後でも、あとからdecision idで判断を確認できます。
@@ -218,12 +218,14 @@ allow
 実行時hookに直結する前に、offlineで判断結果を確認します。現在は `scripts/evaluate_policy.py` を実装しています。
 
 ```bash
-python3 scripts/evaluate_policy.py --latest
-python3 scripts/evaluate_policy.py --latest --include-final-answer
-python3 scripts/evaluate_policy.py --format json
-python3 scripts/evaluate_policy.py --latest --hook-output PreToolUse
-python3 scripts/evaluate_policy.py --latest --include-final-answer --hook-output Stop
+python3 scripts/evaluate_policy.py --workspace-root "$PWD" --latest
+python3 scripts/evaluate_policy.py --workspace-root "$PWD" --latest --include-final-answer
+python3 scripts/evaluate_policy.py --analysis-run <analysis_run_id> --format json
+python3 scripts/evaluate_policy.py --analysis-run <analysis_run_id> --hook-output PreToolUse
+python3 scripts/evaluate_policy.py --analysis-run <analysis_run_id> --include-final-answer --hook-output Stop
 ```
+
+`--analysis-run ID`と`--workspace-root PATH --latest`は排他的です。後者は指定workspaceのcompleted offline runだけを選び、global latestやruntime runへfallbackしません。
 
 text output:
 
@@ -236,7 +238,7 @@ source: source_chunk:private-source:0
 sink: sink_candidate:<id>
 reason: critical source lineage reached external_http_request
 hook_event: PreToolUse
-trace: python3 scripts/trace_lineage.py --node sink_candidate:<id>
+trace: python3 scripts/trace_lineage.py --analysis-run <analysis_run_id> --node sink_candidate:<id>
 ```
 
 JSON output:
@@ -287,7 +289,7 @@ JSON output:
 2. 実CodexのMCP tool名とraw argumentsをadapterへ接続
 3. 二段階opt-inでMCP external sinkを`PreToolUse` denyへ接続
 
-次に設計するのは、apply_patch/Bashのoperation単位fragmentとsnapshot capture、複数workspaceのsource/cursor分離です。tool別`updatedInput`を使うredactは、構造を壊さず安全に書き換えられる条件を定義してから実装します。
+operation単位fragment、snapshot capture、複数workspaceのsource/cursor/resource分離は実装済みです。次に`PermissionRequest`の実payloadとPreToolUse denyの役割差を観測し、接続が必要な場合だけworkspace-scoped policyへ追加します。tool別`updatedInput`を使うredactは、その後に構造を壊さず安全に書き換えられる条件を定義してから実装します。
 
 Stop hook内の解析はsession差分更新へ移行済みです。初回または解析条件変更時は`session-full`、通常時は`session-incremental`としてanalysis runへ記録します。Hook内ではlocal DB、static adapter、indexed lexical候補、差分lineageだけを扱い、embeddingやnetwork accessは行いません。
 

@@ -56,7 +56,7 @@ project単位では、trustedなrepositoryの`.codex/hooks.json`へ次のよう�
         "hooks": [
           {
             "type": "command",
-            "command": "python3 /Users/mani/Developer/ToolUseProxy/hooks/monitor_pre_tool.py",
+            "command": "TOOLUSEPROXY_WORKSPACE_ROOT=/absolute/path/to/workspace python3 /Users/mani/Developer/ToolUseProxy/hooks/monitor_pre_tool.py",
             "timeout": 5
           }
         ]
@@ -68,7 +68,7 @@ project単位では、trustedなrepositoryの`.codex/hooks.json`へ次のよう�
         "hooks": [
           {
             "type": "command",
-            "command": "python3 /Users/mani/Developer/ToolUseProxy/hooks/monitor_post_tool.py",
+            "command": "TOOLUSEPROXY_WORKSPACE_ROOT=/absolute/path/to/workspace python3 /Users/mani/Developer/ToolUseProxy/hooks/monitor_post_tool.py",
             "timeout": 5
           }
         ]
@@ -79,7 +79,7 @@ project単位では、trustedなrepositoryの`.codex/hooks.json`へ次のよう�
         "hooks": [
           {
             "type": "command",
-            "command": "python3 /Users/mani/Developer/ToolUseProxy/hooks/monitor_stop.py",
+            "command": "TOOLUSEPROXY_WORKSPACE_ROOT=/absolute/path/to/workspace python3 /Users/mani/Developer/ToolUseProxy/hooks/monitor_stop.py",
             "timeout": 5
           }
         ]
@@ -106,11 +106,17 @@ project単位では、trustedなrepositoryの`.codex/hooks.json`へ次のよう�
 
 ## 使い方
 
-Codex の GUI か設定ファイルで、次の command を指定します。
+Codex の GUI か設定ファイルで、次の command を指定します。`/absolute/path/to/workspace`は保護対象projectの絶対pathへ置き換えます。
 
-- `PreToolUse` -> `python3 /Users/mani/Developer/ToolUseProxy/hooks/monitor_pre_tool.py`
-- `PostToolUse` -> `python3 /Users/mani/Developer/ToolUseProxy/hooks/monitor_post_tool.py`
-- `Stop` -> `python3 /Users/mani/Developer/ToolUseProxy/hooks/monitor_stop.py`
+- `PreToolUse` -> `TOOLUSEPROXY_WORKSPACE_ROOT=/absolute/path/to/workspace python3 /Users/mani/Developer/ToolUseProxy/hooks/monitor_pre_tool.py`
+- `PostToolUse` -> `TOOLUSEPROXY_WORKSPACE_ROOT=/absolute/path/to/workspace python3 /Users/mani/Developer/ToolUseProxy/hooks/monitor_post_tool.py`
+- `Stop` -> `TOOLUSEPROXY_WORKSPACE_ROOT=/absolute/path/to/workspace python3 /Users/mani/Developer/ToolUseProxy/hooks/monitor_stop.py`
+
+### workspace identity
+
+`TOOLUSEPROXY_WORKSPACE_ROOT`の指定を推奨します。rootは既存の絶対directoryで、root自身がsymlinkではなく、Hook payloadの`cwd`がその配下にある必要があります。canonical rootのSHA-256から安定した`workspace_id`を作り、lexical rootと実行時cwdも別fieldで監査保存します。rootを指定しない場合はHook payloadの`cwd`自体をworkspace rootとして扱うため、同じrepositoryでもsubdirectoryごとに別workspaceになり得ます。
+
+明示rootの検証に失敗したeventはraw evidenceとして保存しますが、snapshot取得とruntime policy評価はfail-openで省略します。workspaceを推測するための親directory走査やGit探索は行いません。
 
 この段階の目的は、hook から I/O を受け取り、後から情報流を再解析できる観測ログを残すことです。加えて `Stop` では、最終応答をユーザーへ出す直前の確認点として `continue_review` を返す最小接続を行います。
 
@@ -197,7 +203,7 @@ hook_monitor/
 7. `PostToolUse`では、保存済みPre operationのownerを検証し、`tool_outcome.py`が実行結果を三値へ分類する
 8. outcomeが`succeeded`の場合だけ、`snapshot_capture.py`が変更対象pathをbounded captureする
 9. `storage.py`がPost event、outcome、snapshotを同じtransactionでSQLiteへ保存する
-10. 有効な`PreToolUse`または`Stop`では、未処理のPost evidenceを含むsession差分解析を更新する
+10. 有効な`PreToolUse`または`Stop`では、現在eventと同じworkspace・sessionの未処理Post evidenceだけを差分解析する
 11. `pre_tool_policy.py`または`stop_policy.py`が現在eventのsinkだけを評価し、stdout JSONへ変換する
 
 短く書くと、こうです。
@@ -235,7 +241,7 @@ Bash stdoutはcommand自身が自由に生成できるため、本文中の`Exit
 ### capture対象と境界
 
 - workspace全体は走査せず、operationから静的に確定できたpathだけを扱う
-- workspace rootにはvalidated PreToolUse `cwd`を使う
+- workspace rootにはvalidated `TOOLUSEPROXY_WORKSPACE_ROOT`を使い、未指定時だけPreToolUse `cwd`をrootとする
 - Post側のsession、tool use、tool名、workspaceがPre ownerと一致しなければcaptureしない
 - lexical pathがroot外なら`outside_workspace`とする
 - workspace root、中間directory、対象fileのsymlinkをfollowせず`symlink_rejected`とする
@@ -263,7 +269,7 @@ moveではsourceが消えたこととtargetの現在内容を別snapshotで確�
 
 `content_sha256`は、上限内のファイル全体を安定して読み切った場合だけ計算します。apply_patch文字列やBash segmentのhashをfile content hashとして代用しません。capture全体の例外はHookをfail-openにし、outcome evidenceへ例外型だけを追記します。path単位の失敗は`capture_status`と`error_code`を保存し、可能な場合はhashless resource versionへfallbackします。ただし、delete tombstoneは不在を確認した場合だけ作り、`execution_unknown`と`ambiguous_final_writer`はmaterializeしません。
 
-snapshotの自動retentionやpruneはまだ実装していないため、recordはDBを削除または明示的に整理するまで残ります。SQLite自体も暗号化しません。snapshot本文をoffにしても、raw Hook payload、artifact、operation fragmentにはtool input/outputが平文で保存され得ます。DBを外部へ共有せず、OSのfile permissionとdisk encryptionで保護してください。
+snapshotの自動retentionやpruneはまだ実装していないため、recordはDBを削除または明示的に整理するまで残ります。SQLite自体も暗号化しません。snapshot本文をoffにしても、raw Hook payload、artifact、operation fragmentにはtool input/outputが平文で保存され得ます。さらにcompleted offline runの`analysis_node_snapshots.metadata_json`はcontent-addressedですが暗号化・匿名化ではなく、artifact fragmentやsource chunkのtextを過去run再現用に保持します。live sourceを削除しても過去run snapshotは自動pruneされません。DBを外部へ共有せず、OSのfile permissionとdisk encryptionで保護してください。
 
 ## Stop hook の policy 接続
 
@@ -293,9 +299,9 @@ Stop payload
   -> Codex Hook stdout JSON
 ```
 
-StopとPreToolUseは同じruntime graph detector versionを使います。初回、detector変更、source manifest変更、cursor不整合時だけ同一sessionを`session-full`で再構築し、通常は未処理sequenceだけを`session-incremental`で追加します。source manifestが変わらない場合、protected source本文は再読込しません。duplicate Postやcursor更新前の部分保存により、delta operationが既存resource versionへ再度当たる場合も、重複versionやcycleを避けるため同一sessionだけを`session-full`で再構築します。runtime Hookが全DB再解析へ戻ることはありません。
+StopとPreToolUseは同じruntime graph detector versionを使います。cursorの主keyは`(workspace_id, session_id)`です。初回、detector変更、workspace単位のsource manifest変更、cursor不整合時だけ同じworkspace・sessionを`session-full`で再構築し、通常は未処理sequenceだけを`session-incremental`で追加します。source manifestが変わらない場合、protected source本文は再読込しません。duplicate Postやcursor更新前の部分保存により、delta operationが既存resource versionへ再度当たる場合も、重複versionやcycleを避けるため同じworkspace・sessionだけを`session-full`で再構築します。runtime Hookが全DB再解析へ戻ることはありません。
 
-source設定は、`protected_sources.json` が存在する場合はその内容を優先します。空の `sources` は「保護対象なし」として扱い、DBに古いsource定義が残っていてもfallbackしません。`protected_sources.json` が存在しない場合だけ、既存DBのsource定義へfallbackします。
+source設定は、canonical workspace rootの`protected_sources.json`が存在する場合はその内容を優先します。空の`sources`は「保護対象なし」として扱い、DBに古いsource定義が残っていてもfallbackしません。設定fileが存在しない場合だけ、同じworkspaceのDB catalogへfallbackし、別workspaceやglobal catalogは参照しません。
 
 Stop hook が返す `reason` は、source、sink、score、severity、trace command、次の修正指示を含む短い説明です。説明には raw protected text や final answer の本文は含めません。
 
@@ -339,7 +345,7 @@ MCP Hookのmatcherは、たとえば`^mcp__.*$`、または対象を絞った`^m
 
 native Web SearchはCodex CLI `0.142.5`で`matcher: "*"`を使ってもPreToolUse / PostToolUseに現れなかったため、実行前遮断へは接続していません。Search adapterはsynthetic / imported eventのoffline解析用に残します。
 
-現時点のsource manifest基準はToolUseProxy repository rootです。一方、snapshotのfilesystem境界にはvalidated PreToolUse `cwd`を使います。capture boundaryが分かれていても、source ID、analysis cursor、resourceをworkspace IDで分離するschemaはまだないため、複数workspace対応は別作業です。
+source manifestの基準directoryはeventのcanonical workspace rootです。`protected_sources.json`の相対pathとoperationの相対pathはこのrootに閉じ、実行時cwdはBashなどの相対pathを解決するために別途使います。event、artifact、operation、snapshot、protected source、source chunk、cursor、resource、sink、edge、analysis runは`workspace_id`で分離されます。同じ`session_id`や同じsource設定上の`id`が別workspaceに存在しても混線させません。
 
 ## 各ファイルの役割
 
@@ -421,9 +427,11 @@ native Web SearchはCodex CLI `0.142.5`で`matcher: "*"`を使ってもPreToolUs
 
 中には主に次のテーブルがあります。
 
+- `workspaces`
+  - canonical rootから作ったworkspace identityと、検出方法を保存します
 - `events`
   - hook が1回発火した記録を入れます
-  - `phase`, `session_id`, `turn_id`, `tool_use_id`, `tool_name` などを持ちます
+  - `phase`, `workspace_id`, `session_id`, `turn_id`, `tool_use_id`, `tool_name` などを持ちます
 - `artifacts`
   - その event から取り出した `tool_input` / `tool_output` を入れます
   - `event_id` で元の event にぶら下がります
@@ -444,6 +452,10 @@ native Web SearchはCodex CLI `0.142.5`で`matcher: "*"`を使ってもPreToolUs
   - protected sourceとartifactグラフの接続点を解析runごとに保存します
 - `lineage_assignments`
   - sourceから各nodeへ到達する最良経路を保存します
+- `analysis_cursors`
+  - `(workspace_id, session_id)`ごとのruntime差分位置とdetector/source digestを保存します
+- `analysis_node_snapshots` / `analysis_run_nodes`
+  - completed offline runが参照したnode metadataをcontent-addressedに保存し、runへ固定します
 
 イメージとしては、
 
@@ -474,7 +486,7 @@ native Web SearchはCodex CLI `0.142.5`で`matcher: "*"`を使ってもPreToolUs
 }
 ```
 
-ここで定義した source を起点にして、後続の artifact にどこまで流れたかを追います。
+ここで定義したsourceを、canonical workspace rootを基準に解決します。DB上のsource identityはworkspace namespaceを含むため、別workspaceで同じ`id`を使っても同一sourceにはなりません。ここで定義したsourceを起点にして、同じworkspace内の後続artifactにどこまで流れたかを追います。
 
 ## embedding や cos 類似度はどこに入るか
 
@@ -523,7 +535,11 @@ embedding を使って自然言語をベクトル化し、cos 類似度を取る
 
 そのために、source 設定と `events.db` を使ってartifactグラフとlineageを再構築するコマンドを用意しています。
 
-- `python3 /Users/mani/Developer/ToolUseProxy/scripts/rebuild_lineage.py`
+```bash
+python3 /Users/mani/Developer/ToolUseProxy/scripts/rebuild_lineage.py \
+  --db /absolute/path/to/events.db \
+  --workspace-root /absolute/path/to/workspace
+```
 
 このコマンドは次を行います。
 
@@ -543,7 +559,7 @@ embedding を使って自然言語をベクトル化し、cos 類似度を取る
 - 類似度計算や source 追跡を変えたいなら `hook_monitor/analysis/`
 - 情報流エッジを強化したいなら `analysis` 側に拡張を足す
 
-現在の`hook_monitor/`は記録の骨格に加え、session差分graph、漏えい検知、Stop継続、Bash/MCP PreToolUse deny、operation単位lineage、PostToolUse snapshotまでを接続しています。次の境界は、複数workspaceの分離と、その後のPermissionRequest・安全なredactの評価です。
+現在の`hook_monitor/`は記録の骨格に加え、workspace・session差分graph、漏えい検知、Stop継続、Bash/MCP PreToolUse deny、operation単位lineage、PostToolUse snapshot、複数workspace分離、offline run snapshotまでを接続しています。次の境界はPermissionRequestの実payload観測と接続要否の評価で、その後に安全なredactを扱います。
 
 ## この研究の位置づけ
 

@@ -358,12 +358,57 @@ session差分解析はcommit `7e07d02`で、1,002件の既存eventを持つsessi
 
 pure capture p95 `< 250 ms`、paired overhead p95 `<= 25 ms`、Post Hook全体p95 `< 150 ms`の全thresholdを満たした。benchmark payloadはstructured success outcomeを含むsynthetic Bash fixtureを使用しており、前節の実Codex空文字responseに対する制約を解消したものではない。全3,740 snapshotのSHA-256をdiskと照合し、全件`captured_hash_only`、`body_text`保存0件であることも確認した。
 
+## Configured workspace root実Codex E2E
+
+2026-07-15にcommit `193a610`、Codex CLI `0.142.5`、`gpt-5.5`で、明示workspace root配下のnested cwdからpolicyが動くことを確認した。実験rootは`/private/tmp/tooluseproxy-workspace-e2e-20260715`、実行cwdはその`nested/`で、project Hook commandへ`TOOLUSEPROXY_WORKSPACE_ROOT`を設定した。
+
+protected fileを読むBashからlocalhost HTTP sinkへ送るdenyケースでは、実Codexが`Command blocked by PreToolUse hook`を返した。localhost requestは0件で、DBには`block / critical / external_http_request / 1.0`が保存され、denied callのPostToolUseは発生しなかった。
+
+publicな固定文字列だけを送るallowケースでは、Bashが実行され、localhostへ1件だけ到達した。PreToolUseとPostToolUseは両方保存された。Stopケースでは、最初のfinal answerにダミーprotected文字列が含まれたため`continue_review`となり、Codexはprotected内容を含まない回答へ修正した。
+
+DBには`discovered_by = configured_root`のworkspaceが1件だけ登録され、全eventが同じworkspace IDとnested execution cwdを持った。workspace-scoped cursor/runも同じworkspaceへ閉じていた。ダミーprotected本文はこの文書には保存しない。
+
+これは単一のconfigured rootでpolicy経路を確認した実Codex E2Eである。workspace A/Bの同一session・同名source/pathが相互にtaintしないことはunit/integration testで検証しており、実Codexで二workspaceを同時に動かした試験とは区別する。
+
+## Workspace分離後のlatency再測定
+
+2026-07-15にcommit `35a485f`で、workspace scopeを含む現行runtimeを再測定した。1,002件の既存eventを持つsessionの初回`session-full`は2,212.953 msだった。10回のwarmupと50回の測定では、全60回が`session-incremental`で、rare full fallbackは0回だった。
+
+| case | p50 | p95 | max | mean |
+|---|---:|---:|---:|---:|
+| workspace session-incremental | 74.784 ms | 104.412 ms | 105.877 ms | 81.147 ms |
+
+保存済みsession graph全体を差分ごとに再読込しない修正後、p95 `< 300 ms`のwarning targetを満たした。最終DBには50,238 edgeがあり、すべてのcursor sequenceとevent countも一致した。
+
+同じcommitで、warmup 10回・測定100回のPost Hook benchmarkも再実行した。
+
+| case | Post Hook p95 | pure capture p95 | paired overhead p95 |
+|---|---:|---:|---:|
+| 2 × 4 KiB | 125.396 ms | 0.446 ms | 11.019 ms |
+| 32 × 32 KiB | 144.381 ms | 7.217 ms | 31.010 ms |
+| no-op | 119.654 ms | - | - |
+
+pure capture p95 `< 250 ms`とPost Hook全体p95 `< 150 ms`は満たした。全3,740 snapshotが`captured_hash_only`で、diskとのhash照合は全件成功し、plaintext rowは0件だった。
+
+一方、32 × 32 KiBの同一round差分から計算したpaired overhead p95は31.010 msで、従来の`<= 25 ms`目標を満たさなかった。case p95とno-op p95の差は24.727 msだが、これはpaired sampleのp95とは異なる指標である。再実行間の揺れも考慮し、今後はpaired per-round p95 `<= 35 ms`を運用warning budget、`<= 25 ms`を最適化目標として扱い、aggregateな`p95(case) - p95(no-op) <= 25 ms`も併記する。
+
+再現結果:
+
+- `/private/tmp/tooluseproxy-workspace-incremental-20260715/result.json`
+  - SHA-256 `1d1eff5037fb170c474c138aab323221e6e6d515ff8439ab649ca2a4bdc2db6d`
+- `/private/tmp/tooluseproxy-workspace-latency-20260715/result.json`
+  - SHA-256 `70eb42aba59256ccd49d56baac4ccec3116f770c479303d67fed9e4c6b9dd67c`
+
+## Workspace分離のintegration検証
+
+同一DB・同一session IDにworkspace A/Bを入れたintegration testでは、AのsecretはAだけ、BのsecretはBだけをblockし、相手workspaceのsecretとpublic write/read-only操作は通過した。offline CLIは明示runかworkspace別latestを必須とし、completed offline runのedge/node metadataがlive tableの後続変更から独立していることも確認した。runtime runは現在session graphを読むmutable scopeであり、offline runのimmutable snapshotとは区別する。
+
 ## 次の検証順序
 
-1. 複数workspaceのsource / cursor / resource分離
-2. `PermissionRequest`の実payloadとPreToolUse denyとの差を観測し、接続の必要性を評価する
-3. tool形状を壊さないredactの必要条件、監査、fallbackを設計する
+1. `PermissionRequest`の実payloadとPreToolUse denyとの差を観測し、接続の必要性を評価する
+2. tool形状を壊さないredactの必要条件、監査、fallbackを設計する
+3. offline staging/promoteとruntime履歴snapshotの必要性を評価する
 4. MCP server固有のwrite/read分類fixture
 5. embedding候補検索の評価
 
-workspace境界を先に確定し、そのscopeを共有する追加介入点として`PermissionRequest`を評価する。redactはBash、apply_patch、MCPごとに安全な書換方法が異なるため、その後に扱う。未サポートの`permissionDecision: ask`には依存しない。
+workspace境界は実装・検証できたため、そのscopeを共有する追加介入点として`PermissionRequest`を評価する。redactはBash、apply_patch、MCPごとに安全な書換方法が異なるため、その後に扱う。未サポートの`permissionDecision: ask`には依存しない。
