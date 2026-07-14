@@ -22,7 +22,7 @@ from hook_monitor.runtime.fragments import build_artifact_fragments
 from hook_monitor.runtime.storage import DEFAULT_DB_PATH, EventStore
 
 
-DETECTOR_VERSION = "artifact-graph-v10-bash-segments"
+DETECTOR_VERSION = "artifact-graph-v11-snapshots"
 GRAPH_FINGERPRINT_KEY = "artifact_graph_fingerprint"
 GRAPH_VERSION_KEY = "artifact_graph_detector_version"
 
@@ -41,11 +41,18 @@ def main() -> int:
     ]
     store.upsert_artifact_fragments(fragments)
     contexts = store.list_artifact_contexts()
-    adapter_result = run_adapters(contexts, REPO_ROOT)
+    operations = tuple(store.list_tool_operations())
+    snapshots = tuple(store.list_resource_snapshots())
+    adapter_result = run_adapters(
+        contexts,
+        REPO_ROOT,
+        operations=operations,
+        snapshots=snapshots,
+    )
     store.replace_resource_versions(list(adapter_result.resources))
     store.replace_sink_candidates(list(adapter_result.sinks))
 
-    graph_fingerprint = _graph_fingerprint(contexts)
+    graph_fingerprint = _graph_fingerprint(contexts, operations, snapshots)
     graph_is_stale = (
         args.rebuild_graph
         or store.get_analysis_state(GRAPH_FINGERPRINT_KEY) != graph_fingerprint
@@ -129,12 +136,37 @@ def _parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _graph_fingerprint(contexts) -> str:
+def _graph_fingerprint(contexts, operations=(), snapshots=()) -> str:
     digest = hashlib.sha256()
     for context in contexts:
         digest.update(context.fragment.fragment_id.encode("utf-8"))
         digest.update(b"\0")
         digest.update(str(context.sequence_no).encode("ascii"))
+        digest.update(b"\n")
+    for operation in sorted(operations, key=lambda item: item.operation_id):
+        for value in (
+            operation.operation_id,
+            operation.outcome,
+            operation.outcome_evidence,
+            operation.outcome_event_id,
+            operation.content_fragment_id,
+        ):
+            digest.update((value or "-").encode("utf-8"))
+            digest.update(b"\0")
+        digest.update(b"\n")
+    for snapshot in sorted(snapshots, key=lambda item: item.snapshot_id):
+        for value in (
+            snapshot.snapshot_id,
+            snapshot.operation_id,
+            snapshot.path_role,
+            snapshot.lexical_path,
+            snapshot.resource_state,
+            snapshot.capture_status,
+            snapshot.content_sha256,
+            snapshot.error_code,
+        ):
+            digest.update((value or "-").encode("utf-8"))
+            digest.update(b"\0")
         digest.update(b"\n")
     return digest.hexdigest()
 

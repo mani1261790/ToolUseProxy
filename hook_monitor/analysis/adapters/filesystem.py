@@ -1,20 +1,34 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 from collections import defaultdict
 from pathlib import Path
+from typing import Optional
 
 from hook_monitor.analysis.adapters.base import AdapterResult
 from hook_monitor.analysis.adapters.common import make_structured_edge, normalize_tool_name
 from hook_monitor.analysis.bash_file_parser import parse_bash_command_plan
 from hook_monitor.analysis.patch_parser import PatchOperation, parse_apply_patch
-from hook_monitor.runtime.models import ArtifactContext, FlowEdge, ResourceVersion
+from hook_monitor.runtime.models import (
+    ArtifactContext,
+    FlowEdge,
+    ResourceSnapshot,
+    ResourceVersion,
+    ToolOperation,
+)
 from hook_monitor.runtime.operations import (
     apply_patch_operation_kind,
     bash_segment_fragment_ids,
     make_operation_id,
 )
+
+
+_OperationLookup = dict[
+    tuple[Optional[str], Optional[str], str, int],
+    ToolOperation,
+]
 
 
 class FilesystemAdapter:
@@ -57,18 +71,37 @@ class FilesystemAdapter:
         contexts: list[ArtifactContext],
         repo_root: Path,
     ) -> AdapterResult:
-        return self._analyze_with_resources(contexts, repo_root, ())
+        return self._analyze_with_resources(contexts, repo_root, (), (), ())
+
+    def analyze_with_evidence(
+        self,
+        contexts: list[ArtifactContext],
+        repo_root: Path,
+        operations: tuple[ToolOperation, ...],
+        snapshots: tuple[ResourceSnapshot, ...],
+    ) -> AdapterResult:
+        return self._analyze_with_resources(
+            contexts,
+            repo_root,
+            (),
+            operations,
+            snapshots,
+        )
 
     def analyze_incremental(
         self,
         contexts: list[ArtifactContext],
         repo_root: Path,
         existing_resources: tuple[ResourceVersion, ...],
+        operations: tuple[ToolOperation, ...] = (),
+        snapshots: tuple[ResourceSnapshot, ...] = (),
     ) -> AdapterResult:
         return self._analyze_with_resources(
             contexts,
             repo_root,
             existing_resources,
+            operations,
+            snapshots,
         )
 
     def _analyze_with_resources(
@@ -76,11 +109,49 @@ class FilesystemAdapter:
         contexts: list[ArtifactContext],
         repo_root: Path,
         existing_resources: tuple[ResourceVersion, ...],
+        operations: tuple[ToolOperation, ...],
+        snapshots: tuple[ResourceSnapshot, ...],
     ) -> AdapterResult:
         groups = _group_tool_calls(contexts)
+        outcome_event_by_operation = {
+            operation.operation_id: operation.outcome_event_id
+            for operation in operations
+        }
+        operations_by_identity: _OperationLookup = {
+            (
+                operation.session_id,
+                operation.tool_use_id,
+                operation.adapter,
+                operation.operation_index,
+            ): operation
+            for operation in operations
+        }
+        snapshots_by_operation_role = {
+            (snapshot.operation_id, snapshot.path_role): snapshot
+            for snapshot in snapshots
+            if (
+                not outcome_event_by_operation
+                or (
+                    snapshot.operation_id in outcome_event_by_operation
+                    and outcome_event_by_operation[snapshot.operation_id]
+                    in {None, snapshot.post_event_id}
+                )
+            )
+        }
         latest_by_session_path: dict[tuple[str | None, str], ResourceVersion] = {}
-        for resource in sorted(existing_resources, key=lambda item: item.sequence_no):
-            latest_by_session_path[(resource.session_id, resource.path)] = resource
+        for resource in sorted(
+            existing_resources,
+            key=lambda item: (
+                item.sequence_no,
+                -1 if item.operation_index is None else item.operation_index,
+                item.node_id,
+            ),
+        ):
+            key = (resource.session_id, resource.path)
+            if resource.resource_state in {"deleted", "missing"}:
+                latest_by_session_path.pop(key, None)
+            else:
+                latest_by_session_path[key] = resource
         edges: list[FlowEdge] = []
         resources: dict[str, ResourceVersion] = {}
 
@@ -93,6 +164,8 @@ class FilesystemAdapter:
                     latest_by_session_path,
                     resources,
                     edges,
+                    snapshots_by_operation_role,
+                    operations_by_identity,
                 )
                 continue
             if normalized_tool_name in self._BASH_NAMES:
@@ -102,6 +175,8 @@ class FilesystemAdapter:
                     latest_by_session_path,
                     resources,
                     edges,
+                    snapshots_by_operation_role,
+                    operations_by_identity,
                 )
                 continue
             operation = self._operation(group[0].tool_name)
@@ -189,6 +264,10 @@ class FilesystemAdapter:
         latest_by_session_path: dict[tuple[str | None, str], ResourceVersion],
         resources: dict[str, ResourceVersion],
         edges: list[FlowEdge],
+        snapshots_by_operation_role: dict[
+            tuple[str, str], ResourceSnapshot
+        ],
+        operations_by_identity: _OperationLookup,
     ) -> None:
         command_context = _select_command_context(group)
         if command_context is None:
@@ -214,7 +293,24 @@ class FilesystemAdapter:
         session_id = group[0].session_id
         tool_use_id = group[0].tool_use_id
         pre_sequence_no = command_context.sequence_no
-        succeeded = _bash_succeeded(group)
+        post_contexts = [
+            context for context in group if context.phase == "post_tool_use"
+        ]
+        stored_outcome = (
+            _stored_tool_outcome(
+                operations_by_identity,
+                session_id=session_id,
+                tool_use_id=tool_use_id,
+                adapter="bash",
+            )
+            if post_contexts
+            else None
+        )
+        succeeded = (
+            stored_outcome == "succeeded"
+            if stored_outcome is not None
+            else bool(post_contexts) and _bash_succeeded(group)
+        )
         outputs = _select_output_contexts(group) if succeeded else []
 
         for index, operation in enumerate(operations):
@@ -225,6 +321,42 @@ class FilesystemAdapter:
             path = _normalize_path(operation.path, operation_context.cwd, repo_root)
             resource_key = (session_id, path)
             previous = latest_by_session_path.get(resource_key)
+            source_path = operation.path if operation.operation == "read" else None
+            target_path = None if operation.operation == "read" else operation.path
+            stored_operation = _validated_stored_operation(
+                operations_by_identity,
+                session_id=session_id,
+                tool_use_id=tool_use_id,
+                adapter="bash",
+                operation_index=index,
+                operation_kind=operation.operation,
+                source_path=source_path,
+                target_path=target_path,
+                segment_index=operation.segment_index,
+            )
+            operation_id = (
+                stored_operation.operation_id
+                if stored_operation is not None
+                else make_operation_id(
+                    event_id=command_context.event_id,
+                    adapter="bash",
+                    operation_index=index,
+                    operation_kind=operation.operation,
+                    source_path=source_path,
+                    target_path=target_path,
+                    segment_index=operation.segment_index,
+                )
+            )
+            operation_index = (
+                index
+                if stored_operation is None
+                else stored_operation.operation_index
+            )
+            connector = (
+                plan.segments[operation.segment_index].connector_from
+                if stored_operation is None
+                else stored_operation.connector
+            )
 
             if operation.operation == "read":
                 resource = previous or _make_resource_version(
@@ -263,16 +395,20 @@ class FilesystemAdapter:
                     )
                 continue
 
+            if connector in {"and_then", "or_else"}:
+                # Post全体の成功だけでは条件付きsegmentの実行を確定できない。
+                # snapshot statusがbounded captureで省略されてもwriteを断定しない。
+                continue
             if not succeeded:
                 continue
-            post_sequence_no = max(
-                context.sequence_no
-                for context in group
-                if context.phase == "post_tool_use"
-            )
+            post_sequence_no = max(context.sequence_no for context in post_contexts)
+            snapshot = snapshots_by_operation_role.get((operation_id, "target"))
+            if not _snapshot_materializable(snapshot):
+                continue
+            resource_path = _snapshot_path(snapshot, path)
             resource = _make_resource_version(
-                path=path,
-                content_hash=None,
+                path=resource_path,
+                content_hash=_snapshot_hash(snapshot),
                 sequence_no=post_sequence_no,
                 session_id=session_id,
                 tool_use_id=tool_use_id,
@@ -280,9 +416,18 @@ class FilesystemAdapter:
                     f"bash_{operation.operation}:{index}:{operation.path}:"
                     f"fd={operation.file_descriptor}:segment={operation.segment_index}"
                 ),
+                operation_id=operation_id,
+                operation_index=operation_index,
+                snapshot_id=None if snapshot is None else snapshot.snapshot_id,
+                resource_state=_snapshot_state(snapshot),
             )
             resources[resource.node_id] = resource
-            latest_by_session_path[resource_key] = resource
+            resource_key = (session_id, resource_path)
+            _record_latest_resource(
+                latest_by_session_path,
+                resource_key,
+                resource,
+            )
             edges.append(
                 make_structured_edge(
                     src_kind="artifact_fragment",
@@ -294,7 +439,11 @@ class FilesystemAdapter:
                     reason=f"Bash command writes {path}",
                 )
             )
-            if operation.operation == "append" and previous is not None:
+            if (
+                operation.operation == "append"
+                and previous is not None
+                and previous.node_id != resource.node_id
+            ):
                 edges.append(
                     make_structured_edge(
                         src_kind="resource_version",
@@ -314,21 +463,39 @@ class FilesystemAdapter:
         latest_by_session_path: dict[tuple[str | None, str], ResourceVersion],
         resources: dict[str, ResourceVersion],
         edges: list[FlowEdge],
+        snapshots_by_operation_role: dict[
+            tuple[str, str], ResourceSnapshot
+        ],
+        operations_by_identity: _OperationLookup,
     ) -> None:
         command_context = _select_apply_patch_command(group)
-        if command_context is None or not _apply_patch_succeeded(group):
+        if command_context is None:
+            return
+        post_contexts = [
+            context for context in group if context.phase == "post_tool_use"
+        ]
+        if not post_contexts:
+            return
+        session_id = group[0].session_id
+        tool_use_id = group[0].tool_use_id
+        stored_outcome = _stored_tool_outcome(
+            operations_by_identity,
+            session_id=session_id,
+            tool_use_id=tool_use_id,
+            adapter="apply_patch",
+        )
+        succeeded = (
+            stored_outcome == "succeeded"
+            if stored_outcome is not None
+            else _apply_patch_succeeded(group)
+        )
+        if not succeeded:
             return
         operations = parse_apply_patch(command_context.fragment.text)
         if not operations:
             return
 
-        sequence_no = max(
-            context.sequence_no
-            for context in group
-            if context.phase == "post_tool_use"
-        )
-        session_id = group[0].session_id
-        tool_use_id = group[0].tool_use_id
+        sequence_no = max(context.sequence_no for context in post_contexts)
         for index, operation in enumerate(operations):
             operation_kind = apply_patch_operation_kind(operation)
             source_path = None if operation.operation == "add" else operation.path
@@ -337,17 +504,37 @@ class FilesystemAdapter:
                 if operation.operation == "delete"
                 else operation.move_to or operation.path
             )
-            operation_id = make_operation_id(
-                event_id=command_context.event_id,
+            stored_operation = _validated_stored_operation(
+                operations_by_identity,
+                session_id=session_id,
+                tool_use_id=tool_use_id,
                 adapter="apply_patch",
                 operation_index=index,
                 operation_kind=operation_kind,
                 source_path=source_path,
                 target_path=target_path,
+                segment_index=None,
+            )
+            operation_id = (
+                stored_operation.operation_id
+                if stored_operation is not None
+                else make_operation_id(
+                    event_id=command_context.event_id,
+                    adapter="apply_patch",
+                    operation_index=index,
+                    operation_kind=operation_kind,
+                    source_path=source_path,
+                    target_path=target_path,
+                )
+            )
+            operation_index = (
+                index
+                if stored_operation is None
+                else stored_operation.operation_index
             )
             self._apply_patch_operation(
                 operation=operation,
-                operation_index=index,
+                operation_index=operation_index,
                 operation_id=operation_id,
                 command_context=command_context,
                 operation_content_context=_select_operation_fragment(
@@ -367,6 +554,12 @@ class FilesystemAdapter:
                 latest_by_session_path=latest_by_session_path,
                 resources=resources,
                 edges=edges,
+                source_snapshot=snapshots_by_operation_role.get(
+                    (operation_id, "source")
+                ),
+                target_snapshot=snapshots_by_operation_role.get(
+                    (operation_id, "target")
+                ),
             )
 
     def _apply_patch_operation(
@@ -385,10 +578,28 @@ class FilesystemAdapter:
         latest_by_session_path: dict[tuple[str | None, str], ResourceVersion],
         resources: dict[str, ResourceVersion],
         edges: list[FlowEdge],
+        source_snapshot: ResourceSnapshot | None,
+        target_snapshot: ResourceSnapshot | None,
     ) -> None:
         source_path = _normalize_path(operation.path, command_context.cwd, repo_root)
         source_key = (session_id, source_path)
         previous = latest_by_session_path.get(source_key)
+        if operation.move_to is not None and previous is None:
+            # move-only patchは追加本文を持たない。Pre時点のsource resourceを
+            # 合成し、protected pathから移動先へのlineageを切らさない。
+            previous = _make_resource_version(
+                path=source_path,
+                content_hash=None,
+                sequence_no=command_context.sequence_no,
+                session_id=session_id,
+                tool_use_id=tool_use_id,
+                version_tag=f"apply_patch:{operation_index}:move:source",
+                operation_id=operation_id,
+                operation_index=operation_index,
+                resource_state="present",
+            )
+            resources[previous.node_id] = previous
+            latest_by_session_path[source_key] = previous
         operation_context = operation_content_context
         if operation_context is None and operation_control_context is None:
             # 旧eventにはoperation fragmentがないため、再解析互換として
@@ -406,9 +617,35 @@ class FilesystemAdapter:
                         dst_id=delete_context.fragment.fragment_id,
                         relation="deleted_by",
                         method="apply_patch_delete",
-                        reason=f"apply_patch deleted {source_path}",
+                        reason=f"apply_patch requested deletion of {source_path}",
                     )
                 )
+            if _snapshot_confirms_deleted(source_snapshot):
+                tombstone = _make_resource_version(
+                    path=_snapshot_path(source_snapshot, source_path),
+                    content_hash=None,
+                    sequence_no=sequence_no,
+                    session_id=session_id,
+                    tool_use_id=tool_use_id,
+                    version_tag=f"apply_patch:{operation_index}:delete:tombstone",
+                    operation_id=operation_id,
+                    operation_index=operation_index,
+                    snapshot_id=source_snapshot.snapshot_id,
+                    resource_state="deleted",
+                )
+                resources[tombstone.node_id] = tombstone
+                if previous is not None and previous.node_id != tombstone.node_id:
+                    edges.append(
+                        make_structured_edge(
+                            src_kind="resource_version",
+                            src_id=previous.node_id,
+                            dst_kind="resource_version",
+                            dst_id=tombstone.node_id,
+                            relation="deleted_to",
+                            method="apply_patch_delete_snapshot",
+                            reason=f"PostToolUse confirmed deletion of {source_path}",
+                        )
+                    )
                 latest_by_session_path.pop(source_key, None)
             return
 
@@ -417,48 +654,94 @@ class FilesystemAdapter:
             command_context.cwd,
             repo_root,
         )
-        target_key = (session_id, target_path)
-        resource = _make_resource_version(
-            path=target_path,
-            content_hash=None,
-            sequence_no=sequence_no,
-            session_id=session_id,
-            tool_use_id=tool_use_id,
-            version_tag=(
-                f"apply_patch:{operation_index}:{operation.operation}:"
-                f"{operation.path}:{operation.move_to or '-'}"
-            ),
-        )
-        resources[resource.node_id] = resource
-        latest_by_session_path[target_key] = resource
-        if operation_context is not None:
-            edges.append(
-                make_structured_edge(
-                    src_kind="artifact_fragment",
-                    src_id=operation_context.fragment.fragment_id,
-                    dst_kind="resource_version",
-                    dst_id=resource.node_id,
-                    relation="written_to",
-                    method="apply_patch_write",
-                    reason=f"apply_patch operation {operation_id} wrote {target_path}",
-                )
+        if _snapshot_materializable(target_snapshot):
+            resource_path = _snapshot_path(target_snapshot, target_path)
+            resource = _make_resource_version(
+                path=resource_path,
+                content_hash=_snapshot_hash(target_snapshot),
+                sequence_no=sequence_no,
+                session_id=session_id,
+                tool_use_id=tool_use_id,
+                version_tag=(
+                    f"apply_patch:{operation_index}:{operation.operation}:"
+                    f"{operation.path}:{operation.move_to or '-'}"
+                ),
+                operation_id=operation_id,
+                operation_index=operation_index,
+                snapshot_id=(
+                    None if target_snapshot is None else target_snapshot.snapshot_id
+                ),
+                resource_state=_snapshot_state(target_snapshot),
             )
+            resources[resource.node_id] = resource
+            target_key = (session_id, resource_path)
+            _record_latest_resource(latest_by_session_path, target_key, resource)
+            if operation_context is not None:
+                edges.append(
+                    make_structured_edge(
+                        src_kind="artifact_fragment",
+                        src_id=operation_context.fragment.fragment_id,
+                        dst_kind="resource_version",
+                        dst_id=resource.node_id,
+                        relation="written_to",
+                        method="apply_patch_write",
+                        reason=(
+                            f"apply_patch operation {operation_id} wrote "
+                            f"{resource_path}"
+                        ),
+                    )
+                )
 
-        if previous is not None:
-            relation = "moved_to" if operation.move_to is not None else "updated_from"
-            method = "apply_patch_move" if operation.move_to is not None else "apply_patch_update"
-            edges.append(
-                make_structured_edge(
-                    src_kind="resource_version",
-                    src_id=previous.node_id,
-                    dst_kind="resource_version",
-                    dst_id=resource.node_id,
-                    relation=relation,
-                    method=method,
-                    reason=f"apply_patch produced {target_path} from {source_path}",
+            if previous is not None and previous.node_id != resource.node_id:
+                relation = (
+                    "moved_to" if operation.move_to is not None else "updated_from"
                 )
+                method = (
+                    "apply_patch_move"
+                    if operation.move_to is not None
+                    else "apply_patch_update"
+                )
+                edges.append(
+                    make_structured_edge(
+                        src_kind="resource_version",
+                        src_id=previous.node_id,
+                        dst_kind="resource_version",
+                        dst_id=resource.node_id,
+                        relation=relation,
+                        method=method,
+                        reason=(
+                            f"apply_patch produced {resource_path} from {source_path}"
+                        ),
+                    )
+                )
+        if operation.move_to is not None and _snapshot_confirms_deleted(
+            source_snapshot
+        ):
+            tombstone = _make_resource_version(
+                path=_snapshot_path(source_snapshot, source_path),
+                content_hash=None,
+                sequence_no=sequence_no,
+                session_id=session_id,
+                tool_use_id=tool_use_id,
+                version_tag=f"apply_patch:{operation_index}:move:tombstone",
+                operation_id=operation_id,
+                operation_index=operation_index,
+                snapshot_id=source_snapshot.snapshot_id,
+                resource_state="deleted",
             )
-        if operation.move_to is not None:
+            resources[tombstone.node_id] = tombstone
+            if previous is not None and previous.node_id != tombstone.node_id:
+                edges.append(
+                    make_structured_edge(
+                        src_kind="resource_version",
+                        src_id=previous.node_id,
+                        dst_kind="resource_version",
+                        dst_id=tombstone.node_id,
+                        relation="deleted_to",
+                        method="apply_patch_move_snapshot",
+                        reason=f"PostToolUse confirmed move source removal of {source_path}",
+                    )
+                )
             latest_by_session_path.pop(source_key, None)
 
     def _operation(self, tool_name: str | None) -> str | None:
@@ -621,10 +904,27 @@ def _prefer_leaf_fragments(
 
 def _normalize_path(path: str, cwd: str | None, repo_root: Path) -> str:
     candidate = Path(path).expanduser()
-    if not candidate.is_absolute():
-        base = Path(cwd).expanduser() if cwd else repo_root
-        candidate = base / candidate
-    return str(candidate.resolve(strict=False))
+    base = Path(cwd).expanduser() if cwd else repo_root
+    base_input = os.path.abspath(os.path.normpath(str(base)))
+    base_canonical = base_input
+    try:
+        if not os.path.islink(base_input):
+            base_canonical = os.path.realpath(base_input)
+    except OSError:
+        pass
+    if candidate.is_absolute():
+        candidate_lexical = os.path.abspath(os.path.normpath(str(candidate)))
+        try:
+            if os.path.commonpath((base_input, candidate_lexical)) == base_input:
+                candidate = Path(base_canonical) / os.path.relpath(
+                    candidate_lexical,
+                    base_input,
+                )
+        except ValueError:
+            pass
+    else:
+        candidate = Path(base_canonical) / candidate
+    return os.path.abspath(os.path.normpath(str(candidate)))
 
 
 def _combined_content_hash(contexts: list[ArtifactContext]) -> str:
@@ -643,6 +943,10 @@ def _make_resource_version(
     session_id: str | None,
     tool_use_id: str | None,
     version_tag: str = "",
+    operation_id: str | None = None,
+    operation_index: int | None = None,
+    snapshot_id: str | None = None,
+    resource_state: str = "present",
 ) -> ResourceVersion:
     identity = "\0".join(
         (
@@ -652,6 +956,10 @@ def _make_resource_version(
             str(sequence_no),
             tool_use_id or "-",
             version_tag,
+            operation_id or "-",
+            "-" if operation_index is None else str(operation_index),
+            snapshot_id or "-",
+            resource_state,
         )
     )
     node_id = hashlib.sha256(identity.encode("utf-8")).hexdigest()
@@ -662,4 +970,111 @@ def _make_resource_version(
         sequence_no=sequence_no,
         session_id=session_id,
         origin_tool_use_id=tool_use_id,
+        operation_id=operation_id,
+        operation_index=operation_index,
+        snapshot_id=snapshot_id,
+        resource_state=resource_state,
     )
+
+
+def _snapshot_path(snapshot: ResourceSnapshot | None, fallback: str) -> str:
+    if snapshot is not None and snapshot.lexical_path is not None:
+        return snapshot.lexical_path
+    return fallback
+
+
+def _snapshot_hash(snapshot: ResourceSnapshot | None) -> str | None:
+    if snapshot is None or snapshot.resource_state != "present":
+        return None
+    return snapshot.content_sha256
+
+
+def _snapshot_state(snapshot: ResourceSnapshot | None) -> str:
+    return "present" if snapshot is None else snapshot.resource_state
+
+
+def _snapshot_confirms_deleted(snapshot: ResourceSnapshot | None) -> bool:
+    return bool(
+        snapshot is not None
+        and snapshot.resource_state == "deleted"
+        and snapshot.capture_status == "deleted"
+    )
+
+
+def _snapshot_materializable(snapshot: ResourceSnapshot | None) -> bool:
+    if snapshot is None:
+        return True
+    return snapshot.capture_status not in {
+        "ambiguous_final_writer",
+        "execution_unknown",
+    }
+
+
+def _validated_stored_operation(
+    operations_by_identity: _OperationLookup,
+    *,
+    session_id: str | None,
+    tool_use_id: str | None,
+    adapter: str,
+    operation_index: int,
+    operation_kind: str,
+    source_path: str | None,
+    target_path: str | None,
+    segment_index: int | None,
+) -> ToolOperation | None:
+    operation = operations_by_identity.get(
+        (session_id, tool_use_id, adapter, operation_index)
+    )
+    if operation is None:
+        return None
+    if (
+        operation.operation_kind != operation_kind
+        or operation.source_path != source_path
+        or operation.target_path != target_path
+        or operation.segment_index != segment_index
+    ):
+        return None
+    return operation
+
+
+def _stored_tool_outcome(
+    operations_by_identity: _OperationLookup,
+    *,
+    session_id: str | None,
+    tool_use_id: str | None,
+    adapter: str,
+) -> str | None:
+    operation_outcomes = {
+        (operation.outcome, operation.outcome_event_id)
+        for (
+            operation_session_id,
+            operation_tool_use_id,
+            operation_adapter,
+            _operation_index,
+        ), operation in operations_by_identity.items()
+        if operation_session_id == session_id
+        and operation_tool_use_id == tool_use_id
+        and operation_adapter == adapter
+    }
+    if not operation_outcomes:
+        return None
+    if not any(event_id is not None for _outcome, event_id in operation_outcomes):
+        # outcome履歴導入前のeventだけは従来のoutput heuristicへfallbackする。
+        return None
+    outcomes = {outcome for outcome, _event_id in operation_outcomes}
+    if outcomes == {"succeeded"}:
+        return "succeeded"
+    if "failed" in outcomes:
+        return "failed"
+    return "unknown"
+
+
+def _record_latest_resource(
+    latest_by_session_path: dict[tuple[str | None, str], ResourceVersion],
+    key: tuple[str | None, str],
+    resource: ResourceVersion,
+) -> None:
+    if resource.resource_state in {"deleted", "missing"}:
+        latest_by_session_path.pop(key, None)
+    else:
+        latest_by_session_path[key] = resource

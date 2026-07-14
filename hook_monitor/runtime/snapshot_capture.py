@@ -58,6 +58,10 @@ class _NonRegularRejected(OSError):
     pass
 
 
+class _TimeBudgetExceeded(OSError):
+    pass
+
+
 def limits_from_environment() -> SnapshotCaptureLimits:
     return SnapshotCaptureLimits(
         max_file_bytes=_bounded_env_int(
@@ -96,14 +100,18 @@ def capture_operation_snapshots(
     store_plaintext: bool = False,
 ) -> list[ResourceSnapshot]:
     """成功PostToolUseに対応する静的pathだけをbounded captureする。"""
+    started_at = time.monotonic()
     limits = limits or SnapshotCaptureLimits()
-    specs = _snapshot_specs(operations)
-    if not specs:
+    max_records = max(1, limits.max_paths * 2)
+    if len(operations) > max_records:
         return []
-    workspace_root = _workspace_root(event.cwd)
+    workspace_root = workspace_root_from_cwd(event.cwd)
+    specs = _snapshot_specs(operations, workspace_root=workspace_root)
+    if not specs or len(specs) > max_records:
+        return []
     budget = _Budget(
         remaining_bytes=limits.max_tool_bytes,
-        deadline=time.monotonic() + limits.time_budget_ms / 1000,
+        deadline=started_at + limits.time_budget_ms / 1000,
     )
     seen_paths: set[str] = set()
     cache: dict[tuple[str, bool], _CaptureResult] = {}
@@ -111,7 +119,15 @@ def capture_operation_snapshots(
 
     root_fd: int | None = None
     root_error: _CaptureResult | None = None
-    if workspace_root is None:
+    if time.monotonic() >= budget.deadline:
+        root_error = _CaptureResult(
+            lexical_path=None,
+            resource_state="unknown",
+            capture_status="time_budget_exhausted",
+            file_kind="unknown",
+            error_code="time_budget",
+        )
+    elif workspace_root is None:
         root_error = _CaptureResult(
             lexical_path=None,
             resource_state="unknown",
@@ -121,7 +137,9 @@ def capture_operation_snapshots(
         )
     else:
         try:
+            _ensure_time_remaining(budget.deadline)
             root_stat = os.lstat(workspace_root)
+            _ensure_time_remaining(budget.deadline)
             if stat.S_ISLNK(root_stat.st_mode) or not stat.S_ISDIR(root_stat.st_mode):
                 raise _SymlinkRejected()
             root_fd = os.open(
@@ -130,6 +148,15 @@ def capture_operation_snapshots(
                 | getattr(os, "O_DIRECTORY", 0)
                 | getattr(os, "O_NOFOLLOW", 0)
                 | getattr(os, "O_CLOEXEC", 0),
+            )
+            _ensure_time_remaining(budget.deadline)
+        except _TimeBudgetExceeded:
+            root_error = _CaptureResult(
+                lexical_path=None,
+                resource_state="unknown",
+                capture_status="time_budget_exhausted",
+                file_kind="unknown",
+                error_code="time_budget",
             )
         except _SymlinkRejected:
             root_error = _CaptureResult(
@@ -149,9 +176,22 @@ def capture_operation_snapshots(
             )
 
     try:
-        for spec in specs:
+        # 実取得できる最終候補を先に処理する。大量のsuperseded statusが
+        # record枠を使い切って最終内容のhashを落とすことを避ける。
+        ordered_specs = sorted(
+            specs,
+            key=lambda spec: (
+                not spec.capture_allowed,
+                spec.operation.operation_index,
+                spec.path_role,
+            ),
+        )
+        for spec in ordered_specs:
+            if len(results) >= max_records:
+                break
             started = time.monotonic()
-            cache_key = (spec.requested_path, spec.expected_missing)
+            path_identity = _path_identity(workspace_root, spec.requested_path)
+            cache_key = (path_identity, spec.expected_missing)
             if not spec.capture_allowed:
                 captured = _CaptureResult(
                     lexical_path=None,
@@ -160,7 +200,13 @@ def capture_operation_snapshots(
                     file_kind="unknown",
                 )
             elif root_error is not None:
-                captured = root_error
+                lexical_path = None
+                if workspace_root is not None:
+                    lexical_path, _ = _lexical_path(
+                        workspace_root,
+                        spec.requested_path,
+                    )
+                captured = replace(root_error, lexical_path=lexical_path)
             elif time.monotonic() >= budget.deadline:
                 captured = _CaptureResult(
                     lexical_path=None,
@@ -169,8 +215,8 @@ def capture_operation_snapshots(
                     file_kind="unknown",
                 )
             elif cache_key in cache:
-                captured = cache[cache_key]
-            elif spec.requested_path not in seen_paths and len(seen_paths) >= limits.max_paths:
+                captured = _cached_capture(cache[cache_key])
+            elif path_identity not in seen_paths and len(seen_paths) >= limits.max_paths:
                 captured = _CaptureResult(
                     lexical_path=None,
                     resource_state="unknown",
@@ -178,7 +224,7 @@ def capture_operation_snapshots(
                     file_kind="unknown",
                 )
             else:
-                seen_paths.add(spec.requested_path)
+                seen_paths.add(path_identity)
                 assert workspace_root is not None and root_fd is not None
                 captured = _capture_path(
                     root_fd,
@@ -199,13 +245,35 @@ def capture_operation_snapshots(
                     captured,
                 )
             )
+            if (
+                captured.capture_status in {"path_limit", "time_budget_exhausted"}
+                or (spec.capture_allowed and root_error is not None)
+            ):
+                break
     finally:
         if root_fd is not None:
             os.close(root_fd)
     return results
 
 
-def _snapshot_specs(operations: list[ToolOperation]) -> list[_SnapshotSpec]:
+def _cached_capture(captured: _CaptureResult) -> _CaptureResult:
+    """同一pathの再利用ではplaintextと取得byteを重複保存しない。"""
+    status = captured.capture_status
+    if captured.content_sha256 is not None:
+        status = "cached_hash_only"
+    return replace(
+        captured,
+        capture_status=status,
+        captured_bytes=0,
+        body_text=None,
+    )
+
+
+def _snapshot_specs(
+    operations: list[ToolOperation],
+    *,
+    workspace_root: str | None,
+) -> list[_SnapshotSpec]:
     specs: list[_SnapshotSpec] = []
     for operation in sorted(
         operations,
@@ -256,21 +324,45 @@ def _snapshot_specs(operations: list[ToolOperation]) -> list[_SnapshotSpec]:
                 )
             )
 
-    last_target_by_path: dict[str, int] = {}
+    target_indexes_by_path: dict[str, list[int]] = {}
     for index, spec in enumerate(specs):
         if spec.path_role == "target":
-            last_target_by_path[spec.requested_path] = index
-    return [
-        replace(
-            spec,
-            capture_allowed=False,
-            skip_status="superseded_by_later_operation",
+            target_indexes_by_path.setdefault(
+                _path_identity(workspace_root, spec.requested_path),
+                [],
+            ).append(index)
+
+    normalized = list(specs)
+    for indexes in target_indexes_by_path.values():
+        last_index = indexes[-1]
+        last_spec = specs[last_index]
+        final_writer_is_ambiguous = (
+            not last_spec.capture_allowed
+            or any(specs[index].operation.connector == "pipe" for index in indexes)
         )
-        if spec.path_role == "target"
-        and last_target_by_path.get(spec.requested_path) != index
-        else spec
-        for index, spec in enumerate(specs)
-    ]
+        if final_writer_is_ambiguous and len(indexes) > 1:
+            for index in indexes:
+                normalized[index] = replace(
+                    specs[index],
+                    capture_allowed=False,
+                    skip_status="ambiguous_final_writer",
+                )
+            continue
+        for index in indexes[:-1]:
+            normalized[index] = replace(
+                specs[index],
+                capture_allowed=False,
+                skip_status="superseded_by_later_operation",
+            )
+    return normalized
+
+
+def _path_identity(workspace_root: str | None, requested_path: str) -> str:
+    if workspace_root is not None:
+        lexical_path, _ = _lexical_path(workspace_root, requested_path)
+        if lexical_path is not None:
+            return lexical_path
+    return os.path.normpath(str(Path(requested_path).expanduser()))
 
 
 def _capture_path(
@@ -298,8 +390,16 @@ def _capture_path(
     file_fd: int | None = None
     directory_fds: list[int] = []
     try:
-        file_fd = _open_regular_file(root_fd, relative_parts, directory_fds)
+        _ensure_time_remaining(budget.deadline)
+        file_fd = _open_regular_file(
+            root_fd,
+            relative_parts,
+            directory_fds,
+            deadline=budget.deadline,
+        )
+        _ensure_time_remaining(budget.deadline)
         before = os.fstat(file_fd)
+        _ensure_time_remaining(budget.deadline)
         if not stat.S_ISREG(before.st_mode):
             return _CaptureResult(
                 lexical_path=lexical_path,
@@ -330,7 +430,7 @@ def _capture_path(
 
         chunks: list[bytes] = []
         captured_bytes = 0
-        while True:
+        while captured_bytes < before.st_size:
             if time.monotonic() >= budget.deadline:
                 return _CaptureResult(
                     lexical_path=lexical_path,
@@ -341,13 +441,12 @@ def _capture_path(
                     captured_bytes=captured_bytes,
                     error_code="time_budget",
                 )
-            chunk = os.read(file_fd, min(64 * 1024, limits.max_file_bytes + 1))
-            if not chunk:
-                break
-            chunks.append(chunk)
-            captured_bytes += len(chunk)
-            budget.remaining_bytes -= len(chunk)
-            if captured_bytes > limits.max_file_bytes or budget.remaining_bytes < 0:
+            read_size = min(
+                64 * 1024,
+                before.st_size - captured_bytes,
+                budget.remaining_bytes,
+            )
+            if read_size <= 0:
                 return _CaptureResult(
                     lexical_path=lexical_path,
                     resource_state="present",
@@ -355,14 +454,25 @@ def _capture_path(
                     file_kind="regular",
                     byte_size=before.st_size,
                     captured_bytes=captured_bytes,
-                    error_code="bounded_read_exceeded",
+                    error_code="tool_total_limit",
                 )
+            chunk = os.read(file_fd, read_size)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            captured_bytes += len(chunk)
+            budget.remaining_bytes -= len(chunk)
+            _ensure_time_remaining(budget.deadline)
 
+        _ensure_time_remaining(budget.deadline)
         after = os.fstat(file_fd)
+        _ensure_time_remaining(budget.deadline)
         if (
-            before.st_ino != after.st_ino
+            before.st_dev != after.st_dev
+            or before.st_ino != after.st_ino
             or before.st_size != after.st_size
             or before.st_mtime_ns != after.st_mtime_ns
+            or before.st_ctime_ns != after.st_ctime_ns
             or captured_bytes != after.st_size
         ):
             return _CaptureResult(
@@ -376,13 +486,16 @@ def _capture_path(
             )
 
         data = b"".join(chunks)
+        _ensure_time_remaining(budget.deadline)
         digest = hashlib.sha256(data).hexdigest()
+        _ensure_time_remaining(budget.deadline)
         try:
             text = data.decode("utf-8")
             is_binary = b"\0" in data
         except UnicodeDecodeError:
             text = ""
             is_binary = True
+        _ensure_time_remaining(budget.deadline)
         if is_binary:
             result = _CaptureResult(
                 lexical_path=lexical_path,
@@ -438,6 +551,14 @@ def _capture_path(
             file_kind="non_regular",
             error_code="non_regular",
         )
+    except _TimeBudgetExceeded:
+        return _CaptureResult(
+            lexical_path=lexical_path,
+            resource_state="unknown",
+            capture_status="time_budget_exhausted",
+            file_kind="unknown",
+            error_code="time_budget",
+        )
     except OSError as exc:
         return _CaptureResult(
             lexical_path=lexical_path,
@@ -457,11 +578,14 @@ def _open_regular_file(
     root_fd: int,
     parts: tuple[str, ...],
     directory_fds: list[int],
+    *,
+    deadline: float,
 ) -> int:
     if not parts:
         raise IsADirectoryError()
     current_fd = root_fd
     for component in parts[:-1]:
+        _ensure_time_remaining(deadline)
         component_stat = os.stat(
             component,
             dir_fd=current_fd,
@@ -469,6 +593,7 @@ def _open_regular_file(
         )
         if stat.S_ISLNK(component_stat.st_mode):
             raise _SymlinkRejected()
+        _ensure_time_remaining(deadline)
         descriptor = os.open(
             component,
             os.O_RDONLY
@@ -480,6 +605,7 @@ def _open_regular_file(
         directory_fds.append(descriptor)
         current_fd = descriptor
 
+    _ensure_time_remaining(deadline)
     final_stat = os.stat(
         parts[-1],
         dir_fd=current_fd,
@@ -489,6 +615,7 @@ def _open_regular_file(
         raise _SymlinkRejected()
     if not stat.S_ISREG(final_stat.st_mode):
         raise _NonRegularRejected()
+    _ensure_time_remaining(deadline)
     return os.open(
         parts[-1],
         os.O_RDONLY
@@ -497,6 +624,11 @@ def _open_regular_file(
         | getattr(os, "O_CLOEXEC", 0),
         dir_fd=current_fd,
     )
+
+
+def _ensure_time_remaining(deadline: float) -> None:
+    if time.monotonic() >= deadline:
+        raise _TimeBudgetExceeded()
 
 
 def _lexical_path(
@@ -519,13 +651,19 @@ def _lexical_path(
     return lexical, parts
 
 
-def _workspace_root(cwd: str | None) -> str | None:
+def workspace_root_from_cwd(cwd: str | None) -> str | None:
     if cwd is None:
         return None
     candidate = Path(cwd).expanduser()
     if not candidate.is_absolute():
         return None
-    return os.path.abspath(os.path.normpath(str(candidate)))
+    lexical = os.path.abspath(os.path.normpath(str(candidate)))
+    try:
+        if stat.S_ISLNK(os.lstat(lexical).st_mode):
+            return lexical
+    except OSError:
+        pass
+    return os.path.realpath(lexical)
 
 
 def _resource_snapshot(

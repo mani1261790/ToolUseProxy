@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import uuid
+from dataclasses import replace
 from pathlib import Path
 
 from hook_monitor.runtime.models import (
@@ -22,6 +24,7 @@ from hook_monitor.runtime.models import (
     StoredPolicyDecision,
     ToolOperation,
 )
+from hook_monitor.runtime.snapshot_capture import workspace_root_from_cwd
 
 
 DEFAULT_DB_PATH = Path(".tooluseproxy/events.db")
@@ -127,6 +130,22 @@ class EventStore:
                     recorded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (event_id) REFERENCES events (event_id),
                     FOREIGN KEY (artifact_id) REFERENCES artifacts (artifact_id)
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS tool_operation_outcomes (
+                    post_event_id TEXT NOT NULL,
+                    operation_id TEXT NOT NULL,
+                    session_id TEXT,
+                    tool_use_id TEXT,
+                    outcome TEXT NOT NULL,
+                    outcome_evidence TEXT,
+                    recorded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (post_event_id, operation_id),
+                    FOREIGN KEY (post_event_id) REFERENCES events (event_id),
+                    FOREIGN KEY (operation_id) REFERENCES tool_operations (operation_id)
                 )
                 """
             )
@@ -262,6 +281,20 @@ class EventStore:
                     recorded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 )
                 """
+            )
+            self._ensure_column(conn, "resource_versions", "operation_id", "TEXT")
+            self._ensure_column(
+                conn,
+                "resource_versions",
+                "operation_index",
+                "INTEGER",
+            )
+            self._ensure_column(conn, "resource_versions", "snapshot_id", "TEXT")
+            self._ensure_column(
+                conn,
+                "resource_versions",
+                "resource_state",
+                "TEXT NOT NULL DEFAULT 'present'",
             )
             conn.execute(
                 """
@@ -417,6 +450,12 @@ class EventStore:
                 "CREATE INDEX IF NOT EXISTS idx_events_session_turn ON events (session_id, turn_id)"
             )
             conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_events_session_sequence
+                ON events (session_id, sequence_no, event_id)
+                """
+            )
+            conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_artifacts_event_id ON artifacts (event_id)"
             )
             conn.execute(
@@ -442,8 +481,37 @@ class EventStore:
             )
             conn.execute(
                 """
+                CREATE INDEX IF NOT EXISTS idx_tool_operations_event
+                ON tool_operations (event_id, operation_index, operation_id)
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_tool_operation_outcomes_operation_event
+                ON tool_operation_outcomes (operation_id, post_event_id)
+                """
+            )
+            conn.execute(
+                """
                 CREATE INDEX IF NOT EXISTS idx_resource_snapshots_session_sequence
                 ON resource_snapshots (session_id, post_event_id, operation_id)
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_resource_snapshots_session_tool
+                ON resource_snapshots (
+                    session_id,
+                    tool_use_id,
+                    operation_id,
+                    path_role
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_resource_snapshots_post_event
+                ON resource_snapshots (post_event_id, operation_id, path_role)
                 """
             )
             conn.execute(
@@ -466,6 +534,18 @@ class EventStore:
             )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_resource_versions_path ON resource_versions (path)"
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_resource_versions_session_sequence
+                ON resource_versions (
+                    session_id,
+                    sequence_no,
+                    operation_index,
+                    path,
+                    node_id
+                )
+                """
             )
             conn.execute(
                 """
@@ -504,6 +584,7 @@ class EventStore:
                 """
             )
             self._backfill_event_sequence_numbers(conn)
+            self._backfill_tool_operation_outcomes(conn)
 
     def record(
         self,
@@ -511,7 +592,15 @@ class EventStore:
         artifacts: list[ArtifactRecord],
         fragments: list[ArtifactFragment] | None = None,
         operations: list[ToolOperation] | None = None,
+        *,
+        post_outcome: tuple[str, str] | None = None,
+        resource_snapshots: list[ResourceSnapshot] | None = None,
     ) -> None:
+        if resource_snapshots and any(
+            snapshot.post_event_id != event.event_id
+            for snapshot in resource_snapshots
+        ):
+            raise ValueError("resource snapshot post_event_id does not match event")
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             existing = conn.execute(
@@ -660,6 +749,133 @@ class EventStore:
                         for fragment in fragments
                     ],
                 )
+            if (
+                post_outcome is not None
+                and event.session_id is not None
+                and event.tool_use_id is not None
+            ):
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO tool_operation_outcomes (
+                        post_event_id,
+                        operation_id,
+                        session_id,
+                        tool_use_id,
+                        outcome,
+                        outcome_evidence
+                    )
+                    SELECT ?, operation_id, session_id, tool_use_id, ?, ?
+                    FROM tool_operations
+                    WHERE session_id = ? AND tool_use_id = ?
+                    """,
+                    (
+                        event.event_id,
+                        post_outcome[0],
+                        post_outcome[1],
+                        event.session_id,
+                        event.tool_use_id,
+                    ),
+                )
+                conn.execute(
+                    """
+                    UPDATE tool_operations
+                    SET outcome = ?, outcome_evidence = ?
+                    WHERE session_id = ? AND tool_use_id = ?
+                    """,
+                    (
+                        post_outcome[0],
+                        post_outcome[1],
+                        event.session_id,
+                        event.tool_use_id,
+                    ),
+                )
+            if resource_snapshots:
+                if any(
+                    snapshot.session_id != event.session_id
+                    or snapshot.tool_use_id != event.tool_use_id
+                    for snapshot in resource_snapshots
+                ):
+                    raise ValueError(
+                        "resource snapshot session/tool_use does not match event"
+                    )
+                snapshot_operation_ids = sorted(
+                    {snapshot.operation_id for snapshot in resource_snapshots}
+                )
+                placeholders = ",".join("?" for _ in snapshot_operation_ids)
+                owner_rows = conn.execute(
+                        f"""
+                        SELECT
+                            operation.operation_id,
+                            owner.phase,
+                            owner.tool_name,
+                            owner.cwd
+                        FROM tool_operations AS operation
+                        JOIN events AS owner ON owner.event_id = operation.event_id
+                        WHERE operation.operation_id IN ({placeholders})
+                          AND operation.session_id = ?
+                          AND operation.tool_use_id = ?
+                        """,
+                        (
+                            *snapshot_operation_ids,
+                            event.session_id,
+                            event.tool_use_id,
+                        ),
+                    ).fetchall()
+                owners = {
+                    operation_id: (phase, tool_name, cwd)
+                    for operation_id, phase, tool_name, cwd in owner_rows
+                }
+                if set(owners) != set(snapshot_operation_ids):
+                    raise ValueError(
+                        "resource snapshot operation does not belong to event tool use"
+                    )
+                event_workspace = workspace_root_from_cwd(event.cwd)
+                if event.phase != "post_tool_use":
+                    raise ValueError("resource snapshots require a PostToolUse event")
+                for snapshot in resource_snapshots:
+                    owner_phase, owner_tool_name, owner_cwd = owners[
+                        snapshot.operation_id
+                    ]
+                    owner_workspace = workspace_root_from_cwd(owner_cwd)
+                    if (
+                        owner_phase != "pre_tool_use"
+                        or _normalized_tool_name(owner_tool_name)
+                        != _normalized_tool_name(event.tool_name)
+                        or owner_workspace != event_workspace
+                        or snapshot.workspace_root != owner_workspace
+                    ):
+                        raise ValueError(
+                            "resource snapshot execution context does not match operation owner"
+                        )
+                conn.executemany(
+                    """
+                    INSERT OR REPLACE INTO resource_snapshots (
+                        snapshot_id,
+                        post_event_id,
+                        operation_id,
+                        session_id,
+                        tool_use_id,
+                        path_role,
+                        requested_path,
+                        workspace_root,
+                        lexical_path,
+                        resource_state,
+                        capture_status,
+                        file_kind,
+                        byte_size,
+                        captured_bytes,
+                        content_sha256,
+                        encoding,
+                        body_text,
+                        error_code,
+                        duration_ms
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    [
+                        _resource_snapshot_values(snapshot)
+                        for snapshot in resource_snapshots
+                    ],
+                )
 
     def list_tool_operations_for_session(
         self,
@@ -676,25 +892,42 @@ class EventStore:
         if through_sequence_no is not None:
             clause += " AND e.sequence_no <= ?"
             params += (through_sequence_no,)
-        return self._list_tool_operations_where(clause, params)
+        return self._list_tool_operations_where(
+            clause,
+            params,
+            outcome_through_sequence_no=through_sequence_no,
+        )
+
+    def list_tool_operations(self) -> list[ToolOperation]:
+        return self._list_tool_operations_where("", ())
 
     def list_tool_operations_for_tool_uses(
         self,
         session_id: str,
         tool_use_ids: set[str],
+        *,
+        through_sequence_no: int | None = None,
     ) -> list[ToolOperation]:
         if not tool_use_ids:
             return []
         placeholders = ",".join("?" for _ in tool_use_ids)
+        clause = f"WHERE o.session_id = ? AND o.tool_use_id IN ({placeholders})"
+        params: tuple[object, ...] = (session_id, *sorted(tool_use_ids))
+        if through_sequence_no is not None:
+            clause += " AND e.sequence_no <= ?"
+            params += (through_sequence_no,)
         return self._list_tool_operations_where(
-            f"WHERE o.session_id = ? AND o.tool_use_id IN ({placeholders})",
-            (session_id, *sorted(tool_use_ids)),
+            clause,
+            params,
+            outcome_through_sequence_no=through_sequence_no,
         )
 
     def _list_tool_operations_where(
         self,
         where_clause: str,
         params: tuple[object, ...],
+        *,
+        outcome_through_sequence_no: int | None = None,
     ) -> list[ToolOperation]:
         with self._connect() as conn:
             rows = conn.execute(
@@ -724,7 +957,59 @@ class EventStore:
                 """,
                 params,
             ).fetchall()
-        return [ToolOperation(*row) for row in rows]
+            operations = [ToolOperation(*row) for row in rows]
+            if not operations:
+                return []
+            operation_ids = [operation.operation_id for operation in operations]
+            placeholders = ",".join("?" for _ in operation_ids)
+            outcome_clause = ""
+            outcome_params: tuple[object, ...] = tuple(operation_ids)
+            if outcome_through_sequence_no is not None:
+                outcome_clause = "AND event.sequence_no <= ?"
+                outcome_params += (outcome_through_sequence_no,)
+            outcome_rows = conn.execute(
+                f"""
+                SELECT
+                    history.operation_id,
+                    history.outcome,
+                    history.outcome_evidence,
+                    history.post_event_id
+                FROM tool_operation_outcomes AS history
+                JOIN events AS event ON event.event_id = history.post_event_id
+                WHERE history.operation_id IN ({placeholders})
+                  {outcome_clause}
+                ORDER BY event.sequence_no DESC, history.post_event_id DESC
+                """,
+                outcome_params,
+            ).fetchall()
+        latest_outcomes: dict[str, tuple[str, str | None, str]] = {}
+        for operation_id, outcome, evidence, post_event_id in outcome_rows:
+            latest_outcomes.setdefault(
+                operation_id,
+                (outcome, evidence, post_event_id),
+            )
+        bounded = outcome_through_sequence_no is not None
+        return [
+            replace(
+                operation,
+                outcome=(
+                    latest_outcomes[operation.operation_id][0]
+                    if operation.operation_id in latest_outcomes
+                    else "unknown" if bounded else operation.outcome
+                ),
+                outcome_evidence=(
+                    latest_outcomes[operation.operation_id][1]
+                    if operation.operation_id in latest_outcomes
+                    else None if bounded else operation.outcome_evidence
+                ),
+                outcome_event_id=(
+                    latest_outcomes[operation.operation_id][2]
+                    if operation.operation_id in latest_outcomes
+                    else None
+                ),
+            )
+            for operation in operations
+        ]
 
     def update_tool_operation_outcome(
         self,
@@ -733,8 +1018,32 @@ class EventStore:
         *,
         outcome: str,
         evidence: str,
+        post_event_id: str | None = None,
     ) -> None:
         with self._connect() as conn:
+            if post_event_id is not None:
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO tool_operation_outcomes (
+                        post_event_id,
+                        operation_id,
+                        session_id,
+                        tool_use_id,
+                        outcome,
+                        outcome_evidence
+                    )
+                    SELECT ?, operation_id, session_id, tool_use_id, ?, ?
+                    FROM tool_operations
+                    WHERE session_id = ? AND tool_use_id = ?
+                    """,
+                    (
+                        post_event_id,
+                        outcome,
+                        evidence,
+                        session_id,
+                        tool_use_id,
+                    ),
+                )
             conn.execute(
                 """
                 UPDATE tool_operations
@@ -795,18 +1104,25 @@ class EventStore:
             params += (through_sequence_no,)
         return self._list_resource_snapshots_where(clause, params)
 
+    def list_resource_snapshots(self) -> list[ResourceSnapshot]:
+        return self._list_resource_snapshots_where("", ())
+
     def list_resource_snapshots_for_tool_uses(
         self,
         session_id: str,
         tool_use_ids: set[str],
+        *,
+        through_sequence_no: int | None = None,
     ) -> list[ResourceSnapshot]:
         if not tool_use_ids:
             return []
         placeholders = ",".join("?" for _ in tool_use_ids)
-        return self._list_resource_snapshots_where(
-            f"WHERE s.session_id = ? AND s.tool_use_id IN ({placeholders})",
-            (session_id, *sorted(tool_use_ids)),
-        )
+        clause = f"WHERE s.session_id = ? AND s.tool_use_id IN ({placeholders})"
+        params: tuple[object, ...] = (session_id, *sorted(tool_use_ids))
+        if through_sequence_no is not None:
+            clause += " AND e.sequence_no <= ?"
+            params += (through_sequence_no,)
+        return self._list_resource_snapshots_where(clause, params)
 
     def _list_resource_snapshots_where(
         self,
@@ -1169,8 +1485,12 @@ class EventStore:
                     content_hash,
                     sequence_no,
                     session_id,
-                    origin_tool_use_id
-                ) VALUES (?, ?, ?, ?, ?, ?)
+                    origin_tool_use_id,
+                    operation_id,
+                    operation_index,
+                    snapshot_id,
+                    resource_state
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
                     (
@@ -1180,6 +1500,10 @@ class EventStore:
                         resource.sequence_no,
                         resource.session_id,
                         resource.origin_tool_use_id,
+                        resource.operation_id,
+                        resource.operation_index,
+                        resource.snapshot_id,
+                        resource.resource_state,
                     )
                     for resource in resources
                 ],
@@ -1193,8 +1517,9 @@ class EventStore:
                 """
                 INSERT OR REPLACE INTO resource_versions (
                     node_id, path, content_hash, sequence_no, session_id,
-                    origin_tool_use_id
-                ) VALUES (?, ?, ?, ?, ?, ?)
+                    origin_tool_use_id, operation_id, operation_index,
+                    snapshot_id, resource_state
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [_resource_values(resource) for resource in resources],
             )
@@ -1539,9 +1864,13 @@ class EventStore:
                     content_hash,
                     sequence_no,
                     session_id,
-                    origin_tool_use_id
+                    origin_tool_use_id,
+                    operation_id,
+                    operation_index,
+                    snapshot_id,
+                    resource_state
                 FROM resource_versions
-                ORDER BY sequence_no, path, node_id
+                ORDER BY sequence_no, COALESCE(operation_index, -1), path, node_id
                 """
             ).fetchall()
         return [
@@ -1552,6 +1881,10 @@ class EventStore:
                 sequence_no=row[3],
                 session_id=row[4],
                 origin_tool_use_id=row[5],
+                operation_id=row[6],
+                operation_index=row[7],
+                snapshot_id=row[8],
+                resource_state=row[9],
             )
             for row in rows
         ]
@@ -1564,10 +1897,11 @@ class EventStore:
             rows = conn.execute(
                 """
                 SELECT node_id, path, content_hash, sequence_no, session_id,
-                       origin_tool_use_id
+                       origin_tool_use_id, operation_id, operation_index,
+                       snapshot_id, resource_state
                 FROM resource_versions
                 WHERE session_id = ?
-                ORDER BY sequence_no, path, node_id
+                ORDER BY sequence_no, COALESCE(operation_index, -1), path, node_id
                 """,
                 (session_id,),
             ).fetchall()
@@ -1993,14 +2327,18 @@ class EventStore:
         self,
         session_id: str,
         tool_use_ids: set[str],
+        *,
+        through_sequence_no: int | None = None,
     ) -> list[ArtifactContext]:
         if not tool_use_ids:
             return []
         placeholders = ",".join("?" for _ in tool_use_ids)
-        return self._list_artifact_contexts_where(
-            f"WHERE e.session_id = ? AND e.tool_use_id IN ({placeholders})",
-            (session_id, *sorted(tool_use_ids)),
-        )
+        clause = f"WHERE e.session_id = ? AND e.tool_use_id IN ({placeholders})"
+        params: tuple[object, ...] = (session_id, *sorted(tool_use_ids))
+        if through_sequence_no is not None:
+            clause += " AND e.sequence_no <= ?"
+            params += (through_sequence_no,)
+        return self._list_artifact_contexts_where(clause, params)
 
     def list_artifact_contexts_by_fragment_ids(
         self,
@@ -2033,6 +2371,27 @@ class EventStore:
         if row is None:
             raise KeyError(f"event not found: {event_id}")
         return row[0]
+
+    def list_event_execution_contexts(
+        self,
+        event_ids: set[str],
+    ) -> dict[str, tuple[str, str | None, str | None, str | None, str | None]]:
+        if not event_ids:
+            return {}
+        placeholders = ",".join("?" for _ in event_ids)
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT event_id, phase, session_id, tool_use_id, tool_name, cwd
+                FROM events
+                WHERE event_id IN ({placeholders})
+                """,
+                tuple(sorted(event_ids)),
+            ).fetchall()
+        return {
+            event_id: (phase, session_id, tool_use_id, tool_name, cwd)
+            for event_id, phase, session_id, tool_use_id, tool_name, cwd in rows
+        }
 
     def _list_artifact_contexts_where(
         self,
@@ -2197,6 +2556,50 @@ class EventStore:
                 (next_sequence + offset, event_id),
             )
 
+    def _backfill_tool_operation_outcomes(self, conn: sqlite3.Connection) -> None:
+        """旧DBの可変outcomeを、対応する最新Postへ保守的に移す。"""
+        migration_key = "migration.tool_operation_outcomes.v1"
+        if conn.execute(
+            "SELECT 1 FROM analysis_state WHERE key = ?",
+            (migration_key,),
+        ).fetchone() is not None:
+            return
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO tool_operation_outcomes (
+                post_event_id,
+                operation_id,
+                session_id,
+                tool_use_id,
+                outcome,
+                outcome_evidence
+            )
+            SELECT
+                post.event_id,
+                operation.operation_id,
+                operation.session_id,
+                operation.tool_use_id,
+                operation.outcome,
+                operation.outcome_evidence
+            FROM tool_operations AS operation
+            JOIN events AS post
+              ON post.event_id = (
+                  SELECT candidate.event_id
+                  FROM events AS candidate
+                  WHERE candidate.phase = 'post_tool_use'
+                    AND candidate.session_id = operation.session_id
+                    AND candidate.tool_use_id = operation.tool_use_id
+                  ORDER BY candidate.sequence_no DESC, candidate.event_id DESC
+                  LIMIT 1
+              )
+            WHERE operation.outcome IN ('succeeded', 'failed')
+            """
+        )
+        conn.execute(
+            "INSERT INTO analysis_state (key, value) VALUES (?, ?)",
+            (migration_key, "complete"),
+        )
+
     def _next_sequence_no(self, conn: sqlite3.Connection) -> int:
         row = conn.execute(
             "SELECT COALESCE(MAX(sequence_no), 0) + 1 FROM events"
@@ -2247,6 +2650,10 @@ def _resource_values(resource: ResourceVersion) -> tuple[object, ...]:
         resource.sequence_no,
         resource.session_id,
         resource.origin_tool_use_id,
+        resource.operation_id,
+        resource.operation_index,
+        resource.snapshot_id,
+        resource.resource_state,
     )
 
 
@@ -2270,6 +2677,13 @@ def _tool_operation_values(operation: ToolOperation) -> tuple[object, ...]:
         operation.outcome,
         operation.outcome_evidence,
     )
+
+
+def _normalized_tool_name(tool_name: str | None) -> str | None:
+    if not tool_name:
+        return None
+    normalized = re.sub(r"[^a-z0-9]+", "_", tool_name.casefold()).strip("_")
+    return normalized or None
 
 
 def _resource_snapshot_values(snapshot: ResourceSnapshot) -> tuple[object, ...]:

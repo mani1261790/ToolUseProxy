@@ -171,6 +171,8 @@ def build_protected_source_resource_edges(
     """protected sourceのpathと一致するresource versionを確定的に接続する。"""
     resources_by_path: dict[str, list[ResourceVersion]] = defaultdict(list)
     for resource in resources:
+        if resource.resource_state in {"deleted", "missing"}:
+            continue
         resources_by_path[resource.path].append(resource)
 
     edges: list[FlowEdge] = []

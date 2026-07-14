@@ -174,10 +174,85 @@ class InformationFlowTest(unittest.TestCase):
         self.assertEqual("operation_added", reloaded.fragment_kind)
         self.assertEqual(operation_id, reloaded.operation_id)
 
+    def test_incremental_storage_queries_have_composite_indexes(self) -> None:
+        expected = {
+            "idx_events_session_sequence",
+            "idx_tool_operations_event",
+            "idx_resource_snapshots_post_event",
+            "idx_resource_versions_session_sequence",
+        }
+        with sqlite3.connect(self.db_path) as connection:
+            indexes = {
+                row[0]
+                for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'index'"
+                ).fetchall()
+            }
+            event_plan = " ".join(
+                row[3]
+                for row in connection.execute(
+                    """
+                    EXPLAIN QUERY PLAN
+                    SELECT event_id
+                    FROM events
+                    WHERE session_id = ?
+                      AND sequence_no > ?
+                      AND sequence_no <= ?
+                    ORDER BY sequence_no, event_id
+                    """,
+                    ("session-1", 0, 10),
+                ).fetchall()
+            )
+            resource_plan = " ".join(
+                row[3]
+                for row in connection.execute(
+                    """
+                    EXPLAIN QUERY PLAN
+                    SELECT node_id
+                    FROM resource_versions
+                    WHERE session_id = ? AND sequence_no <= ?
+                    ORDER BY sequence_no, operation_index, path, node_id
+                    """,
+                    ("session-1", 10),
+                ).fetchall()
+            )
+
+        self.assertTrue(expected.issubset(indexes))
+        self.assertIn("idx_events_session_sequence", event_plan)
+        self.assertIn("idx_resource_versions_session_sequence", resource_plan)
+
     def test_post_tool_outcome_classifies_success_failure_and_unknown(self) -> None:
         cases = (
             ({"tool_response": {"exit_code": 0}}, "succeeded"),
-            ({"tool_response": "Exit code: 7\nCommand failed"}, "failed"),
+            ({"tool_response": {"exit_code": "1"}}, "failed"),
+            (
+                {"tool_response": {"content": [{"success": False}]}},
+                "failed",
+            ),
+            ({"tool_response": {"exit_code": False}}, "unknown"),
+            (
+                {"tool_response": {"exit_code": 0, "success": False}},
+                "failed",
+            ),
+            (
+                {
+                    "tool_response": {
+                        "content": [{"exit_code": 0}, {"exit_code": 1}]
+                    }
+                },
+                "failed",
+            ),
+            # Bash stdoutはcommand自身が偽装できるためstatus証拠にしない。
+            ({"tool_response": "Exit code: 7\nCommand failed"}, "unknown"),
+            (
+                {
+                    "tool_response": {
+                        "exit_code": 0,
+                        "stdout": "process exited with code 1",
+                    }
+                },
+                "succeeded",
+            ),
             ({}, "unknown"),
         )
         for extra, expected in cases:
@@ -362,6 +437,225 @@ class InformationFlowTest(unittest.TestCase):
         )[0]
         self.assertEqual("failed", failed_operation.outcome)
 
+    def test_post_hook_publishes_event_outcome_and_snapshot_atomically(self) -> None:
+        cwd = Path(self.temporary_directory.name)
+        target = cwd / "atomic.txt"
+        target.write_text("atomic snapshot\n", encoding="utf-8")
+        command = """*** Begin Patch
+*** Add File: atomic.txt
++atomic snapshot
+*** End Patch"""
+        self._record(
+            "pre_tool_use",
+            "snapshot-atomic",
+            "apply_patch",
+            tool_input={"command": command},
+            cwd=str(cwd),
+        )
+        payload = {
+            "session_id": "session-1",
+            "turn_id": "turn-1",
+            "tool_use_id": "snapshot-atomic",
+            "tool_name": "apply_patch",
+            "cwd": str(cwd),
+            "tool_input": {"command": command},
+            "tool_response": {"stdout": "Exit code: 0\nSuccess."},
+        }
+        stdin = io.TextIOWrapper(io.BytesIO(json.dumps(payload).encode("utf-8")))
+        original_record = EventStore.record
+        observed: dict[str, object] = {}
+
+        def record_spy(store, event, artifacts, fragments=None, operations=None, **kwargs):
+            with sqlite3.connect(store.db_path) as connection:
+                observed["event_count_before_record"] = connection.execute(
+                    "SELECT COUNT(*) FROM events WHERE event_id = ?",
+                    (event.event_id,),
+                ).fetchone()[0]
+            observed["post_outcome"] = kwargs.get("post_outcome")
+            observed["snapshot_count"] = len(kwargs.get("resource_snapshots") or [])
+            return original_record(
+                store,
+                event,
+                artifacts,
+                fragments,
+                operations,
+                **kwargs,
+            )
+
+        with (
+            patch("sys.stdin", stdin),
+            patch.dict(os.environ, {"TOOLUSEPROXY_DB_PATH": str(self.db_path)}),
+            patch.object(EventStore, "record", new=record_spy),
+        ):
+            self.assertEqual(0, run_hook("post_tool_use"))
+
+        self.assertEqual(0, observed["event_count_before_record"])
+        self.assertEqual(
+            ("succeeded", "apply_patch_success_marker"),
+            observed["post_outcome"],
+        )
+        self.assertEqual(1, observed["snapshot_count"])
+        operation = self.store.list_tool_operations_for_tool_uses(
+            "session-1",
+            {"snapshot-atomic"},
+        )[0]
+        snapshots = self.store.list_resource_snapshots_for_session("session-1")
+        self.assertEqual("succeeded", operation.outcome)
+        self.assertEqual(1, len(snapshots))
+        self.assertEqual(
+            hashlib.sha256(target.read_bytes()).hexdigest(),
+            snapshots[0].content_sha256,
+        )
+
+    def test_invalid_snapshot_ownership_rolls_back_post_event_and_outcome(self) -> None:
+        cwd = Path(self.temporary_directory.name)
+        target = cwd / "ownership.txt"
+        target.write_text("ownership", encoding="utf-8")
+        command = """*** Begin Patch
+*** Add File: ownership.txt
++ownership
+*** End Patch"""
+        self._record(
+            "pre_tool_use",
+            "snapshot-ownership",
+            "apply_patch",
+            tool_input={"command": command},
+            cwd=str(cwd),
+        )
+        event = normalize_event(
+            "post_tool_use",
+            {
+                "session_id": "session-1",
+                "turn_id": "turn-1",
+                "tool_use_id": "snapshot-ownership",
+                "tool_name": "apply_patch",
+                "cwd": str(cwd),
+                "tool_input": {"command": command},
+                "tool_response": {"exit_code": 0},
+            },
+        )
+        operation = self.store.list_tool_operations_for_tool_uses(
+            "session-1",
+            {"snapshot-ownership"},
+        )[0]
+        snapshot = capture_operation_snapshots(event, [operation])[0]
+        artifacts = build_artifacts(event)
+
+        with self.assertRaisesRegex(ValueError, "session/tool_use"):
+            self.store.record(
+                event,
+                artifacts,
+                build_fragments(artifacts),
+                post_outcome=("succeeded", "exit_code:0"),
+                resource_snapshots=[replace(snapshot, session_id="other-session")],
+            )
+
+        with sqlite3.connect(self.db_path) as connection:
+            event_count = connection.execute(
+                "SELECT COUNT(*) FROM events WHERE event_id = ?",
+                (event.event_id,),
+            ).fetchone()[0]
+            outcome_count = connection.execute(
+                """
+                SELECT COUNT(*)
+                FROM tool_operation_outcomes
+                WHERE post_event_id = ?
+                """,
+                (event.event_id,),
+            ).fetchone()[0]
+        self.assertEqual(0, event_count)
+        self.assertEqual(0, outcome_count)
+
+    def test_unexpected_snapshot_failure_keeps_success_outcome_and_fails_open(self) -> None:
+        cwd = Path(self.temporary_directory.name)
+        command = """*** Begin Patch
+*** Add File: capture-error.txt
++content
+*** End Patch"""
+        self._record(
+            "pre_tool_use",
+            "snapshot-capture-error",
+            "apply_patch",
+            tool_input={"command": command},
+            cwd=str(cwd),
+        )
+        post = self._record(
+            "post_tool_use",
+            "snapshot-capture-error",
+            "apply_patch",
+            tool_input={"command": command},
+            tool_response="Done!",
+            cwd=str(cwd),
+        )
+        stderr = io.StringIO()
+        with (
+            patch(
+                "hook_monitor.runtime.runner.capture_operation_snapshots",
+                side_effect=RuntimeError(SECRET),
+            ),
+            redirect_stderr(stderr),
+        ):
+            _capture_post_tool_evidence(self.store, post)
+
+        operation = self.store.list_tool_operations_for_tool_uses(
+            "session-1",
+            {"snapshot-capture-error"},
+        )[0]
+        self.assertEqual("succeeded", operation.outcome)
+        self.assertEqual(
+            "apply_patch_success_marker;snapshot_capture_error:RuntimeError",
+            operation.outcome_evidence,
+        )
+        self.assertEqual([], self.store.list_resource_snapshots_for_session("session-1"))
+        self.assertIn("RuntimeError", stderr.getvalue())
+        self.assertNotIn(SECRET, stderr.getvalue())
+
+    def test_post_cwd_mismatch_cannot_capture_another_workspace(self) -> None:
+        root = Path(self.temporary_directory.name)
+        pre_cwd = root / "workspace-a"
+        post_cwd = root / "workspace-b"
+        pre_cwd.mkdir()
+        post_cwd.mkdir()
+        command = """*** Begin Patch
+*** Add File: target.txt
++safe
+*** End Patch"""
+        self._record(
+            "pre_tool_use",
+            "snapshot-owner-mismatch",
+            "apply_patch",
+            tool_input={"command": command},
+            cwd=str(pre_cwd),
+        )
+        (post_cwd / "target.txt").write_text(SECRET, encoding="utf-8")
+        post = self._record(
+            "post_tool_use",
+            "snapshot-owner-mismatch",
+            "apply_patch",
+            tool_input={"command": command},
+            tool_response={"exit_code": 0},
+            cwd=str(post_cwd),
+        )
+        _capture_post_tool_evidence(self.store, post)
+        operation = self.store.list_tool_operations_for_session("session-1")[0]
+        result = run_adapters(
+            self.store.list_artifact_contexts(),
+            root,
+            operations=(operation,),
+            snapshots=(),
+        )
+
+        self.assertEqual("unknown", operation.outcome)
+        self.assertEqual("post_operation_owner_mismatch", operation.outcome_evidence)
+        self.assertEqual(post.event_id, operation.outcome_event_id)
+        self.assertEqual([], self.store.list_resource_snapshots_for_session("session-1"))
+        self.assertEqual([], list(result.resources))
+        with sqlite3.connect(self.db_path) as connection:
+            stored_bodies = connection.execute(
+                "SELECT body_text FROM resource_snapshots WHERE body_text IS NOT NULL"
+            ).fetchall()
+        self.assertEqual([], stored_bodies)
+
     def test_snapshot_capture_records_move_and_delete_state(self) -> None:
         cwd = Path(self.temporary_directory.name)
         (cwd / "moved.txt").write_text("moved value", encoding="utf-8")
@@ -434,6 +728,630 @@ class InformationFlowTest(unittest.TestCase):
             [delete_operation],
         )[0]
         self.assertEqual("deleted", delete_snapshot.capture_status)
+
+    def test_snapshot_materializes_apply_patch_file_hash_and_metadata(self) -> None:
+        cwd = Path(self.temporary_directory.name)
+        target = cwd / "materialized.txt"
+        target.write_text("actual file bytes\n", encoding="utf-8")
+        command = """*** Begin Patch
+*** Add File: materialized.txt
++actual file bytes
+*** End Patch"""
+        self._record(
+            "pre_tool_use",
+            "snapshot-materialized",
+            "apply_patch",
+            tool_input={"command": command},
+            cwd=str(cwd),
+        )
+        post = self._record(
+            "post_tool_use",
+            "snapshot-materialized",
+            "apply_patch",
+            tool_input={"command": command},
+            tool_response={"stdout": "Exit code: 0\nSuccess."},
+            cwd=str(cwd),
+        )
+        _capture_post_tool_evidence(self.store, post)
+
+        operations = tuple(self.store.list_tool_operations_for_session("session-1"))
+        snapshots = tuple(self.store.list_resource_snapshots_for_session("session-1"))
+        result = run_adapters(
+            self.store.list_artifact_contexts(),
+            cwd,
+            operations=operations,
+            snapshots=snapshots,
+        )
+
+        self.assertEqual(1, len(result.resources))
+        resource = result.resources[0]
+        self.assertEqual(hashlib.sha256(target.read_bytes()).hexdigest(), resource.content_hash)
+        self.assertNotEqual(
+            hashlib.sha256(command.encode("utf-8")).hexdigest(),
+            resource.content_hash,
+        )
+        self.assertEqual(operations[0].operation_id, resource.operation_id)
+        self.assertEqual(0, resource.operation_index)
+        self.assertEqual(snapshots[0].snapshot_id, resource.snapshot_id)
+        self.assertEqual("present", resource.resource_state)
+
+        self.store.upsert_resource_versions(list(result.resources))
+        stored = self.store.list_resource_versions_for_session("session-1")
+        self.assertEqual([resource], stored)
+
+    def test_structured_outcome_controls_snapshot_lineage(self) -> None:
+        cwd = Path(self.temporary_directory.name)
+        patch_command = """*** Begin Patch
+*** Add File: structured.txt
++structured
+*** End Patch"""
+        self._record(
+            "pre_tool_use",
+            "structured-patch",
+            "apply_patch",
+            tool_input={"command": patch_command},
+            cwd=str(cwd),
+        )
+        (cwd / "structured.txt").write_text("structured\n", encoding="utf-8")
+        patch_post = self._record(
+            "post_tool_use",
+            "structured-patch",
+            "apply_patch",
+            tool_input={"command": patch_command},
+            tool_response={"exit_code": 0},
+            cwd=str(cwd),
+        )
+        _capture_post_tool_evidence(self.store, patch_post)
+
+        bash_command = "printf failed > should-not-materialize.txt"
+        self._record(
+            "pre_tool_use",
+            "structured-bash-failure",
+            "Bash",
+            tool_input={"command": bash_command},
+            cwd=str(cwd),
+        )
+        (cwd / "should-not-materialize.txt").write_text(
+            "partial output",
+            encoding="utf-8",
+        )
+        bash_post = self._record(
+            "post_tool_use",
+            "structured-bash-failure",
+            "Bash",
+            tool_input={"command": bash_command},
+            tool_response={"exit_code": 1},
+            cwd=str(cwd),
+        )
+        _capture_post_tool_evidence(self.store, bash_post)
+
+        operations = tuple(self.store.list_tool_operations_for_session("session-1"))
+        snapshots = tuple(self.store.list_resource_snapshots_for_session("session-1"))
+        result = run_adapters(
+            self.store.list_artifact_contexts(),
+            cwd,
+            operations=operations,
+            snapshots=snapshots,
+        )
+
+        self.assertEqual(
+            ["structured-patch"],
+            [resource.origin_tool_use_id for resource in result.resources],
+        )
+        self.assertEqual(
+            hashlib.sha256((cwd / "structured.txt").read_bytes()).hexdigest(),
+            result.resources[0].content_hash,
+        )
+        failed_operation = next(
+            operation
+            for operation in operations
+            if operation.tool_use_id == "structured-bash-failure"
+        )
+        self.assertEqual("failed", failed_operation.outcome)
+        self.assertFalse(
+            any(
+                snapshot.tool_use_id == "structured-bash-failure"
+                for snapshot in snapshots
+            )
+        )
+
+    def test_snapshot_limit_keeps_structured_write_with_unknown_hash(self) -> None:
+        cwd = Path(self.temporary_directory.name)
+        target = cwd / "oversized.txt"
+        target.write_bytes(b"x" * (256 * 1024 + 1))
+        command = """*** Begin Patch
+*** Add File: oversized.txt
++x
+*** End Patch"""
+        self._record(
+            "pre_tool_use",
+            "snapshot-oversized",
+            "apply_patch",
+            tool_input={"command": command},
+            cwd=str(cwd),
+        )
+        post = self._record(
+            "post_tool_use",
+            "snapshot-oversized",
+            "apply_patch",
+            tool_input={"command": command},
+            tool_response="Done!",
+            cwd=str(cwd),
+        )
+        _capture_post_tool_evidence(self.store, post)
+
+        operations = tuple(self.store.list_tool_operations_for_session("session-1"))
+        snapshots = tuple(self.store.list_resource_snapshots_for_session("session-1"))
+        result = run_adapters(
+            self.store.list_artifact_contexts(),
+            cwd,
+            operations=operations,
+            snapshots=snapshots,
+        )
+
+        self.assertEqual("file_too_large", snapshots[0].capture_status)
+        self.assertEqual(1, len(result.resources))
+        self.assertIsNone(result.resources[0].content_hash)
+        self.assertEqual("present", result.resources[0].resource_state)
+        self.assertTrue(
+            any(
+                edge.method == "apply_patch_write"
+                and edge.dst_node_id == result.resources[0].node_id
+                for edge in result.edges
+            )
+        )
+
+    def test_snapshot_path_limit_preserves_all_static_bash_writes(self) -> None:
+        cwd = Path(self.temporary_directory.name)
+        command = (
+            "printf one > one.txt; "
+            "printf two > two.txt; "
+            "printf three > three.txt"
+        )
+        self._record(
+            "pre_tool_use",
+            "snapshot-path-limit",
+            "Bash",
+            tool_input={"command": command},
+            cwd=str(cwd),
+        )
+        for name, body in (("one.txt", b"one"), ("two.txt", b"two"), ("three.txt", b"three")):
+            (cwd / name).write_bytes(body)
+        post = self._record(
+            "post_tool_use",
+            "snapshot-path-limit",
+            "Bash",
+            tool_input={"command": command},
+            tool_response={"exit_code": 0},
+            cwd=str(cwd),
+        )
+        operations = self.store.list_tool_operations_for_tool_uses(
+            "session-1",
+            {"snapshot-path-limit"},
+        )
+        snapshots = capture_operation_snapshots(
+            post,
+            operations,
+            limits=SnapshotCaptureLimits(
+                max_file_bytes=64,
+                max_tool_bytes=128,
+                max_paths=2,
+                time_budget_ms=250,
+            ),
+        )
+        result = run_adapters(
+            self.store.list_artifact_contexts(),
+            cwd,
+            operations=tuple(operations),
+            snapshots=tuple(snapshots),
+        )
+
+        self.assertLessEqual(len(snapshots), 4)
+        self.assertEqual(1, sum(s.capture_status == "path_limit" for s in snapshots))
+        resources = sorted(result.resources, key=lambda resource: resource.operation_index)
+        self.assertEqual(3, len(resources))
+        self.assertEqual([True, True, False], [r.content_hash is not None for r in resources])
+        self.assertEqual(
+            3,
+            sum(edge.relation == "written_to" for edge in result.edges),
+        )
+
+    def test_snapshot_operation_overflow_falls_back_without_wrong_hash(self) -> None:
+        cwd = Path(self.temporary_directory.name)
+        command = "; ".join(
+            f"printf {index} > repeated.txt" for index in range(5)
+        )
+        self._record(
+            "pre_tool_use",
+            "snapshot-operation-overflow",
+            "Bash",
+            tool_input={"command": command},
+            cwd=str(cwd),
+        )
+        (cwd / "repeated.txt").write_text("4", encoding="utf-8")
+        post = self._record(
+            "post_tool_use",
+            "snapshot-operation-overflow",
+            "Bash",
+            tool_input={"command": command},
+            tool_response={"exit_code": 0},
+            cwd=str(cwd),
+        )
+        operations = self.store.list_tool_operations_for_tool_uses(
+            "session-1",
+            {"snapshot-operation-overflow"},
+        )
+        snapshots = capture_operation_snapshots(
+            post,
+            operations,
+            limits=SnapshotCaptureLimits(
+                max_file_bytes=64,
+                max_tool_bytes=128,
+                max_paths=2,
+                time_budget_ms=250,
+            ),
+        )
+        result = run_adapters(
+            self.store.list_artifact_contexts(),
+            cwd,
+            operations=tuple(operations),
+            snapshots=tuple(snapshots),
+        )
+
+        self.assertEqual([], snapshots)
+        self.assertEqual(5, len(result.resources))
+        self.assertTrue(all(resource.content_hash is None for resource in result.resources))
+
+    def test_snapshot_cache_does_not_duplicate_plaintext_or_byte_budget(self) -> None:
+        cwd = Path(self.temporary_directory.name)
+        target = cwd / "delete-not-effective.txt"
+        target.write_text("still present", encoding="utf-8")
+        command = """*** Begin Patch
+*** Delete File: delete-not-effective.txt
+*** End Patch"""
+        self._record(
+            "pre_tool_use",
+            "snapshot-cache",
+            "apply_patch",
+            tool_input={"command": command},
+            cwd=str(cwd),
+        )
+        base = self.store.list_tool_operations_for_tool_uses(
+            "session-1",
+            {"snapshot-cache"},
+        )[0]
+        operations = [
+            base,
+            replace(base, operation_id="snapshot-cache-second", operation_index=1),
+        ]
+        post = normalize_event(
+            "post_tool_use",
+            {
+                "session_id": "session-1",
+                "tool_use_id": "snapshot-cache",
+                "tool_name": "apply_patch",
+                "cwd": str(cwd),
+                "tool_input": {"command": command},
+                "tool_response": "Done!",
+            },
+        )
+        snapshots = capture_operation_snapshots(
+            post,
+            operations,
+            limits=SnapshotCaptureLimits(
+                max_file_bytes=64,
+                max_tool_bytes=64,
+                max_paths=2,
+                time_budget_ms=250,
+            ),
+            store_plaintext=True,
+        )
+
+        self.assertEqual(2, len(snapshots))
+        self.assertEqual(1, sum(snapshot.body_text is not None for snapshot in snapshots))
+        self.assertEqual(len(target.read_bytes()), sum(s.captured_bytes for s in snapshots))
+        self.assertEqual("cached_hash_only", snapshots[1].capture_status)
+
+    def test_snapshot_workspace_symlink_stops_once_and_keeps_target_paths(self) -> None:
+        real_cwd = Path(self.temporary_directory.name) / "real-workspace"
+        real_cwd.mkdir()
+        linked_cwd = Path(self.temporary_directory.name) / "linked-workspace"
+        linked_cwd.symlink_to(real_cwd, target_is_directory=True)
+        command = "printf one > one.txt; printf two > two.txt"
+        self._record(
+            "pre_tool_use",
+            "snapshot-root-symlink",
+            "Bash",
+            tool_input={"command": command},
+            cwd=str(linked_cwd),
+        )
+        (real_cwd / "one.txt").write_text("one", encoding="utf-8")
+        (real_cwd / "two.txt").write_text("two", encoding="utf-8")
+        post = self._record(
+            "post_tool_use",
+            "snapshot-root-symlink",
+            "Bash",
+            tool_input={"command": command},
+            tool_response="",
+            cwd=str(linked_cwd),
+        )
+        operations = self.store.list_tool_operations_for_tool_uses(
+            "session-1",
+            {"snapshot-root-symlink"},
+        )
+        snapshots = capture_operation_snapshots(post, operations)
+        result = run_adapters(
+            self.store.list_artifact_contexts(),
+            linked_cwd,
+            operations=tuple(operations),
+            snapshots=tuple(snapshots),
+        )
+
+        self.assertEqual(1, len(snapshots))
+        self.assertEqual("symlink_rejected", snapshots[0].capture_status)
+        self.assertNotEqual(str(linked_cwd), snapshots[0].lexical_path)
+        self.assertEqual(
+            {str(linked_cwd / "one.txt"), str(linked_cwd / "two.txt")},
+            {resource.path for resource in result.resources},
+        )
+        self.assertTrue(all(resource.content_hash is None for resource in result.resources))
+
+    def test_snapshot_materializes_move_and_delete_tombstones(self) -> None:
+        cwd = Path(self.temporary_directory.name)
+        source = cwd / "old.txt"
+        target = cwd / "moved.txt"
+        source.write_text("old value", encoding="utf-8")
+        self._record(
+            "pre_tool_use",
+            "write-old",
+            "Write",
+            tool_input={"path": "old.txt", "content": "old value"},
+            cwd=str(cwd),
+        )
+
+        move_command = """*** Begin Patch
+*** Update File: old.txt
+*** Move to: moved.txt
+@@
+-old value
++moved value
+*** End Patch"""
+        self._record(
+            "pre_tool_use",
+            "snapshot-move-materialized",
+            "apply_patch",
+            tool_input={"command": move_command},
+            cwd=str(cwd),
+        )
+        source.rename(target)
+        target.write_text("moved value", encoding="utf-8")
+        move_post = self._record(
+            "post_tool_use",
+            "snapshot-move-materialized",
+            "apply_patch",
+            tool_input={"command": move_command},
+            tool_response="Done!",
+            cwd=str(cwd),
+        )
+        _capture_post_tool_evidence(self.store, move_post)
+
+        delete_command = """*** Begin Patch
+*** Delete File: moved.txt
+*** End Patch"""
+        self._record(
+            "pre_tool_use",
+            "snapshot-delete-materialized",
+            "apply_patch",
+            tool_input={"command": delete_command},
+            cwd=str(cwd),
+        )
+        target.unlink()
+        delete_post = self._record(
+            "post_tool_use",
+            "snapshot-delete-materialized",
+            "apply_patch",
+            tool_input={"command": delete_command},
+            tool_response="Done!",
+            cwd=str(cwd),
+        )
+        _capture_post_tool_evidence(self.store, delete_post)
+
+        operations = tuple(self.store.list_tool_operations_for_session("session-1"))
+        snapshots = tuple(self.store.list_resource_snapshots_for_session("session-1"))
+        result = run_adapters(
+            self.store.list_artifact_contexts(),
+            cwd,
+            operations=operations,
+            snapshots=snapshots,
+        )
+
+        move_resources = [
+            resource
+            for resource in result.resources
+            if resource.origin_tool_use_id == "snapshot-move-materialized"
+        ]
+        delete_resources = [
+            resource
+            for resource in result.resources
+            if resource.origin_tool_use_id == "snapshot-delete-materialized"
+        ]
+        self.assertEqual({"present", "deleted"}, {r.resource_state for r in move_resources})
+        self.assertEqual(["deleted"], [r.resource_state for r in delete_resources])
+        self.assertEqual(
+            hashlib.sha256(b"moved value").hexdigest(),
+            next(r.content_hash for r in move_resources if r.resource_state == "present"),
+        )
+        relations = [edge.relation for edge in result.edges]
+        self.assertIn("moved_to", relations)
+        self.assertEqual(2, relations.count("deleted_to"))
+        self.assertIn("deleted_by", relations)
+
+        tombstone_ids = {
+            resource.node_id
+            for resource in result.resources
+            if resource.resource_state == "deleted"
+        }
+        source_edges = build_protected_source_resource_edges(
+            [self._protected_source("old.txt"), self._protected_source("moved.txt")],
+            list(result.resources),
+            cwd,
+        )
+        self.assertTrue(tombstone_ids.isdisjoint({edge.dst_node_id for edge in source_edges}))
+
+    def test_move_only_patch_preserves_protected_source_lineage(self) -> None:
+        cwd = Path(self.temporary_directory.name)
+        source = cwd / "old.txt"
+        target = cwd / "moved.txt"
+        source.write_text("protected move content", encoding="utf-8")
+        command = """*** Begin Patch
+*** Update File: old.txt
+*** Move to: moved.txt
+*** End Patch"""
+        self._record(
+            "pre_tool_use",
+            "snapshot-move-only",
+            "apply_patch",
+            tool_input={"command": command},
+            cwd=str(cwd),
+        )
+        source.rename(target)
+        post = self._record(
+            "post_tool_use",
+            "snapshot-move-only",
+            "apply_patch",
+            tool_input={"command": command},
+            tool_response="Done!",
+            cwd=str(cwd),
+        )
+        _capture_post_tool_evidence(self.store, post)
+        operations = tuple(self.store.list_tool_operations_for_session("session-1"))
+        snapshots = tuple(self.store.list_resource_snapshots_for_session("session-1"))
+        result = run_adapters(
+            self.store.list_artifact_contexts(),
+            cwd,
+            operations=operations,
+            snapshots=snapshots,
+        )
+        source_edges = build_protected_source_resource_edges(
+            [self._protected_source("old.txt")],
+            list(result.resources),
+            cwd,
+        )
+        assignments = propagate_lineage(
+            "move-only-run",
+            source_edges + list(result.edges),
+        )
+        target_resource = next(
+            resource
+            for resource in result.resources
+            if resource.path == str(target.resolve())
+            and resource.resource_state == "present"
+        )
+
+        self.assertTrue(source_edges)
+        self.assertTrue(
+            any(
+                edge.relation == "moved_to"
+                and edge.dst_node_id == target_resource.node_id
+                for edge in result.edges
+            )
+        )
+        self.assertIn(
+            target_resource.node_id,
+            {assignment.node_id for assignment in assignments},
+        )
+
+    def test_bash_snapshot_assigns_final_hash_only_to_last_static_writer(self) -> None:
+        cwd = Path(self.temporary_directory.name)
+        command = "printf 'A' > chain.txt; printf 'B' >> ./chain.txt"
+        self._record(
+            "pre_tool_use",
+            "bash-snapshot-chain",
+            "Bash",
+            tool_input={"command": command},
+            cwd=str(cwd),
+        )
+        (cwd / "chain.txt").write_bytes(b"AB")
+        post = self._record(
+            "post_tool_use",
+            "bash-snapshot-chain",
+            "Bash",
+            tool_input={"command": command},
+            tool_response={"exit_code": 0},
+            cwd=str(cwd),
+        )
+        _capture_post_tool_evidence(self.store, post)
+
+        operations = tuple(self.store.list_tool_operations_for_session("session-1"))
+        snapshots = tuple(self.store.list_resource_snapshots_for_session("session-1"))
+        operation_index_by_id = {
+            operation.operation_id: operation.operation_index
+            for operation in operations
+        }
+        self.assertEqual(
+            ["superseded_by_later_operation", "captured_hash_only"],
+            [
+                snapshot.capture_status
+                for snapshot in sorted(
+                    snapshots,
+                    key=lambda item: operation_index_by_id[item.operation_id],
+                )
+            ],
+        )
+        result = run_adapters(
+            self.store.list_artifact_contexts(),
+            cwd,
+            operations=operations,
+            snapshots=snapshots,
+        )
+        resources = sorted(result.resources, key=lambda resource: resource.operation_index)
+        self.assertEqual(2, len(resources))
+        self.assertIsNone(resources[0].content_hash)
+        self.assertEqual(hashlib.sha256(b"AB").hexdigest(), resources[1].content_hash)
+        append_edge = next(
+            edge
+            for edge in result.edges
+            if edge.method == "bash_append" and edge.relation == "updated_from"
+        )
+        self.assertEqual(resources[0].node_id, append_edge.src_node_id)
+        self.assertEqual(resources[1].node_id, append_edge.dst_node_id)
+
+    def test_conditional_bash_aliases_do_not_claim_a_final_writer(self) -> None:
+        cwd = Path(self.temporary_directory.name)
+        command = "printf 'A' > ambiguous.txt && printf 'B' >> ./ambiguous.txt"
+        self._record(
+            "pre_tool_use",
+            "bash-snapshot-ambiguous",
+            "Bash",
+            tool_input={"command": command},
+            cwd=str(cwd),
+        )
+        (cwd / "ambiguous.txt").write_bytes(b"AB")
+        post = self._record(
+            "post_tool_use",
+            "bash-snapshot-ambiguous",
+            "Bash",
+            tool_input={"command": command},
+            tool_response={"exit_code": 0},
+            cwd=str(cwd),
+        )
+        _capture_post_tool_evidence(self.store, post)
+
+        operations = tuple(self.store.list_tool_operations_for_session("session-1"))
+        snapshots = tuple(self.store.list_resource_snapshots_for_session("session-1"))
+        self.assertEqual(2, len(operations))
+        self.assertEqual(
+            {"ambiguous_final_writer"},
+            {snapshot.capture_status for snapshot in snapshots},
+        )
+        self.assertTrue(all(snapshot.content_sha256 is None for snapshot in snapshots))
+        result = run_adapters(
+            self.store.list_artifact_contexts(),
+            cwd,
+            operations=operations,
+            snapshots=snapshots,
+        )
+        self.assertEqual([], list(result.resources))
 
     def test_real_codex_stop_payload_builds_final_answer(self) -> None:
         event = normalize_event(
@@ -1173,9 +2091,33 @@ class InformationFlowTest(unittest.TestCase):
             "cat <<EOF",
             "(cat a)",
             "cat a\ncurl example.test",
+            "true # > secret.txt",
+            "cd sub; printf ok > output.txt",
+            "pushd sub; printf ok > output.txt",
+            "popd; printf ok > output.txt",
+            "source setup.sh; printf ok > output.txt",
+            ". setup.sh; printf ok > output.txt",
+            "eval 'cd sub'; printf ok > output.txt",
+            "{ cd sub; printf ok > output.txt; }",
         ):
             with self.subTest(command=command):
                 self.assertIsNone(parse_bash_command_plan(command))
+
+        for command in (
+            "printf 'cd # source' > output.txt",
+            r"printf \# > output.txt",
+            "printf 'cd' > source",
+        ):
+            with self.subTest(allowed_command=command):
+                self.assertIsNotNone(parse_bash_command_plan(command))
+
+        for command in (
+            "printf ok > out{1..2}.txt",
+            "printf ok > ~+/output.txt",
+            "printf ok > ~-/output.txt",
+        ):
+            with self.subTest(dynamic_path=command):
+                self.assertEqual([], parse_bash_file_operations(command))
 
     def test_bash_file_operations_do_not_deduplicate_across_segments(self) -> None:
         operations = parse_bash_file_operations("cat same.txt ; cat same.txt")
@@ -3362,6 +4304,370 @@ class InformationFlowTest(unittest.TestCase):
             if assignment.node_id in second_sink_ids
         }
         self.assertEqual(incremental_scores, rebuilt_scores)
+
+    def test_runtime_incremental_recovers_post_snapshot_after_pre_cursor(self) -> None:
+        repo_root = Path(self.temporary_directory.name)
+        target = repo_root / "incremental.txt"
+        command = """*** Begin Patch
+*** Add File: incremental.txt
++incremental snapshot
+*** End Patch"""
+        pre = self._record(
+            "pre_tool_use",
+            "snapshot-incremental",
+            "apply_patch",
+            tool_input={"command": command},
+            cwd=str(repo_root),
+        )
+        target.write_text("incremental snapshot\n", encoding="utf-8")
+        post = self._record(
+            "post_tool_use",
+            "snapshot-incremental",
+            "apply_patch",
+            tool_input={"command": command},
+            tool_response={"stdout": "Exit code: 0\nSuccess."},
+            cwd=str(repo_root),
+        )
+        _capture_post_tool_evidence(self.store, post)
+
+        before_post = update_runtime_analysis(
+            self.store,
+            repo_root,
+            session_id="session-1",
+            current_event_id=pre.event_id,
+            detector_version="runtime-snapshot-test-v1",
+            minimum_path_score=0.15,
+        )
+        self.assertEqual("session-full", before_post.mode)
+        self.assertEqual([], self.store.list_resource_versions_for_session("session-1"))
+        self.assertEqual(
+            self.store.get_event_sequence_no(pre.event_id),
+            self.store.get_analysis_cursor("session-1").last_sequence_no,
+        )
+
+        after_post = update_runtime_analysis(
+            self.store,
+            repo_root,
+            session_id="session-1",
+            current_event_id=post.event_id,
+            detector_version="runtime-snapshot-test-v1",
+            minimum_path_score=0.15,
+        )
+        incremental_resources = self.store.list_resource_versions_for_session("session-1")
+        self.assertEqual("session-incremental", after_post.mode)
+        self.assertEqual(1, len(incremental_resources))
+        self.assertEqual(
+            hashlib.sha256(target.read_bytes()).hexdigest(),
+            incremental_resources[0].content_hash,
+        )
+        self.assertIsNotNone(incremental_resources[0].snapshot_id)
+        incremental_signature = {
+            (
+                resource.node_id,
+                resource.path,
+                resource.content_hash,
+                resource.operation_id,
+                resource.operation_index,
+                resource.snapshot_id,
+                resource.resource_state,
+            )
+            for resource in incremental_resources
+        }
+        incremental_edges = {
+            (
+                edge.edge_id,
+                edge.src_node_kind,
+                edge.src_node_id,
+                edge.dst_node_kind,
+                edge.dst_node_id,
+                edge.relation,
+            )
+            for edge in self.store.list_information_flow_edges_for_session("session-1")
+        }
+
+        self.store.clear_runtime_analysis_for_session("session-1")
+        rebuilt = update_runtime_analysis(
+            self.store,
+            repo_root,
+            session_id="session-1",
+            current_event_id=post.event_id,
+            detector_version="runtime-snapshot-test-v1",
+            minimum_path_score=0.15,
+        )
+        rebuilt_resources = self.store.list_resource_versions_for_session("session-1")
+        rebuilt_signature = {
+            (
+                resource.node_id,
+                resource.path,
+                resource.content_hash,
+                resource.operation_id,
+                resource.operation_index,
+                resource.snapshot_id,
+                resource.resource_state,
+            )
+            for resource in rebuilt_resources
+        }
+        rebuilt_edges = {
+            (
+                edge.edge_id,
+                edge.src_node_kind,
+                edge.src_node_id,
+                edge.dst_node_kind,
+                edge.dst_node_id,
+                edge.relation,
+            )
+            for edge in self.store.list_information_flow_edges_for_session("session-1")
+        }
+        self.assertEqual("session-full", rebuilt.mode)
+        self.assertEqual(incremental_signature, rebuilt_signature)
+        self.assertEqual(incremental_edges, rebuilt_edges)
+
+    def test_duplicate_post_rebuilds_session_and_preserves_historical_outcome(self) -> None:
+        repo_root = Path(self.temporary_directory.name)
+        target = repo_root / "duplicate.txt"
+        command = """*** Begin Patch
+*** Add File: duplicate.txt
++value
+*** End Patch"""
+        pre = self._record(
+            "pre_tool_use",
+            "duplicate-post",
+            "apply_patch",
+            tool_input={"command": command},
+            cwd=str(repo_root),
+        )
+        target.write_text("first\n", encoding="utf-8")
+        first_post = self._record(
+            "post_tool_use",
+            "duplicate-post",
+            "apply_patch",
+            tool_input={"command": command},
+            tool_response={"exit_code": 0, "revision": "first"},
+            cwd=str(repo_root),
+        )
+        _capture_post_tool_evidence(self.store, first_post)
+
+        update_runtime_analysis(
+            self.store,
+            repo_root,
+            session_id="session-1",
+            current_event_id=pre.event_id,
+            detector_version="runtime-duplicate-test-v1",
+            minimum_path_score=0.15,
+        )
+        first = update_runtime_analysis(
+            self.store,
+            repo_root,
+            session_id="session-1",
+            current_event_id=first_post.event_id,
+            detector_version="runtime-duplicate-test-v1",
+            minimum_path_score=0.15,
+        )
+        self.assertEqual("session-incremental", first.mode)
+        self.assertEqual(
+            hashlib.sha256(b"first\n").hexdigest(),
+            self.store.list_resource_versions_for_session("session-1")[0].content_hash,
+        )
+
+        target.write_text("second\n", encoding="utf-8")
+        second_post = self._record(
+            "post_tool_use",
+            "duplicate-post",
+            "apply_patch",
+            tool_input={"command": command},
+            tool_response={"exit_code": 0, "revision": "second"},
+            cwd=str(repo_root),
+        )
+        _capture_post_tool_evidence(self.store, second_post)
+        second = update_runtime_analysis(
+            self.store,
+            repo_root,
+            session_id="session-1",
+            current_event_id=second_post.event_id,
+            detector_version="runtime-duplicate-test-v1",
+            minimum_path_score=0.15,
+        )
+        second_resources = self.store.list_resource_versions_for_session("session-1")
+        self.assertEqual("session-full", second.mode)
+        self.assertEqual(1, len(second_resources))
+        self.assertEqual(
+            hashlib.sha256(b"second\n").hexdigest(),
+            second_resources[0].content_hash,
+        )
+        self.assertFalse(
+            any(
+                edge.src_node_kind == "resource_version"
+                and edge.src_node_id == edge.dst_node_id
+                for edge in self.store.list_information_flow_edges_for_session("session-1")
+            )
+        )
+
+        self.store.clear_runtime_analysis_for_session("session-1")
+        historical = update_runtime_analysis(
+            self.store,
+            repo_root,
+            session_id="session-1",
+            current_event_id=first_post.event_id,
+            detector_version="runtime-duplicate-test-v1",
+            minimum_path_score=0.15,
+        )
+        historical_resources = self.store.list_resource_versions_for_session("session-1")
+        historical_operation = self.store.list_tool_operations_for_session(
+            "session-1",
+            through_sequence_no=self.store.get_event_sequence_no(first_post.event_id),
+        )[0]
+        self.assertEqual("session-full", historical.mode)
+        self.assertEqual(
+            hashlib.sha256(b"first\n").hexdigest(),
+            historical_resources[0].content_hash,
+        )
+        self.assertEqual(first_post.event_id, historical_operation.outcome_event_id)
+
+        failed_post = self._record(
+            "post_tool_use",
+            "duplicate-post",
+            "apply_patch",
+            tool_input={"command": command},
+            tool_response={"exit_code": 1, "revision": "failed"},
+            cwd=str(repo_root),
+        )
+        _capture_post_tool_evidence(self.store, failed_post)
+        failed = update_runtime_analysis(
+            self.store,
+            repo_root,
+            session_id="session-1",
+            current_event_id=failed_post.event_id,
+            detector_version="runtime-duplicate-test-v1",
+            minimum_path_score=0.15,
+        )
+        latest_operation = self.store.list_tool_operations_for_session(
+            "session-1",
+            through_sequence_no=self.store.get_event_sequence_no(failed_post.event_id),
+        )[0]
+        self.assertEqual("session-full", failed.mode)
+        self.assertEqual([], self.store.list_resource_versions_for_session("session-1"))
+        self.assertEqual("failed", latest_operation.outcome)
+        self.assertEqual(failed_post.event_id, latest_operation.outcome_event_id)
+
+    def test_latest_unknown_post_does_not_reuse_older_success(self) -> None:
+        repo_root = Path(self.temporary_directory.name)
+        target = repo_root / "unknown-latest.txt"
+        command = """*** Begin Patch
+*** Add File: unknown-latest.txt
++value
+*** End Patch"""
+        self._record(
+            "pre_tool_use",
+            "unknown-latest",
+            "apply_patch",
+            tool_input={"command": command},
+            cwd=str(repo_root),
+        )
+        target.write_text("first\n", encoding="utf-8")
+        success = self._record(
+            "post_tool_use",
+            "unknown-latest",
+            "apply_patch",
+            tool_input={"command": command},
+            tool_response="Done!",
+            cwd=str(repo_root),
+        )
+        _capture_post_tool_evidence(self.store, success)
+        unknown = self._record(
+            "post_tool_use",
+            "unknown-latest",
+            "apply_patch",
+            tool_input={"command": command},
+            tool_response={"opaque": "result"},
+            cwd=str(repo_root),
+        )
+        _capture_post_tool_evidence(self.store, unknown)
+        operations = tuple(self.store.list_tool_operations_for_session("session-1"))
+        snapshots = tuple(self.store.list_resource_snapshots_for_session("session-1"))
+        result = run_adapters(
+            self.store.list_artifact_contexts(),
+            repo_root,
+            operations=operations,
+            snapshots=snapshots,
+        )
+
+        self.assertEqual("unknown", operations[0].outcome)
+        self.assertEqual(unknown.event_id, operations[0].outcome_event_id)
+        self.assertEqual([], list(result.resources))
+
+    def test_incremental_retry_rebuilds_after_partial_resource_write(self) -> None:
+        repo_root = Path(self.temporary_directory.name)
+        command = "printf A > retry.txt; printf B >> retry.txt"
+        pre = self._record(
+            "pre_tool_use",
+            "snapshot-retry",
+            "Bash",
+            tool_input={"command": command},
+            cwd=str(repo_root),
+        )
+        (repo_root / "retry.txt").write_bytes(b"AB")
+        post = self._record(
+            "post_tool_use",
+            "snapshot-retry",
+            "Bash",
+            tool_input={"command": command},
+            tool_response={"exit_code": 0},
+            cwd=str(repo_root),
+        )
+        _capture_post_tool_evidence(self.store, post)
+        update_runtime_analysis(
+            self.store,
+            repo_root,
+            session_id="session-1",
+            current_event_id=pre.event_id,
+            detector_version="runtime-retry-test-v1",
+            minimum_path_score=0.15,
+        )
+
+        original_upsert = self.store.upsert_resource_versions
+
+        def persist_then_fail(resources):
+            original_upsert(resources)
+            raise RuntimeError("injected after resource persistence")
+
+        with patch.object(
+            self.store,
+            "upsert_resource_versions",
+            side_effect=persist_then_fail,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "injected"):
+                update_runtime_analysis(
+                    self.store,
+                    repo_root,
+                    session_id="session-1",
+                    current_event_id=post.event_id,
+                    detector_version="runtime-retry-test-v1",
+                    minimum_path_score=0.15,
+                )
+
+        retry = update_runtime_analysis(
+            self.store,
+            repo_root,
+            session_id="session-1",
+            current_event_id=post.event_id,
+            detector_version="runtime-retry-test-v1",
+            minimum_path_score=0.15,
+        )
+        resources = self.store.list_resource_versions_for_session("session-1")
+        resource_edges = [
+            edge
+            for edge in self.store.list_information_flow_edges_for_session("session-1")
+            if edge.src_node_kind == "resource_version"
+            and edge.dst_node_kind == "resource_version"
+        ]
+        adjacency = {edge.src_node_id: edge.dst_node_id for edge in resource_edges}
+
+        self.assertEqual("session-full", retry.mode)
+        self.assertEqual(2, len(resources))
+        self.assertTrue(all(src != dst for src, dst in adjacency.items()))
+        self.assertFalse(
+            any(adjacency.get(destination) == source for source, destination in adjacency.items())
+        )
 
     def _record_exact_pair(
         self,

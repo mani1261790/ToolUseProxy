@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -43,6 +44,30 @@ _CONNECTORS = {
 }
 _UNSUPPORTED_OPERATORS = {"&", "|&", "<<", "<<<", "(", ")"}
 _REDIRECTIONS = {">", ">>", "&>", "&>>", "<"}
+_CWD_MUTATORS = {".", "cd", "eval", "popd", "pushd", "source"}
+_COMMAND_WRAPPERS = {"builtin", "command"}
+_UNSUPPORTED_COMMAND_WORDS = {
+    "!",
+    "{",
+    "}",
+    "case",
+    "coproc",
+    "do",
+    "done",
+    "elif",
+    "else",
+    "esac",
+    "fi",
+    "for",
+    "function",
+    "if",
+    "select",
+    "then",
+    "time",
+    "until",
+    "while",
+}
+_ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=.*", flags=re.DOTALL)
 
 
 def parse_bash_command_plan(command: str) -> BashCommandPlan | None:
@@ -76,6 +101,8 @@ def parse_bash_command_plan(command: str) -> BashCommandPlan | None:
     raw_segments.append(
         _make_segment(command, len(raw_segments), connector_from, current)
     )
+    if any(_segment_has_unsupported_command(segment) for segment in raw_segments):
+        return None
 
     simple_cat = len(raw_segments) == 1 and not any(
         token.is_operator and token.value in _REDIRECTIONS
@@ -155,6 +182,10 @@ def _shell_tokens(command: str) -> list[ShellToken] | None:
             quote = char
             index += 1
             continue
+        if char == "#":
+            # shell commentの残りを静的operationと誤認しないよう、
+            # allowlistではunquoted commentをcommand全体ごと拒否する。
+            return None
         if char.isspace():
             finish(index)
             index += 1
@@ -230,6 +261,32 @@ def _segment_file_operations(
     operations = _redirection_operations(segment)
     operations.extend(_cat_operations(segment, simple_cat=simple_cat))
     return _deduplicate(operations)
+
+
+def _segment_has_unsupported_command(segment: BashSegment) -> bool:
+    ignored = _redirect_operand_indexes(segment.tokens)
+    words: list[str] = []
+    for index, token in enumerate(segment.tokens):
+        if index in ignored or token.is_operator:
+            continue
+        if not words and _ASSIGNMENT.fullmatch(token.value):
+            continue
+        words.append(token.value)
+    if not words:
+        return False
+
+    command_index = 0
+    command = Path(words[command_index]).name or words[command_index]
+    if command in _UNSUPPORTED_COMMAND_WORDS:
+        return True
+    if command in _COMMAND_WRAPPERS:
+        command_index += 1
+        while command_index < len(words) and words[command_index].startswith("-"):
+            command_index += 1
+        if command_index >= len(words):
+            return False
+        command = Path(words[command_index]).name or words[command_index]
+    return command in _CWD_MUTATORS
 
 
 def _redirection_operations(segment: BashSegment) -> list[BashFileOperation]:
@@ -329,7 +386,12 @@ def _redirect_operand_indexes(tokens: tuple[ShellToken, ...]) -> set[int]:
 def _is_static_path(token: str) -> bool:
     if not token or "\0" in token:
         return False
-    if any(marker in token for marker in ("$", "`", "*", "?", "[", "]")):
+    if any(
+        marker in token
+        for marker in ("$", "`", "*", "?", "[", "]", "{", "}")
+    ):
+        return False
+    if token.startswith(("~+", "~-")):
         return False
     if token in {"-", "&", "/dev/null", "/dev/stdin", "/dev/stdout", "/dev/stderr"}:
         return False

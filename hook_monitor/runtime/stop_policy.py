@@ -101,7 +101,12 @@ def _evaluate_without_session(
     store.upsert_artifact_fragments(fragments)
 
     contexts = store.list_artifact_contexts()
-    adapter_result = run_adapters(contexts, repo_root)
+    adapter_result = run_adapters(
+        contexts,
+        repo_root,
+        operations=tuple(store.list_tool_operations()),
+        snapshots=tuple(store.list_resource_snapshots()),
+    )
     artifact_edges = build_artifact_flow_edges(contexts) + list(adapter_result.edges)
     store.replace_resource_versions(list(adapter_result.resources))
     store.replace_sink_candidates(list(adapter_result.sinks))

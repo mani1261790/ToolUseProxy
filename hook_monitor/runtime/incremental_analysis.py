@@ -38,7 +38,7 @@ from hook_monitor.runtime.source_config import (
 from hook_monitor.runtime.storage import EventStore
 
 
-RUNTIME_GRAPH_DETECTOR_VERSION = "runtime-graph-v8-bash-segments"
+RUNTIME_GRAPH_DETECTOR_VERSION = "runtime-graph-v9-snapshots"
 
 
 @dataclass(frozen=True)
@@ -117,7 +117,24 @@ def _rebuild_session(
         session_id,
         through_sequence_no=current_sequence_no,
     )
-    adapter_result = run_adapters(contexts, repo_root)
+    operations = tuple(
+        store.list_tool_operations_for_session(
+            session_id,
+            through_sequence_no=current_sequence_no,
+        )
+    )
+    snapshots = tuple(
+        store.list_resource_snapshots_for_session(
+            session_id,
+            through_sequence_no=current_sequence_no,
+        )
+    )
+    adapter_result = run_adapters(
+        contexts,
+        repo_root,
+        operations=operations,
+        snapshots=snapshots,
+    )
     artifact_edges = build_artifact_flow_edges(contexts) + list(adapter_result.edges)
     source_edges = build_source_binding_edges(chunks, contexts, artifact_edges)
     source_edges += build_protected_source_resource_edges(
@@ -193,20 +210,74 @@ def _update_session_delta(
         after_sequence_no=after_sequence_no,
         through_sequence_no=current_sequence_no,
     )
+    delta_operations = store.list_tool_operations_for_session(
+        session_id,
+        after_sequence_no=after_sequence_no,
+        through_sequence_no=current_sequence_no,
+    )
+    delta_snapshots = store.list_resource_snapshots_for_session(
+        session_id,
+        after_sequence_no=after_sequence_no,
+        through_sequence_no=current_sequence_no,
+    )
+    affected_tool_use_ids = {
+        tool_use_id
+        for tool_use_id in (
+            [context.tool_use_id for context in delta_contexts]
+            + [operation.tool_use_id for operation in delta_operations]
+            + [snapshot.tool_use_id for snapshot in delta_snapshots]
+        )
+        if tool_use_id is not None
+    }
     dependency_contexts = store.list_artifact_contexts_for_tool_uses(
         session_id,
-        {
-            context.tool_use_id
-            for context in delta_contexts
-            if context.tool_use_id is not None
-        },
+        affected_tool_use_ids,
+        through_sequence_no=current_sequence_no,
     )
     adapter_contexts = _deduplicate_contexts(delta_contexts + dependency_contexts)
+    adapter_operations = tuple(
+        store.list_tool_operations_for_tool_uses(
+            session_id,
+            affected_tool_use_ids,
+            through_sequence_no=current_sequence_no,
+        )
+    )
+    adapter_snapshots = tuple(
+        store.list_resource_snapshots_for_tool_uses(
+            session_id,
+            affected_tool_use_ids,
+            through_sequence_no=current_sequence_no,
+        )
+    )
     existing_resources = tuple(store.list_resource_versions_for_session(session_id))
+    affected_operation_ids = {
+        operation.operation_id for operation in adapter_operations
+    }
+    existing_operation_ids = {
+        resource.operation_id
+        for resource in existing_resources
+        if resource.operation_id is not None
+    }
+    if affected_operation_ids & existing_operation_ids:
+        # duplicate Postまたはcursor更新前の部分保存を検出した場合だけ、
+        # 同一sessionをraw evidenceから再構築して重複version/cycleを避ける。
+        return _rebuild_session(
+            store,
+            repo_root,
+            session_id=session_id,
+            current_sequence_no=current_sequence_no,
+            detector_version=detector_version,
+            source_digest=source_digest,
+            sources=sources,
+            chunks=chunks,
+            minimum_path_score=minimum_path_score,
+        )
     adapter_result = run_adapters_incremental(
         adapter_contexts,
         repo_root,
         existing_resources,
+        adapter_operations,
+        adapter_snapshots,
     )
     similarity_edges = _build_delta_similarity_edges(
         store,

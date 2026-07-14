@@ -79,6 +79,7 @@ class ToolOperation:
     content_fragment_id: str | None
     outcome: str = "unknown"
     outcome_evidence: str | None = None
+    outcome_event_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -133,6 +134,10 @@ class ResourceVersion:
     sequence_no: int
     session_id: str | None
     origin_tool_use_id: str | None
+    operation_id: str | None = None
+    operation_index: int | None = None
+    snapshot_id: str | None = None
+    resource_state: str = "present"
 
 
 @dataclass(frozen=True)

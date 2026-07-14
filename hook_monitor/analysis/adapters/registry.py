@@ -12,7 +12,9 @@ from hook_monitor.runtime.models import (
     ArtifactContext,
     FlowEdge,
     ResourceVersion,
+    ResourceSnapshot,
     SinkCandidate,
+    ToolOperation,
 )
 
 
@@ -29,12 +31,23 @@ def run_adapters(
     contexts: list[ArtifactContext],
     repo_root: Path,
     adapters: tuple[ToolAdapter, ...] = DEFAULT_ADAPTERS,
+    *,
+    operations: tuple[ToolOperation, ...] = (),
+    snapshots: tuple[ResourceSnapshot, ...] = (),
 ) -> AdapterResult:
     edges: dict[str, FlowEdge] = {}
     resources: dict[str, ResourceVersion] = {}
     sinks: dict[str, SinkCandidate] = {}
     for adapter in adapters:
-        result = adapter.analyze(contexts, repo_root)
+        if isinstance(adapter, FilesystemAdapter):
+            result = adapter.analyze_with_evidence(
+                contexts,
+                repo_root,
+                operations,
+                snapshots,
+            )
+        else:
+            result = adapter.analyze(contexts, repo_root)
         edges.update((edge.edge_id, edge) for edge in result.edges)
         resources.update((resource.node_id, resource) for resource in result.resources)
         sinks.update((sink.node_id, sink) for sink in result.sinks)
@@ -45,6 +58,8 @@ def run_adapters_incremental(
     contexts: list[ArtifactContext],
     repo_root: Path,
     existing_resources: tuple[ResourceVersion, ...],
+    operations: tuple[ToolOperation, ...] = (),
+    snapshots: tuple[ResourceSnapshot, ...] = (),
 ) -> AdapterResult:
     edges: dict[str, FlowEdge] = {}
     resources: dict[str, ResourceVersion] = {}
@@ -55,6 +70,8 @@ def run_adapters_incremental(
                 contexts,
                 repo_root,
                 existing_resources,
+                operations,
+                snapshots,
             )
         else:
             result = adapter.analyze(contexts, repo_root)
