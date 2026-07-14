@@ -50,6 +50,7 @@ class BashAdapter:
                     context=command_context,
                     metadata={
                         "adapter": "bash",
+                        "event_id": command_context.event_id,
                         "command_fragment_id": command_context.fragment.fragment_id,
                         "command_json_pointer": command_context.fragment.json_pointer,
                         "matched_program": matched_program,
