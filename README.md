@@ -58,7 +58,9 @@ API キーや認証情報のように文字列パターンで判別しやすい�
 
 ## 現在地
 
-現在は第3段階の実行時介入へ進み、外部tool送信とCodex最終応答をgraph上の出口として扱っています。Codexの`PreToolUse` / `PostToolUse` / `Stop` HooksからeventとartifactをSQLiteへ記録し、artifact fragment間の類似関係とadapterが作るstructured edgeから情報流グラフを構築します。`scripts/detect_leaks.py`はsource lineageが`sink_candidate`へ到達した場合にfindingを出し、`scripts/evaluate_policy.py`は`allow` / `warn` / `block` / `continue_review`へ変換します。実Hookでは、Stopが`final_answer`漏えい候補を`continue_review`で差し戻し、opt-inのBashとMCP PreToolUseがcriticalなexternal sinkを`permissionDecision: deny`で実行前遮断します。MCPは追加のopt-inを必要とし、write-like toolだけを対象にします。両方ともsession差分解析を共有し、介入判断は`policy_decisions`へ保存します。
+現在は第3段階の実行時介入へ進み、外部tool送信とCodex最終応答をgraph上の出口として扱っています。Codexの`PreToolUse` / `PostToolUse` / `Stop` HooksからeventとartifactをSQLiteへ記録し、artifact fragment間の類似関係とadapterが作るstructured edgeから情報流グラフを構築します。`apply_patch`はfile operation単位、Bashは静的に理解できるsegment単位へ分解し、成功を確認できた`PostToolUse`では変更対象pathだけをbounded snapshotの候補にします。snapshot本文は既定で保存せず、安定して全体を読み取れたファイルのSHA-256をresource versionへ接続します。operation outcomeとsnapshotもsession差分解析へ統合しています。
+
+`scripts/detect_leaks.py`はsource lineageが`sink_candidate`へ到達した場合にfindingを出し、`scripts/evaluate_policy.py`は`allow` / `warn` / `block` / `continue_review`へ変換します。実Hookでは、Stopが`final_answer`漏えい候補を`continue_review`で差し戻し、opt-inのBashとMCP PreToolUseがcriticalなexternal sinkを`permissionDecision: deny`で実行前遮断します。MCPは追加のopt-inを必要とし、write-like toolだけを対象にします。両方ともsession差分解析を共有し、介入判断は`policy_decisions`へ保存します。次の実装課題は、複数workspace間でsource、cursor、resourceを明示的に分離することです。
 
 Hook の構成と接続方法は [docs/設定/Hook設定.md](docs/設定/Hook設定.md) にまとめています。
 ドキュメント全体の索引は [docs/索引.md](docs/索引.md) にまとめています。

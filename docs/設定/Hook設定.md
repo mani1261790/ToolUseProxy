@@ -4,7 +4,8 @@
 
 ## 参考
 
-- Hooks の全体像をつかむための動画: [YouTube](https://www.youtube.com/watch?v=03CfGf9iw_U)
+- 公式仕様: [Codex Hooks](https://learn.chatgpt.com/docs/hooks.md)
+- Hooks の全体像をつかむための補助動画: [YouTube](https://www.youtube.com/watch?v=03CfGf9iw_U)
 
 ## Hooks の構造
 
@@ -36,7 +37,7 @@ Codex Hooks の設定と、そこから呼び出される監視プログラム�
 ## この研究での役割分担
 
 - `PreToolUse` は、tool 実行前の入力を観測する
-- `PostToolUse` は、tool 実行後の出力を記録する
+- `PostToolUse` は、tool 実行後の出力とoperation outcomeを記録し、成功を確認できた変更だけをsnapshot候補にする
 - `UserPromptSubmit` は、最初のユーザー入力に秘密情報が混ざっていないかを見る候補
 - `Stop` は、最終応答に漏えいがないかを見る候補
 
@@ -44,40 +45,42 @@ Codex Hooks の設定と、そこから呼び出される監視プログラム�
 
 ## 設定イメージ
 
-たとえば、設定は概念的には次のようになります。
+project単位では、trustedなrepositoryの`.codex/hooks.json`へ次のように設定します。operation抽出とsnapshot captureの対象である`Bash`と`apply_patch`を同じmatcherで観測します。
 
 ```json
 {
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Bash",
+        "matcher": "^(Bash|apply_patch)$",
         "hooks": [
           {
             "type": "command",
-            "command": "python3 /Users/mani/Developer/ToolUseProxy/hooks/monitor_pre_tool.py"
+            "command": "python3 /Users/mani/Developer/ToolUseProxy/hooks/monitor_pre_tool.py",
+            "timeout": 5
           }
         ]
       }
     ],
     "PostToolUse": [
       {
-        "matcher": "Bash",
+        "matcher": "^(Bash|apply_patch)$",
         "hooks": [
           {
             "type": "command",
-            "command": "python3 /Users/mani/Developer/ToolUseProxy/hooks/monitor_post_tool.py"
+            "command": "python3 /Users/mani/Developer/ToolUseProxy/hooks/monitor_post_tool.py",
+            "timeout": 5
           }
         ]
       }
     ],
     "Stop": [
       {
-        "matcher": "*",
         "hooks": [
           {
             "type": "command",
-            "command": "python3 /Users/mani/Developer/ToolUseProxy/hooks/monitor_stop.py"
+            "command": "python3 /Users/mani/Developer/ToolUseProxy/hooks/monitor_stop.py",
+            "timeout": 5
           }
         ]
       }
@@ -89,15 +92,17 @@ Codex Hooks の設定と、そこから呼び出される監視プログラム�
 `PreToolUse`、`PostToolUse`、`Stop` は Codex が用意している既存イベントです。
 このリポジトリで実装するのは、そこから呼び出される `monitor_pre_tool.py`、`monitor_post_tool.py`、`monitor_stop.py` の中身です。
 
+`matcher`は正規表現です。`PreToolUse`と`PostToolUse`ではtool名に適用されますが、`Stop`ではmatcherがサポートされないため省略します。MCPも観測する場合は、対象serverを絞った`^mcp__<server>__.*$`などのmatcher groupを追加します。Codexはtimeoutを省略すると600秒を使用するため、この軽量Hookでは明示的に5秒へ制限します。commandはsessionの`cwd`で実行され、複数のmatching command hookは並行起動されます。project-local Hookは実行前に定義内容をtrustする必要があります。
+
 ## 置いてあるもの
 
 - `hooks/monitor_pre_tool.py`
 - `hooks/monitor_post_tool.py`
 - `hooks/monitor_stop.py`
 
-いずれも stdin のHook payloadを受け取り、event、artifact、artifact fragmentをローカルSQLiteへ記録します。
+いずれも stdin のHook payloadを受け取り、event、artifact、artifact fragmentをローカルSQLiteへ記録します。`PreToolUse`では静的なfile operationも抽出し、`PostToolUse`ではoperation outcomeとbounded resource snapshotを記録します。
 
-`PostToolUse`は記録だけを行います。`Stop`は最終応答の`final_answer` sinkを評価します。`PreToolUse`は既定では記録だけですが、`TOOLUSEPROXY_PRE_TOOL_POLICY=1`を設定すると、実payloadを確認済みの`Bash`を実行前に評価します。MCPはさらに`TOOLUSEPROXY_PRE_TOOL_MCP_POLICY=1`を設定した場合だけ評価します。
+`PostToolUse`はtool responseを三値のoutcomeへ分類し、成功を確認できた`apply_patch`またはBash writeだけをsnapshot候補にします。`Stop`は最終応答の`final_answer` sinkを評価します。`PreToolUse`は既定では記録だけですが、`TOOLUSEPROXY_PRE_TOOL_POLICY=1`を設定すると、実payloadを確認済みの`Bash`を実行前に評価します。MCPはさらに`TOOLUSEPROXY_PRE_TOOL_MCP_POLICY=1`を設定した場合だけ評価します。
 
 ## 使い方
 
@@ -127,6 +132,9 @@ hook_monitor/
     normalize.py
     parser.py
     fragments.py
+    operations.py
+    tool_outcome.py
+    snapshot_capture.py
     storage.py
     source_config.py
     runner.py
@@ -147,7 +155,7 @@ hook_monitor/
     source_index.py
 ```
 
-まず、記録の単位を2つに分けています。
+記録の単位は、raw Hook payloadから実ファイルの状態まで段階的に分けています。
 
 - `event`
   - hook が1回発火した記録です
@@ -155,11 +163,24 @@ hook_monitor/
 - `artifact`
   - その event から比較対象として抜き出した文字列です
   - たとえば `tool_input` や `tool_response` がここに入ります
+- `artifact fragment`
+  - artifactを比較・解釈する単位へ分割したものです
+  - payload由来fragmentに加え、`operation_container`、`operation_added`、`operation_removed`、`operation_control`、`bash_segment`を区別します
+- `tool operation`
+  - `PreToolUse`の入力から静的に確定できたfile操作です
+  - adapter、operation index/kind、source/target path、Bash segment/connector、対応fragmentを持ちます
+- `tool operation outcome`
+  - あるPost eventが各operationを`succeeded` / `failed` / `unknown`のどれと判断したかを保存する履歴です
+- `resource snapshot`
+  - 成功を確認できたPost後に、operationから静的に確定したpathだけをbounded captureした証拠です
+  - 本文、hash、取得status、workspace境界、所要時間を別fieldで保持します
 
 つまり、
 
 - `event` = 時系列で追いたい単位
 - `artifact` = 類似度を計算したい単位
+- `operation` = tool call内のfile操作を分離する単位
+- `snapshot` = 実行後のresource状態を確認する単位
 
 です。
 
@@ -172,9 +193,12 @@ hook_monitor/
 3. `hook_monitor/runtime/parser.py` が JSON payload を読む
 4. `hook_monitor/runtime/parser.py` が event を内部形式に正規化する
 5. `hook_monitor/runtime/parser.py` が `tool_input` / `tool_response` / `final_answer` から artifact を作る
-6. `hook_monitor/runtime/storage.py` が SQLite に保存する
-7. 有効な`PreToolUse`または`Stop`ではsession差分解析を更新する
-8. `pre_tool_policy.py`または`stop_policy.py`が現在eventのsinkだけを評価し、stdout JSONへ変換する
+6. `PreToolUse`では`operations.py`がapply_patchのfile operationまたはBashの静的segment operationを抽出する
+7. `PostToolUse`では、保存済みPre operationのownerを検証し、`tool_outcome.py`が実行結果を三値へ分類する
+8. outcomeが`succeeded`の場合だけ、`snapshot_capture.py`が変更対象pathをbounded captureする
+9. `storage.py`がPost event、outcome、snapshotを同じtransactionでSQLiteへ保存する
+10. 有効な`PreToolUse`または`Stop`では、未処理のPost evidenceを含むsession差分解析を更新する
+11. `pre_tool_policy.py`または`stop_policy.py`が現在eventのsinkだけを評価し、stdout JSONへ変換する
 
 短く書くと、こうです。
 
@@ -183,11 +207,63 @@ Codex
   -> hooks/monitor_pre_tool.py or hooks/monitor_post_tool.py or hooks/monitor_stop.py
   -> hook_monitor/runtime/runner.py
   -> hook_monitor/runtime/parser.py
+  -> PreToolUse: hook_monitor/runtime/operations.py
+  -> PostToolUse: hook_monitor/runtime/tool_outcome.py
+                  hook_monitor/runtime/snapshot_capture.py
   -> hook_monitor/runtime/storage.py
   -> .tooluseproxy/events.db
   -> PreToolUse: hook_monitor/runtime/pre_tool_policy.py
   -> Stop: hook_monitor/runtime/stop_policy.py
 ```
+
+## PostToolUseのoperation outcomeとsnapshot
+
+snapshotの目的は、patch文字列やshell commandをファイル本文の代用品にせず、tool実行後に実在するresourceの状態を確認することです。PreToolUseでは実行前遮断のlatencyを増やさないためsnapshotを取得しません。`PreToolUse`で静的operationだけを保存し、同じsession / tool use / tool名 / workspaceの`PostToolUse`で成功を確認できた場合だけcaptureします。
+
+outcomeは次の三値です。
+
+- `succeeded`
+  - structuredな`exit_code: 0`または成功flagを確認した
+  - `apply_patch`では実Codex互換の`Done!` / `success` markerも採用する
+- `failed`
+  - structuredなnon-zero exit codeまたは明示的な失敗flagを確認した
+- `unknown`
+  - statusを確定できない、owner contextが一致しない、またはstructured statusが不正
+
+Bash stdoutはcommand自身が自由に生成できるため、本文中の`Exit code: 0`などをstatusとして信用しません。Codex CLI `0.142.5` / `gpt-5.5`の実Hookでは、成功したno-output Bashと失敗した`false`のどちらも`tool_response: ""`として届きました。そのため現在のHook contractでは両方を`unknown / success_unconfirmed`として保存し、Bash snapshotは取得しません。静的Bash segment operation自体はPreToolUseで保存されます。structured statusを含むsynthetic payloadとbenchmarkではsnapshot経路を検証しています。
+
+### capture対象と境界
+
+- workspace全体は走査せず、operationから静的に確定できたpathだけを扱う
+- workspace rootにはvalidated PreToolUse `cwd`を使う
+- Post側のsession、tool use、tool名、workspaceがPre ownerと一致しなければcaptureしない
+- lexical pathがroot外なら`outside_workspace`とする
+- workspace root、中間directory、対象fileのsymlinkをfollowせず`symlink_rejected`とする
+- regular fileだけを読み、device、FIFO、directoryなどは`non_regular`とする
+- 読み始めと終了時のdevice、inode、size、mtime、ctimeを比較し、変化した場合は`unstable_file`としてhashを採用しない
+- binary fileは本文を保存せず、上限内で全体を読めた場合だけ`binary_hash_only`としてSHA-256を保存する
+
+moveではsourceが消えたこととtargetの現在内容を別snapshotで確認します。deleteではsourceの不在を確認できた場合だけ`deleted` tombstoneを作ります。overwriteは古いresource lineageを引き継がず、appendは`updated_from`で以前のresourceを引き継ぎます。同じtool callで同じpathを複数回書く場合は最終writerだけをcaptureし、先行operationを`superseded_by_later_operation`とします。`&&` / `||`は各segmentが実行されたかをPost全体のstatusから確定できないため`execution_unknown`、pipeを含み最終writerが曖昧な場合は`ambiguous_final_writer`としてresourceを断定しません。
+
+### 上限
+
+| 環境変数 | 既定値 | hard cap / 許容値 |
+|---|---:|---:|
+| `TOOLUSEPROXY_SNAPSHOT_MAX_FILE_BYTES` | 256 KiB | 4 MiB |
+| `TOOLUSEPROXY_SNAPSHOT_MAX_TOOL_BYTES` | 1 MiB | 16 MiB |
+| `TOOLUSEPROXY_SNAPSHOT_MAX_PATHS` | 32 | 128 |
+| `TOOLUSEPROXY_SNAPSHOT_TIME_BUDGET_MS` | 250 ms | 1000 ms |
+| `TOOLUSEPROXY_SNAPSHOT_PLAINTEXT` | `0` | `0` / `1`相当のboolean |
+
+不正値または0以下は既定値へ戻し、hard capを超える値はcapへ丸めます。内部のsnapshot record上限はpath上限の2倍です。operationまたはsnapshot specがこのrecord上限を最初から超える場合はcapture全体を省略し、hashless解析へfallbackします。個別処理中にfile上限、tool call合計byte上限、path数、時間budgetのいずれかへ達した場合は、`file_too_large`、`tool_total_limit`、`path_limit`、`time_budget_exhausted`などのstatusを監査証拠として残します。
+
+### 本文、hash、失敗時のfallback
+
+既定の`TOOLUSEPROXY_SNAPSHOT_PLAINTEXT=0`では、UTF-8 textでも`body_text`を保存せず`captured_hash_only`にします。opt-in時だけ`captured_text`として本文を保存します。binary本文はopt-inでも保存しません。同じpathの取得結果を再利用する場合も、重複本文を保存せず`cached_hash_only`にします。
+
+`content_sha256`は、上限内のファイル全体を安定して読み切った場合だけ計算します。apply_patch文字列やBash segmentのhashをfile content hashとして代用しません。capture全体の例外はHookをfail-openにし、outcome evidenceへ例外型だけを追記します。path単位の失敗は`capture_status`と`error_code`を保存し、可能な場合はhashless resource versionへfallbackします。ただし、delete tombstoneは不在を確認した場合だけ作り、`execution_unknown`と`ambiguous_final_writer`はmaterializeしません。
+
+snapshotの自動retentionやpruneはまだ実装していないため、recordはDBを削除または明示的に整理するまで残ります。SQLite自体も暗号化しません。snapshot本文をoffにしても、raw Hook payload、artifact、operation fragmentにはtool input/outputが平文で保存され得ます。DBを外部へ共有せず、OSのfile permissionとdisk encryptionで保護してください。
 
 ## Stop hook の policy 接続
 
@@ -217,7 +293,7 @@ Stop payload
   -> Codex Hook stdout JSON
 ```
 
-StopとPreToolUseは同じruntime graph detector versionを使います。初回、detector変更、source manifest変更、cursor不整合時だけ同一sessionを`session-full`で再構築し、通常は未処理sequenceだけを`session-incremental`で追加します。source manifestが変わらない場合、protected source本文は再読込しません。
+StopとPreToolUseは同じruntime graph detector versionを使います。初回、detector変更、source manifest変更、cursor不整合時だけ同一sessionを`session-full`で再構築し、通常は未処理sequenceだけを`session-incremental`で追加します。source manifestが変わらない場合、protected source本文は再読込しません。duplicate Postやcursor更新前の部分保存により、delta operationが既存resource versionへ再度当たる場合も、重複versionやcycleを避けるため同一sessionだけを`session-full`で再構築します。runtime Hookが全DB再解析へ戻ることはありません。
 
 source設定は、`protected_sources.json` が存在する場合はその内容を優先します。空の `sources` は「保護対象なし」として扱い、DBに古いsource定義が残っていてもfallbackしません。`protected_sources.json` が存在しない場合だけ、既存DBのsource定義へfallbackします。
 
@@ -263,7 +339,7 @@ MCP Hookのmatcherは、たとえば`^mcp__.*$`、または対象を絞った`^m
 
 native Web SearchはCodex CLI `0.142.5`で`matcher: "*"`を使ってもPreToolUse / PostToolUseに現れなかったため、実行前遮断へは接続していません。Search adapterはsynthetic / imported eventのoffline解析用に残します。
 
-現時点のsource設定基準はToolUseProxy repository rootです。複数workspaceを同じDBで分離するsource ID / cursor schemaは別作業とします。
+現時点のsource manifest基準はToolUseProxy repository rootです。一方、snapshotのfilesystem境界にはvalidated PreToolUse `cwd`を使います。capture boundaryが分かれていても、source ID、analysis cursor、resourceをworkspace IDで分離するschemaはまだないため、複数workspace対応は別作業です。
 
 ## 各ファイルの役割
 
@@ -272,7 +348,7 @@ native Web SearchはCodex CLI `0.142.5`で`matcher: "*"`を使ってもPreToolUs
   - `run_hook("pre_tool_use")`を呼び、opt-in時はBashとMCPのexternal sinkを評価します
 - `hooks/monitor_post_tool.py`
   - `PostToolUse` 用の薄い entrypoint です
-  - `run_hook("post_tool_use")` を呼ぶだけです
+  - `run_hook("post_tool_use")`を呼び、runner側でoutcome分類と成功時snapshot captureを実行します
 - `hooks/monitor_stop.py`
   - `Stop` 用の薄い entrypoint です
   - `run_hook("stop")` を呼び、記録後に `final_answer` の policy 評価を実行します
@@ -280,7 +356,7 @@ native Web SearchはCodex CLI `0.142.5`で`matcher: "*"`を使ってもPreToolUs
   - 内部で扱う「記録の型」を定義します
   - `NormalizedEvent` は event 用です
   - `ArtifactRecord` は artifact 用です
-  - ここで「1件の event は何を持つか」「1件の artifact は何を持つか」を固定します
+  - `ToolOperation`、`ResourceSnapshot`、`ResourceVersion`もここで固定します
 - `hook_monitor/runtime/ids.py`
   - `event_id` と `artifact_id` を生成します
   - `event_id` は `events` テーブルの主キーとして使います
@@ -299,17 +375,25 @@ native Web SearchはCodex CLI `0.142.5`で`matcher: "*"`を使ってもPreToolUs
 - `hook_monitor/runtime/fragments.py`
   - artifact全体とJSON内の値を比較用fragmentへ分割します
   - `query`、`path`、`content`、`stdout`などのsemantic roleを付けます
+- `hook_monitor/runtime/operations.py`
+  - PreToolUseのapply_patchをfile operationへ、Bashを静的segment operationへ分解します
+  - operation固有fragmentと安定したoperation IDを作ります
+- `hook_monitor/runtime/tool_outcome.py`
+  - PostToolUse responseを`succeeded` / `failed` / `unknown`へ分類します
+  - Bashの自由なstdout本文を実行statusとして信用しません
+- `hook_monitor/runtime/snapshot_capture.py`
+  - 成功Postに対応する静的pathだけを、workspace・byte・path数・時間上限内で取得します
+  - symlinkや非regular fileを拒否し、hash-onlyを既定にします
 - `hook_monitor/runtime/storage.py`
   - SQLite への保存を担当します
-  - `events` テーブルと `artifacts` テーブルを初期化し、記録します
-  - `events` は時系列の箱です
-  - `artifacts` は比較対象テキストの箱です
+  - event、artifact、operation、outcome、snapshotと解析結果tableを初期化し、記録します
+  - Post event、operation outcome、resource snapshotを同じtransactionで保存します
 - `hook_monitor/runtime/source_config.py`
   - 保護対象 source の設定ファイルを読みます
   - `.env` や `private.py` を「守るべき source」として定義する入口です
 - `hook_monitor/runtime/runner.py`
   - 全体の実行順序をまとめる orchestrator です
-  - `read stdin -> parse -> normalize -> build artifacts -> store` を順番に実行します
+  - `read stdin -> parse -> operation/outcome/snapshot evidence -> store -> policy`を順番に実行します
 - `hook_monitor/analysis/chunking.py`
   - 保護対象 source を chunk に分割します
   - `.py` は関数や class 単位、テキストは段落単位で分割します
@@ -344,11 +428,18 @@ native Web SearchはCodex CLI `0.142.5`で`matcher: "*"`を使ってもPreToolUs
   - その event から取り出した `tool_input` / `tool_output` を入れます
   - `event_id` で元の event にぶら下がります
 - `artifact_fragments`
-  - artifact内のquery、path、content、stdoutなどを比較単位として保存します
+  - artifact内のquery、path、content、stdoutとoperation由来fragmentを比較・監査単位として保存します
+- `tool_operations`
+  - PreToolUseから静的に抽出したfile operation、path、segment、connector、対応fragmentを保存します
+- `tool_operation_outcomes`
+  - `(post_event_id, operation_id)`単位でPostの三値outcomeと根拠を保存します
+- `resource_snapshots`
+  - operation、workspace、path role、resource state、capture status、byte数、SHA-256、任意本文、error、durationを保存します
 - `information_flow_edges`
   - source設定とは独立したartifact fragment間の情報流候補を保存します
 - `resource_versions`
   - Filesystem adapterが再構成したファイルのversionを保存します
+  - operation ID/index、snapshot ID、resource stateにより実行証拠と接続します
 - `source_binding_edges`
   - protected sourceとartifactグラフの接続点を解析runごとに保存します
 - `lineage_assignments`
@@ -452,8 +543,7 @@ embedding を使って自然言語をベクトル化し、cos 類似度を取る
 - 類似度計算や source 追跡を変えたいなら `hook_monitor/analysis/`
 - 情報流エッジを強化したいなら `analysis` 側に拡張を足す
 
-つまり、いまの `hook_monitor/` は「記録の骨格」です。
-まだ漏えい検知や stop 判定までは入れず、まず event と artifact を壊れず保存するところに絞っています。
+現在の`hook_monitor/`は記録の骨格に加え、session差分graph、漏えい検知、Stop継続、Bash/MCP PreToolUse deny、operation単位lineage、PostToolUse snapshotまでを接続しています。次の境界は、複数workspaceの分離と、その後のPermissionRequest・安全なredactの評価です。
 
 ## この研究の位置づけ
 
