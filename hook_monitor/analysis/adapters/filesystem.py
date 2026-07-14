@@ -7,11 +7,12 @@ from pathlib import Path
 
 from hook_monitor.analysis.adapters.base import AdapterResult
 from hook_monitor.analysis.adapters.common import make_structured_edge, normalize_tool_name
-from hook_monitor.analysis.bash_file_parser import parse_bash_file_operations
+from hook_monitor.analysis.bash_file_parser import parse_bash_command_plan
 from hook_monitor.analysis.patch_parser import PatchOperation, parse_apply_patch
 from hook_monitor.runtime.models import ArtifactContext, FlowEdge, ResourceVersion
 from hook_monitor.runtime.operations import (
     apply_patch_operation_kind,
+    bash_segment_fragment_ids,
     make_operation_id,
 )
 
@@ -192,9 +193,23 @@ class FilesystemAdapter:
         command_context = _select_command_context(group)
         if command_context is None:
             return
-        operations = parse_bash_file_operations(command_context.fragment.text)
+        plan = parse_bash_command_plan(command_context.fragment.text)
+        if plan is None:
+            return
+        operations = [
+            operation
+            for segment in plan.segments
+            for operation in segment.operations
+        ]
         if not operations:
             return
+        segment_ids = bash_segment_fragment_ids(command_context.fragment, plan)
+        segment_contexts = {
+            context.fragment.fragment_id: context
+            for context in group
+            if context.phase == "pre_tool_use"
+            and context.fragment.fragment_kind == "bash_segment"
+        }
 
         session_id = group[0].session_id
         tool_use_id = group[0].tool_use_id
@@ -203,7 +218,11 @@ class FilesystemAdapter:
         outputs = _select_output_contexts(group) if succeeded else []
 
         for index, operation in enumerate(operations):
-            path = _normalize_path(operation.path, command_context.cwd, repo_root)
+            operation_context = segment_contexts.get(
+                segment_ids.get(operation.segment_index, ""),
+                command_context,
+            )
+            path = _normalize_path(operation.path, operation_context.cwd, repo_root)
             resource_key = (session_id, path)
             previous = latest_by_session_path.get(resource_key)
 
@@ -223,7 +242,7 @@ class FilesystemAdapter:
                         src_kind="resource_version",
                         src_id=resource.node_id,
                         dst_kind="artifact_fragment",
-                        dst_id=command_context.fragment.fragment_id,
+                        dst_id=operation_context.fragment.fragment_id,
                         relation="read_by",
                         method="bash_file_read",
                         reason=f"Bash command reads {path}",
@@ -259,7 +278,7 @@ class FilesystemAdapter:
                 tool_use_id=tool_use_id,
                 version_tag=(
                     f"bash_{operation.operation}:{index}:{operation.path}:"
-                    f"fd={operation.file_descriptor}"
+                    f"fd={operation.file_descriptor}:segment={operation.segment_index}"
                 ),
             )
             resources[resource.node_id] = resource
@@ -267,7 +286,7 @@ class FilesystemAdapter:
             edges.append(
                 make_structured_edge(
                     src_kind="artifact_fragment",
-                    src_id=command_context.fragment.fragment_id,
+                    src_id=operation_context.fragment.fragment_id,
                     dst_kind="resource_version",
                     dst_id=resource.node_id,
                     relation="written_to",
@@ -519,6 +538,7 @@ def _select_apply_patch_command(
         and context.artifact_role == "tool_input"
         and context.fragment.semantic_role == "command"
         and context.fragment.json_pointer != "/"
+        and context.fragment.fragment_kind != "bash_segment"
     ]
     return min(commands, key=lambda context: context.sequence_no) if commands else None
 
@@ -536,7 +556,15 @@ def _select_command_context(
     ]
     if not commands:
         return None
-    return min(commands, key=lambda context: context.sequence_no)
+    containers = [
+        context
+        for context in commands
+        if context.fragment.fragment_kind == "operation_container"
+    ]
+    return min(
+        containers or commands,
+        key=lambda context: (context.sequence_no, context.fragment.fragment_id),
+    )
 
 
 def _select_operation_fragment(

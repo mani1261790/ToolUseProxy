@@ -6,11 +6,14 @@ from pathlib import Path
 from hook_monitor.analysis.adapters.base import AdapterResult
 from hook_monitor.analysis.adapters.common import (
     group_tool_calls,
+    make_structured_edge,
     make_sink_candidate,
     make_submitted_to_edge,
     normalize_tool_name,
 )
+from hook_monitor.analysis.bash_file_parser import BashSegment, parse_bash_command_plan
 from hook_monitor.runtime.models import ArtifactContext, FlowEdge, SinkCandidate
+from hook_monitor.runtime.operations import bash_segment_fragment_ids
 
 
 class BashAdapter:
@@ -38,6 +41,56 @@ class BashAdapter:
 
         for group in group_tool_calls(contexts):
             if normalize_tool_name(group[0].tool_name) not in self._BASH_NAMES:
+                continue
+            planned = _planned_segment_contexts(group)
+            if planned is not None:
+                parent, segment_contexts = planned
+                for segment, segment_context in segment_contexts:
+                    if segment.connector_from == "pipe" and segment.index > 0:
+                        previous_context = segment_contexts[segment.index - 1][1]
+                        edges.append(
+                            make_structured_edge(
+                                src_kind="artifact_fragment",
+                                src_id=previous_context.fragment.fragment_id,
+                                dst_kind="artifact_fragment",
+                                dst_id=segment_context.fragment.fragment_id,
+                                relation="piped_to",
+                                method="bash_pipe",
+                                reason="Bash pipeline forwards stdout to the next segment",
+                            )
+                        )
+                    classification = _classify_segment(
+                        _basename(segment.tokens[0].value),
+                        [token.value for token in segment.tokens],
+                    )
+                    if classification is None:
+                        continue
+                    sink_type, label, matched_program, matched_pattern = classification
+                    sink = make_sink_candidate(
+                        sink_type=sink_type,
+                        label=label,
+                        context=segment_context,
+                        metadata={
+                            "adapter": "bash",
+                            "event_id": segment_context.event_id,
+                            "command_fragment_id": segment_context.fragment.fragment_id,
+                            "command_json_pointer": segment_context.fragment.json_pointer,
+                            "parent_command_fragment_id": parent.fragment.fragment_id,
+                            "segment_index": segment.index,
+                            "connector": segment.connector_from,
+                            "matched_program": matched_program,
+                            "matched_pattern": matched_pattern,
+                        },
+                    )
+                    sinks[sink.node_id] = sink
+                    edges.append(
+                        make_submitted_to_edge(
+                            src_id=segment_context.fragment.fragment_id,
+                            sink_id=sink.node_id,
+                            method="bash_segment",
+                            reason=f"bash segment may send data to {sink_type}",
+                        )
+                    )
                 continue
             for command_context in _select_command_contexts(group):
                 classification = _classify_command(command_context.fragment.text)
@@ -77,9 +130,43 @@ def _select_command_contexts(group: list[ArtifactContext]) -> list[ArtifactConte
         if context.phase == "pre_tool_use"
         and context.artifact_role == "tool_input"
         and context.fragment.semantic_role == "command"
+        and context.fragment.fragment_kind != "bash_segment"
     ]
     leaves = [context for context in candidates if context.fragment.json_pointer != "/"]
     return sorted(leaves or candidates, key=lambda context: context.fragment.fragment_id)
+
+
+def _planned_segment_contexts(
+    group: list[ArtifactContext],
+) -> tuple[ArtifactContext, list[tuple[BashSegment, ArtifactContext]]] | None:
+    parents = [
+        context
+        for context in group
+        if context.phase == "pre_tool_use"
+        and context.artifact_role == "tool_input"
+        and context.fragment.semantic_role == "command"
+        and context.fragment.fragment_kind == "operation_container"
+    ]
+    if not parents:
+        return None
+    parent = min(parents, key=lambda context: context.fragment.fragment_id)
+    plan = parse_bash_command_plan(parent.fragment.text)
+    if plan is None:
+        return None
+    ids = bash_segment_fragment_ids(parent.fragment, plan)
+    contexts_by_id = {
+        context.fragment.fragment_id: context
+        for context in group
+        if context.phase == "pre_tool_use"
+        and context.fragment.fragment_kind == "bash_segment"
+    }
+    result: list[tuple[BashSegment, ArtifactContext]] = []
+    for segment in plan.segments:
+        context = contexts_by_id.get(ids[segment.index])
+        if context is None:
+            return None
+        result.append((segment, context))
+    return parent, result
 
 
 def _classify_command(command: str) -> tuple[str, str, str, str] | None:
