@@ -270,6 +270,24 @@ class EventStore:
             )
             conn.execute(
                 """
+                CREATE TABLE IF NOT EXISTS runtime_source_binding_edges (
+                    session_id TEXT NOT NULL,
+                    edge_id TEXT NOT NULL,
+                    src_node_kind TEXT NOT NULL,
+                    src_node_id TEXT NOT NULL,
+                    dst_node_kind TEXT NOT NULL,
+                    dst_node_id TEXT NOT NULL,
+                    relation TEXT NOT NULL,
+                    evidence_level TEXT NOT NULL,
+                    method TEXT NOT NULL,
+                    score REAL NOT NULL,
+                    reason TEXT NOT NULL,
+                    PRIMARY KEY (session_id, edge_id)
+                )
+                """
+            )
+            conn.execute(
+                """
                 CREATE TABLE IF NOT EXISTS policy_decisions (
                     decision_id TEXT PRIMARY KEY,
                     finding_id TEXT NOT NULL,
@@ -741,6 +759,7 @@ class EventStore:
             conn.execute("DELETE FROM information_flow_edge_scopes")
             conn.execute("DELETE FROM analysis_cursors")
             conn.execute("DELETE FROM runtime_lineage_state")
+            conn.execute("DELETE FROM runtime_source_binding_edges")
             conn.execute("DELETE FROM information_flow_edges")
             conn.executemany(
                 """
@@ -1010,6 +1029,10 @@ class EventStore:
             )
             conn.execute(
                 "DELETE FROM runtime_lineage_state WHERE session_id = ?",
+                (session_id,),
+            )
+            conn.execute(
+                "DELETE FROM runtime_source_binding_edges WHERE session_id = ?",
                 (session_id,),
             )
             conn.execute(
@@ -1312,6 +1335,41 @@ class EventStore:
                 ],
             )
 
+    def upsert_runtime_source_binding_edges(
+        self,
+        session_id: str,
+        edges: list[FlowEdge],
+    ) -> None:
+        if not edges:
+            return
+        with self._connect() as conn:
+            conn.executemany(
+                """
+                INSERT OR REPLACE INTO runtime_source_binding_edges (
+                    session_id, edge_id, src_node_kind, src_node_id,
+                    dst_node_kind, dst_node_id, relation, evidence_level,
+                    method, score, reason
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [(session_id, *_flow_edge_values(edge)) for edge in edges],
+            )
+
+    def list_runtime_source_binding_edges(
+        self,
+        session_id: str,
+    ) -> list[FlowEdge]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT edge_id, src_node_kind, src_node_id, dst_node_kind,
+                       dst_node_id, relation, evidence_level, method, score, reason
+                FROM runtime_source_binding_edges
+                WHERE session_id = ?
+                """,
+                (session_id,),
+            ).fetchall()
+        return [_flow_edge_from_row(row) for row in rows]
+
     def upsert_runtime_lineage_state(
         self,
         session_id: str,
@@ -1492,14 +1550,14 @@ class EventStore:
                 row[0]
                 for row in conn.execute(
                     """
-                    SELECT f.fragment_id
+                    SELECT DISTINCT f.fragment_id
                     FROM artifact_fragments AS f
                     JOIN artifacts AS a ON a.artifact_id = f.artifact_id
                     JOIN events AS e ON e.event_id = a.event_id
+                    JOIN fragment_shingles AS i ON i.fragment_id = f.fragment_id
                     WHERE e.session_id = ? AND e.sequence_no < ? AND f.text_hash = ?
-                    LIMIT ?
                     """,
-                    (session_id, before_sequence_no, text_hash, limit),
+                    (session_id, before_sequence_no, text_hash),
                 ).fetchall()
             ]
             overlap: list[str] = []
@@ -1521,7 +1579,7 @@ class EventStore:
                         (session_id, before_sequence_no, *values, limit),
                     ).fetchall()
                 ]
-        return list(dict.fromkeys(exact + overlap))[:limit]
+        return list(dict.fromkeys(exact + overlap))
 
     def upsert_lineage_assignments(
         self,
@@ -1586,12 +1644,16 @@ class EventStore:
         session_id: str,
         *,
         after_sequence_no: int | None = None,
+        through_sequence_no: int | None = None,
     ) -> list[ArtifactContext]:
         clause = "WHERE e.session_id = ?"
         params: tuple[object, ...] = (session_id,)
         if after_sequence_no is not None:
             clause += " AND e.sequence_no > ?"
             params += (after_sequence_no,)
+        if through_sequence_no is not None:
+            clause += " AND e.sequence_no <= ?"
+            params += (through_sequence_no,)
         return self._list_artifact_contexts_where(clause, params)
 
     def list_artifact_contexts_for_tool_uses(
@@ -1628,6 +1690,16 @@ class EventStore:
         if row is None or row[0] is None:
             raise KeyError(f"event not found: {event_id}")
         return int(row[0])
+
+    def get_event_session_id(self, event_id: str) -> str | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT session_id FROM events WHERE event_id = ?",
+                (event_id,),
+            ).fetchone()
+        if row is None:
+            raise KeyError(f"event not found: {event_id}")
+        return row[0]
 
     def _list_artifact_contexts_where(
         self,

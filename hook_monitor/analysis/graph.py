@@ -75,6 +75,18 @@ def build_artifact_flow_edges(
     return list(edges.values())
 
 
+def compare_artifact_contexts(
+    previous: ArtifactContext,
+    current: ArtifactContext,
+) -> FlowEdge | None:
+    """差分解析からもfull graphと同じpair判定を使う。"""
+    if not _is_similarity_context(previous) or not _is_similarity_context(current):
+        return None
+    if _comparison_scope(previous) != _comparison_scope(current):
+        return None
+    return _compare_artifact_pair(previous, current)
+
+
 def build_source_binding_edges(
     source_chunks: list[SourceChunk],
     contexts: list[ArtifactContext],

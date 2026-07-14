@@ -19,6 +19,7 @@ from hook_monitor.policy.engine import evaluate_policy
 from hook_monitor.policy.explanation import build_policy_explanation
 from hook_monitor.policy.models import PolicyDecision
 from hook_monitor.runtime.fragments import build_artifact_fragments
+from hook_monitor.runtime.incremental_analysis import update_runtime_analysis
 from hook_monitor.runtime.models import (
     ProtectedSource,
     SinkCandidate,
@@ -29,7 +30,7 @@ from hook_monitor.runtime.source_config import DEFAULT_CONFIG_PATH
 from hook_monitor.runtime.storage import EventStore
 
 
-DETECTOR_VERSION = "stop-hook-final-answer-v4-bash-filesystem"
+DETECTOR_VERSION = "stop-hook-final-answer-v5-session-incremental"
 
 
 def evaluate_stop_hook_policy(
@@ -40,6 +41,61 @@ def evaluate_stop_hook_policy(
     minimum_path_score: float = 0.15,
     leak_min_score: float = 0.3,
 ) -> dict[str, object]:
+    session_id = store.get_event_session_id(current_event_id)
+    if session_id is not None:
+        runtime_result = update_runtime_analysis(
+            store,
+            repo_root,
+            session_id=session_id,
+            current_event_id=current_event_id,
+            detector_version=DETECTOR_VERSION,
+            minimum_path_score=minimum_path_score,
+        )
+        analysis_run = runtime_result.analysis_run
+        assignments = list(runtime_result.assignments)
+        sinks = list(runtime_result.sinks)
+    else:
+        analysis_run, assignments, sinks = _evaluate_without_session(
+            store,
+            repo_root,
+            current_event_id=current_event_id,
+            minimum_path_score=minimum_path_score,
+            leak_min_score=leak_min_score,
+        )
+
+    findings = detect_leaks(
+        analysis_run=analysis_run,
+        assignments=assignments,
+        sink_candidates=_current_final_answer_sinks(sinks, current_event_id),
+        min_score=leak_min_score,
+        sink_types={"final_answer"},
+        included_sink_types={"final_answer"},
+    )
+    decisions = evaluate_policy(findings)
+    selected = select_strongest_decision(decisions, "Stop")
+    if selected is not None and selected.action != "allow":
+        store.upsert_policy_decision(
+            _stored_policy_decision(
+                selected,
+                analysis_run.analysis_run_id,
+                store.db_path,
+            )
+        )
+    return render_codex_hook_output(
+        selected,
+        "Stop",
+        db_path=store.db_path,
+    )
+
+
+def _evaluate_without_session(
+    store: EventStore,
+    repo_root: Path,
+    *,
+    current_event_id: str,
+    minimum_path_score: float,
+    leak_min_score: float,
+):
     artifacts = store.list_artifacts()
     fragments = [
         fragment
@@ -87,32 +143,7 @@ def evaluate_stop_hook_policy(
     analysis_run = next(
         run for run in store.list_analysis_runs() if run.analysis_run_id == analysis_run_id
     )
-    findings = detect_leaks(
-        analysis_run=analysis_run,
-        assignments=assignments,
-        sink_candidates=_current_final_answer_sinks(
-            list(adapter_result.sinks),
-            current_event_id,
-        ),
-        min_score=leak_min_score,
-        sink_types={"final_answer"},
-        included_sink_types={"final_answer"},
-    )
-    decisions = evaluate_policy(findings)
-    selected = select_strongest_decision(decisions, "Stop")
-    if selected is not None and selected.action != "allow":
-        store.upsert_policy_decision(
-            _stored_policy_decision(
-                selected,
-                analysis_run_id,
-                store.db_path,
-            )
-        )
-    return render_codex_hook_output(
-        selected,
-        "Stop",
-        db_path=store.db_path,
-    )
+    return analysis_run, assignments, list(adapter_result.sinks)
 
 
 def _stored_policy_decision(

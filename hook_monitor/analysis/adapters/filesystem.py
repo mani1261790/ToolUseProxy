@@ -52,8 +52,30 @@ class FilesystemAdapter:
         contexts: list[ArtifactContext],
         repo_root: Path,
     ) -> AdapterResult:
+        return self._analyze_with_resources(contexts, repo_root, ())
+
+    def analyze_incremental(
+        self,
+        contexts: list[ArtifactContext],
+        repo_root: Path,
+        existing_resources: tuple[ResourceVersion, ...],
+    ) -> AdapterResult:
+        return self._analyze_with_resources(
+            contexts,
+            repo_root,
+            existing_resources,
+        )
+
+    def _analyze_with_resources(
+        self,
+        contexts: list[ArtifactContext],
+        repo_root: Path,
+        existing_resources: tuple[ResourceVersion, ...],
+    ) -> AdapterResult:
         groups = _group_tool_calls(contexts)
         latest_by_session_path: dict[tuple[str | None, str], ResourceVersion] = {}
+        for resource in sorted(existing_resources, key=lambda item: item.sequence_no):
+            latest_by_session_path[(resource.session_id, resource.path)] = resource
         edges: list[FlowEdge] = []
         resources: dict[str, ResourceVersion] = {}
 

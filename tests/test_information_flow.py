@@ -10,6 +10,7 @@ import tempfile
 import unittest
 from dataclasses import replace
 from pathlib import Path
+from unittest.mock import patch
 
 from hook_monitor.analysis.graph import (
     build_artifact_flow_edges,
@@ -27,6 +28,7 @@ from hook_monitor.policy.codex_output import render_codex_hook_output, select_st
 from hook_monitor.policy.engine import evaluate_policy
 from hook_monitor.policy.models import PolicyDecision
 from hook_monitor.runtime.parser import build_artifacts, build_fragments, normalize_event
+from hook_monitor.runtime.incremental_analysis import update_runtime_analysis
 from hook_monitor.runtime.stop_policy import evaluate_stop_hook_policy
 from hook_monitor.runtime.models import AnalysisCursor, ProtectedSource, SourceChunk
 from hook_monitor.runtime.storage import EventStore
@@ -1902,6 +1904,14 @@ class InformationFlowTest(unittest.TestCase):
         self.assertEqual("block", json.loads(leaked.stdout)["decision"])
         self.assertEqual("", clean.stdout)
         self.assertEqual(1, len(self.store.list_policy_decisions()))
+        runtime_modes = {
+            json.loads(run.config_json).get("runtime_reanalysis")
+            for run in self.store.list_analysis_runs()
+        }
+        self.assertEqual(
+            {"session-full", "session-incremental"},
+            runtime_modes,
+        )
 
     def test_stop_hook_policy_can_be_disabled(self) -> None:
         self._record(
@@ -2060,6 +2070,120 @@ class InformationFlowTest(unittest.TestCase):
             )
         )
 
+    def test_runtime_analysis_rebuilds_once_then_updates_session_delta(self) -> None:
+        repo_root = Path(self.temporary_directory.name)
+        Path(repo_root, "private.py").write_text(SECRET, encoding="utf-8")
+        Path(repo_root, "protected_sources.json").write_text(
+            json.dumps(
+                {
+                    "sources": [
+                        {
+                            "id": "private-source",
+                            "path": "private.py",
+                            "type": "unpublished_impl",
+                            "sensitivity": "high",
+                            "policy_tags": ["no_external"],
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        self._record(
+            "pre_tool_use",
+            "bash-read",
+            "Bash",
+            tool_input={"command": "cat private.py"},
+            cwd=str(repo_root),
+        )
+        self._record(
+            "post_tool_use",
+            "bash-read",
+            "Bash",
+            tool_input={"command": "cat private.py"},
+            tool_response=SECRET,
+            cwd=str(repo_root),
+        )
+        first_stop = self._record_stop_event(final_answer=SECRET)
+
+        first = update_runtime_analysis(
+            self.store,
+            repo_root,
+            session_id="session-1",
+            current_event_id=first_stop.event_id,
+            detector_version="runtime-test-v1",
+            minimum_path_score=0.15,
+        )
+
+        first_sink_ids = {
+            sink.node_id
+            for sink in first.sinks
+            if sink.metadata.get("event_id") == first_stop.event_id
+        }
+        self.assertEqual("session-full", first.mode)
+        self.assertTrue(first_sink_ids)
+        self.assertTrue(
+            any(
+                assignment.node_id in first_sink_ids
+                for assignment in first.assignments
+            )
+        )
+
+        second_stop = self._record_stop_event(final_answer=SECRET)
+        with patch(
+            "hook_monitor.runtime.incremental_analysis.load_sources_and_chunks",
+            side_effect=AssertionError("unchanged sources must not be reread"),
+        ):
+            second = update_runtime_analysis(
+                self.store,
+                repo_root,
+                session_id="session-1",
+                current_event_id=second_stop.event_id,
+                detector_version="runtime-test-v1",
+                minimum_path_score=0.15,
+            )
+
+        second_sink_ids = {
+            sink.node_id
+            for sink in second.sinks
+            if sink.metadata.get("event_id") == second_stop.event_id
+        }
+        self.assertEqual("session-incremental", second.mode)
+        self.assertTrue(second_sink_ids)
+        self.assertTrue(
+            any(
+                assignment.node_id in second_sink_ids
+                for assignment in second.assignments
+            )
+        )
+        self.assertEqual(
+            self.store.get_event_sequence_no(second_stop.event_id),
+            self.store.get_analysis_cursor("session-1").last_sequence_no,
+        )
+        incremental_scores = {
+            (assignment.source_node_kind, assignment.source_node_id):
+                assignment.best_path_score
+            for assignment in second.assignments
+            if assignment.node_id in second_sink_ids
+        }
+
+        self.store.clear_runtime_analysis_for_session("session-1")
+        rebuilt = update_runtime_analysis(
+            self.store,
+            repo_root,
+            session_id="session-1",
+            current_event_id=second_stop.event_id,
+            detector_version="runtime-test-v1",
+            minimum_path_score=0.15,
+        )
+        rebuilt_scores = {
+            (assignment.source_node_kind, assignment.source_node_id):
+                assignment.best_path_score
+            for assignment in rebuilt.assignments
+            if assignment.node_id in second_sink_ids
+        }
+        self.assertEqual(incremental_scores, rebuilt_scores)
+
     def _record_exact_pair(
         self,
         session_id: str,
@@ -2106,6 +2230,9 @@ class InformationFlowTest(unittest.TestCase):
         self.store.record(event, artifacts, build_fragments(artifacts))
 
     def _record_stop(self, *, final_answer: str) -> None:
+        self._record_stop_event(final_answer=final_answer)
+
+    def _record_stop_event(self, *, final_answer: str):
         event = normalize_event(
             "stop",
             {
@@ -2116,6 +2243,7 @@ class InformationFlowTest(unittest.TestCase):
         )
         artifacts = build_artifacts(event)
         self.store.record(event, artifacts, build_fragments(artifacts))
+        return event
 
     def _policy_decision(
         self,

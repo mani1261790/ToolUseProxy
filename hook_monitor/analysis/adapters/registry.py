@@ -39,3 +39,30 @@ def run_adapters(
         resources.update((resource.node_id, resource) for resource in result.resources)
         sinks.update((sink.node_id, sink) for sink in result.sinks)
     return AdapterResult(tuple(edges.values()), tuple(resources.values()), tuple(sinks.values()))
+
+
+def run_adapters_incremental(
+    contexts: list[ArtifactContext],
+    repo_root: Path,
+    existing_resources: tuple[ResourceVersion, ...],
+) -> AdapterResult:
+    edges: dict[str, FlowEdge] = {}
+    resources: dict[str, ResourceVersion] = {}
+    sinks: dict[str, SinkCandidate] = {}
+    for adapter in DEFAULT_ADAPTERS:
+        if isinstance(adapter, FilesystemAdapter):
+            result = adapter.analyze_incremental(
+                contexts,
+                repo_root,
+                existing_resources,
+            )
+        else:
+            result = adapter.analyze(contexts, repo_root)
+        edges.update((edge.edge_id, edge) for edge in result.edges)
+        resources.update((resource.node_id, resource) for resource in result.resources)
+        sinks.update((sink.node_id, sink) for sink in result.sinks)
+    return AdapterResult(
+        tuple(edges.values()),
+        tuple(resources.values()),
+        tuple(sinks.values()),
+    )
