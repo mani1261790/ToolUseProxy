@@ -21,13 +21,14 @@ from hook_monitor.analysis.bash_file_parser import parse_bash_file_operations
 from hook_monitor.analysis.adapters.registry import run_adapters
 from hook_monitor.analysis.leak_detection import detect_leaks
 from hook_monitor.analysis.lineage import propagate_lineage
+from hook_monitor.analysis.similarity import make_shingles
 from hook_monitor.analysis.patch_parser import parse_apply_patch
 from hook_monitor.policy.codex_output import render_codex_hook_output, select_strongest_decision
 from hook_monitor.policy.engine import evaluate_policy
 from hook_monitor.policy.models import PolicyDecision
 from hook_monitor.runtime.parser import build_artifacts, build_fragments, normalize_event
 from hook_monitor.runtime.stop_policy import evaluate_stop_hook_policy
-from hook_monitor.runtime.models import ProtectedSource, SourceChunk
+from hook_monitor.runtime.models import AnalysisCursor, ProtectedSource, SourceChunk
 from hook_monitor.runtime.storage import EventStore
 
 
@@ -1974,6 +1975,110 @@ class InformationFlowTest(unittest.TestCase):
         )
 
         self.assertEqual({}, output)
+
+    def test_runtime_analysis_cursor_is_session_scoped(self) -> None:
+        cursor = AnalysisCursor(
+            session_id="session-1",
+            detector_version="runtime-v1",
+            source_digest="source-v1",
+            last_sequence_no=4,
+            status="ready",
+        )
+
+        self.store.upsert_analysis_cursor(cursor)
+
+        self.assertEqual(cursor, self.store.get_analysis_cursor("session-1"))
+        self.assertIsNone(self.store.get_analysis_cursor("session-2"))
+
+    def test_runtime_edge_upsert_preserves_other_sessions(self) -> None:
+        first = build_artifact_flow_edges(
+            self._record_exact_pair("session-a", "a")
+        )
+        second = build_artifact_flow_edges(
+            self._record_exact_pair("session-b", "b")
+        )
+
+        self.store.upsert_information_flow_edges_for_session("session-a", 2, first)
+        self.store.upsert_information_flow_edges_for_session("session-b", 4, second)
+        self.store.clear_runtime_analysis_for_session("session-a")
+
+        self.assertEqual([], self.store.list_information_flow_edges_for_session("session-a"))
+        self.assertEqual(
+            {edge.edge_id for edge in second},
+            {
+                edge.edge_id
+                for edge in self.store.list_information_flow_edges_for_session(
+                    "session-b"
+                )
+            },
+        )
+
+    def test_fragment_shingle_index_returns_only_prior_session_candidates(self) -> None:
+        contexts_a = self._record_exact_pair("session-a", "a")
+        contexts_b = self._record_exact_pair("session-b", "b")
+        canonical_a = select_canonical_similarity_contexts(contexts_a)
+        canonical_b = select_canonical_similarity_contexts(contexts_b)
+        self.store.upsert_fragment_shingles(
+            "session-a",
+            canonical_a,
+            {
+                context.fragment.fragment_id: make_shingles(
+                    context.fragment.normalized_text
+                )
+                for context in canonical_a
+            },
+        )
+        self.store.upsert_fragment_shingles(
+            "session-b",
+            canonical_b,
+            {
+                context.fragment.fragment_id: make_shingles(
+                    context.fragment.normalized_text
+                )
+                for context in canonical_b
+            },
+        )
+        current = max(canonical_a, key=lambda context: context.sequence_no)
+
+        candidates = self.store.find_similarity_candidate_fragment_ids(
+            "session-a",
+            current.fragment.text_hash,
+            make_shingles(current.fragment.normalized_text),
+            current.sequence_no,
+            limit=50,
+        )
+
+        expected = {
+            context.fragment.fragment_id
+            for context in canonical_a
+            if context.sequence_no < current.sequence_no
+        }
+        self.assertEqual(expected, set(candidates))
+        self.assertTrue(
+            set(candidates).isdisjoint(
+                {context.fragment.fragment_id for context in canonical_b}
+            )
+        )
+
+    def _record_exact_pair(
+        self,
+        session_id: str,
+        identity_prefix: str,
+    ) -> list:
+        for index in range(2):
+            event = normalize_event(
+                "pre_tool_use",
+                {
+                    "session_id": session_id,
+                    "turn_id": f"turn-{identity_prefix}",
+                    "tool_use_id": f"{identity_prefix}-{index}",
+                    "tool_name": "Search",
+                    "tool_input": {"query": SECRET},
+                },
+            )
+            artifacts = build_artifacts(event)
+            self.store.record(event, artifacts, build_fragments(artifacts))
+        return self.store.list_artifact_contexts_for_session(session_id)
 
     def _record(
         self,

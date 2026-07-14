@@ -136,6 +136,15 @@ class AnalysisRun:
 
 
 @dataclass(frozen=True)
+class AnalysisCursor:
+    session_id: str
+    detector_version: str
+    source_digest: str
+    last_sequence_no: int
+    status: str
+
+
+@dataclass(frozen=True)
 class StoredPolicyDecision:
     decision_id: str
     finding_id: str

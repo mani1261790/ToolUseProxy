@@ -6,6 +6,7 @@ import uuid
 from pathlib import Path
 
 from hook_monitor.runtime.models import (
+    AnalysisCursor,
     AnalysisRun,
     ArtifactContext,
     ArtifactFragment,
@@ -31,6 +32,7 @@ class EventStore:
     def initialize(self) -> None:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as conn:
+            conn.execute("PRAGMA journal_mode = WAL")
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS events (
@@ -212,6 +214,62 @@ class EventStore:
             )
             conn.execute(
                 """
+                CREATE TABLE IF NOT EXISTS analysis_cursors (
+                    session_id TEXT PRIMARY KEY,
+                    detector_version TEXT NOT NULL,
+                    source_digest TEXT NOT NULL,
+                    last_sequence_no INTEGER NOT NULL,
+                    status TEXT NOT NULL,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS fragment_shingles (
+                    fragment_id TEXT NOT NULL,
+                    session_id TEXT NOT NULL,
+                    sequence_no INTEGER NOT NULL,
+                    shingle TEXT NOT NULL,
+                    PRIMARY KEY (fragment_id, shingle),
+                    FOREIGN KEY (fragment_id) REFERENCES artifact_fragments (fragment_id)
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS information_flow_edge_scopes (
+                    edge_id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    sequence_no INTEGER NOT NULL,
+                    FOREIGN KEY (edge_id) REFERENCES information_flow_edges (edge_id)
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS runtime_lineage_state (
+                    session_id TEXT NOT NULL,
+                    source_node_kind TEXT NOT NULL,
+                    source_node_id TEXT NOT NULL,
+                    node_kind TEXT NOT NULL,
+                    node_id TEXT NOT NULL,
+                    best_path_score REAL NOT NULL,
+                    predecessor_edge_id TEXT,
+                    hop_count INTEGER NOT NULL,
+                    updated_sequence_no INTEGER NOT NULL,
+                    PRIMARY KEY (
+                        session_id,
+                        source_node_kind,
+                        source_node_id,
+                        node_kind,
+                        node_id
+                    )
+                )
+                """
+            )
+            conn.execute(
+                """
                 CREATE TABLE IF NOT EXISTS policy_decisions (
                     decision_id TEXT PRIMARY KEY,
                     finding_id TEXT NOT NULL,
@@ -319,6 +377,18 @@ class EventStore:
                 ON policy_decisions (analysis_run_id)
                 """
             )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_fragment_shingles_lookup
+                ON fragment_shingles (session_id, shingle, sequence_no)
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_edge_scopes_session_sequence
+                ON information_flow_edge_scopes (session_id, sequence_no)
+                """
+            )
             self._backfill_event_sequence_numbers(conn)
 
     def record(
@@ -328,6 +398,7 @@ class EventStore:
         fragments: list[ArtifactFragment] | None = None,
     ) -> None:
         with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             existing = conn.execute(
                 "SELECT sequence_no FROM events WHERE event_id = ?",
                 (event.event_id,),
@@ -667,6 +738,9 @@ class EventStore:
 
     def replace_information_flow_edges(self, edges: list[FlowEdge]) -> None:
         with self._connect() as conn:
+            conn.execute("DELETE FROM information_flow_edge_scopes")
+            conn.execute("DELETE FROM analysis_cursors")
+            conn.execute("DELETE FROM runtime_lineage_state")
             conn.execute("DELETE FROM information_flow_edges")
             conn.executemany(
                 """
@@ -700,6 +774,38 @@ class EventStore:
                 ],
             )
 
+    def upsert_information_flow_edges_for_session(
+        self,
+        session_id: str,
+        sequence_no: int,
+        edges: list[FlowEdge],
+    ) -> None:
+        if not edges:
+            return
+        with self._connect() as conn:
+            conn.executemany(
+                """
+                INSERT OR REPLACE INTO information_flow_edges (
+                    edge_id, src_node_kind, src_node_id, dst_node_kind, dst_node_id,
+                    relation, evidence_level, method, score, reason
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [_flow_edge_values(edge) for edge in edges],
+            )
+            conn.executemany(
+                """
+                INSERT INTO information_flow_edge_scopes (edge_id, session_id, sequence_no)
+                VALUES (?, ?, ?)
+                ON CONFLICT(edge_id) DO UPDATE SET
+                    session_id = excluded.session_id,
+                    sequence_no = MIN(
+                        information_flow_edge_scopes.sequence_no,
+                        excluded.sequence_no
+                    )
+                """,
+                [(edge.edge_id, session_id, sequence_no) for edge in edges],
+            )
+
     def replace_resource_versions(self, resources: list[ResourceVersion]) -> None:
         with self._connect() as conn:
             conn.execute("DELETE FROM resource_versions")
@@ -725,6 +831,20 @@ class EventStore:
                     )
                     for resource in resources
                 ],
+            )
+
+    def upsert_resource_versions(self, resources: list[ResourceVersion]) -> None:
+        if not resources:
+            return
+        with self._connect() as conn:
+            conn.executemany(
+                """
+                INSERT OR REPLACE INTO resource_versions (
+                    node_id, path, content_hash, sequence_no, session_id,
+                    origin_tool_use_id
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                [_resource_values(resource) for resource in resources],
             )
 
     def replace_sink_candidates(self, sinks: list[SinkCandidate]) -> None:
@@ -756,6 +876,20 @@ class EventStore:
                     )
                     for sink in sinks
                 ],
+            )
+
+    def upsert_sink_candidates(self, sinks: list[SinkCandidate]) -> None:
+        if not sinks:
+            return
+        with self._connect() as conn:
+            conn.executemany(
+                """
+                INSERT OR REPLACE INTO sink_candidates (
+                    node_id, sink_type, label, tool_name, tool_use_id, session_id,
+                    sequence_no, metadata_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [_sink_values(sink) for sink in sinks],
             )
 
     def upsert_source_binding_edges(
@@ -831,6 +965,65 @@ class EventStore:
             )
             for row in rows
         ]
+
+    def list_information_flow_edges_for_session(
+        self,
+        session_id: str,
+    ) -> list[FlowEdge]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT
+                    e.edge_id, e.src_node_kind, e.src_node_id, e.dst_node_kind,
+                    e.dst_node_id, e.relation, e.evidence_level, e.method,
+                    e.score, e.reason
+                FROM information_flow_edges AS e
+                JOIN information_flow_edge_scopes AS s ON s.edge_id = e.edge_id
+                WHERE s.session_id = ?
+                """,
+                (session_id,),
+            ).fetchall()
+        return [_flow_edge_from_row(row) for row in rows]
+
+    def clear_runtime_analysis_for_session(self, session_id: str) -> None:
+        with self._connect() as conn:
+            edge_ids = [
+                row[0]
+                for row in conn.execute(
+                    "SELECT edge_id FROM information_flow_edge_scopes WHERE session_id = ?",
+                    (session_id,),
+                ).fetchall()
+            ]
+            conn.execute(
+                "DELETE FROM information_flow_edge_scopes WHERE session_id = ?",
+                (session_id,),
+            )
+            if edge_ids:
+                placeholders = ",".join("?" for _ in edge_ids)
+                conn.execute(
+                    f"DELETE FROM information_flow_edges WHERE edge_id IN ({placeholders})",
+                    edge_ids,
+                )
+            conn.execute(
+                "DELETE FROM fragment_shingles WHERE session_id = ?",
+                (session_id,),
+            )
+            conn.execute(
+                "DELETE FROM runtime_lineage_state WHERE session_id = ?",
+                (session_id,),
+            )
+            conn.execute(
+                "DELETE FROM analysis_cursors WHERE session_id = ?",
+                (session_id,),
+            )
+            conn.execute(
+                "DELETE FROM resource_versions WHERE session_id = ?",
+                (session_id,),
+            )
+            conn.execute(
+                "DELETE FROM sink_candidates WHERE session_id = ?",
+                (session_id,),
+            )
 
     def list_source_binding_edges(self, analysis_run_id: str) -> list[FlowEdge]:
         with self._connect() as conn:
@@ -1007,6 +1200,23 @@ class EventStore:
             for row in rows
         ]
 
+    def list_resource_versions_for_session(
+        self,
+        session_id: str,
+    ) -> list[ResourceVersion]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT node_id, path, content_hash, sequence_no, session_id,
+                       origin_tool_use_id
+                FROM resource_versions
+                WHERE session_id = ?
+                ORDER BY sequence_no, path, node_id
+                """,
+                (session_id,),
+            ).fetchall()
+        return [ResourceVersion(*row) for row in rows]
+
     def list_sink_candidates(self) -> list[SinkCandidate]:
         with self._connect() as conn:
             rows = conn.execute(
@@ -1038,6 +1248,140 @@ class EventStore:
             for row in rows
         ]
 
+    def list_sink_candidates_for_session(
+        self,
+        session_id: str,
+    ) -> list[SinkCandidate]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT node_id, sink_type, label, tool_name, tool_use_id,
+                       session_id, sequence_no, metadata_json
+                FROM sink_candidates
+                WHERE session_id = ?
+                ORDER BY sequence_no, sink_type, node_id
+                """,
+                (session_id,),
+            ).fetchall()
+        return [
+            SinkCandidate(
+                node_id=row[0],
+                sink_type=row[1],
+                label=row[2],
+                tool_name=row[3],
+                tool_use_id=row[4],
+                session_id=row[5],
+                sequence_no=row[6],
+                metadata=json.loads(row[7]),
+            )
+            for row in rows
+        ]
+
+    def replace_runtime_lineage_state(
+        self,
+        session_id: str,
+        sequence_no: int,
+        assignments: list[LineageAssignment],
+    ) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "DELETE FROM runtime_lineage_state WHERE session_id = ?",
+                (session_id,),
+            )
+            conn.executemany(
+                """
+                INSERT INTO runtime_lineage_state (
+                    session_id, source_node_kind, source_node_id, node_kind,
+                    node_id, best_path_score, predecessor_edge_id, hop_count,
+                    updated_sequence_no
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        session_id,
+                        assignment.source_node_kind,
+                        assignment.source_node_id,
+                        assignment.node_kind,
+                        assignment.node_id,
+                        assignment.best_path_score,
+                        assignment.predecessor_edge_id,
+                        assignment.hop_count,
+                        sequence_no,
+                    )
+                    for assignment in assignments
+                ],
+            )
+
+    def upsert_runtime_lineage_state(
+        self,
+        session_id: str,
+        sequence_no: int,
+        assignments: list[LineageAssignment],
+    ) -> None:
+        if not assignments:
+            return
+        with self._connect() as conn:
+            conn.executemany(
+                """
+                INSERT INTO runtime_lineage_state (
+                    session_id, source_node_kind, source_node_id, node_kind,
+                    node_id, best_path_score, predecessor_edge_id, hop_count,
+                    updated_sequence_no
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(
+                    session_id, source_node_kind, source_node_id, node_kind, node_id
+                ) DO UPDATE SET
+                    best_path_score = excluded.best_path_score,
+                    predecessor_edge_id = excluded.predecessor_edge_id,
+                    hop_count = excluded.hop_count,
+                    updated_sequence_no = excluded.updated_sequence_no
+                WHERE excluded.best_path_score > runtime_lineage_state.best_path_score
+                """,
+                [
+                    (
+                        session_id,
+                        assignment.source_node_kind,
+                        assignment.source_node_id,
+                        assignment.node_kind,
+                        assignment.node_id,
+                        assignment.best_path_score,
+                        assignment.predecessor_edge_id,
+                        assignment.hop_count,
+                        sequence_no,
+                    )
+                    for assignment in assignments
+                ],
+            )
+
+    def list_runtime_lineage_state(
+        self,
+        session_id: str,
+        analysis_run_id: str,
+    ) -> list[LineageAssignment]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT source_node_kind, source_node_id, node_kind, node_id,
+                       best_path_score, predecessor_edge_id, hop_count
+                FROM runtime_lineage_state
+                WHERE session_id = ?
+                """,
+                (session_id,),
+            ).fetchall()
+        return [
+            LineageAssignment(
+                analysis_run_id=analysis_run_id,
+                source_node_kind=row[0],
+                source_node_id=row[1],
+                node_kind=row[2],
+                node_id=row[3],
+                best_path_score=row[4],
+                predecessor_edge_id=row[5],
+                hop_count=row[6],
+            )
+            for row in rows
+        ]
+
     def get_analysis_state(self, key: str) -> str | None:
         with self._connect() as conn:
             row = conn.execute(
@@ -1058,6 +1402,126 @@ class EventStore:
                 """,
                 (key, value),
             )
+
+    def get_analysis_cursor(self, session_id: str) -> AnalysisCursor | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT session_id, detector_version, source_digest,
+                       last_sequence_no, status
+                FROM analysis_cursors
+                WHERE session_id = ?
+                """,
+                (session_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return AnalysisCursor(
+            session_id=row[0],
+            detector_version=row[1],
+            source_digest=row[2],
+            last_sequence_no=row[3],
+            status=row[4],
+        )
+
+    def upsert_analysis_cursor(self, cursor: AnalysisCursor) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO analysis_cursors (
+                    session_id, detector_version, source_digest,
+                    last_sequence_no, status
+                ) VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(session_id) DO UPDATE SET
+                    detector_version = excluded.detector_version,
+                    source_digest = excluded.source_digest,
+                    last_sequence_no = excluded.last_sequence_no,
+                    status = excluded.status,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (
+                    cursor.session_id,
+                    cursor.detector_version,
+                    cursor.source_digest,
+                    cursor.last_sequence_no,
+                    cursor.status,
+                ),
+            )
+
+    def upsert_fragment_shingles(
+        self,
+        session_id: str,
+        contexts: list[ArtifactContext],
+        shingles_by_fragment: dict[str, set[str]],
+    ) -> None:
+        rows = [
+            (
+                context.fragment.fragment_id,
+                session_id,
+                context.sequence_no,
+                shingle,
+            )
+            for context in contexts
+            for shingle in shingles_by_fragment.get(
+                context.fragment.fragment_id,
+                set(),
+            )
+        ]
+        if not rows:
+            return
+        with self._connect() as conn:
+            conn.executemany(
+                """
+                INSERT OR IGNORE INTO fragment_shingles (
+                    fragment_id, session_id, sequence_no, shingle
+                ) VALUES (?, ?, ?, ?)
+                """,
+                rows,
+            )
+
+    def find_similarity_candidate_fragment_ids(
+        self,
+        session_id: str,
+        text_hash: str,
+        shingles: set[str],
+        before_sequence_no: int,
+        limit: int,
+    ) -> list[str]:
+        with self._connect() as conn:
+            exact = [
+                row[0]
+                for row in conn.execute(
+                    """
+                    SELECT f.fragment_id
+                    FROM artifact_fragments AS f
+                    JOIN artifacts AS a ON a.artifact_id = f.artifact_id
+                    JOIN events AS e ON e.event_id = a.event_id
+                    WHERE e.session_id = ? AND e.sequence_no < ? AND f.text_hash = ?
+                    LIMIT ?
+                    """,
+                    (session_id, before_sequence_no, text_hash, limit),
+                ).fetchall()
+            ]
+            overlap: list[str] = []
+            if shingles:
+                values = sorted(shingles)
+                placeholders = ",".join("?" for _ in values)
+                overlap = [
+                    row[0]
+                    for row in conn.execute(
+                        f"""
+                        SELECT fragment_id, COUNT(*) AS overlap_count
+                        FROM fragment_shingles
+                        WHERE session_id = ? AND sequence_no < ?
+                          AND shingle IN ({placeholders})
+                        GROUP BY fragment_id
+                        ORDER BY overlap_count DESC, fragment_id
+                        LIMIT ?
+                        """,
+                        (session_id, before_sequence_no, *values, limit),
+                    ).fetchall()
+                ]
+        return list(dict.fromkeys(exact + overlap))[:limit]
 
     def upsert_lineage_assignments(
         self,
@@ -1115,9 +1579,64 @@ class EventStore:
         ]
 
     def list_artifact_contexts(self) -> list[ArtifactContext]:
+        return self._list_artifact_contexts_where("", ())
+
+    def list_artifact_contexts_for_session(
+        self,
+        session_id: str,
+        *,
+        after_sequence_no: int | None = None,
+    ) -> list[ArtifactContext]:
+        clause = "WHERE e.session_id = ?"
+        params: tuple[object, ...] = (session_id,)
+        if after_sequence_no is not None:
+            clause += " AND e.sequence_no > ?"
+            params += (after_sequence_no,)
+        return self._list_artifact_contexts_where(clause, params)
+
+    def list_artifact_contexts_for_tool_uses(
+        self,
+        session_id: str,
+        tool_use_ids: set[str],
+    ) -> list[ArtifactContext]:
+        if not tool_use_ids:
+            return []
+        placeholders = ",".join("?" for _ in tool_use_ids)
+        return self._list_artifact_contexts_where(
+            f"WHERE e.session_id = ? AND e.tool_use_id IN ({placeholders})",
+            (session_id, *sorted(tool_use_ids)),
+        )
+
+    def list_artifact_contexts_by_fragment_ids(
+        self,
+        fragment_ids: list[str],
+    ) -> list[ArtifactContext]:
+        if not fragment_ids:
+            return []
+        placeholders = ",".join("?" for _ in fragment_ids)
+        return self._list_artifact_contexts_where(
+            f"WHERE f.fragment_id IN ({placeholders})",
+            tuple(fragment_ids),
+        )
+
+    def get_event_sequence_no(self, event_id: str) -> int:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT sequence_no FROM events WHERE event_id = ?",
+                (event_id,),
+            ).fetchone()
+        if row is None or row[0] is None:
+            raise KeyError(f"event not found: {event_id}")
+        return int(row[0])
+
+    def _list_artifact_contexts_where(
+        self,
+        where_clause: str,
+        params: tuple[object, ...],
+    ) -> list[ArtifactContext]:
         with self._connect() as conn:
             rows = conn.execute(
-                """
+                f"""
                 SELECT
                     f.fragment_id,
                     f.artifact_id,
@@ -1139,8 +1658,10 @@ class EventStore:
                 FROM artifact_fragments AS f
                 JOIN artifacts AS a ON a.artifact_id = f.artifact_id
                 JOIN events AS e ON e.event_id = a.event_id
+                {where_clause}
                 ORDER BY e.sequence_no, f.fragment_id
-                """
+                """,
+                params,
             ).fetchall()
         return [
             ArtifactContext(
@@ -1272,7 +1793,63 @@ class EventStore:
         return int(row[0])
 
     def _connect(self) -> sqlite3.Connection:
-        return sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=5.0)
+        conn.execute("PRAGMA busy_timeout = 5000")
+        return conn
+
+
+def _flow_edge_values(edge: FlowEdge) -> tuple[object, ...]:
+    return (
+        edge.edge_id,
+        edge.src_node_kind,
+        edge.src_node_id,
+        edge.dst_node_kind,
+        edge.dst_node_id,
+        edge.relation,
+        edge.evidence_level,
+        edge.method,
+        edge.score,
+        edge.reason,
+    )
+
+
+def _flow_edge_from_row(row: tuple) -> FlowEdge:
+    return FlowEdge(
+        edge_id=row[0],
+        src_node_kind=row[1],
+        src_node_id=row[2],
+        dst_node_kind=row[3],
+        dst_node_id=row[4],
+        relation=row[5],
+        evidence_level=row[6],
+        method=row[7],
+        score=row[8],
+        reason=row[9],
+    )
+
+
+def _resource_values(resource: ResourceVersion) -> tuple[object, ...]:
+    return (
+        resource.node_id,
+        resource.path,
+        resource.content_hash,
+        resource.sequence_no,
+        resource.session_id,
+        resource.origin_tool_use_id,
+    )
+
+
+def _sink_values(sink: SinkCandidate) -> tuple[object, ...]:
+    return (
+        sink.node_id,
+        sink.sink_type,
+        sink.label,
+        sink.tool_name,
+        sink.tool_use_id,
+        sink.session_id,
+        sink.sequence_no,
+        json.dumps(sink.metadata, ensure_ascii=False, sort_keys=True),
+    )
 
 
 def _stored_policy_decision_from_row(row: tuple) -> StoredPolicyDecision:
