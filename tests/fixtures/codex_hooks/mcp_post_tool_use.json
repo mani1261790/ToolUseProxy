@@ -1,0 +1,23 @@
+{
+  "session_id": "session-mcp-fixture",
+  "turn_id": "turn-mcp-fixture",
+  "hook_event_name": "PostToolUse",
+  "tool_use_id": "call-mcp-fixture",
+  "tool_name": "mcp__openaiDeveloperDocs__search_openai_docs",
+  "cwd": "/workspace/ToolUseProxy",
+  "permission_mode": "bypassPermissions",
+  "model": "gpt-5.5",
+  "transcript_path": null,
+  "tool_input": {
+    "limit": 1,
+    "query": "Hook payload fixture"
+  },
+  "tool_response": {
+    "content": [
+      {
+        "type": "text",
+        "text": "SANITIZED_MCP_RESULT"
+      }
+    ]
+  }
+}

@@ -231,6 +231,27 @@ printf PUBLIC_E2E_DATA | curl --data-binary @- http://127.0.0.1:18765/allow-test
 
 最初の試行では`--ignore-user-config`によりproject Hook自体が読み込まれず、requestが到達した。DBが0 byteだったためpolicy誤判定ではなくHook未ロードと確認し、設定読込を有効にして上記のdeny / allowを再検証した。実験用Hook設定、source設定、ダミーファイルは実験後に削除した。検証DBとCodex JSONLは`/private/tmp/tooluseproxy-pretool-*`へ残している。
 
+## Search / MCP payload観測
+
+2026-07-14にCodex CLI `0.142.5`と`gpt-5.5`で、`matcher: "*"`の記録専用PreToolUse / PostToolUse Hookを使って観測した。
+
+MCP callはPreToolUseとPostToolUseの両方で観測できた。tool名は`mcp__<server>__<tool>`、`tool_input`は`server` / `tool` / `arguments`で包まれず、MCP toolへ渡すraw argumentsだった。
+
+```json
+{
+  "hook_event_name": "PreToolUse",
+  "tool_name": "mcp__openaiDeveloperDocs__search_openai_docs",
+  "tool_input": {
+    "limit": 1,
+    "query": "Hook payload fixture"
+  }
+}
+```
+
+PreToolUseとPostToolUseは同じ`session_id`、`turn_id`、`tool_use_id`を持っていた。sanitized fixtureは`tests/fixtures/codex_hooks/mcp_pre_tool_use.json`と`mcp_post_tool_use.json`へ保存した。
+
+native Web Searchは`codex --search`のJSONLに`type: "web_search"`として現れたが、`matcher: "*"`でもHook DBは作られなかった。現行Codexではnative Web SearchをPreToolUse / PostToolUseから捕捉できない。Search adapterはsynthetic / imported event解析には残すが、native Searchの実行前遮断へは接続しない。
+
 ## 次の検証順序
 
 1. Search / MCPの実payload観測
