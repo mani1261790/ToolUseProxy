@@ -132,7 +132,7 @@ PreToolUse
 
 PermissionRequest
   block -> decision.behavior: deny
-  allow -> decision.behavior: allow
+  allow -> 通常承認へ委ねるため空stdout
 
 PostToolUse
   warn -> additionalContext
@@ -143,7 +143,11 @@ Stop
   warn -> systemMessage
 ```
 
-Codex の `PreToolUse` では `permissionDecision: "ask"` は現在の安定した返却形として使いません。ユーザー確認に委ねたい場合は、まず `warn` として追加contextを出し、実行時の通常の承認フローや後続の `PermissionRequest` に接続します。
+Codex の `PreToolUse` では `permissionDecision: "ask"` は現在の安定した返却形として使いません。ユーザー確認に委ねたい場合は、まず `warn` として追加contextを出し、Codex本来の承認フローへ委ねます。
+
+`PermissionRequest`の`decision.behavior: allow`は、policy上の`allow`を記録するだけではなく、guardian / userの通常承認を省略してtool実行を承認します。ToolUseProxyはDLP判断を権限付与へ昇格させないため、`behavior: allow`を返しません。criticalな追加漏えい根拠がある場合だけ`deny`を返し、それ以外は空stdoutで通常承認へ戻すのが安全な契約です。ただし現時点では、PermissionRequest自体をruntimeへ接続していません。
+
+PermissionRequestはPreToolUseの後、Codexが承認を必要とした場合だけ発火します。payloadには`tool_use_id`がなく、cached / auto-approved / `approval_policy=never`の呼び出しでは発火しません。現在のexternal sinkはより早いPreToolUseで評価でき、generic接続は解析と監査を二重化する一方でcoverageを増やさないため、接続を見送りました。PreToolUseで観測できない実漏えい経路とstableな相関・permission fieldが確認できた場合だけ、deny-onlyの独立adapterとして再評価します。
 
 `Stop` の `decision: "block"` は最終応答を単純に拒否するものではなく、Codexに追加ターンを継続させる動きです。そのため、最終応答の漏えい候補は `continue_review` として扱います。
 
@@ -289,7 +293,7 @@ JSON output:
 2. 実CodexのMCP tool名とraw argumentsをadapterへ接続
 3. 二段階opt-inでMCP external sinkを`PreToolUse` denyへ接続
 
-operation単位fragment、snapshot capture、複数workspaceのsource/cursor/resource分離は実装済みです。次に`PermissionRequest`の実payloadとPreToolUse denyの役割差を観測し、接続が必要な場合だけworkspace-scoped policyへ追加します。tool別`updatedInput`を使うredactは、その後に構造を壊さず安全に書き換えられる条件を定義してから実装します。
+operation単位fragment、snapshot capture、複数workspaceのsource/cursor/resource分離は実装済みです。`PermissionRequest`は公式source、実payload、deny / allow E2Eを検証し、汎用runtime接続を追加しないと判断しました。次はtool別`updatedInput`を使うredactについて、構造を壊さず安全に書き換えられる条件を定義します。
 
 Stop hook内の解析はsession差分更新へ移行済みです。初回または解析条件変更時は`session-full`、通常時は`session-incremental`としてanalysis runへ記録します。Hook内ではlocal DB、static adapter、indexed lexical候補、差分lineageだけを扱い、embeddingやnetwork accessは行いません。
 

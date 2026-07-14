@@ -403,12 +403,59 @@ pure capture p95 `< 250 ms`とPost Hook全体p95 `< 150 ms`は満たした。全
 
 同一DB・同一session IDにworkspace A/Bを入れたintegration testでは、AのsecretはAだけ、BのsecretはBだけをblockし、相手workspaceのsecretとpublic write/read-only操作は通過した。offline CLIは明示runかworkspace別latestを必須とし、completed offline runのedge/node metadataがlive tableの後続変更から独立していることも確認した。runtime runは現在session graphを読むmutable scopeであり、offline runのimmutable snapshotとは区別する。
 
+## PermissionRequest公式実装確認と実Codex E2E
+
+2026-07-15にCodex CLI `0.142.5`、`gpt-5.5`、`approval_policy=on-request`のinteractive TUIで、Bashのworkspace外書き込みに対する`PermissionRequest`を観測した。公式sourceは`openai/codex`のtag `rust-v0.142.5`、commit `26de83050b20f7e0ee211b9739e52ae00ce8032a`と照合した。
+
+実行順序は次の通りだった。
+
+```text
+PreToolUse
+  -> tool handler内のapproval判定
+  -> 必要な場合だけPermissionRequest
+  -> guardian / user approval、またはHook decision
+  -> tool実行
+  -> 成功時PostToolUse
+```
+
+`PermissionRequest`は全tool callに発火する検査点ではない。approvalが不要な呼び出し、cachedまたは自動承認されたMCP call、`approval_policy=never`では発火しない。非interactiveな`codex exec`は通常`approval_policy=never`を使うため、実験にはinteractive TUIを使用した。
+
+観測したBash payloadの主要部分は次の形だった。
+
+```json
+{
+  "hook_event_name": "PermissionRequest",
+  "session_id": "...",
+  "turn_id": "...",
+  "cwd": "/private/tmp/.../run-workspace",
+  "permission_mode": "default",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "printf ... > /private/tmp/.../permission-deny.txt",
+    "description": "Do you want to allow writing the marker file outside the workspace?"
+  }
+}
+```
+
+同じcallの`PreToolUse`には`tool_use_id`があったが、`PermissionRequest`にはなかった。`session_id`、`turn_id`、`tool_name`、`tool_input`は共有するものの、並列かつ同一inputのcallを一意にjoinできない。そのため、ToolUseProxyはPermissionRequestをPreToolUse eventへheuristicに結合しない。
+
+安全なダミーmarkerを使ったE2E結果は次の通りだった。
+
+- `decision.behavior: deny`ではCodex UIに`PermissionRequest hook (blocked)`が表示され、対象fileは作られず、tool実行前に停止した
+- `decision.behavior: allow`では通常の承認UIを表示せずworkspace外fileが作られた
+- denyとallowのどちらも、順序は`PreToolUse -> PermissionRequest`だった
+
+`allow`は単なるDLP上の「漏えいなし」ではなく、Codexの通常承認を自動通過させる権限判断である。ToolUseProxyは権限付与主体ではないため、PermissionRequestで`allow`を返さない。Hook failure、invalid output、空stdoutはdecisionなしとなり、通常の承認経路へ戻る。
+
+公式sourceではnetwork proxy approvalがBash形式の`tool_input.description`へ`network-access <target>`を付ける場合がある。ただし`description`は一般のjustificationと共用され、structuredなpermission kindでもsegment対応情報でもない。command全体へsinkを付けるとsegment単位lineageを壊すため、現Stageではgraphやpolicyへ接続しない。
+
+結論として、汎用的なPermissionRequest runtime接続は追加しない。現在のBash/MCP external sinkは、より早く、全matching callに発火し、`tool_use_id`を持つPreToolUseで既に評価できるためである。将来、PreToolUseで観測できない実漏えい経路が確認され、Codex payloadにstableなcall ID、structuredなpermission kind、network target、segment/process対応が追加された場合に、deny-onlyの独立adapterとして再評価する。
+
 ## 次の検証順序
 
-1. `PermissionRequest`の実payloadとPreToolUse denyとの差を観測し、接続の必要性を評価する
-2. tool形状を壊さないredactの必要条件、監査、fallbackを設計する
-3. offline staging/promoteとruntime履歴snapshotの必要性を評価する
-4. MCP server固有のwrite/read分類fixture
-5. embedding候補検索の評価
+1. tool形状を壊さないredactの必要条件、監査、fallbackを設計する
+2. offline staging/promoteとruntime履歴snapshotの必要性を評価する
+3. MCP server固有のwrite/read分類fixture
+4. embedding候補検索の評価
 
-workspace境界は実装・検証できたため、そのscopeを共有する追加介入点として`PermissionRequest`を評価する。redactはBash、apply_patch、MCPごとに安全な書換方法が異なるため、その後に扱う。未サポートの`permissionDecision: ask`には依存しない。
+PermissionRequestは評価を完了し、汎用runtime接続を見送った。次はBash、apply_patch、MCPごとに、安全に意味と構造を維持できる範囲だけを対象にredactを設計する。未サポートの`permissionDecision: ask`には依存しない。

@@ -62,7 +62,7 @@ API キーや認証情報のように文字列パターンで判別しやすい�
 
 `scripts/detect_leaks.py`はsource lineageが`sink_candidate`へ到達した場合にfindingを出し、`scripts/evaluate_policy.py`は`allow` / `warn` / `block` / `continue_review`へ変換します。実Hookでは、Stopが`final_answer`漏えい候補を`continue_review`で差し戻し、opt-inのBashとMCP PreToolUseがcriticalなexternal sinkを`permissionDecision: deny`で実行前遮断します。MCPは追加のopt-inを必要とし、write-like toolだけを対象にします。両方ともworkspace・session単位の差分解析を共有し、介入判断は`policy_decisions`へ保存します。
 
-複数workspaceの分離も実装済みです。明示したcanonical workspace rootをidentityとし、event、source、cursor、resource、edge、解析runをworkspaceごとに分離します。runtimeは現在eventのworkspaceとsessionだけを更新し、offline CLIは`--analysis-run ID`または`--workspace-root PATH --latest`の明示を必須にします。completed offline runはedgeだけでなくnode metadataもcontent-addressed snapshotとして保持するため、後からlive DBのnodeが変わっても過去runを再現できます。次は`PermissionRequest`の実payloadとPreToolUse denyの役割差を観測し、接続が必要かを判断した後、tool形状を壊さないredactを設計します。
+複数workspaceの分離も実装済みです。明示したcanonical workspace rootをidentityとし、event、source、cursor、resource、edge、解析runをworkspaceごとに分離します。runtimeは現在eventのworkspaceとsessionだけを更新し、offline CLIは`--analysis-run ID`または`--workspace-root PATH --latest`の明示を必須にします。completed offline runはedgeだけでなくnode metadataもcontent-addressed snapshotとして保持するため、後からlive DBのnodeが変わっても過去runを再現できます。`PermissionRequest`は実payload、公式実装、実Codexのdeny / allowを検証した結果、PreToolUseの代替にならず、現時点では汎用runtime接続を追加しないと判断しました。次はtool形状を壊さないredactの書換契約を設計します。
 
 Hook の構成と接続方法は [docs/設定/Hook設定.md](docs/設定/Hook設定.md) にまとめています。
 ドキュメント全体の索引は [docs/索引.md](docs/索引.md) にまとめています。
