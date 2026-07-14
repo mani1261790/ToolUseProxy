@@ -216,6 +216,12 @@ def _candidate_ids(
 
 
 def _is_similarity_context(context: ArtifactContext) -> bool:
+    if context.fragment.fragment_kind in {
+        "operation_container",
+        "operation_control",
+        "operation_removed",
+    }:
+        return False
     if (
         context.phase == "post_tool_use"
         and context.artifact_role == "tool_input"

@@ -31,6 +31,7 @@ from hook_monitor.policy.codex_output import render_codex_hook_output, select_st
 from hook_monitor.policy.engine import evaluate_policy
 from hook_monitor.policy.models import PolicyDecision
 from hook_monitor.runtime.parser import build_artifacts, build_fragments, normalize_event
+from hook_monitor.runtime.operations import extract_tool_operations
 from hook_monitor.runtime.incremental_analysis import (
     RUNTIME_GRAPH_DETECTOR_VERSION,
     update_runtime_analysis,
@@ -568,6 +569,141 @@ class InformationFlowTest(unittest.TestCase):
         self.assertEqual("old value", operations[1].removed_text)
         self.assertEqual("new value", operations[1].added_text)
         self.assertEqual([], parse_apply_patch("*** Update File: broken.txt"))
+
+    def test_apply_patch_operation_fragments_isolate_multiple_files(self) -> None:
+        cwd = self.temporary_directory.name
+        command = f"""*** Begin Patch
+*** Add File: secret-derived.txt
++{SECRET}
+*** Add File: public.txt
++public release notes only
+*** End Patch"""
+        self._record(
+            "pre_tool_use",
+            "patch-multiple",
+            "apply_patch",
+            tool_input={"command": command},
+            cwd=cwd,
+        )
+        self._record(
+            "post_tool_use",
+            "patch-multiple",
+            "apply_patch",
+            tool_input={"command": command},
+            tool_response={"stdout": "Exit code: 0\nSuccess."},
+            cwd=cwd,
+        )
+
+        operations = self.store.list_tool_operations_for_session("session-1")
+        contexts = self.store.list_artifact_contexts()
+        operation_contents = [
+            context
+            for context in contexts
+            if context.fragment.fragment_kind == "operation_added"
+        ]
+        canonical_ids = {
+            context.fragment.fragment_id
+            for context in select_canonical_similarity_contexts(contexts)
+        }
+        parent_commands = [
+            context
+            for context in contexts
+            if context.phase == "pre_tool_use"
+            and context.fragment.fragment_kind == "operation_container"
+        ]
+
+        self.assertEqual(2, len(operations))
+        self.assertEqual(2, len(operation_contents))
+        self.assertEqual(
+            {SECRET, "public release notes only"},
+            {context.fragment.text for context in operation_contents},
+        )
+        self.assertTrue(parent_commands)
+        self.assertTrue(
+            all(
+                context.fragment.fragment_id not in canonical_ids
+                for context in parent_commands
+            )
+        )
+
+        adapter_result = run_adapters(contexts, Path(cwd))
+        artifact_edges = build_artifact_flow_edges(contexts) + list(
+            adapter_result.edges
+        )
+        source_edges = build_source_binding_edges(
+            [self._source_chunk()],
+            contexts,
+            artifact_edges,
+        )
+        assignments = propagate_lineage(
+            "run-patch-multiple",
+            source_edges + artifact_edges,
+        )
+        resources_by_name = {
+            Path(resource.path).name: resource
+            for resource in adapter_result.resources
+        }
+        reached_resources = {
+            assignment.node_id
+            for assignment in assignments
+            if assignment.node_kind == "resource_version"
+        }
+        written_sources = {
+            edge.dst_node_id: edge.src_node_id
+            for edge in adapter_result.edges
+            if edge.method == "apply_patch_write"
+        }
+
+        self.assertIn(resources_by_name["secret-derived.txt"].node_id, reached_resources)
+        self.assertNotIn(resources_by_name["public.txt"].node_id, reached_resources)
+        self.assertEqual(
+            {
+                context.fragment.fragment_id
+                for context in operation_contents
+            },
+            set(written_sources.values()),
+        )
+        self.assertTrue(
+            all(
+                source_id not in {
+                    context.fragment.fragment_id for context in parent_commands
+                }
+                for source_id in written_sources.values()
+            )
+        )
+
+    def test_apply_patch_removed_content_is_audit_only(self) -> None:
+        command = f"""*** Begin Patch
+*** Update File: derived.txt
+@@
+-{SECRET}
++public replacement
+*** End Patch"""
+        self._record(
+            "pre_tool_use",
+            "patch-remove-secret",
+            "apply_patch",
+            tool_input={"command": command},
+            cwd=self.temporary_directory.name,
+        )
+        contexts = self.store.list_artifact_contexts()
+        removed = next(
+            context
+            for context in contexts
+            if context.fragment.fragment_kind == "operation_removed"
+        )
+        canonical_ids = {
+            context.fragment.fragment_id
+            for context in select_canonical_similarity_contexts(contexts)
+        }
+        source_edges = build_source_binding_edges(
+            [self._source_chunk()],
+            contexts,
+        )
+
+        self.assertEqual(SECRET, removed.fragment.text)
+        self.assertNotIn(removed.fragment.fragment_id, canonical_ids)
+        self.assertEqual([], source_edges)
 
     def test_filesystem_adapter_tracks_successful_apply_patch_versions(self) -> None:
         cwd = self.temporary_directory.name
@@ -2761,7 +2897,15 @@ class InformationFlowTest(unittest.TestCase):
             payload["tool_response"] = tool_response
         event = normalize_event(phase, payload)
         artifacts = build_artifacts(event)
-        self.store.record(event, artifacts, build_fragments(artifacts))
+        fragments = build_fragments(artifacts)
+        extraction = extract_tool_operations(event, artifacts, fragments)
+        fragments.extend(extraction.fragments)
+        self.store.record(
+            event,
+            artifacts,
+            fragments,
+            list(extraction.operations),
+        )
         return event
 
     def _record_stop(self, *, final_answer: str) -> None:

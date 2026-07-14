@@ -22,7 +22,7 @@ from hook_monitor.runtime.fragments import build_artifact_fragments
 from hook_monitor.runtime.storage import DEFAULT_DB_PATH, EventStore
 
 
-DETECTOR_VERSION = "artifact-graph-v8-bash-filesystem"
+DETECTOR_VERSION = "artifact-graph-v9-operation-fragments"
 GRAPH_FINGERPRINT_KEY = "artifact_graph_fingerprint"
 GRAPH_VERSION_KEY = "artifact_graph_detector_version"
 

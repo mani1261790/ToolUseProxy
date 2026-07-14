@@ -10,6 +10,10 @@ from hook_monitor.analysis.adapters.common import make_structured_edge, normaliz
 from hook_monitor.analysis.bash_file_parser import parse_bash_file_operations
 from hook_monitor.analysis.patch_parser import PatchOperation, parse_apply_patch
 from hook_monitor.runtime.models import ArtifactContext, FlowEdge, ResourceVersion
+from hook_monitor.runtime.operations import (
+    apply_patch_operation_kind,
+    make_operation_id,
+)
 
 
 class FilesystemAdapter:
@@ -307,10 +311,36 @@ class FilesystemAdapter:
         session_id = group[0].session_id
         tool_use_id = group[0].tool_use_id
         for index, operation in enumerate(operations):
+            operation_kind = apply_patch_operation_kind(operation)
+            source_path = None if operation.operation == "add" else operation.path
+            target_path = (
+                None
+                if operation.operation == "delete"
+                else operation.move_to or operation.path
+            )
+            operation_id = make_operation_id(
+                event_id=command_context.event_id,
+                adapter="apply_patch",
+                operation_index=index,
+                operation_kind=operation_kind,
+                source_path=source_path,
+                target_path=target_path,
+            )
             self._apply_patch_operation(
                 operation=operation,
                 operation_index=index,
+                operation_id=operation_id,
                 command_context=command_context,
+                operation_content_context=_select_operation_fragment(
+                    group,
+                    operation_id,
+                    "operation_added",
+                ),
+                operation_control_context=_select_operation_fragment(
+                    group,
+                    operation_id,
+                    "operation_control",
+                ),
                 repo_root=repo_root,
                 sequence_no=sequence_no,
                 session_id=session_id,
@@ -325,7 +355,10 @@ class FilesystemAdapter:
         *,
         operation: PatchOperation,
         operation_index: int,
+        operation_id: str,
         command_context: ArtifactContext,
+        operation_content_context: ArtifactContext | None,
+        operation_control_context: ArtifactContext | None,
         repo_root: Path,
         sequence_no: int,
         session_id: str | None,
@@ -337,15 +370,21 @@ class FilesystemAdapter:
         source_path = _normalize_path(operation.path, command_context.cwd, repo_root)
         source_key = (session_id, source_path)
         previous = latest_by_session_path.get(source_key)
+        operation_context = operation_content_context
+        if operation_context is None and operation_control_context is None:
+            # 旧eventにはoperation fragmentがないため、再解析互換として
+            # patch全体fragmentへfallbackする。
+            operation_context = command_context
 
         if operation.operation == "delete":
             if previous is not None:
+                delete_context = operation_control_context or command_context
                 edges.append(
                     make_structured_edge(
                         src_kind="resource_version",
                         src_id=previous.node_id,
                         dst_kind="artifact_fragment",
-                        dst_id=command_context.fragment.fragment_id,
+                        dst_id=delete_context.fragment.fragment_id,
                         relation="deleted_by",
                         method="apply_patch_delete",
                         reason=f"apply_patch deleted {source_path}",
@@ -373,17 +412,18 @@ class FilesystemAdapter:
         )
         resources[resource.node_id] = resource
         latest_by_session_path[target_key] = resource
-        edges.append(
-            make_structured_edge(
-                src_kind="artifact_fragment",
-                src_id=command_context.fragment.fragment_id,
-                dst_kind="resource_version",
-                dst_id=resource.node_id,
-                relation="written_to",
-                method="apply_patch_write",
-                reason=f"apply_patch wrote {target_path}",
+        if operation_context is not None:
+            edges.append(
+                make_structured_edge(
+                    src_kind="artifact_fragment",
+                    src_id=operation_context.fragment.fragment_id,
+                    dst_kind="resource_version",
+                    dst_id=resource.node_id,
+                    relation="written_to",
+                    method="apply_patch_write",
+                    reason=f"apply_patch operation {operation_id} wrote {target_path}",
+                )
             )
-        )
 
         if previous is not None:
             relation = "moved_to" if operation.move_to is not None else "updated_from"
@@ -497,6 +537,21 @@ def _select_command_context(
     if not commands:
         return None
     return min(commands, key=lambda context: context.sequence_no)
+
+
+def _select_operation_fragment(
+    group: list[ArtifactContext],
+    operation_id: str,
+    fragment_kind: str,
+) -> ArtifactContext | None:
+    matches = [
+        context
+        for context in group
+        if context.phase == "pre_tool_use"
+        and context.fragment.operation_id == operation_id
+        and context.fragment.fragment_kind == fragment_kind
+    ]
+    return min(matches, key=lambda context: context.fragment.fragment_id) if matches else None
 
 
 def _apply_patch_succeeded(group: list[ArtifactContext]) -> bool:

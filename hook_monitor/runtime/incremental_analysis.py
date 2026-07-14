@@ -38,7 +38,7 @@ from hook_monitor.runtime.source_config import (
 from hook_monitor.runtime.storage import EventStore
 
 
-RUNTIME_GRAPH_DETECTOR_VERSION = "runtime-graph-v6-real-mcp-payload"
+RUNTIME_GRAPH_DETECTOR_VERSION = "runtime-graph-v7-operation-fragments"
 
 
 @dataclass(frozen=True)

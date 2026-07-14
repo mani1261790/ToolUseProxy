@@ -12,6 +12,7 @@ from hook_monitor.runtime.parser import (
     normalize_event,
     parse_hook_payload,
 )
+from hook_monitor.runtime.operations import extract_tool_operations
 from hook_monitor.runtime.pre_tool_policy import (
     evaluate_pre_tool_hook_policy,
     pre_tool_adapter,
@@ -33,10 +34,12 @@ def run_hook(phase: str) -> int:
     event = normalize_event(phase, payload)
     artifacts = build_artifacts(event)
     fragments = build_fragments(artifacts)
+    extraction = extract_tool_operations(event, artifacts, fragments)
+    fragments.extend(extraction.fragments)
 
     store = EventStore(_resolve_db_path())
     store.initialize()
-    store.record(event, artifacts, fragments)
+    store.record(event, artifacts, fragments, list(extraction.operations))
     enabled_pre_tool_adapters = _enabled_pre_tool_adapters()
     if phase == "pre_tool_use" and pre_tool_adapter(
         event.tool_name

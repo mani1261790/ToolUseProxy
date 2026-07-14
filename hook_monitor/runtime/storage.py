@@ -405,6 +405,12 @@ class EventStore:
                 """
             )
             conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_tool_operations_content_fragment
+                ON tool_operations (content_fragment_id)
+                """
+            )
+            conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_source_chunks_source_id ON source_chunks (source_id)"
             )
             conn.execute(
