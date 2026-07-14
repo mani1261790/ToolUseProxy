@@ -24,6 +24,7 @@ from hook_monitor.runtime.models import (
     ProtectedSource,
     ResourceVersion,
     ResourceSnapshot,
+    RuntimeAnalysisScope,
     SinkCandidate,
     SourceChunk,
     StoredPolicyDecision,
@@ -42,6 +43,7 @@ from hook_monitor.runtime.source_config import (
 
 
 DEFAULT_DB_PATH = Path(".tooluseproxy/events.db")
+LEGACY_DERIVED_WORKSPACE_ID = "legacy_unscoped"
 
 
 class EventStore:
@@ -284,6 +286,8 @@ class EventStore:
                 )
                 """
             )
+            self._ensure_column(conn, "analysis_runs", "workspace_id", "TEXT")
+            self._ensure_column(conn, "analysis_runs", "session_id", "TEXT")
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS information_flow_edges (
@@ -497,6 +501,7 @@ class EventStore:
                 """
             )
             self._migrate_lineage_assignments(conn)
+            self._migrate_workspace_analysis_scope(conn)
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_events_tool_use_id ON events (tool_use_id)"
             )
@@ -609,17 +614,26 @@ class EventStore:
             conn.execute(
                 """
                 CREATE INDEX IF NOT EXISTS idx_information_flow_edges_src
-                ON information_flow_edges (src_node_kind, src_node_id)
+                ON information_flow_edges (
+                    workspace_id,
+                    src_node_kind,
+                    src_node_id
+                )
                 """
             )
             conn.execute(
                 """
                 CREATE INDEX IF NOT EXISTS idx_information_flow_edges_dst
-                ON information_flow_edges (dst_node_kind, dst_node_id)
+                ON information_flow_edges (
+                    workspace_id,
+                    dst_node_kind,
+                    dst_node_id
+                )
                 """
             )
             conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_resource_versions_path ON resource_versions (path)"
+                "CREATE INDEX IF NOT EXISTS idx_resource_versions_path "
+                "ON resource_versions (workspace_id, path, sequence_no, node_id)"
             )
             conn.execute(
                 """
@@ -649,7 +663,7 @@ class EventStore:
             conn.execute(
                 """
                 CREATE INDEX IF NOT EXISTS idx_sink_candidates_type
-                ON sink_candidates (sink_type)
+                ON sink_candidates (workspace_id, sink_type, node_id)
                 """
             )
             conn.execute(
@@ -685,13 +699,41 @@ class EventStore:
             conn.execute(
                 """
                 CREATE INDEX IF NOT EXISTS idx_fragment_shingles_lookup
-                ON fragment_shingles (session_id, shingle, sequence_no)
+                ON fragment_shingles (
+                    workspace_id,
+                    session_id,
+                    shingle,
+                    sequence_no,
+                    fragment_id
+                )
                 """
             )
             conn.execute(
                 """
                 CREATE INDEX IF NOT EXISTS idx_edge_scopes_session_sequence
-                ON information_flow_edge_scopes (session_id, sequence_no)
+                ON information_flow_edge_scopes (
+                    workspace_id,
+                    session_id,
+                    sequence_no,
+                    edge_id
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_analysis_runs_workspace_started
+                ON analysis_runs (workspace_id, started_at, analysis_run_id)
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_analysis_runs_workspace_session
+                ON analysis_runs (
+                    workspace_id,
+                    session_id,
+                    started_at,
+                    analysis_run_id
+                )
                 """
             )
             self._backfill_event_sequence_numbers(conn)
@@ -1100,6 +1142,32 @@ class EventStore:
             outcome_through_sequence_no=through_sequence_no,
         )
 
+    def list_tool_operations_for_scope(
+        self,
+        workspace_id: str,
+        session_id: str,
+        *,
+        after_sequence_no: int | None = None,
+        through_sequence_no: int | None = None,
+    ) -> list[ToolOperation]:
+        clause = """
+            WHERE e.workspace_id = ?
+              AND e.workspace_status = 'ready'
+              AND o.session_id = ?
+        """
+        params: tuple[object, ...] = (workspace_id, session_id)
+        if after_sequence_no is not None:
+            clause += " AND e.sequence_no > ?"
+            params += (after_sequence_no,)
+        if through_sequence_no is not None:
+            clause += " AND e.sequence_no <= ?"
+            params += (through_sequence_no,)
+        return self._list_tool_operations_where(
+            clause,
+            params,
+            outcome_through_sequence_no=through_sequence_no,
+        )
+
     def list_tool_operations(self) -> list[ToolOperation]:
         return self._list_tool_operations_where("", ())
 
@@ -1115,6 +1183,37 @@ class EventStore:
         placeholders = ",".join("?" for _ in tool_use_ids)
         clause = f"WHERE o.session_id = ? AND o.tool_use_id IN ({placeholders})"
         params: tuple[object, ...] = (session_id, *sorted(tool_use_ids))
+        if through_sequence_no is not None:
+            clause += " AND e.sequence_no <= ?"
+            params += (through_sequence_no,)
+        return self._list_tool_operations_where(
+            clause,
+            params,
+            outcome_through_sequence_no=through_sequence_no,
+        )
+
+    def list_tool_operations_for_scope_tool_uses(
+        self,
+        workspace_id: str,
+        session_id: str,
+        tool_use_ids: set[str],
+        *,
+        through_sequence_no: int | None = None,
+    ) -> list[ToolOperation]:
+        if not tool_use_ids:
+            return []
+        placeholders = ",".join("?" for _ in tool_use_ids)
+        clause = f"""
+            WHERE e.workspace_id = ?
+              AND e.workspace_status = 'ready'
+              AND o.session_id = ?
+              AND o.tool_use_id IN ({placeholders})
+        """
+        params: tuple[object, ...] = (
+            workspace_id,
+            session_id,
+            *sorted(tool_use_ids),
+        )
         if through_sequence_no is not None:
             clause += " AND e.sequence_no <= ?"
             params += (through_sequence_no,)
@@ -1444,6 +1543,28 @@ class EventStore:
             params += (through_sequence_no,)
         return self._list_resource_snapshots_where(clause, params)
 
+    def list_resource_snapshots_for_scope(
+        self,
+        workspace_id: str,
+        session_id: str,
+        *,
+        after_sequence_no: int | None = None,
+        through_sequence_no: int | None = None,
+    ) -> list[ResourceSnapshot]:
+        clause = """
+            WHERE e.workspace_id = ?
+              AND e.workspace_status = 'ready'
+              AND s.session_id = ?
+        """
+        params: tuple[object, ...] = (workspace_id, session_id)
+        if after_sequence_no is not None:
+            clause += " AND e.sequence_no > ?"
+            params += (after_sequence_no,)
+        if through_sequence_no is not None:
+            clause += " AND e.sequence_no <= ?"
+            params += (through_sequence_no,)
+        return self._list_resource_snapshots_where(clause, params)
+
     def list_resource_snapshots(self) -> list[ResourceSnapshot]:
         return self._list_resource_snapshots_where("", ())
 
@@ -1459,6 +1580,33 @@ class EventStore:
         placeholders = ",".join("?" for _ in tool_use_ids)
         clause = f"WHERE s.session_id = ? AND s.tool_use_id IN ({placeholders})"
         params: tuple[object, ...] = (session_id, *sorted(tool_use_ids))
+        if through_sequence_no is not None:
+            clause += " AND e.sequence_no <= ?"
+            params += (through_sequence_no,)
+        return self._list_resource_snapshots_where(clause, params)
+
+    def list_resource_snapshots_for_scope_tool_uses(
+        self,
+        workspace_id: str,
+        session_id: str,
+        tool_use_ids: set[str],
+        *,
+        through_sequence_no: int | None = None,
+    ) -> list[ResourceSnapshot]:
+        if not tool_use_ids:
+            return []
+        placeholders = ",".join("?" for _ in tool_use_ids)
+        clause = f"""
+            WHERE e.workspace_id = ?
+              AND e.workspace_status = 'ready'
+              AND s.session_id = ?
+              AND s.tool_use_id IN ({placeholders})
+        """
+        params: tuple[object, ...] = (
+            workspace_id,
+            session_id,
+            *sorted(tool_use_ids),
+        )
         if through_sequence_no is not None:
             clause += " AND e.sequence_no <= ?"
             params += (through_sequence_no,)
@@ -1773,6 +1921,9 @@ class EventStore:
         self,
         detector_version: str,
         config: dict[str, object],
+        *,
+        workspace_id: str | None = None,
+        session_id: str | None = None,
     ) -> str:
         analysis_run_id = uuid.uuid4().hex
         with self._connect() as conn:
@@ -1781,13 +1932,49 @@ class EventStore:
                 INSERT INTO analysis_runs (
                     analysis_run_id,
                     detector_version,
-                    config_json
-                ) VALUES (?, ?, ?)
+                    config_json,
+                    workspace_id,
+                    session_id
+                ) VALUES (?, ?, ?, ?, ?)
                 """,
                 (
                     analysis_run_id,
                     detector_version,
                     json.dumps(config, ensure_ascii=False, sort_keys=True),
+                    workspace_id,
+                    session_id,
+                ),
+            )
+        return analysis_run_id
+
+    def start_runtime_analysis_run(
+        self,
+        detector_version: str,
+        config: dict[str, object],
+        *,
+        workspace_id: str,
+        session_id: str,
+    ) -> str:
+        analysis_run_id = uuid.uuid4().hex
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            self._validate_runtime_scope_owner(conn, workspace_id, session_id)
+            conn.execute(
+                """
+                INSERT INTO analysis_runs (
+                    analysis_run_id,
+                    detector_version,
+                    config_json,
+                    workspace_id,
+                    session_id
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    analysis_run_id,
+                    detector_version,
+                    json.dumps(config, ensure_ascii=False, sort_keys=True),
+                    workspace_id,
+                    session_id,
                 ),
             )
         return analysis_run_id
@@ -1924,16 +2111,30 @@ class EventStore:
             ).fetchone()
         return None if row is None else _stored_policy_decision_from_row(row)
 
-    def replace_information_flow_edges(self, edges: list[FlowEdge]) -> None:
+    def replace_information_flow_edges(
+        self,
+        edges: list[FlowEdge],
+        *,
+        workspace_id: str | None = None,
+    ) -> None:
+        stored_workspace_id = _stored_derived_workspace_id(workspace_id)
         with self._connect() as conn:
-            conn.execute("DELETE FROM information_flow_edge_scopes")
-            conn.execute("DELETE FROM analysis_cursors")
-            conn.execute("DELETE FROM runtime_lineage_state")
-            conn.execute("DELETE FROM runtime_source_binding_edges")
-            conn.execute("DELETE FROM information_flow_edges")
+            conn.execute("BEGIN IMMEDIATE")
+            for table in (
+                "information_flow_edge_scopes",
+                "analysis_cursors",
+                "runtime_lineage_state",
+                "runtime_source_binding_edges",
+                "information_flow_edges",
+            ):
+                conn.execute(
+                    f"DELETE FROM {table} WHERE workspace_id = ?",
+                    (stored_workspace_id,),
+                )
             conn.executemany(
                 """
-                INSERT OR REPLACE INTO information_flow_edges (
+                INSERT INTO information_flow_edges (
+                    workspace_id,
                     edge_id,
                     src_node_kind,
                     src_node_id,
@@ -1944,10 +2145,21 @@ class EventStore:
                     method,
                     score,
                     reason
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(workspace_id, edge_id) DO UPDATE SET
+                    src_node_kind = excluded.src_node_kind,
+                    src_node_id = excluded.src_node_id,
+                    dst_node_kind = excluded.dst_node_kind,
+                    dst_node_id = excluded.dst_node_id,
+                    relation = excluded.relation,
+                    evidence_level = excluded.evidence_level,
+                    method = excluded.method,
+                    score = excluded.score,
+                    reason = excluded.reason
                 """,
                 [
                     (
+                        stored_workspace_id,
                         edge.edge_id,
                         edge.src_node_kind,
                         edge.src_node_id,
@@ -1968,36 +2180,143 @@ class EventStore:
         session_id: str,
         sequence_no: int,
         edges: list[FlowEdge],
+        *,
+        workspace_id: str,
     ) -> None:
         if not edges:
             return
         with self._connect() as conn:
-            conn.executemany(
-                """
-                INSERT OR REPLACE INTO information_flow_edges (
-                    edge_id, src_node_kind, src_node_id, dst_node_kind, dst_node_id,
-                    relation, evidence_level, method, score, reason
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                [_flow_edge_values(edge) for edge in edges],
+            conn.execute("BEGIN IMMEDIATE")
+            self._validate_runtime_scope_owner(conn, workspace_id, session_id)
+            self._reject_flow_edge_scope_collisions(
+                conn,
+                workspace_id,
+                session_id,
+                edges,
             )
             conn.executemany(
                 """
-                INSERT INTO information_flow_edge_scopes (edge_id, session_id, sequence_no)
-                VALUES (?, ?, ?)
-                ON CONFLICT(edge_id) DO UPDATE SET
-                    session_id = excluded.session_id,
+                INSERT INTO information_flow_edges (
+                    workspace_id, edge_id, src_node_kind, src_node_id,
+                    dst_node_kind, dst_node_id,
+                    relation, evidence_level, method, score, reason
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(workspace_id, edge_id) DO UPDATE SET
+                    src_node_kind = excluded.src_node_kind,
+                    src_node_id = excluded.src_node_id,
+                    dst_node_kind = excluded.dst_node_kind,
+                    dst_node_id = excluded.dst_node_id,
+                    relation = excluded.relation,
+                    evidence_level = excluded.evidence_level,
+                    method = excluded.method,
+                    score = excluded.score,
+                    reason = excluded.reason
+                """,
+                [
+                    (workspace_id, *_flow_edge_values(edge))
+                    for edge in edges
+                ],
+            )
+            conn.executemany(
+                """
+                INSERT INTO information_flow_edge_scopes (
+                    workspace_id, session_id, edge_id, sequence_no
+                ) VALUES (?, ?, ?, ?)
+                ON CONFLICT(workspace_id, session_id, edge_id) DO UPDATE SET
                     sequence_no = MIN(
                         information_flow_edge_scopes.sequence_no,
                         excluded.sequence_no
                     )
                 """,
-                [(edge.edge_id, session_id, sequence_no) for edge in edges],
+                [
+                    (
+                        workspace_id,
+                        session_id,
+                        edge.edge_id,
+                        sequence_no,
+                    )
+                    for edge in edges
+                ],
             )
 
-    def replace_resource_versions(self, resources: list[ResourceVersion]) -> None:
+    def _reject_flow_edge_scope_collisions(
+        self,
+        conn: sqlite3.Connection,
+        workspace_id: str,
+        session_id: str,
+        edges: list[FlowEdge],
+    ) -> None:
+        batch: dict[str, tuple[object, ...]] = {}
+        for edge in edges:
+            values = _flow_edge_values(edge)[1:]
+            previous = batch.get(edge.edge_id)
+            if previous is not None and previous != values:
+                raise ValueError("flow edge id has conflicting batch payloads")
+            batch[edge.edge_id] = values
+
+        edge_ids = sorted(batch)
+        for start in range(0, len(edge_ids), 400):
+            current_ids = edge_ids[start:start + 400]
+            placeholders = ",".join("?" for _ in current_ids)
+            rows = conn.execute(
+                f"""
+                SELECT
+                    edge_id,
+                    workspace_id,
+                    src_node_kind,
+                    src_node_id,
+                    dst_node_kind,
+                    dst_node_id,
+                    relation,
+                    evidence_level,
+                    method,
+                    score,
+                    reason
+                FROM information_flow_edges
+                WHERE edge_id IN ({placeholders})
+                """,
+                current_ids,
+            ).fetchall()
+            for row in rows:
+                edge_id = row[0]
+                if row[1] != workspace_id:
+                    raise ValueError("flow edge id belongs to another workspace")
+                if tuple(row[2:]) != batch[edge_id]:
+                    raise ValueError("flow edge id has a conflicting stored payload")
+            other_session = conn.execute(
+                f"""
+                SELECT 1
+                FROM information_flow_edge_scopes
+                WHERE workspace_id = ?
+                  AND edge_id IN ({placeholders})
+                  AND session_id != ?
+                LIMIT 1
+                """,
+                (workspace_id, *current_ids, session_id),
+            ).fetchone()
+            if other_session is not None:
+                raise ValueError("flow edge id belongs to another session")
+
+    def replace_resource_versions(
+        self,
+        resources: list[ResourceVersion],
+        *,
+        workspace_id: str | None = None,
+    ) -> None:
+        owners = {resource.workspace_id for resource in resources}
+        if workspace_id is None and owners and owners != {None}:
+            if len(owners) != 1:
+                raise ValueError("resource versions span multiple workspaces")
+            workspace_id = next(iter(owners))
+        if any(resource.workspace_id != workspace_id for resource in resources):
+            raise ValueError("resource version workspace does not match replace scope")
+        stored_workspace_id = _stored_derived_workspace_id(workspace_id)
         with self._connect() as conn:
-            conn.execute("DELETE FROM resource_versions")
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                "DELETE FROM resource_versions WHERE workspace_id = ?",
+                (stored_workspace_id,),
+            )
             conn.executemany(
                 """
                 INSERT INTO resource_versions (
@@ -2017,7 +2336,7 @@ class EventStore:
                 [
                     (
                         resource.node_id,
-                        resource.workspace_id,
+                        stored_workspace_id,
                         resource.path,
                         resource.content_hash,
                         resource.sequence_no,
@@ -2032,32 +2351,84 @@ class EventStore:
                 ],
             )
 
-    def upsert_resource_versions(self, resources: list[ResourceVersion]) -> None:
+    def upsert_resource_versions(
+        self,
+        resources: list[ResourceVersion],
+        *,
+        workspace_id: str,
+        session_id: str,
+    ) -> None:
         if not resources:
             return
-        nodes = [(resource.node_id, resource.workspace_id) for resource in resources]
+        if any(
+            resource.workspace_id != workspace_id
+            or resource.session_id != session_id
+            for resource in resources
+        ):
+            raise ValueError("resource version workspace does not match write scope")
+        nodes = [
+            (
+                resource.node_id,
+                workspace_id,
+            )
+            for resource in resources
+        ]
         _validate_node_workspace_owners(nodes)
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
+            self._validate_runtime_scope_owner(conn, workspace_id, session_id)
             self._reject_cross_workspace_node_collisions(
                 conn,
                 "resource_versions",
                 nodes,
             )
+            self._reject_cross_session_node_collisions(
+                conn,
+                "resource_versions",
+                nodes,
+                session_id,
+            )
             conn.executemany(
                 """
-                INSERT OR REPLACE INTO resource_versions (
+                INSERT INTO resource_versions (
                     node_id, workspace_id, path, content_hash, sequence_no, session_id,
                     origin_tool_use_id, operation_id, operation_index,
                     snapshot_id, resource_state
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(workspace_id, node_id) DO UPDATE SET
+                    path = excluded.path,
+                    content_hash = excluded.content_hash,
+                    sequence_no = excluded.sequence_no,
+                    session_id = excluded.session_id,
+                    origin_tool_use_id = excluded.origin_tool_use_id,
+                    operation_id = excluded.operation_id,
+                    operation_index = excluded.operation_index,
+                    snapshot_id = excluded.snapshot_id,
+                    resource_state = excluded.resource_state
                 """,
                 [_resource_values(resource) for resource in resources],
             )
 
-    def replace_sink_candidates(self, sinks: list[SinkCandidate]) -> None:
+    def replace_sink_candidates(
+        self,
+        sinks: list[SinkCandidate],
+        *,
+        workspace_id: str | None = None,
+    ) -> None:
+        owners = {sink.workspace_id for sink in sinks}
+        if workspace_id is None and owners and owners != {None}:
+            if len(owners) != 1:
+                raise ValueError("sink candidates span multiple workspaces")
+            workspace_id = next(iter(owners))
+        if any(sink.workspace_id != workspace_id for sink in sinks):
+            raise ValueError("sink candidate workspace does not match replace scope")
+        stored_workspace_id = _stored_derived_workspace_id(workspace_id)
         with self._connect() as conn:
-            conn.execute("DELETE FROM sink_candidates")
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                "DELETE FROM sink_candidates WHERE workspace_id = ?",
+                (stored_workspace_id,),
+            )
             conn.executemany(
                 """
                 INSERT INTO sink_candidates (
@@ -2075,7 +2446,7 @@ class EventStore:
                 [
                     (
                         sink.node_id,
-                        sink.workspace_id,
+                        stored_workspace_id,
                         sink.sink_type,
                         sink.label,
                         sink.tool_name,
@@ -2088,24 +2459,53 @@ class EventStore:
                 ],
             )
 
-    def upsert_sink_candidates(self, sinks: list[SinkCandidate]) -> None:
+    def upsert_sink_candidates(
+        self,
+        sinks: list[SinkCandidate],
+        *,
+        workspace_id: str,
+        session_id: str,
+    ) -> None:
         if not sinks:
             return
-        nodes = [(sink.node_id, sink.workspace_id) for sink in sinks]
+        if any(
+            sink.workspace_id != workspace_id or sink.session_id != session_id
+            for sink in sinks
+        ):
+            raise ValueError("sink candidate workspace does not match write scope")
+        nodes = [
+            (sink.node_id, workspace_id)
+            for sink in sinks
+        ]
         _validate_node_workspace_owners(nodes)
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
+            self._validate_runtime_scope_owner(conn, workspace_id, session_id)
             self._reject_cross_workspace_node_collisions(
                 conn,
                 "sink_candidates",
                 nodes,
             )
+            self._reject_cross_session_node_collisions(
+                conn,
+                "sink_candidates",
+                nodes,
+                session_id,
+            )
             conn.executemany(
                 """
-                INSERT OR REPLACE INTO sink_candidates (
+                INSERT INTO sink_candidates (
                     node_id, workspace_id, sink_type, label, tool_name, tool_use_id, session_id,
                     sequence_no, metadata_json
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(workspace_id, node_id) DO UPDATE SET
+                    sink_type = excluded.sink_type,
+                    label = excluded.label,
+                    tool_name = excluded.tool_name,
+                    tool_use_id = excluded.tool_use_id,
+                    session_id = excluded.session_id,
+                    sequence_no = excluded.sequence_no,
+                    metadata_json = excluded.metadata_json
                 """,
                 [_sink_values(sink) for sink in sinks],
             )
@@ -2114,15 +2514,82 @@ class EventStore:
         self,
         conn: sqlite3.Connection,
         table: str,
-        nodes: list[tuple[str, str | None]],
+        nodes: list[tuple[str, str]],
     ) -> None:
         for node_id, workspace_id in nodes:
             row = conn.execute(
-                f"SELECT workspace_id FROM {table} WHERE node_id = ?",
-                (node_id,),
+                f"""
+                SELECT 1 FROM {table}
+                WHERE node_id = ? AND workspace_id != ?
+                LIMIT 1
+                """,
+                (node_id, workspace_id),
             ).fetchone()
-            if row is not None and row[0] != workspace_id:
+            if row is not None:
                 raise ValueError("derived node id belongs to another workspace")
+
+    def _reject_cross_session_node_collisions(
+        self,
+        conn: sqlite3.Connection,
+        table: str,
+        nodes: list[tuple[str, str]],
+        session_id: str,
+    ) -> None:
+        for node_id, workspace_id in nodes:
+            row = conn.execute(
+                f"""
+                SELECT 1 FROM {table}
+                WHERE workspace_id = ?
+                  AND node_id = ?
+                  AND session_id IS NOT ?
+                LIMIT 1
+                """,
+                (workspace_id, node_id, session_id),
+            ).fetchone()
+            if row is not None:
+                raise ValueError("derived node id belongs to another session")
+
+    def _validate_runtime_scope_owner(
+        self,
+        conn: sqlite3.Connection,
+        workspace_id: str,
+        session_id: str,
+    ) -> None:
+        row = conn.execute(
+            """
+            SELECT 1
+            FROM workspaces AS w
+            WHERE w.workspace_id = ?
+              AND EXISTS (
+                  SELECT 1
+                  FROM events AS e
+                  WHERE e.workspace_id = w.workspace_id
+                    AND e.workspace_status = 'ready'
+                    AND e.session_id = ?
+              )
+            """,
+            (workspace_id, session_id),
+        ).fetchone()
+        if row is None:
+            raise ValueError("runtime analysis scope is not registered")
+
+    def _validate_runtime_analysis_run_owner(
+        self,
+        conn: sqlite3.Connection,
+        analysis_run_id: str,
+        workspace_id: str,
+        session_id: str,
+    ) -> None:
+        row = conn.execute(
+            """
+            SELECT workspace_id, session_id
+            FROM analysis_runs
+            WHERE analysis_run_id = ?
+            """,
+            (analysis_run_id,),
+        ).fetchone()
+        if row != (workspace_id, session_id):
+            raise ValueError("analysis run does not match runtime scope")
 
     def upsert_source_binding_edges(
         self,
@@ -2201,6 +2668,8 @@ class EventStore:
     def list_information_flow_edges_for_session(
         self,
         session_id: str,
+        *,
+        workspace_id: str,
     ) -> list[FlowEdge]:
         with self._connect() as conn:
             rows = conn.execute(
@@ -2210,55 +2679,97 @@ class EventStore:
                     e.dst_node_id, e.relation, e.evidence_level, e.method,
                     e.score, e.reason
                 FROM information_flow_edges AS e
-                JOIN information_flow_edge_scopes AS s ON s.edge_id = e.edge_id
-                WHERE s.session_id = ?
+                JOIN information_flow_edge_scopes AS s
+                  ON s.workspace_id = e.workspace_id
+                 AND s.edge_id = e.edge_id
+                WHERE s.workspace_id = ? AND s.session_id = ?
                 """,
-                (session_id,),
+                (workspace_id, session_id),
             ).fetchall()
         return [_flow_edge_from_row(row) for row in rows]
 
-    def clear_runtime_analysis_for_session(self, session_id: str) -> None:
+    def clear_runtime_analysis_for_session(
+        self,
+        session_id: str,
+        *,
+        workspace_id: str,
+    ) -> None:
         with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            self._validate_runtime_scope_owner(conn, workspace_id, session_id)
             edge_ids = [
                 row[0]
                 for row in conn.execute(
-                    "SELECT edge_id FROM information_flow_edge_scopes WHERE session_id = ?",
-                    (session_id,),
+                    """
+                    SELECT edge_id FROM information_flow_edge_scopes
+                    WHERE workspace_id = ? AND session_id = ?
+                    """,
+                    (workspace_id, session_id),
                 ).fetchall()
             ]
             conn.execute(
-                "DELETE FROM information_flow_edge_scopes WHERE session_id = ?",
-                (session_id,),
+                """
+                DELETE FROM information_flow_edge_scopes
+                WHERE workspace_id = ? AND session_id = ?
+                """,
+                (workspace_id, session_id),
             )
             if edge_ids:
                 placeholders = ",".join("?" for _ in edge_ids)
                 conn.execute(
-                    f"DELETE FROM information_flow_edges WHERE edge_id IN ({placeholders})",
-                    edge_ids,
+                    f"""
+                    DELETE FROM information_flow_edges
+                    WHERE workspace_id = ?
+                      AND edge_id IN ({placeholders})
+                      AND NOT EXISTS (
+                          SELECT 1 FROM information_flow_edge_scopes AS scope
+                          WHERE scope.workspace_id = information_flow_edges.workspace_id
+                            AND scope.edge_id = information_flow_edges.edge_id
+                      )
+                    """,
+                    (workspace_id, *edge_ids),
                 )
             conn.execute(
-                "DELETE FROM fragment_shingles WHERE session_id = ?",
-                (session_id,),
+                """
+                DELETE FROM fragment_shingles
+                WHERE workspace_id = ? AND session_id = ?
+                """,
+                (workspace_id, session_id),
             )
             conn.execute(
-                "DELETE FROM runtime_lineage_state WHERE session_id = ?",
-                (session_id,),
+                """
+                DELETE FROM runtime_lineage_state
+                WHERE workspace_id = ? AND session_id = ?
+                """,
+                (workspace_id, session_id),
             )
             conn.execute(
-                "DELETE FROM runtime_source_binding_edges WHERE session_id = ?",
-                (session_id,),
+                """
+                DELETE FROM runtime_source_binding_edges
+                WHERE workspace_id = ? AND session_id = ?
+                """,
+                (workspace_id, session_id),
             )
             conn.execute(
-                "DELETE FROM analysis_cursors WHERE session_id = ?",
-                (session_id,),
+                """
+                DELETE FROM analysis_cursors
+                WHERE workspace_id = ? AND session_id = ?
+                """,
+                (workspace_id, session_id),
             )
             conn.execute(
-                "DELETE FROM resource_versions WHERE session_id = ?",
-                (session_id,),
+                """
+                DELETE FROM resource_versions
+                WHERE workspace_id = ? AND session_id = ?
+                """,
+                (workspace_id, session_id),
             )
             conn.execute(
-                "DELETE FROM sink_candidates WHERE session_id = ?",
-                (session_id,),
+                """
+                DELETE FROM sink_candidates
+                WHERE workspace_id = ? AND session_id = ?
+                """,
+                (workspace_id, session_id),
             )
 
     def list_source_binding_edges(self, analysis_run_id: str) -> list[FlowEdge]:
@@ -2306,7 +2817,9 @@ class EventStore:
                     detector_version,
                     config_json,
                     started_at,
-                    completed_at
+                    completed_at,
+                    workspace_id,
+                    session_id
                 FROM analysis_runs
                 ORDER BY started_at DESC, rowid DESC
                 """
@@ -2318,9 +2831,56 @@ class EventStore:
                 config_json=row[2],
                 started_at=row[3],
                 completed_at=row[4],
+                workspace_id=row[5],
+                session_id=row[6],
             )
             for row in rows
         ]
+
+    def get_analysis_run(self, analysis_run_id: str) -> AnalysisRun | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT
+                    analysis_run_id,
+                    detector_version,
+                    config_json,
+                    started_at,
+                    completed_at,
+                    workspace_id,
+                    session_id
+                FROM analysis_runs
+                WHERE analysis_run_id = ?
+                """,
+                (analysis_run_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return AnalysisRun(
+            analysis_run_id=row[0],
+            detector_version=row[1],
+            config_json=row[2],
+            started_at=row[3],
+            completed_at=row[4],
+            workspace_id=row[5],
+            session_id=row[6],
+        )
+
+    def get_runtime_analysis_run(
+        self,
+        analysis_run_id: str,
+        *,
+        workspace_id: str,
+        session_id: str,
+    ) -> AnalysisRun:
+        run = self.get_analysis_run(analysis_run_id)
+        if (
+            run is None
+            or run.workspace_id != workspace_id
+            or run.session_id != session_id
+        ):
+            raise ValueError("analysis run does not match runtime scope")
+        return run
 
     def list_lineage_assignments(
         self,
@@ -2467,7 +3027,7 @@ class EventStore:
         return [
             ResourceVersion(
                 node_id=row[0],
-                workspace_id=row[1],
+                workspace_id=_model_derived_workspace_id(row[1]),
                 path=row[2],
                 content_hash=row[3],
                 sequence_no=row[4],
@@ -2484,6 +3044,8 @@ class EventStore:
     def list_resource_versions_for_session(
         self,
         session_id: str,
+        *,
+        workspace_id: str,
     ) -> list[ResourceVersion]:
         with self._connect() as conn:
             rows = conn.execute(
@@ -2492,10 +3054,10 @@ class EventStore:
                        origin_tool_use_id, operation_id, operation_index,
                        snapshot_id, resource_state, workspace_id
                 FROM resource_versions
-                WHERE session_id = ?
+                WHERE workspace_id = ? AND session_id = ?
                 ORDER BY sequence_no, COALESCE(operation_index, -1), path, node_id
                 """,
-                (session_id,),
+                (workspace_id, session_id),
             ).fetchall()
         return [
             ResourceVersion(
@@ -2509,7 +3071,7 @@ class EventStore:
                 operation_index=row[7],
                 snapshot_id=row[8],
                 resource_state=row[9],
-                workspace_id=row[10],
+                workspace_id=_model_derived_workspace_id(row[10]),
             )
             for row in rows
         ]
@@ -2535,7 +3097,7 @@ class EventStore:
         return [
             SinkCandidate(
                 node_id=row[0],
-                workspace_id=row[1],
+                workspace_id=_model_derived_workspace_id(row[1]),
                 sink_type=row[2],
                 label=row[3],
                 tool_name=row[4],
@@ -2550,6 +3112,8 @@ class EventStore:
     def list_sink_candidates_for_session(
         self,
         session_id: str,
+        *,
+        workspace_id: str,
     ) -> list[SinkCandidate]:
         with self._connect() as conn:
             rows = conn.execute(
@@ -2557,10 +3121,10 @@ class EventStore:
                 SELECT node_id, sink_type, label, tool_name, tool_use_id,
                        session_id, sequence_no, metadata_json, workspace_id
                 FROM sink_candidates
-                WHERE session_id = ?
+                WHERE workspace_id = ? AND session_id = ?
                 ORDER BY sequence_no, sink_type, node_id
                 """,
-                (session_id,),
+                (workspace_id, session_id),
             ).fetchall()
         return [
             SinkCandidate(
@@ -2572,7 +3136,7 @@ class EventStore:
                 session_id=row[5],
                 sequence_no=row[6],
                 metadata=json.loads(row[7]),
-                workspace_id=row[8],
+                workspace_id=_model_derived_workspace_id(row[8]),
             )
             for row in rows
         ]
@@ -2582,22 +3146,38 @@ class EventStore:
         session_id: str,
         sequence_no: int,
         assignments: list[LineageAssignment],
+        *,
+        workspace_id: str,
+        analysis_run_id: str,
     ) -> None:
+        _validate_assignment_run_ids(assignments, analysis_run_id)
         with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            self._validate_runtime_scope_owner(conn, workspace_id, session_id)
+            self._validate_runtime_analysis_run_owner(
+                conn,
+                analysis_run_id,
+                workspace_id,
+                session_id,
+            )
             conn.execute(
-                "DELETE FROM runtime_lineage_state WHERE session_id = ?",
-                (session_id,),
+                """
+                DELETE FROM runtime_lineage_state
+                WHERE workspace_id = ? AND session_id = ?
+                """,
+                (workspace_id, session_id),
             )
             conn.executemany(
                 """
                 INSERT INTO runtime_lineage_state (
-                    session_id, source_node_kind, source_node_id, node_kind,
-                    node_id, best_path_score, predecessor_edge_id, hop_count,
-                    updated_sequence_no
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    workspace_id, session_id, source_node_kind, source_node_id,
+                    node_kind, node_id, best_path_score, predecessor_edge_id,
+                    hop_count, updated_sequence_no
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
                     (
+                        workspace_id,
                         session_id,
                         assignment.source_node_kind,
                         assignment.source_node_id,
@@ -2616,24 +3196,43 @@ class EventStore:
         self,
         session_id: str,
         edges: list[FlowEdge],
+        *,
+        workspace_id: str,
     ) -> None:
         if not edges:
             return
         with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            self._validate_runtime_scope_owner(conn, workspace_id, session_id)
             conn.executemany(
                 """
-                INSERT OR REPLACE INTO runtime_source_binding_edges (
-                    session_id, edge_id, src_node_kind, src_node_id,
+                INSERT INTO runtime_source_binding_edges (
+                    workspace_id, session_id, edge_id, src_node_kind, src_node_id,
                     dst_node_kind, dst_node_id, relation, evidence_level,
                     method, score, reason
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(workspace_id, session_id, edge_id) DO UPDATE SET
+                    src_node_kind = excluded.src_node_kind,
+                    src_node_id = excluded.src_node_id,
+                    dst_node_kind = excluded.dst_node_kind,
+                    dst_node_id = excluded.dst_node_id,
+                    relation = excluded.relation,
+                    evidence_level = excluded.evidence_level,
+                    method = excluded.method,
+                    score = excluded.score,
+                    reason = excluded.reason
                 """,
-                [(session_id, *_flow_edge_values(edge)) for edge in edges],
+                [
+                    (workspace_id, session_id, *_flow_edge_values(edge))
+                    for edge in edges
+                ],
             )
 
     def list_runtime_source_binding_edges(
         self,
         session_id: str,
+        *,
+        workspace_id: str,
     ) -> list[FlowEdge]:
         with self._connect() as conn:
             rows = conn.execute(
@@ -2641,9 +3240,9 @@ class EventStore:
                 SELECT edge_id, src_node_kind, src_node_id, dst_node_kind,
                        dst_node_id, relation, evidence_level, method, score, reason
                 FROM runtime_source_binding_edges
-                WHERE session_id = ?
+                WHERE workspace_id = ? AND session_id = ?
                 """,
-                (session_id,),
+                (workspace_id, session_id),
             ).fetchall()
         return [_flow_edge_from_row(row) for row in rows]
 
@@ -2652,19 +3251,32 @@ class EventStore:
         session_id: str,
         sequence_no: int,
         assignments: list[LineageAssignment],
+        *,
+        workspace_id: str,
+        analysis_run_id: str,
     ) -> None:
+        _validate_assignment_run_ids(assignments, analysis_run_id)
         if not assignments:
             return
         with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            self._validate_runtime_scope_owner(conn, workspace_id, session_id)
+            self._validate_runtime_analysis_run_owner(
+                conn,
+                analysis_run_id,
+                workspace_id,
+                session_id,
+            )
             conn.executemany(
                 """
                 INSERT INTO runtime_lineage_state (
-                    session_id, source_node_kind, source_node_id, node_kind,
-                    node_id, best_path_score, predecessor_edge_id, hop_count,
-                    updated_sequence_no
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    workspace_id, session_id, source_node_kind, source_node_id,
+                    node_kind, node_id, best_path_score, predecessor_edge_id,
+                    hop_count, updated_sequence_no
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(
-                    session_id, source_node_kind, source_node_id, node_kind, node_id
+                    workspace_id, session_id, source_node_kind, source_node_id,
+                    node_kind, node_id
                 ) DO UPDATE SET
                     best_path_score = excluded.best_path_score,
                     predecessor_edge_id = excluded.predecessor_edge_id,
@@ -2674,6 +3286,7 @@ class EventStore:
                 """,
                 [
                     (
+                        workspace_id,
                         session_id,
                         assignment.source_node_kind,
                         assignment.source_node_id,
@@ -2692,16 +3305,24 @@ class EventStore:
         self,
         session_id: str,
         analysis_run_id: str,
+        *,
+        workspace_id: str,
     ) -> list[LineageAssignment]:
         with self._connect() as conn:
+            self._validate_runtime_analysis_run_owner(
+                conn,
+                analysis_run_id,
+                workspace_id,
+                session_id,
+            )
             rows = conn.execute(
                 """
                 SELECT source_node_kind, source_node_id, node_kind, node_id,
                        best_path_score, predecessor_edge_id, hop_count
                 FROM runtime_lineage_state
-                WHERE session_id = ?
+                WHERE workspace_id = ? AND session_id = ?
                 """,
-                (session_id,),
+                (workspace_id, session_id),
             ).fetchall()
         return [
             LineageAssignment(
@@ -2738,36 +3359,82 @@ class EventStore:
                 (key, value),
             )
 
-    def get_analysis_cursor(self, session_id: str) -> AnalysisCursor | None:
+    def get_workspace_analysis_state(
+        self,
+        workspace_id: str,
+        key: str,
+    ) -> str | None:
         with self._connect() as conn:
             row = conn.execute(
                 """
-                SELECT session_id, detector_version, source_digest,
+                SELECT value
+                FROM workspace_analysis_state
+                WHERE workspace_id = ? AND key = ?
+                """,
+                (workspace_id, key),
+            ).fetchone()
+        return None if row is None else str(row[0])
+
+    def set_workspace_analysis_state(
+        self,
+        workspace_id: str,
+        key: str,
+        value: str,
+    ) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO workspace_analysis_state (workspace_id, key, value)
+                VALUES (?, ?, ?)
+                ON CONFLICT(workspace_id, key) DO UPDATE SET
+                    value = excluded.value,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (workspace_id, key, value),
+            )
+
+    def get_analysis_cursor(
+        self,
+        session_id: str,
+        *,
+        workspace_id: str,
+    ) -> AnalysisCursor | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT workspace_id, session_id, detector_version, source_digest,
                        last_sequence_no, status
                 FROM analysis_cursors
-                WHERE session_id = ?
+                WHERE workspace_id = ? AND session_id = ?
                 """,
-                (session_id,),
+                (workspace_id, session_id),
             ).fetchone()
         if row is None:
             return None
         return AnalysisCursor(
-            session_id=row[0],
-            detector_version=row[1],
-            source_digest=row[2],
-            last_sequence_no=row[3],
-            status=row[4],
+            workspace_id=row[0],
+            session_id=row[1],
+            detector_version=row[2],
+            source_digest=row[3],
+            last_sequence_no=row[4],
+            status=row[5],
         )
 
     def upsert_analysis_cursor(self, cursor: AnalysisCursor) -> None:
         with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            self._validate_runtime_scope_owner(
+                conn,
+                cursor.workspace_id,
+                cursor.session_id,
+            )
             conn.execute(
                 """
                 INSERT INTO analysis_cursors (
-                    session_id, detector_version, source_digest,
+                    workspace_id, session_id, detector_version, source_digest,
                     last_sequence_no, status
-                ) VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT(session_id) DO UPDATE SET
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(workspace_id, session_id) DO UPDATE SET
                     detector_version = excluded.detector_version,
                     source_digest = excluded.source_digest,
                     last_sequence_no = excluded.last_sequence_no,
@@ -2775,6 +3442,7 @@ class EventStore:
                     updated_at = CURRENT_TIMESTAMP
                 """,
                 (
+                    cursor.workspace_id,
                     cursor.session_id,
                     cursor.detector_version,
                     cursor.source_digest,
@@ -2788,11 +3456,21 @@ class EventStore:
         session_id: str,
         contexts: list[ArtifactContext],
         shingles_by_fragment: dict[str, set[str]],
+        *,
+        workspace_id: str,
     ) -> None:
+        if any(
+            context.workspace_id != workspace_id
+            or context.workspace_status != "ready"
+            or context.session_id != session_id
+            for context in contexts
+        ):
+            raise ValueError("fragment shingle context does not match write scope")
         rows = [
             (
-                context.fragment.fragment_id,
+                workspace_id,
                 session_id,
+                context.fragment.fragment_id,
                 context.sequence_no,
                 shingle,
             )
@@ -2805,11 +3483,13 @@ class EventStore:
         if not rows:
             return
         with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            self._validate_runtime_scope_owner(conn, workspace_id, session_id)
             conn.executemany(
                 """
                 INSERT OR IGNORE INTO fragment_shingles (
-                    fragment_id, session_id, sequence_no, shingle
-                ) VALUES (?, ?, ?, ?)
+                    workspace_id, session_id, fragment_id, sequence_no, shingle
+                ) VALUES (?, ?, ?, ?, ?)
                 """,
                 rows,
             )
@@ -2821,6 +3501,8 @@ class EventStore:
         shingles: set[str],
         before_sequence_no: int,
         limit: int,
+        *,
+        workspace_id: str,
     ) -> list[str]:
         with self._connect() as conn:
             exact = [
@@ -2831,10 +3513,17 @@ class EventStore:
                     FROM artifact_fragments AS f
                     JOIN artifacts AS a ON a.artifact_id = f.artifact_id
                     JOIN events AS e ON e.event_id = a.event_id
-                    JOIN fragment_shingles AS i ON i.fragment_id = f.fragment_id
-                    WHERE e.session_id = ? AND e.sequence_no < ? AND f.text_hash = ?
+                    JOIN fragment_shingles AS i
+                      ON i.workspace_id = e.workspace_id
+                     AND i.session_id = e.session_id
+                     AND i.fragment_id = f.fragment_id
+                    WHERE e.workspace_id = ?
+                      AND e.workspace_status = 'ready'
+                      AND e.session_id = ?
+                      AND e.sequence_no < ?
+                      AND f.text_hash = ?
                     """,
-                    (session_id, before_sequence_no, text_hash),
+                    (workspace_id, session_id, before_sequence_no, text_hash),
                 ).fetchall()
             ]
             overlap: list[str] = []
@@ -2847,13 +3536,20 @@ class EventStore:
                         f"""
                         SELECT fragment_id, COUNT(*) AS overlap_count
                         FROM fragment_shingles
-                        WHERE session_id = ? AND sequence_no < ?
+                        WHERE workspace_id = ? AND session_id = ?
+                          AND sequence_no < ?
                           AND shingle IN ({placeholders})
                         GROUP BY fragment_id
                         ORDER BY overlap_count DESC, fragment_id
                         LIMIT ?
                         """,
-                        (session_id, before_sequence_no, *values, limit),
+                        (
+                            workspace_id,
+                            session_id,
+                            before_sequence_no,
+                            *values,
+                            limit,
+                        ),
                     ).fetchall()
                 ]
         return list(dict.fromkeys(exact + overlap))
@@ -2933,6 +3629,28 @@ class EventStore:
             params += (through_sequence_no,)
         return self._list_artifact_contexts_where(clause, params)
 
+    def list_artifact_contexts_for_scope(
+        self,
+        workspace_id: str,
+        session_id: str,
+        *,
+        after_sequence_no: int | None = None,
+        through_sequence_no: int | None = None,
+    ) -> list[ArtifactContext]:
+        clause = """
+            WHERE e.workspace_id = ?
+              AND e.workspace_status = 'ready'
+              AND e.session_id = ?
+        """
+        params: tuple[object, ...] = (workspace_id, session_id)
+        if after_sequence_no is not None:
+            clause += " AND e.sequence_no > ?"
+            params += (after_sequence_no,)
+        if through_sequence_no is not None:
+            clause += " AND e.sequence_no <= ?"
+            params += (through_sequence_no,)
+        return self._list_artifact_contexts_where(clause, params)
+
     def list_artifact_contexts_for_tool_uses(
         self,
         session_id: str,
@@ -2950,6 +3668,33 @@ class EventStore:
             params += (through_sequence_no,)
         return self._list_artifact_contexts_where(clause, params)
 
+    def list_artifact_contexts_for_scope_tool_uses(
+        self,
+        workspace_id: str,
+        session_id: str,
+        tool_use_ids: set[str],
+        *,
+        through_sequence_no: int | None = None,
+    ) -> list[ArtifactContext]:
+        if not tool_use_ids:
+            return []
+        placeholders = ",".join("?" for _ in tool_use_ids)
+        clause = f"""
+            WHERE e.workspace_id = ?
+              AND e.workspace_status = 'ready'
+              AND e.session_id = ?
+              AND e.tool_use_id IN ({placeholders})
+        """
+        params: tuple[object, ...] = (
+            workspace_id,
+            session_id,
+            *sorted(tool_use_ids),
+        )
+        if through_sequence_no is not None:
+            clause += " AND e.sequence_no <= ?"
+            params += (through_sequence_no,)
+        return self._list_artifact_contexts_where(clause, params)
+
     def list_artifact_contexts_by_fragment_ids(
         self,
         fragment_ids: list[str],
@@ -2960,6 +3705,25 @@ class EventStore:
         return self._list_artifact_contexts_where(
             f"WHERE f.fragment_id IN ({placeholders})",
             tuple(fragment_ids),
+        )
+
+    def list_artifact_contexts_for_scope_by_fragment_ids(
+        self,
+        workspace_id: str,
+        session_id: str,
+        fragment_ids: list[str],
+    ) -> list[ArtifactContext]:
+        if not fragment_ids:
+            return []
+        placeholders = ",".join("?" for _ in fragment_ids)
+        return self._list_artifact_contexts_where(
+            f"""
+            WHERE e.workspace_id = ?
+              AND e.workspace_status = 'ready'
+              AND e.session_id = ?
+              AND f.fragment_id IN ({placeholders})
+            """,
+            (workspace_id, session_id, *fragment_ids),
         )
 
     def get_event_sequence_no(self, event_id: str) -> int:
@@ -3007,6 +3771,61 @@ class EventStore:
             execution_cwd=row[3],
             status=row[4],
             discovered_by=row[5] or "legacy_unscoped",
+        )
+
+    def get_runtime_analysis_scope(self, event_id: str) -> RuntimeAnalysisScope:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT
+                    e.event_id,
+                    e.phase,
+                    e.workspace_id,
+                    e.workspace_root,
+                    e.workspace_execution_cwd,
+                    e.workspace_status,
+                    e.session_id,
+                    e.sequence_no,
+                    w.canonical_root
+                FROM events AS e
+                LEFT JOIN workspaces AS w ON w.workspace_id = e.workspace_id
+                WHERE e.event_id = ?
+                """,
+                (event_id,),
+            ).fetchone()
+        if row is None:
+            raise KeyError(f"event not found: {event_id}")
+        (
+            stored_event_id,
+            phase,
+            workspace_id,
+            workspace_root,
+            execution_cwd,
+            workspace_status,
+            session_id,
+            sequence_no,
+            registry_root,
+        ) = row
+        if (
+            workspace_status != "ready"
+            or workspace_id is None
+            or workspace_root is None
+            or execution_cwd is None
+            or session_id is None
+            or sequence_no is None
+            or registry_root is None
+            or workspace_root != registry_root
+            or make_workspace_id(workspace_root) != workspace_id
+        ):
+            raise ValueError("event is not eligible for runtime analysis")
+        return RuntimeAnalysisScope(
+            event_id=stored_event_id,
+            phase=phase,
+            workspace_id=workspace_id,
+            canonical_root=workspace_root,
+            execution_cwd=execution_cwd,
+            session_id=session_id,
+            sequence_no=int(sequence_no),
         )
 
     def list_event_execution_contexts(
@@ -3186,6 +4005,301 @@ class EventStore:
             )
             """
         )
+
+    def _migrate_workspace_analysis_scope(
+        self,
+        conn: sqlite3.Connection,
+    ) -> None:
+        migration_key = "migration.workspace_analysis_scope.v1"
+        migration_complete = conn.execute(
+            "SELECT 1 FROM analysis_state WHERE key = ? AND value = 'complete'",
+            (migration_key,),
+        ).fetchone() is not None
+        if migration_complete:
+            try:
+                self._validate_workspace_analysis_schema(conn)
+            except RuntimeError:
+                # runtime派生tableはraw evidenceから再生成できるため、
+                # markerとschemaが不整合なら推測修復せず再作成する。
+                pass
+            else:
+                return
+
+        # これらはraw hook evidenceから再構築可能で、旧session-only rowを
+        # workspaceへ推測割当すると誤taintになるため移行せず破棄する。
+        for table in (
+            "information_flow_edge_scopes",
+            "information_flow_edges",
+            "runtime_lineage_state",
+            "runtime_source_binding_edges",
+            "fragment_shingles",
+            "analysis_cursors",
+            "resource_versions",
+            "sink_candidates",
+            "workspace_analysis_state",
+        ):
+            conn.execute(f"DROP TABLE IF EXISTS {table}")
+
+        conn.execute(
+            """
+            CREATE TABLE workspace_analysis_state (
+                workspace_id TEXT NOT NULL,
+                key TEXT NOT NULL,
+                value TEXT NOT NULL,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (workspace_id, key)
+            )
+            """
+        )
+
+        conn.execute(
+            """
+            CREATE TABLE information_flow_edges (
+                workspace_id TEXT NOT NULL,
+                edge_id TEXT NOT NULL,
+                src_node_kind TEXT NOT NULL,
+                src_node_id TEXT NOT NULL,
+                dst_node_kind TEXT NOT NULL,
+                dst_node_id TEXT NOT NULL,
+                relation TEXT NOT NULL,
+                evidence_level TEXT NOT NULL,
+                method TEXT NOT NULL,
+                score REAL NOT NULL,
+                reason TEXT NOT NULL,
+                recorded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (workspace_id, edge_id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE information_flow_edge_scopes (
+                workspace_id TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                edge_id TEXT NOT NULL,
+                sequence_no INTEGER NOT NULL,
+                PRIMARY KEY (workspace_id, session_id, edge_id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE resource_versions (
+                workspace_id TEXT NOT NULL,
+                node_id TEXT NOT NULL,
+                path TEXT NOT NULL,
+                content_hash TEXT,
+                sequence_no INTEGER NOT NULL,
+                session_id TEXT,
+                origin_tool_use_id TEXT,
+                operation_id TEXT,
+                operation_index INTEGER,
+                snapshot_id TEXT,
+                resource_state TEXT NOT NULL DEFAULT 'present',
+                recorded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (workspace_id, node_id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE sink_candidates (
+                workspace_id TEXT NOT NULL,
+                node_id TEXT NOT NULL,
+                sink_type TEXT NOT NULL,
+                label TEXT NOT NULL,
+                tool_name TEXT,
+                tool_use_id TEXT,
+                session_id TEXT,
+                sequence_no INTEGER NOT NULL,
+                metadata_json TEXT NOT NULL,
+                recorded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (workspace_id, node_id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE analysis_cursors (
+                workspace_id TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                detector_version TEXT NOT NULL,
+                source_digest TEXT NOT NULL,
+                last_sequence_no INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (workspace_id, session_id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE fragment_shingles (
+                workspace_id TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                fragment_id TEXT NOT NULL,
+                sequence_no INTEGER NOT NULL,
+                shingle TEXT NOT NULL,
+                PRIMARY KEY (workspace_id, session_id, fragment_id, shingle)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE runtime_lineage_state (
+                workspace_id TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                source_node_kind TEXT NOT NULL,
+                source_node_id TEXT NOT NULL,
+                node_kind TEXT NOT NULL,
+                node_id TEXT NOT NULL,
+                best_path_score REAL NOT NULL,
+                predecessor_edge_id TEXT,
+                hop_count INTEGER NOT NULL,
+                updated_sequence_no INTEGER NOT NULL,
+                PRIMARY KEY (
+                    workspace_id,
+                    session_id,
+                    source_node_kind,
+                    source_node_id,
+                    node_kind,
+                    node_id
+                )
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE runtime_source_binding_edges (
+                workspace_id TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                edge_id TEXT NOT NULL,
+                src_node_kind TEXT NOT NULL,
+                src_node_id TEXT NOT NULL,
+                dst_node_kind TEXT NOT NULL,
+                dst_node_id TEXT NOT NULL,
+                relation TEXT NOT NULL,
+                evidence_level TEXT NOT NULL,
+                method TEXT NOT NULL,
+                score REAL NOT NULL,
+                reason TEXT NOT NULL,
+                PRIMARY KEY (workspace_id, session_id, edge_id)
+            )
+            """
+        )
+        conn.execute(
+            "DELETE FROM analysis_state WHERE key LIKE 'artifact_graph_%'"
+        )
+        conn.execute(
+            """
+            INSERT INTO analysis_state (key, value)
+            VALUES (?, 'complete')
+            ON CONFLICT(key) DO UPDATE SET
+                value = excluded.value,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (migration_key,),
+        )
+        self._validate_workspace_analysis_schema(conn)
+
+    def _validate_workspace_analysis_schema(
+        self,
+        conn: sqlite3.Connection,
+    ) -> None:
+        required_columns = {
+            "information_flow_edges": {
+                "workspace_id", "edge_id", "src_node_kind", "src_node_id",
+                "dst_node_kind", "dst_node_id", "relation", "evidence_level",
+                "method", "score", "reason", "recorded_at",
+            },
+            "information_flow_edge_scopes": {
+                "workspace_id", "session_id", "edge_id", "sequence_no",
+            },
+            "resource_versions": {
+                "workspace_id", "node_id", "path", "content_hash",
+                "sequence_no", "session_id", "origin_tool_use_id",
+                "operation_id", "operation_index", "snapshot_id",
+                "resource_state", "recorded_at",
+            },
+            "sink_candidates": {
+                "workspace_id", "node_id", "sink_type", "label", "tool_name",
+                "tool_use_id", "session_id", "sequence_no", "metadata_json",
+                "recorded_at",
+            },
+            "analysis_cursors": {
+                "workspace_id", "session_id", "detector_version",
+                "source_digest", "last_sequence_no", "status", "updated_at",
+            },
+            "fragment_shingles": {
+                "workspace_id", "session_id", "fragment_id", "sequence_no",
+                "shingle",
+            },
+            "runtime_lineage_state": {
+                "workspace_id", "session_id", "source_node_kind",
+                "source_node_id", "node_kind", "node_id", "best_path_score",
+                "predecessor_edge_id", "hop_count", "updated_sequence_no",
+            },
+            "runtime_source_binding_edges": {
+                "workspace_id", "session_id", "edge_id", "src_node_kind",
+                "src_node_id", "dst_node_kind", "dst_node_id", "relation",
+                "evidence_level", "method", "score", "reason",
+            },
+            "workspace_analysis_state": {
+                "workspace_id", "key", "value", "updated_at",
+            },
+        }
+        expected_primary_keys = {
+            "information_flow_edges": ("workspace_id", "edge_id"),
+            "information_flow_edge_scopes": (
+                "workspace_id",
+                "session_id",
+                "edge_id",
+            ),
+            "resource_versions": ("workspace_id", "node_id"),
+            "sink_candidates": ("workspace_id", "node_id"),
+            "analysis_cursors": ("workspace_id", "session_id"),
+            "fragment_shingles": (
+                "workspace_id",
+                "session_id",
+                "fragment_id",
+                "shingle",
+            ),
+            "runtime_lineage_state": (
+                "workspace_id",
+                "session_id",
+                "source_node_kind",
+                "source_node_id",
+                "node_kind",
+                "node_id",
+            ),
+            "runtime_source_binding_edges": (
+                "workspace_id",
+                "session_id",
+                "edge_id",
+            ),
+            "workspace_analysis_state": ("workspace_id", "key"),
+        }
+        for table, expected_key in expected_primary_keys.items():
+            rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+            columns = {row[1]: row for row in rows}
+            actual_key = tuple(
+                row[1]
+                for row in sorted(
+                    (row for row in rows if row[5]),
+                    key=lambda row: row[5],
+                )
+            )
+            if (
+                not required_columns[table].issubset(columns)
+                or actual_key != expected_key
+            ):
+                raise RuntimeError(
+                    f"workspace analysis schema mismatch: {table}"
+                )
+            if columns["workspace_id"][3] != 1:
+                raise RuntimeError(
+                    f"workspace analysis owner must be required: {table}"
+                )
 
     def _backfill_event_sequence_numbers(self, conn: sqlite3.Connection) -> None:
         rows = conn.execute(
@@ -3553,6 +4667,27 @@ def _validate_node_workspace_owners(
         owners[node_id] = workspace_id
 
 
+def _validate_assignment_run_ids(
+    assignments: list[LineageAssignment],
+    analysis_run_id: str,
+) -> None:
+    if any(
+        assignment.analysis_run_id != analysis_run_id
+        for assignment in assignments
+    ):
+        raise ValueError("lineage assignment does not match analysis run")
+
+
+def _stored_derived_workspace_id(workspace_id: str | None) -> str:
+    return workspace_id or LEGACY_DERIVED_WORKSPACE_ID
+
+
+def _model_derived_workspace_id(workspace_id: str) -> str | None:
+    if workspace_id == LEGACY_DERIVED_WORKSPACE_ID:
+        return None
+    return workspace_id
+
+
 def _protected_source_from_row(row: tuple) -> ProtectedSource:
     return ProtectedSource(
         source_id=row[0],
@@ -3612,7 +4747,7 @@ def _flow_edge_from_row(row: tuple) -> FlowEdge:
 def _resource_values(resource: ResourceVersion) -> tuple[object, ...]:
     return (
         resource.node_id,
-        resource.workspace_id,
+        _stored_derived_workspace_id(resource.workspace_id),
         resource.path,
         resource.content_hash,
         resource.sequence_no,
@@ -3681,7 +4816,7 @@ def _resource_snapshot_values(snapshot: ResourceSnapshot) -> tuple[object, ...]:
 def _sink_values(sink: SinkCandidate) -> tuple[object, ...]:
     return (
         sink.node_id,
-        sink.workspace_id,
+        _stored_derived_workspace_id(sink.workspace_id),
         sink.sink_type,
         sink.label,
         sink.tool_name,

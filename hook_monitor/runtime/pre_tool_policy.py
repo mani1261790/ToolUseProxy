@@ -47,6 +47,8 @@ def evaluate_pre_tool_hook_policy(
     current_adapter = pre_tool_adapter(current_event.tool_name)
     if (
         current_event.session_id is None
+        or current_event.workspace_status != "ready"
+        or current_event.workspace_id is None
         or current_adapter is None
         or current_adapter not in enabled_adapters
     ):
@@ -54,8 +56,6 @@ def evaluate_pre_tool_hook_policy(
 
     runtime_result = update_runtime_analysis(
         store,
-        repo_root,
-        session_id=current_event.session_id,
         current_event_id=current_event.event_id,
         detector_version=RUNTIME_GRAPH_DETECTOR_VERSION,
         minimum_path_score=minimum_path_score,
@@ -98,6 +98,8 @@ def _current_external_sinks(
         for sink in sinks
         if sink.sink_type.startswith("external_")
         and sink.sequence_no == current_sequence_no
+        and sink.workspace_id == current_event.workspace_id
+        and sink.session_id == current_event.session_id
         and sink.metadata.get("adapter") == current_adapter
         and sink.metadata.get("event_id") == current_event.event_id
         and (

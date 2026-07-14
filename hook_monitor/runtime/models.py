@@ -202,15 +202,29 @@ class AnalysisRun:
     config_json: str
     started_at: str
     completed_at: str | None
+    workspace_id: str | None = None
+    session_id: str | None = None
 
 
 @dataclass(frozen=True)
 class AnalysisCursor:
+    workspace_id: str
     session_id: str
     detector_version: str
     source_digest: str
     last_sequence_no: int
     status: str
+
+
+@dataclass(frozen=True)
+class RuntimeAnalysisScope:
+    event_id: str
+    phase: str
+    workspace_id: str
+    canonical_root: str
+    execution_cwd: str
+    session_id: str
+    sequence_no: int
 
 
 @dataclass(frozen=True)

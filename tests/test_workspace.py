@@ -20,9 +20,12 @@ from hook_monitor.analysis.graph import (
 )
 from hook_monitor.runtime.ids import make_event_id, make_source_chunk_id
 from hook_monitor.runtime.models import (
+    FlowEdge,
+    LineageAssignment,
     ProtectedSource,
     ResourceSnapshot,
     SourceChunk,
+    StoredPolicyDecision,
 )
 from hook_monitor.runtime.operations import extract_tool_operations
 from hook_monitor.runtime.parser import build_artifacts, build_fragments, normalize_event
@@ -32,6 +35,60 @@ from hook_monitor.runtime.workspace import make_workspace_id, resolve_workspace
 
 
 class WorkspaceIdentityTest(unittest.TestCase):
+    def test_runtime_derived_tables_require_workspace_primary_keys(self) -> None:
+        expected = {
+            "information_flow_edges": ("workspace_id", "edge_id"),
+            "information_flow_edge_scopes": (
+                "workspace_id",
+                "session_id",
+                "edge_id",
+            ),
+            "resource_versions": ("workspace_id", "node_id"),
+            "sink_candidates": ("workspace_id", "node_id"),
+            "analysis_cursors": ("workspace_id", "session_id"),
+            "fragment_shingles": (
+                "workspace_id",
+                "session_id",
+                "fragment_id",
+                "shingle",
+            ),
+            "runtime_lineage_state": (
+                "workspace_id",
+                "session_id",
+                "source_node_kind",
+                "source_node_id",
+                "node_kind",
+                "node_id",
+            ),
+            "runtime_source_binding_edges": (
+                "workspace_id",
+                "session_id",
+                "edge_id",
+            ),
+            "workspace_analysis_state": ("workspace_id", "key"),
+        }
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            db_path = Path(temporary_directory) / "events.db"
+            EventStore(db_path).initialize()
+            with sqlite3.connect(db_path) as connection:
+                for table, expected_key in expected.items():
+                    with self.subTest(table=table):
+                        rows = connection.execute(
+                            f"PRAGMA table_info({table})"
+                        ).fetchall()
+                        actual_key = tuple(
+                            row[1]
+                            for row in sorted(
+                                (row for row in rows if row[5]),
+                                key=lambda row: row[5],
+                            )
+                        )
+                        workspace_column = next(
+                            row for row in rows if row[1] == "workspace_id"
+                        )
+                        self.assertEqual(expected_key, actual_key)
+                        self.assertEqual(1, workspace_column[3])
+
     def test_cwd_identity_is_stable_across_lexical_variants(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory) / "workspace"
@@ -896,7 +953,7 @@ class WorkspaceIdentityTest(unittest.TestCase):
         self.assertIsNone(legacy_chunk.workspace_id)
         self.assertEqual([], scoped_sources)
 
-    def test_legacy_resource_and_sink_rows_keep_null_workspace(self) -> None:
+    def test_legacy_derived_resource_and_sink_rows_are_rebuilt(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             db_path = Path(temporary_directory) / "events.db"
             with sqlite3.connect(db_path) as connection:
@@ -966,14 +1023,127 @@ class WorkspaceIdentityTest(unittest.TestCase):
 
             store = EventStore(db_path)
             store.initialize()
-            resource = store.list_resource_versions()[0]
-            sink = store.list_sink_candidates()[0]
+            resources = store.list_resource_versions()
+            sinks = store.list_sink_candidates()
 
-        self.assertEqual("legacy-resource", resource.node_id)
-        self.assertIsNone(resource.workspace_id)
-        self.assertEqual("present", resource.resource_state)
-        self.assertEqual("legacy-sink", sink.node_id)
-        self.assertIsNone(sink.workspace_id)
+        self.assertEqual([], resources)
+        self.assertEqual([], sinks)
+
+    def test_workspace_analysis_schema_repairs_without_losing_audit(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            db_path = Path(temporary_directory) / "events.db"
+            store = EventStore(db_path)
+            store.initialize()
+            run_id = store.start_analysis_run(
+                "legacy-audit-v1",
+                {"scope": "legacy"},
+            )
+            edge = FlowEdge(
+                edge_id="legacy-source-edge",
+                src_node_kind="source_chunk",
+                src_node_id="legacy-source:0",
+                dst_node_kind="artifact_fragment",
+                dst_node_id="legacy-fragment",
+                relation="source_similarity",
+                evidence_level="content_similarity",
+                method="exact_hash",
+                score=1.0,
+                reason="legacy audit edge",
+            )
+            store.upsert_source_binding_edges(run_id, [edge])
+            store.upsert_lineage_assignments(
+                [
+                    LineageAssignment(
+                        analysis_run_id=run_id,
+                        source_node_kind="source_chunk",
+                        source_node_id="legacy-source:0",
+                        node_kind="artifact_fragment",
+                        node_id="legacy-fragment",
+                        best_path_score=1.0,
+                        predecessor_edge_id=edge.edge_id,
+                        hop_count=1,
+                    )
+                ]
+            )
+            decision = StoredPolicyDecision(
+                decision_id="legacy-decision",
+                finding_id="legacy-finding",
+                analysis_run_id=run_id,
+                hook_event="Stop",
+                action="continue_review",
+                severity="high",
+                sink_type="final_answer",
+                source_node_kind="source_chunk",
+                source_node_id="legacy-source:0",
+                sink_node_id="legacy-sink",
+                path_score=1.0,
+                reason="legacy reason",
+                user_message="legacy message",
+                technical_summary="legacy summary",
+                trace_command="trace legacy",
+                path_summary=("legacy path",),
+            )
+            store.upsert_policy_decision(decision)
+            store.complete_analysis_run(run_id)
+
+            with sqlite3.connect(db_path) as connection:
+                connection.execute(
+                    """
+                    INSERT INTO resource_versions (
+                        workspace_id, node_id, path, sequence_no, resource_state
+                    ) VALUES ('legacy_unscoped', 'stale-resource', '/stale', 1, 'present')
+                    """
+                )
+                connection.execute("DROP TABLE workspace_analysis_state")
+                connection.execute(
+                    """
+                    CREATE TABLE workspace_analysis_state (
+                        workspace_id TEXT NOT NULL,
+                        key TEXT NOT NULL,
+                        value TEXT NOT NULL,
+                        PRIMARY KEY (workspace_id, key)
+                    )
+                    """
+                )
+
+            store.initialize()
+            store.initialize()
+            with sqlite3.connect(db_path) as connection:
+                table_info = connection.execute(
+                    "PRAGMA table_info(workspace_analysis_state)"
+                ).fetchall()
+                primary_key = tuple(
+                    row[1]
+                    for row in sorted(
+                        (row for row in table_info if row[5]),
+                        key=lambda row: row[5],
+                    )
+                )
+                workspace_column = next(
+                    row for row in table_info if row[1] == "workspace_id"
+                )
+                marker_count = connection.execute(
+                    """
+                    SELECT COUNT(*) FROM analysis_state
+                    WHERE key = 'migration.workspace_analysis_scope.v1'
+                      AND value = 'complete'
+                    """
+                ).fetchone()[0]
+
+            self.assertEqual(("workspace_id", "key"), primary_key)
+            self.assertEqual(1, workspace_column[3])
+            self.assertEqual(1, marker_count)
+            self.assertEqual([], store.list_resource_versions())
+            self.assertEqual(run_id, store.get_analysis_run(run_id).analysis_run_id)
+            self.assertEqual([edge], store.list_source_binding_edges(run_id))
+            self.assertEqual(
+                "legacy-fragment",
+                store.list_lineage_assignments(run_id)[0].node_id,
+            )
+            stored_decision = store.get_policy_decision("legacy-decision")
+            assert stored_decision is not None
+            self.assertEqual(decision.decision_id, stored_decision.decision_id)
+            self.assertEqual(decision.path_summary, stored_decision.path_summary)
 
     def test_workspace_source_path_cannot_escape_root(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -1093,7 +1263,15 @@ class WorkspaceIdentityTest(unittest.TestCase):
             )
 
             sinks = list(adapter_result.sinks)
-            store.upsert_sink_candidates(sinks)
+            for workspace_id in workspace_ids.values():
+                workspace_sinks = [
+                    sink for sink in sinks if sink.workspace_id == workspace_id
+                ]
+                store.upsert_sink_candidates(
+                    workspace_sinks,
+                    workspace_id=workspace_id,
+                    session_id="shared-session",
+                )
             stored_by_id = {
                 sink.node_id: sink for sink in store.list_sink_candidates()
             }
@@ -1108,8 +1286,12 @@ class WorkspaceIdentityTest(unittest.TestCase):
                 sink for sink in sinks if sink.workspace_id == workspace_ids["a"]
             )
             forged = replace(sink_a, workspace_id=workspace_ids["b"])
-            with self.assertRaisesRegex(ValueError, "another workspace"):
-                store.upsert_sink_candidates([forged])
+            with self.assertRaisesRegex(ValueError, "does not match"):
+                store.upsert_sink_candidates(
+                    [forged],
+                    workspace_id=workspace_ids["a"],
+                    session_id="shared-session",
+                )
             self.assertEqual(
                 sink_a,
                 next(
@@ -1172,10 +1354,19 @@ class WorkspaceIdentityTest(unittest.TestCase):
                 len({item.node_id for item in cloned_result.resources}),
             )
 
-            store.upsert_resource_versions([resource])
+            assert resource.workspace_id is not None
+            store.upsert_resource_versions(
+                [resource],
+                workspace_id=resource.workspace_id,
+                session_id="filesystem-session",
+            )
             forged = replace(resource, workspace_id="ws_v1_other")
-            with self.assertRaisesRegex(ValueError, "another workspace"):
-                store.upsert_resource_versions([forged])
+            with self.assertRaisesRegex(ValueError, "does not match"):
+                store.upsert_resource_versions(
+                    [forged],
+                    workspace_id=resource.workspace_id,
+                    session_id="filesystem-session",
+                )
             self.assertEqual(
                 resource,
                 next(
