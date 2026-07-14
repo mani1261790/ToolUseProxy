@@ -14,7 +14,7 @@ from hook_monitor.runtime.parser import (
 )
 from hook_monitor.runtime.pre_tool_policy import (
     evaluate_pre_tool_hook_policy,
-    is_enforced_bash_tool,
+    pre_tool_adapter,
 )
 from hook_monitor.runtime.storage import DEFAULT_DB_PATH, EventStore
 from hook_monitor.runtime.stop_policy import evaluate_stop_hook_policy
@@ -37,16 +37,16 @@ def run_hook(phase: str) -> int:
     store = EventStore(_resolve_db_path())
     store.initialize()
     store.record(event, artifacts, fragments)
-    if (
-        phase == "pre_tool_use"
-        and _pre_tool_policy_enabled()
-        and is_enforced_bash_tool(event.tool_name)
-    ):
+    enabled_pre_tool_adapters = _enabled_pre_tool_adapters()
+    if phase == "pre_tool_use" and pre_tool_adapter(
+        event.tool_name
+    ) in enabled_pre_tool_adapters:
         try:
             hook_output = evaluate_pre_tool_hook_policy(
                 store,
                 REPO_ROOT,
                 current_event=event,
+                enabled_adapters=enabled_pre_tool_adapters,
             )
         except Exception as exc:  # pragma: no cover - defensive hook boundary
             _report_policy_failure("pre-tool", exc)
@@ -85,6 +85,20 @@ def _stop_policy_enabled() -> bool:
 def _pre_tool_policy_enabled() -> bool:
     configured = os.environ.get("TOOLUSEPROXY_PRE_TOOL_POLICY", "0")
     return configured.lower() in {"1", "true", "yes", "on"}
+
+
+def _pre_tool_mcp_policy_enabled() -> bool:
+    configured = os.environ.get("TOOLUSEPROXY_PRE_TOOL_MCP_POLICY", "0")
+    return configured.lower() in {"1", "true", "yes", "on"}
+
+
+def _enabled_pre_tool_adapters() -> frozenset[str]:
+    if not _pre_tool_policy_enabled():
+        return frozenset()
+    adapters = {"bash"}
+    if _pre_tool_mcp_policy_enabled():
+        adapters.add("mcp")
+    return frozenset(adapters)
 
 
 def _report_policy_failure(policy_name: str, exc: Exception) -> None:

@@ -1993,6 +1993,69 @@ class InformationFlowTest(unittest.TestCase):
         }
         self.assertEqual({"session-full", "session-incremental"}, modes)
 
+    def test_pre_tool_policy_denies_current_protected_mcp_sink(self) -> None:
+        self.store.upsert_sources(
+            [self._protected_source("private.py")],
+            [self._source_chunk()],
+        )
+        dangerous = self._record(
+            "pre_tool_use",
+            "mcp-dangerous",
+            "mcp__slack__send_message",
+            tool_input={"channel": "security", "text": SECRET},
+        )
+        clean = self._record(
+            "pre_tool_use",
+            "mcp-clean",
+            "mcp__slack__send_message",
+            tool_input={"channel": "security", "text": "Public status only."},
+        )
+
+        first = evaluate_pre_tool_hook_policy(
+            self.store,
+            Path(self.temporary_directory.name),
+            current_event=dangerous,
+            enabled_adapters=frozenset({"mcp"}),
+        )
+        second = evaluate_pre_tool_hook_policy(
+            self.store,
+            Path(self.temporary_directory.name),
+            current_event=clean,
+            enabled_adapters=frozenset({"mcp"}),
+        )
+
+        self.assertEqual(
+            "deny",
+            first["hookSpecificOutput"]["permissionDecision"],
+        )
+        self.assertEqual({}, second)
+        self.assertNotIn(SECRET, json.dumps(first))
+        decisions = self.store.list_policy_decisions()
+        self.assertEqual(1, len(decisions))
+        self.assertEqual("external_message", decisions[0].sink_type)
+
+    def test_pre_tool_policy_allows_read_only_mcp_call(self) -> None:
+        self.store.upsert_sources(
+            [self._protected_source("private.py")],
+            [self._source_chunk()],
+        )
+        event = self._record(
+            "pre_tool_use",
+            "mcp-read-only",
+            "mcp__github__get_issue",
+            tool_input={"owner": "example", "repo": "repo", "body": SECRET},
+        )
+
+        output = evaluate_pre_tool_hook_policy(
+            self.store,
+            Path(self.temporary_directory.name),
+            current_event=event,
+            enabled_adapters=frozenset({"mcp"}),
+        )
+
+        self.assertEqual({}, output)
+        self.assertEqual([], self.store.list_policy_decisions())
+
     def test_pre_tool_policy_allows_local_protected_read(self) -> None:
         self.store.upsert_sources(
             [self._protected_source("private.py")],
@@ -2114,6 +2177,51 @@ class InformationFlowTest(unittest.TestCase):
             input=json.dumps(payload),
             cwd=REPO_ROOT,
             env={**env, "TOOLUSEPROXY_PRE_TOOL_POLICY": "1"},
+            check=True,
+            text=True,
+            capture_output=True,
+        )
+
+        self.assertEqual("", disabled.stdout)
+        self.assertEqual(
+            "deny",
+            json.loads(enabled.stdout)["hookSpecificOutput"]["permissionDecision"],
+        )
+        self.assertNotIn(SECRET, enabled.stdout)
+
+    def test_pre_tool_mcp_runtime_requires_separate_opt_in(self) -> None:
+        self.store.upsert_sources(
+            [self._protected_source("private.py")],
+            [self._source_chunk()],
+        )
+        payload = {
+            "session_id": "session-1",
+            "turn_id": "turn-1",
+            "tool_use_id": "mcp-exfil",
+            "tool_name": "mcp__slack__send_message",
+            "cwd": str(REPO_ROOT),
+            "tool_input": {"channel": "security", "text": SECRET},
+        }
+        env = {
+            **os.environ,
+            "TOOLUSEPROXY_DB_PATH": str(self.db_path),
+            "TOOLUSEPROXY_PRE_TOOL_POLICY": "1",
+        }
+
+        disabled = subprocess.run(
+            [sys.executable, str(REPO_ROOT / "hooks" / "monitor_pre_tool.py")],
+            input=json.dumps(payload),
+            cwd=REPO_ROOT,
+            env=env,
+            check=True,
+            text=True,
+            capture_output=True,
+        )
+        enabled = subprocess.run(
+            [sys.executable, str(REPO_ROOT / "hooks" / "monitor_pre_tool.py")],
+            input=json.dumps(payload),
+            cwd=REPO_ROOT,
+            env={**env, "TOOLUSEPROXY_PRE_TOOL_MCP_POLICY": "1"},
             check=True,
             text=True,
             capture_output=True,
