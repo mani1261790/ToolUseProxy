@@ -470,6 +470,19 @@ pure plannerは32 testsで、以下のhappy path、all-or-nothing、実MCP adapt
    - 2つのPreToolUse Hookが異なるrewriteを返す
    - completion orderで結果が変わることを確認し、production-ready判定には使わない
 
+### 2026-07-15 実行結果
+
+commit `81a519c`、Codex CLI `0.142.5`、`gpt-5.5`で、hash-onlyのローカルstdio MCP serverと別々のpublic / protected DBを使って1と3を再検証しました。runtime rewriteとsyntheticな`rendered` planは有効化していません。
+
+- public callはPreToolUse 1件、PostToolUse 1件、server call 1件で、canonical arguments hashも期待値と一致した
+- public DBのredaction planとpolicy decisionはともに0件で、Post confirmationはplan-first no-opだった
+- protected callはPreToolUse 1件、PostToolUse 0件、server call 0件だった
+- protected DBには`block / critical / external_api_call` 1件と`preview / eligible` plan 1件を保存し、`post_event_id`は`NULL`のままだった
+- `rendered`、`post_confirmed`、`post_mismatch`は0件で、preview planを誤って終端状態へ進めなかった
+- protected inputの期待hashはpublic側のhash-only監査に存在せず、protected側はserver call 0で監査file自体が作られなかった。Codex JSONLとfinal answerにもダミー本文は残らなかった
+
+これにより、現行production経路ではpublic callを壊さず、protected callは従来どおり副作用前にblockし、dormant confirmationがpreview stateへ干渉しないことを確認しました。Post hash一致による`post_confirmed`遷移はfuture rendered planだけの境界なので、引き続きsynthetic integration testの検証対象です。
+
 実験後も、original protected valueをterminal、Hook reason、server logの本文として出力しません。検証は固定marker、件数、hash、fileの有無で行います。
 
 ## 再評価条件

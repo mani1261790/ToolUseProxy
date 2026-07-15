@@ -459,11 +459,38 @@ bounded envelope内のeligible / rejected planとfinding単位の全targetは、
 
 `scripts/cleanup_redaction_audits.py`は所有するPreToolUse eventのworkspace、任意session、recorded-at cutoffでauditを選び、既定はdry-runとする。SQLiteのforeign key enforcementはリポジトリ全体でoffのままなので、execute時は`ON DELETE CASCADE`に依存せず、同じtransactionでtargetを先に明示削除してからplanを削除する。
 
+## Dormant Post confirmation実Codex E2E
+
+2026-07-15にcommit `81a519c`、Codex CLI `0.142.5`、`gpt-5.5`で、Post confirmationを追加した現行runtimeのpublic allow / protected denyを再検証した。実験workspaceは`/private/tmp/tooluseproxy-redaction-e2e-20260715`で、受信argumentsは本文ではなくcanonical JSONのSHA-256とbyte数だけを保存するローカルstdio MCP serverを使用した。publicとprotectedは別DBに分離し、runtime rewrite、`updatedInput`、syntheticな`rendered` planは有効化していない。
+
+publicな固定markerを`publish_text(content)`へ渡した結果は次のとおりだった。
+
+- PreToolUse 1件、PostToolUse 1件
+- MCP serverの`tools/call` 1件
+- serverが保存したcanonical arguments hashは期待値と一致
+- `policy_decisions` 0件、`redaction_plans` 0件
+- Codex側のMCP tool statusは`completed`
+
+従って、productionと同じplanなし経路でPost confirmationはwriterへ進まず、public callへ影響しなかった。
+
+同じmanifest内のダミーprotected valueを`publish_text(content)`へ渡した結果は次のとおりだった。
+
+- PreToolUse 1件、PostToolUse 0件
+- MCP serverの`tools/call` 0件
+- `block / critical / external_api_call` decision 1件
+- `preview / eligible` plan 1件、linked Post 0件
+- `rendered`、`post_confirmed`、`post_mismatch` 0件
+- protected argumentsの期待hashはpublic側のserver監査に存在せず、protected側はcall 0で監査file自体が生成されない
+- Codex JSONLとfinal answerにダミーprotected本文は存在しない
+
+従って、protected callは既存のPreToolUse denyで副作用前に止まり、Post confirmationはPostのないpreview planを終端状態へ進めなかった。実験用SQLiteのraw Hook eventには従来どおりtool inputが入るため、これはmonitor DBのplaintext問題を解決する検証ではない。
+
+最初のpublic試行では`--ignore-user-config`がproject-local MCP設定も除外し、DB 0件、server call 0件だったため無効試行として除外した。protectedの初回wrapperではCodex終了後にzshの予約変数`status`へ代入してshell exit 1となったため、別DBで再実行し、同じ遮断結果とwrapper exit 0を確認した。いずれも有効試行の件数へ混ぜていない。
+
 ## 次の検証順序
 
-1. dormant Post confirmationを実Codexのpublic allow / protected denyで再検証する
-2. 複数rewriterとderived redact decision linkageのenforcement gateを評価する
-3. offline staging/promoteとruntime履歴snapshotの必要性を評価する
-4. embedding候補検索の評価
+1. 複数rewriter、derived redact decision linkage、Post payload byte metadataのenforcement gateを評価する
+2. offline staging/promoteとruntime履歴snapshotの必要性を評価する
+3. embedding候補検索の評価
 
 PermissionRequestは評価を完了し、汎用runtime接続を見送った。redactも書換契約を設計したが、複数PreToolUse Hookでは最後に完了したrewriteだけが採用され、rewrite後のPreToolUse再検査もない。production Stop境界へは接続せず、MCPのexplicit profile、call内全findingのaggregate plan、hash-only audit、future rendered planだけを対象にしたdormant Post confirmationまで接続した。現行previewは一致しても状態遷移せず、実Codex E2Eでもruntime rewriteを有効化しない。未サポートの`permissionDecision: ask`には依存しない。
