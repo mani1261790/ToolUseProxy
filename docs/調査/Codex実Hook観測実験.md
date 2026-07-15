@@ -487,10 +487,41 @@ publicな固定markerを`publish_text(content)`へ渡した結果は次のとお
 
 最初のpublic試行では`--ignore-user-config`がproject-local MCP設定も除外し、DB 0件、server call 0件だったため無効試行として除外した。protectedの初回wrapperではCodex終了後にzshの予約変数`status`へ代入してshell exit 1となったため、別DBで再実行し、同じ遮断結果とwrapper exit 0を確認した。いずれも有効試行の件数へ混ぜていない。
 
+## O(1) hash-only event metadata実装後の再検証
+
+同日の次作業単位で、Post confirmationがwideな`events` rowを読まなくてもrecord時点の観測を確認できるよう、`event_payload_metadata`をhash-only sidecarへ拡張した。初期案のbyte数だけのsidecarでは、bounded candidateに対する`substr(CAST(payload_json AS BLOB))`もSQLite内部で巨大TEXTをmaterializeし得るため、確認経路から`events` tableの読取り自体を除外した。
+
+新しいeventは、本文JSONを1回だけserializeしてUTF-8 byte列とし、正確な`payload_bytes`と`payload_sha256`をeventと同じouter transactionで保存する。redaction対象のPre / Postには、4 KiB以下へ制限したcall identityから作る`redaction_scope_sha256`、scope内の`sequence_no`、Post inputのbounded canonical hash / structure hash、profileと観測statusを保存する。全列を束ねた`metadata_sha256`とclosed-worldなCHECK制約でsidecar内部の不整合を検出するが、これはkeyed MACではなく、同一DBを任意に書き換えられる攻撃者への耐改ざん境界ではない。
+
+metadata insertだけの失敗はsavepointで戻してredaction auditを無効化し、core event / artifactは残す。後続core書込みが失敗した場合はeventとmetadataを共にrollbackする。legacy eventはHook初期化時にpayloadを全走査してbackfillせず、metadata欠落を`post_payload_bytes_unavailable`として未確認にする。同一eventのreplayはrecord時のsidecarを不変とし、後日のregistry driftで上書きしない。
+
+Post confirmationはrendered planを先に検索し、その後はsidecarのscope / sequence / integrity / bounded input hashだけでcurrent Post、対応するPre、最初のPostを確認する。確認queryは`events` tableの列を1つも読まない。1 MiB超は`post_payload_bytes_exceeded`、metadata不整合は`post_payload_metadata_invalid`、metadata欠落は`post_payload_bytes_unavailable`のまま状態遷移しない。sidecarはrecord時点のauthoritative observationであり、保存後に`events.payload_json`だけが外部から変更されたことを検出する用途ではない。
+
+local benchmarkはfixture構築とevent保存を除外し、再現script `/private/tmp/tooluseproxy-redaction-sidecar-20260715/benchmark.py`（SHA-256 `70a07fb132a15526ac37b104f10bf498d8ae66e2f175e9dcbe1ff2c499b0aebe`、Python 3.9.6、SQLite 3.54.0）を独立再実行した。結果は次のとおりだった。
+
+| case | samples | p95 |
+|---|---:|---:|
+| 10 MiB no-plan | 500 | 0.789 ms |
+| 10 MiB rendered oversize | 300 | 0.839 ms |
+| terminal replay | 500 | 0.993 ms |
+| new transition | 120 | 3.291 ms |
+| downward-corrupt metadata + 20 MiB event row | 300 | 0.477 ms |
+| 10 MiB SHA-256 at record time | 300 | 4.175 ms |
+| small bounded observer | 2,000 | 0.033 ms |
+| near-32 KiB bounded observer | 500 | 0.198 ms |
+| paired sidecar + observer overhead | 500 | 1.350 ms |
+
+sidecar実装前の10 MiB rendered oversizeはp95 8.01 msだった。新しいconfirmation queryはpartial index `idx_event_payload_metadata_redaction_scope_sequence`とevent ID lookupを使用し、計測したp95は10 ms budget内だった。no-planとrendered oversizeにはそれぞれ34.054 ms、29.766 msの単発max outlierがあるため、maxが10 ms未満とは扱わない。
+
+一つ前のsize-only sidecarでは、同じhash-only stdio MCPを実Codexで再実行した。publicはPre / Post各1件に対してmetadata 2件、server call 1件、plan / decision 0件だった。protectedはPre 1件にmetadata 1件、Post / server call 0件、`block / critical / external_api_call` 1件、`preview / eligible` 1件だった。protected expected hashはserver監査になく、Codex JSONL / final answerにもダミー本文はなかった。
+
+最終hash-only schemaでの再実行は、既定の`gpt-5.6-sol`がCodex CLIと非互換でturn開始前に失敗し、その後の明示的な`gpt-5.5`と`gpt-5.4-mini`はusage limitでturn開始前に停止した。いずれもHook eventやserver callを生成していないため有効試行へ数えていない。最終schemaはactual Hook entrypoint fixtureを含むlocal 270 testsで検証済みだが、実Codex再検証はusageが利用可能になった後の残件である。runtime rewriteは引き続き有効化していない。
+
 ## 次の検証順序
 
-1. 複数rewriter、derived redact decision linkage、Post payload byte metadataのenforcement gateを評価する
-2. offline staging/promoteとruntime履歴snapshotの必要性を評価する
-3. embedding候補検索の評価
+1. derived redact decision linkageのschema、atomic writer、confirmation再証明をdormantな独立作業単位で実装する
+2. exclusive rewriteまたは完全管理singleton配備境界が成立しない限りruntime rendererを実装しない
+3. offline staging/promoteとruntime履歴snapshotの必要性を評価する
+4. embedding候補検索の評価
 
 PermissionRequestは評価を完了し、汎用runtime接続を見送った。redactも書換契約を設計したが、複数PreToolUse Hookでは最後に完了したrewriteだけが採用され、rewrite後のPreToolUse再検査もない。production Stop境界へは接続せず、MCPのexplicit profile、call内全findingのaggregate plan、hash-only audit、future rendered planだけを対象にしたdormant Post confirmationまで接続した。現行previewは一致しても状態遷移せず、実Codex E2Eでもruntime rewriteを有効化しない。未サポートの`permissionDecision: ask`には依存しない。

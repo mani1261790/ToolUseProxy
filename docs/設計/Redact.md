@@ -216,6 +216,37 @@ CREATE TABLE redaction_targets (
     FOREIGN KEY (plan_id) REFERENCES redaction_plans(plan_id) ON DELETE CASCADE
 );
 
+CREATE TABLE event_payload_metadata (
+    event_id TEXT PRIMARY KEY NOT NULL,
+    metadata_version TEXT NOT NULL,
+    metadata_sha256 TEXT NOT NULL,
+    payload_bytes INTEGER NOT NULL CHECK (
+        typeof(payload_bytes) = 'integer' AND payload_bytes >= 0
+    ),
+    payload_sha256 TEXT NOT NULL,
+    sequence_no INTEGER NOT NULL,
+    redaction_event_kind TEXT NOT NULL,
+    redaction_scope_sha256 TEXT,
+    post_input_status TEXT NOT NULL,
+    post_input_observer_version TEXT,
+    post_input_diagnostic_code TEXT,
+    post_profile_id TEXT,
+    post_profile_version TEXT,
+    post_profile_registry_version TEXT,
+    post_input_bytes INTEGER,
+    post_input_sha256 TEXT,
+    post_structure_sha256 TEXT,
+    -- 実装はstatusごとのNULL/type/length/hash invariantをCHECKする
+    FOREIGN KEY (event_id) REFERENCES events(event_id)
+);
+
+CREATE INDEX idx_event_payload_metadata_redaction_scope_sequence
+    ON event_payload_metadata(
+        redaction_scope_sha256, redaction_event_kind,
+        sequence_no, event_id
+    )
+    WHERE redaction_scope_sha256 IS NOT NULL;
+
 CREATE UNIQUE INDEX idx_redaction_plans_event_version
     ON redaction_plans(
         workspace_id, pre_event_id, analysis_run_id,
@@ -226,8 +257,14 @@ CREATE INDEX idx_redaction_plans_tool_use
     ON redaction_plans(
         workspace_id, session_id, tool_use_id,
         created_at DESC, plan_id
-    );
+);
 ```
+
+`event_payload_metadata`は巨大な`events.payload_json`とは物理的に分離したhash-only sidecarです。新しく記録する全eventについて、実際に`events`へ保存するJSONを1回だけserialize / UTF-8 encodeし、byte数とpayload SHA-256を同じouter transactionで保存します。redaction対象になり得るPre / Postには、4 KiB以下のworkspace / session / turn / tool identityをcanonical JSONへ入れたcall-scope SHA-256と`sequence_no`も保存します。
+
+1 MiB以下のPostでは、exact profileがPost input stableかつfile inputなしの場合だけ、32 KiB / 32 fields / depth 8以内のcanonical input byte数・SHA-256とstructure SHA-256をrecord時に導出します。oversize、unknown profile、unstable input、型・上限違反は固定diagnosticだけを保存し、input本文やprefixは複製しません。observer algorithmには独立versionを持たせ、metadata SHA-256はevent ID、payload byte数・hash、sequence、scope、status、profile / input hashをすべてbindします。これは偶発的なrow driftを検出するfingerprintであり、認証付きMACではありません。
+
+同じevent IDのreplayではpayload hash、sequence、scopeが一致する場合だけ最初のrecord-time observationを正として維持し、再計算したprofile registryで上書きしません。既存eventはHook初期化中の全payload走査を避けるためbackfillしません。legacy rowにmetadataがない場合は本文長へfallbackせず`post_payload_bytes_unavailable`として未確認にします。observerまたはsidecar insertだけが失敗した場合はauditを無効化し、core event / artifactの保存を継続します。後続core書込みが失敗した場合はeventとsidecarを同じouter transactionでrollbackします。
 
 exact profileがないreject planでは、`profile_id`に`unprofiled:<server>/<tool>`、`profile_version`にregistry versionを入れ、nullable keyによる重複を避けます。これは適格profileが存在することを意味せず、`rejection_code = 'unknown_profile'`と対で扱います。
 
@@ -247,9 +284,11 @@ hash対象はtool inputのcanonical JSONです。Bash / apply_patchも`{"command
 - `mode = enforce AND status = rendered`のplanだけをPost confirmation候補にし、previewのeligible / rejected planは遷移させない
 - enforce planの全immutable列とbounded target集合が、storageで再証明済みのeligible previewとexact cloneであることを要求する
 - exact workspace / session / turn / tool use / tool名、所有Pre event、完了analysis runが一致する単一planだけを扱う
-- exact scopeでPreより後に保存された最小`sequence_no`のPost eventだけを採用し、confirmation呼出順には依存しない
-- 1 MiB以下の保存済みPost payloadを正としてevent IDを再検証し、現在registryの同一versionかつ`post_input_stable: true`、file inputなしのprofileで、boundedなactual input hashが一致した場合だけ`post_confirmed`にする
-- boundedなactual inputをhash化でき、そのhashが不一致なら`post_mismatch`とし、別Hookのoverrideなどを疑う
+- exact scopeでPreより後に保存された最小`sequence_no`のPost sidecarだけを採用し、confirmation呼出順には依存しない
+- planが1件だけ存在する場合に限り、current Post、所有Pre、同scopeの最小Postをsidecarから取得する。confirmation SQLは`events` tableと`payload_json`を一切読まない
+- metadata欠落は`post_payload_bytes_unavailable`、row integrity / version / status不一致は`post_payload_metadata_invalid`、1 MiB超過は`post_payload_bytes_exceeded`として未確認にする
+- record時のbounded Post input hashについて、現在registryの同一version、`post_input_stable: true`、file inputなしを再検証し、planのrewritten input hashと一致した場合だけ`post_confirmed`にする
+- exact profileでboundedにhash化できたactual inputが不一致なら、Post shapeがprofile validationに失敗していても`post_mismatch`とし、別Hookのoverrideなどを疑う
 - input超過、profile drift、file input、曖昧な複数planは未確認のままにし、不一致と推測しない
 - Postがない場合は、approval拒否、別Hook deny、tool failureを区別できないため、自動的に`applied`とは記録しない
 
@@ -257,9 +296,11 @@ previewではtargetの`decision_id`に元のblock decisionを保存します。�
 
 statusの`rendered`はHookがstdout用JSONを作ったことだけを表し、Codexが採用したことを意味しません。採用を示せるのは、観測したPost inputが一致した`post_confirmed`だけです。`post_mismatch`はexact scopeで最小sequenceのPost eventを保持し、後続Postで上書きしません。同じPost eventの再処理は冪等です。`confirmed_at`は一致時だけ設定し、不一致の観測時刻は`post_event_id`が参照するeventの`recorded_at`を使います。
 
-Post confirmationはaudit用10 ms busy timeoutの短いread transactionで候補を確認し、一致または不一致を確定した1 rowだけを同じsnapshotからcompare-and-setします。現行のno-plan経路ではPost event rowへ触れず、writer lockへもupgradeしません。targetやinput本文を更新せず、network、embedding、filesystem、workspace走査、全DB解析を行いません。失敗はPost event本体の保存をrollbackせず、exception typeだけをstderrへ出してHookを継続します。現行runtimeは`rendered` planを作らないため、この経路はproductionではno-opです。synthetic testだけが将来rendererの境界をseedし、状態遷移を検証します。
+Post confirmationはaudit用10 ms busy timeoutの短いread transactionで候補を確認し、一致または不一致を確定した1 rowだけを同じsnapshotからcompare-and-setします。現行のno-plan経路ではsidecarにも触れず、writer lockへもupgradeしません。future rendered planがある場合もwideな`events` rowは読まず、current Post / owning Pre / earliest Postのidentityと順序をintegrity検証済みsidecarだけで証明します。SQLite authorizerで`events` tableの全readをdenyしたconfirmed、mismatch、oversize、metadata drift、terminal replay、no-plan testを通しています。targetやinput本文を更新せず、network、embedding、filesystem、workspace走査、全DB解析を行いません。失敗はPost event本体の保存をrollbackせず、exception typeだけをstderrへ出してHookを継続します。現行runtimeは`rendered` planを作らないため、この経路はproductionではno-opです。synthetic testだけが将来rendererの境界をseedし、状態遷移を検証します。
 
-retentionはeventと同じscopeへ連動させます。planだけを長く残すとsource / sink関係を不要に保持するため、`scripts/cleanup_redaction_audits.py`は所有するPreToolUse eventのworkspace、任意session、recorded-at cutoffでplan / targetを選びます。既定はdry-runで、`--execute`を明示した場合だけ削除します。SQLiteのforeign key enforcementはリポジトリ全体で現在offのため、`ON DELETE CASCADE`に依存せず、同じtransactionでtargetを先に明示削除してからplanを削除します。現行DBは暗号化されず、raw Hook payloadやartifactにplaintextが残り得ます。redactは外部送信を減らす機能であり、monitor DBのplaintext保存問題を解決する機能ではありません。
+confirmationのauthorityは、core eventと同じtransactionで初回保存したsidecar observationです。保存後に外部processが`events.payload_json`だけを改変してもconfirmationは再読込せず、sidecar側のmetadata SHAも変わらないため検出しません。local DBへ任意writeできる攻撃者は現行threat model外であり、必要なら将来MAC / DB暗号化 / file permission hardeningを別境界で追加します。
+
+retentionはeventと同じscopeへ連動させます。planだけを長く残すとsource / sink関係を不要に保持するため、`scripts/cleanup_redaction_audits.py`は所有するPreToolUse eventのworkspace、任意session、recorded-at cutoffでplan / targetを選びます。既定はdry-runで、`--execute`を明示した場合だけ削除します。SQLiteのforeign key enforcementはリポジトリ全体で現在offのため、`ON DELETE CASCADE`に依存せず、同じtransactionでtargetを先に明示削除してからplanを削除します。将来event retentionを追加する場合も、sidecar rowを同じtransactionで明示削除します。`event_payload_metadata`は新しいplaintext本文を複製しませんが、payload / input / structure / metadata hashはdictionary test可能なfingerprintです。さらに現行DBは暗号化されず、既存のraw Hook payloadやartifactにplaintextが残り得ます。redactは外部送信を減らす機能であり、monitor DBのat-rest機密性を解決する機能ではありません。
 
 ## plannerの処理順序
 
@@ -308,7 +349,7 @@ redact plannerを`try/except`の外へ投げて空stdoutにすると、blockす�
 
 ## 複数Hook問題とenforcement gate
 
-現行Codexの「last completed rewrite wins」では、ToolUseProxyがredactした後に別Hookが別inputを返せます。ToolUseProxy自身からはmatching rewriterの総数も、最終採用inputも実行前に確認できません。
+Codex CLI `0.142.5`の公式sourceでは、matching PreToolUse Hookは同じoriginal inputで並行実行され、denyがなければ最後に完了した有効な`updatedInput`だけが採用されます。採用後にPreToolUseは再実行されません。この「last completed rewrite wins」では、ToolUseProxyがredactした後に別Hookが別inputを返せます。ToolUseProxy自身からはmatching rewriterの総数も、最終採用inputも実行前に確認できません。`hooks/list`とmanaged-only設定は事前棚卸しには使えますが、複数managed Hook、session override、実行時にrewriteを返すか、設定確認後の変更を証明できないため、一般配備のsingleton attestationにはなりません。
 
 このため、次のどちらかが満たされるまでruntime enforceへ進みません。
 
@@ -353,7 +394,11 @@ redact plannerはlocal JSON、indexed DB row、hash、tool profileだけを使�
 
 同日の最終Post confirmation実測では、fixture構築とPost event保存を除外し、productionと同じrendered planなしのread-only経路2,000 sampleがp95 0.718 ms、同一terminal Post replay 1,000 sampleがp95 0.964 ms、synthetic rendered planの新規state transition 120 sampleがp95 2.964 msでした。10 MiBのPost responseを持つno-plan経路もplan-first lookupにより120 sampleでp95 0.649 msとなり、payload rowへ触れずsmall fixtureと同等でした。writer lock中もno-plan readは継続し、transitionだけが10 ms busy timeout内でfail-fastして`rendered`を維持します。
 
-一方、synthetic rendered planが存在する10 MiB Post payloadのoversize未確認経路は20 sampleでp95 8.01 msでした。1 MiB capにより本文をPythonへmaterializeする前に止めますが、SQLiteの`length(payload_json)`がoverflow pageを読むコストはpayload量に比例します。現行productionはrendered planがないためこの経路へ入りません。actual enforce前に`payload_bytes`をevent record時の固定metadataとして保存するなどO(1) preflightへ変更し、enforcement latency gateを再計測します。
+同日のsidecar実装前は、synthetic rendered planが存在する10 MiB Post payloadのoversize未確認経路が20 sampleでp95 8.01 msでした。SQLiteの`length(payload_json)`がoverflow pageを読むコストはpayload量に比例したためです。
+
+final hash-only `event_payload_metadata`実装後の再測定では、fixture構築とevent保存を除外し、10 MiB no-plan 500 sampleがp95 0.789 ms、10 MiB rendered oversize 300 sampleがp95 0.839 ms、terminal replay 500 sampleがp95 0.993 ms、new transition 120 sampleがp95 3.291 msでした。さらに`events.payload_json`を20 MiBへ拡大し、sidecarの`payload_bytes`だけを過少値へ壊したmetadata-integrity失敗300 sampleもp95 0.477 msでした。confirmationはwide rowを読まず、primary-key indexと`idx_event_payload_metadata_redaction_scope_sequence`を使います。全caseのp95は10 ms budget内ですが、no-planとoversizeにはOS scheduling由来とみられる単発max 34.054 / 29.766 msがあったため、maxまで10 ms以内とは主張しません。
+
+record側の追加componentは、10 MiB payload SHA-256 300 sampleがp95 4.175 ms、small observer 2,000 sampleがp95 0.033 ms、near-32 KiB observer 500 sampleがp95 0.198 msでした。small Postのaudit-enabled / forced-disabled storeを520 round interleaveし最初の20 roundを捨てたpaired observer + sidecar overheadは500 sample p95 1.350 msでした。full payloadのserialize / UTF-8 encodeは両側に含め、paired差から除外しています。
 
 benchmarkはeligible、rejected、複数targetの3caseを同じroundで測り、no-redactのPreToolUseとの差をpaired sampleで計算します。Post confirmationは別HookなのでPre budgetへ混ぜません。
 
@@ -382,16 +427,21 @@ benchmarkはeligible、rejected、複数targetの3caseを同じroundで測り、
    - future enforce用のdormantなhash照合とstate transition
    - preview中はsynthetic rendered fixtureだけでstate transitionを検証
    - mismatch / missingをapplied扱いしない
-5. enforcement gateを再評価
-   - 複数rewriter問題を解消する
+5. `Persist O(1) hash-only event metadata`（実装済み）
+   - wideなevent rowと分離したpayload / scope / Post observation sidecar
+   - legacy rowをbackfillせず、欠落時は未確認
+   - plans-firstで、confirmation中の`events` readを0にする
+   - metadata / observer version、row integrity digest、immutable replay
+   - metadata失敗時もcore eventと既存denyを維持
+6. enforcement gateを再評価
    - derived redact decision linkageのschema / atomic writer / confirmation再証明を追加する
-   - Post payload byte数をrecord時metadata化し、candidate confirmationのsize preflightをO(1)にする
-   - すべてを満たした場合だけ、独立opt-inでMCP runtime rewriteを追加
-6. `Prototype static Bash data-operand redaction`
+   - Codex 0.142.5の複数rewriterは一般Hook環境で解消不能なため、runtime rendererを実装しない
+   - upstreamのexclusive composition、final input再検査、または完全管理されたsingleton配備境界が成立した場合だけ再評価する
+7. `Prototype static Bash data-operand redaction`
    - MCPの安全性と監査を検証した後
    - apply_patch automatic redactは対象外のまま維持
 
-各項目を別commitにし、preview plannerとruntime enforcementを同じcommitへ混ぜません。最初の4項目を実装しても、gateを満たすまではHook stdoutへ`updatedInput`を返しません。
+各項目を別commitにし、preview plannerとruntime enforcementを同じcommitへ混ぜません。最初の5項目を実装しても、gateを満たすまではHook stdoutへ`updatedInput`を返しません。
 
 ## tests
 
@@ -433,8 +483,13 @@ pure plannerは32 testsで、以下のhappy path、all-or-nothing、実MCP adapt
 - exact turnを含むowner scope不一致と複数候補を更新しない
 - confirmation呼出順が逆でも最小sequenceのPostだけを採用する
 - 同一Post replayは冪等、後続Postで終端状態を上書きしない
-- caller側event objectを変更しても保存済みPost payloadだけを正とする
-- 1 MiB超のPost payloadは未確認にし、actual enforce前のO(1) size metadata gateを残す
+- caller側event objectを変更しても初回record時のsidecar observationだけを正とする
+- eventへ保存するJSONのUTF-8 byte数・SHA-256、sequence、call scopeをsidecarへ同一transactionで保存し、legacy rowをHook内でbackfillしない
+- bounded Post inputのobserver version、status、profile version、canonical input byte数・hash、structure hashを本文なしで保存する
+- metadata欠落、1 MiB超過、row digest / schema不一致は未確認にし、planを`rendered`のまま維持する
+- confirmed / mismatch / oversize / drift / terminal replay / no-planの全経路で`events` tableを読まない
+- exact replayでは初回observationを上書きせず、payload hash / scope / sequence不一致でauditを無効化する
+- metadata insert失敗でもcore eventと既存denyを維持し、後続core保存失敗時はeventとmetadataを一緒にrollbackする
 - enforce target欠落やverified previewとの不一致を拒否する
 - confirmation失敗でも記録済みPost eventを残し、stdoutと機密本文を出さない
 - Postなしをapplied扱いしない

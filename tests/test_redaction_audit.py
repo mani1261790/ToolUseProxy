@@ -31,6 +31,11 @@ from hook_monitor.runtime.redaction_integrity import (
     REDACTION_REPLACEMENT_TEXT,
     structure_sha256,
 )
+from hook_monitor.runtime.redaction_confirmation import (
+    REDACTION_POST_INPUT_OBSERVER_VERSION,
+    compare_mcp_post_observation,
+    observe_mcp_post_input,
+)
 from hook_monitor.runtime.storage import EventStore
 
 
@@ -101,6 +106,118 @@ class RedactionAuditTest(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.temporary_directory.cleanup()
+
+    def test_post_input_observer_is_bounded_hash_only_and_versioned(
+        self,
+    ) -> None:
+        tool_input = {"content": "公開情報-日本語"}
+        observation = observe_mcp_post_input(
+            tool_name=PROFILED_TOOL,
+            tool_input=tool_input,
+        )
+        canonical_input = json.dumps(
+            tool_input,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+
+        self.assertEqual("captured", observation.status)
+        self.assertEqual(
+            REDACTION_POST_INPUT_OBSERVER_VERSION,
+            observation.observer_version,
+        )
+        self.assertEqual(len(canonical_input), observation.input_bytes)
+        self.assertEqual(
+            hashlib.sha256(canonical_input).hexdigest(),
+            observation.input_sha256,
+        )
+        self.assertNotIn(tool_input["content"], repr(observation))
+
+        class OversizedMapping(dict):
+            def __len__(self):
+                return 33
+
+            def __iter__(self):
+                raise AssertionError("oversized mapping keys were iterated")
+
+            def items(self):
+                raise AssertionError("oversized mapping items were iterated")
+
+        oversized = observe_mcp_post_input(
+            tool_name=PROFILED_TOOL,
+            tool_input=OversizedMapping(),
+        )
+        self.assertEqual("unobserved", oversized.status)
+        self.assertEqual("field_count_exceeded", oversized.diagnostic_code)
+        self.assertIsNone(oversized.input_sha256)
+
+        non_string_key = observe_mcp_post_input(
+            tool_name=PROFILED_TOOL,
+            tool_input={1: "value"},
+        )
+        self.assertEqual("unsupported_input_type", non_string_key.diagnostic_code)
+        nan_value = observe_mcp_post_input(
+            tool_name=PROFILED_TOOL,
+            tool_input={"content": float("nan")},
+        )
+        self.assertEqual("unsupported_input_type", nan_value.diagnostic_code)
+        unknown = observe_mcp_post_input(
+            tool_name="mcp__unknown__publish",
+            tool_input=tool_input,
+        )
+        self.assertEqual("unknown_profile", unknown.diagnostic_code)
+
+    def test_post_input_observation_version_and_structure_are_revalidated(
+        self,
+    ) -> None:
+        tool_input = {"content": REDACTION_REPLACEMENT_TEXT}
+        observation = observe_mcp_post_input(
+            tool_name=PROFILED_TOOL,
+            tool_input=tool_input,
+        )
+        profile = DEFAULT_MCP_PROFILE_REGISTRY.resolve(
+            "tooluseproxy_e2e",
+            "publish_text",
+        )
+        assert profile is not None
+        assert observation.input_sha256 is not None
+        assert observation.structure_sha256 is not None
+        comparison_args = {
+            "tool_name": PROFILED_TOOL,
+            "profile_id": profile.profile_id,
+            "profile_version": profile.profile_version,
+            "profile_registry_version": (
+                DEFAULT_MCP_PROFILE_REGISTRY.registry_version
+            ),
+            "rewritten_input_sha256": observation.input_sha256,
+            "structure_sha256_after": observation.structure_sha256,
+        }
+
+        version_drift = compare_mcp_post_observation(
+            observation=replace(
+                observation,
+                observer_version="mcp-post-input-observer-v2",
+            ),
+            **comparison_args,
+        )
+        self.assertEqual("unobserved", version_drift.disposition)
+        self.assertEqual(
+            "post_input_metadata_invalid",
+            version_drift.diagnostic_code,
+        )
+        structure_drift = compare_mcp_post_observation(
+            observation=replace(
+                observation,
+                structure_sha256="0" * 64,
+            ),
+            **comparison_args,
+        )
+        self.assertEqual("unobserved", structure_drift.disposition)
+        self.assertEqual(
+            "plan_integrity_mismatch",
+            structure_drift.diagnostic_code,
+        )
 
     def test_profiled_protected_call_persists_hash_only_eligible_plan(self) -> None:
         event = self._record(
@@ -188,7 +305,7 @@ class RedactionAuditTest(unittest.TestCase):
             tool_input={"content": REDACTION_REPLACEMENT_TEXT},
         )
 
-        result = self.store.confirm_redaction_post_input(post_event)
+        result = self._confirm_without_event_reads(post_event)
 
         self.assertEqual("not_applicable", result.disposition)
         assert pre_event.workspace_id is not None
@@ -216,7 +333,7 @@ class RedactionAuditTest(unittest.TestCase):
             tool_input={"content": REDACTION_REPLACEMENT_TEXT},
         )
 
-        result = self.store.confirm_redaction_post_input(post_event)
+        result = self._confirm_without_event_reads(post_event)
 
         self.assertEqual("confirmed", result.disposition)
         self.assertEqual(enforce_plan_id, result.plan_id)
@@ -233,7 +350,7 @@ class RedactionAuditTest(unittest.TestCase):
         self.assertIsNotNone(plan.rendered_at)
         self.assertIsNotNone(plan.confirmed_at)
 
-        replay = self.store.confirm_redaction_post_input(post_event)
+        replay = self._confirm_without_event_reads(post_event)
         self.assertEqual("confirmed", replay.disposition)
         self.assertTrue(replay.replayed)
         self.assertEqual(enforce_plan_id, replay.plan_id)
@@ -267,7 +384,7 @@ class RedactionAuditTest(unittest.TestCase):
             tool_input={"content": PUBLIC_TEXT},
         )
 
-        result = self.store.confirm_redaction_post_input(first_post)
+        result = self._confirm_without_event_reads(first_post)
 
         self.assertEqual("mismatch", result.disposition)
         assert pre_event.workspace_id is not None
@@ -285,7 +402,7 @@ class RedactionAuditTest(unittest.TestCase):
             tool_input={"content": REDACTION_REPLACEMENT_TEXT},
             tool_response={"ok": "second-observation"},
         )
-        conflict = self.store.confirm_redaction_post_input(second_post)
+        conflict = self._confirm_without_event_reads(second_post)
         self.assertEqual("conflict", conflict.disposition)
         self.assertEqual(
             "earlier_post_event_exists",
@@ -298,6 +415,35 @@ class RedactionAuditTest(unittest.TestCase):
         assert unchanged is not None
         self.assertEqual("post_mismatch", unchanged.status)
         self.assertEqual(first_post.event_id, unchanged.post_event_id)
+
+    def test_profile_invalid_but_bounded_post_input_is_a_mismatch(self) -> None:
+        pre_event = self._record(
+            self.workspace_a,
+            tool_use_id="future-rendered-profile-invalid-mismatch",
+            tool_name=PROFILED_TOOL,
+            tool_input={"content": SECRET},
+        )
+        self._assert_deny_without_rewrite(self._evaluate_mcp(pre_event))
+        enforce_plan_id = self._simulate_future_rendered_plan(pre_event)
+        post_event = self._record_post(
+            pre_event,
+            tool_input={
+                "content": REDACTION_REPLACEMENT_TEXT,
+                "unexpected": "bounded override",
+            },
+        )
+
+        result = self._confirm_without_event_reads(post_event)
+
+        self.assertEqual("mismatch", result.disposition)
+        assert pre_event.workspace_id is not None
+        plan = self.store.get_redaction_plan(
+            enforce_plan_id,
+            workspace_id=pre_event.workspace_id,
+        )
+        assert plan is not None
+        self.assertEqual("post_mismatch", plan.status)
+        self.assertEqual(post_event.event_id, plan.post_event_id)
 
     def test_unbounded_or_wrong_turn_post_does_not_confirm_rendered_plan(self) -> None:
         pre_event = self._record(
@@ -313,7 +459,7 @@ class RedactionAuditTest(unittest.TestCase):
             tool_input={"content": "x" * (33 * 1024)},
         )
 
-        unobserved = self.store.confirm_redaction_post_input(oversized_post)
+        unobserved = self._confirm_without_event_reads(oversized_post)
 
         self.assertEqual("unobserved", unobserved.disposition)
         self.assertEqual("input_bytes_exceeded", unobserved.diagnostic_code)
@@ -325,6 +471,34 @@ class RedactionAuditTest(unittest.TestCase):
         assert plan is not None
         self.assertEqual("rendered", plan.status)
         self.assertIsNone(plan.post_event_id)
+
+    def test_unbounded_post_identity_is_rejected_before_storage_read(self) -> None:
+        pre_event = self._record(
+            self.workspace_a,
+            tool_use_id="post-confirmation-identity-limit",
+            tool_name=PROFILED_TOOL,
+            tool_input={"content": SECRET},
+        )
+        post_event = self._record_post(
+            pre_event,
+            tool_input={"content": REDACTION_REPLACEMENT_TEXT},
+        )
+        oversized_identity = replace(
+            post_event,
+            tool_use_id="x" * (4 * 1024 + 1),
+        )
+
+        with patch.object(
+            self.store,
+            "_connect_redaction_audit",
+            side_effect=AssertionError("storage should not be opened"),
+        ):
+            result = self.store.confirm_redaction_post_input(
+                oversized_identity
+            )
+
+        self.assertEqual("not_applicable", result.disposition)
+        self.assertEqual("unsupported_post_scope", result.diagnostic_code)
 
     def test_earliest_recorded_post_wins_even_when_confirmed_out_of_order(self) -> None:
         pre_event = self._record(
@@ -346,11 +520,11 @@ class RedactionAuditTest(unittest.TestCase):
             tool_response={"ok": "later"},
         )
 
-        later_result = self.store.confirm_redaction_post_input(later_post)
+        later_result = self._confirm_without_event_reads(later_post)
 
         self.assertEqual("conflict", later_result.disposition)
         self.assertEqual("earlier_post_event_exists", later_result.diagnostic_code)
-        first_result = self.store.confirm_redaction_post_input(first_post)
+        first_result = self._confirm_without_event_reads(first_post)
         self.assertEqual("mismatch", first_result.disposition)
         assert pre_event.workspace_id is not None
         plan = self.store.get_redaction_plan(
@@ -378,7 +552,7 @@ class RedactionAuditTest(unittest.TestCase):
             "content": REDACTION_REPLACEMENT_TEXT
         }
 
-        result = self.store.confirm_redaction_post_input(post_event)
+        result = self._confirm_without_event_reads(post_event)
 
         self.assertEqual("mismatch", result.disposition)
         assert pre_event.workspace_id is not None
@@ -436,10 +610,114 @@ class RedactionAuditTest(unittest.TestCase):
             tool_response={"body": "x" * (1024 * 1024)},
         )
 
-        result = self.store.confirm_redaction_post_input(post_event)
+        statements: list[str] = []
+        traced_connection = self.store._connect_redaction_audit()
+        traced_connection.set_trace_callback(statements.append)
+        try:
+            with patch.object(
+                self.store,
+                "_connect_redaction_audit",
+                return_value=traced_connection,
+            ):
+                result = self.store.confirm_redaction_post_input(post_event)
+        finally:
+            traced_connection.close()
 
         self.assertEqual("unobserved", result.disposition)
         self.assertEqual("post_payload_bytes_exceeded", result.diagnostic_code)
+        self.assertTrue(
+            any("event_payload_metadata" in statement for statement in statements)
+        )
+        self.assertFalse(
+            any("payload_json" in statement for statement in statements)
+        )
+        self.assertFalse(
+            any("length(" in statement.casefold() for statement in statements)
+        )
+        assert pre_event.workspace_id is not None
+        plan = self.store.get_redaction_plan(
+            enforce_plan_id,
+            workspace_id=pre_event.workspace_id,
+        )
+        assert plan is not None
+        self.assertEqual("rendered", plan.status)
+        self.assertIsNone(plan.post_event_id)
+
+    def test_missing_legacy_payload_metadata_remains_unobserved(self) -> None:
+        pre_event = self._record(
+            self.workspace_a,
+            tool_use_id="post-confirmation-missing-payload-metadata",
+            tool_name=PROFILED_TOOL,
+            tool_input={"content": SECRET},
+        )
+        self._assert_deny_without_rewrite(self._evaluate_mcp(pre_event))
+        enforce_plan_id = self._simulate_future_rendered_plan(pre_event)
+        post_event = self._record_post(
+            pre_event,
+            tool_input={"content": REDACTION_REPLACEMENT_TEXT},
+        )
+        with sqlite3.connect(self.db_path) as connection:
+            connection.execute(
+                "DELETE FROM event_payload_metadata WHERE event_id = ?",
+                (post_event.event_id,),
+            )
+
+        result = self._confirm_without_event_reads(post_event)
+
+        self.assertEqual("unobserved", result.disposition)
+        self.assertEqual(
+            "post_payload_bytes_unavailable",
+            result.diagnostic_code,
+        )
+        assert pre_event.workspace_id is not None
+        plan = self.store.get_redaction_plan(
+            enforce_plan_id,
+            workspace_id=pre_event.workspace_id,
+        )
+        assert plan is not None
+        self.assertEqual("rendered", plan.status)
+        self.assertIsNone(plan.post_event_id)
+
+    def test_corrupted_payload_metadata_never_reads_wide_event_row(
+        self,
+    ) -> None:
+        pre_event = self._record(
+            self.workspace_a,
+            tool_use_id="post-confirmation-payload-metadata-mismatch",
+            tool_name=PROFILED_TOOL,
+            tool_input={"content": SECRET},
+        )
+        self._assert_deny_without_rewrite(self._evaluate_mcp(pre_event))
+        enforce_plan_id = self._simulate_future_rendered_plan(pre_event)
+        post_event = self._record_post(
+            pre_event,
+            tool_input={"content": REDACTION_REPLACEMENT_TEXT},
+        )
+        with sqlite3.connect(self.db_path) as connection:
+            connection.execute(
+                """
+                UPDATE events
+                SET payload_json = ?
+                WHERE event_id = ?
+                """,
+                ("x" * (10 * 1024 * 1024), post_event.event_id),
+            )
+            connection.execute(
+                """
+                UPDATE event_payload_metadata
+                SET payload_bytes = 1
+                WHERE event_id = ?
+                """,
+                (post_event.event_id,),
+            )
+
+        result = self._confirm_without_event_reads(post_event)
+
+        self.assertEqual("unobserved", result.disposition)
+        self.assertEqual(
+            "post_payload_metadata_invalid",
+            result.diagnostic_code,
+        )
         assert pre_event.workspace_id is not None
         plan = self.store.get_redaction_plan(
             enforce_plan_id,
@@ -476,7 +754,7 @@ class RedactionAuditTest(unittest.TestCase):
             tool_input={"content": REDACTION_REPLACEMENT_TEXT},
         )
 
-        result = self.store.confirm_redaction_post_input(post_event)
+        result = self._confirm_without_event_reads(post_event)
 
         self.assertEqual("conflict", result.disposition)
         self.assertEqual("ambiguous_rendered_plan", result.diagnostic_code)
@@ -522,7 +800,7 @@ class RedactionAuditTest(unittest.TestCase):
             (*DEFAULT_MCP_PROFILE_REGISTRY.profiles, unrelated_profile)
         )
 
-        result = self.store.confirm_redaction_post_input(
+        result = self._confirm_without_event_reads(
             post_event,
             profile_registry=drifted_registry,
         )
@@ -545,7 +823,7 @@ class RedactionAuditTest(unittest.TestCase):
             tool_response={"ok": "wrong-turn"},
         )
         with self.assertRaisesRegex(ValueError, "owner mismatch"):
-            self.store.confirm_redaction_post_input(wrong_turn_post)
+            self._confirm_without_event_reads(wrong_turn_post)
         unchanged = self.store.get_redaction_plan(
             enforce_plan_id,
             workspace_id=pre_event.workspace_id,
@@ -568,15 +846,32 @@ class RedactionAuditTest(unittest.TestCase):
             tool_response={"body": "x" * (2 * 1024 * 1024)},
         )
 
-        with sqlite3.connect(self.db_path, timeout=0) as blocker:
-            blocker.execute("BEGIN IMMEDIATE")
-            started = time.monotonic()
-            result = self.store.confirm_redaction_post_input(post_event)
-            elapsed = time.monotonic() - started
-            blocker.rollback()
+        statements: list[str] = []
+        traced_connection = self.store._connect_redaction_audit()
+        traced_connection.set_trace_callback(statements.append)
+        try:
+            with sqlite3.connect(self.db_path, timeout=0) as blocker:
+                blocker.execute("BEGIN IMMEDIATE")
+                started = time.monotonic()
+                with patch.object(
+                    self.store,
+                    "_connect_redaction_audit",
+                    return_value=traced_connection,
+                ):
+                    result = self.store.confirm_redaction_post_input(post_event)
+                elapsed = time.monotonic() - started
+                blocker.rollback()
+        finally:
+            traced_connection.close()
 
         self.assertEqual("not_applicable", result.disposition)
         self.assertLess(elapsed, 0.2)
+        self.assertFalse(
+            any("event_payload_metadata" in statement for statement in statements)
+        )
+        self.assertFalse(
+            any("payload_json" in statement for statement in statements)
+        )
 
     def test_rendered_post_confirmation_write_lock_fails_fast(self) -> None:
         pre_event = self._record(
@@ -1372,6 +1667,343 @@ class RedactionAuditTest(unittest.TestCase):
             self.store.list_redaction_plans(workspace_id=event.workspace_id),
         )
 
+    def test_event_payload_metadata_uses_exact_utf8_bytes_for_every_phase(
+        self,
+    ) -> None:
+        tool_input = {"content": "公開情報-日本語"}
+        pre_event = self._record(
+            self.workspace_a,
+            tool_use_id="payload-metadata-all-phases",
+            tool_name=PROFILED_TOOL,
+            tool_input=tool_input,
+        )
+        self._record_post(pre_event, tool_input=tool_input)
+        stop_event = normalize_event(
+            "stop",
+            {
+                "session_id": pre_event.session_id,
+                "turn_id": pre_event.turn_id,
+                "cwd": str(self.workspace_a),
+                "final_answer": "完了",
+            },
+        )
+        stop_artifacts = build_artifacts(stop_event)
+        self.store.record(
+            stop_event,
+            stop_artifacts,
+            build_fragments(stop_artifacts),
+        )
+
+        replay = self._record(
+            self.workspace_a,
+            tool_use_id="payload-metadata-all-phases",
+            tool_name=PROFILED_TOOL,
+            tool_input=tool_input,
+        )
+
+        self.assertEqual(pre_event.event_id, replay.event_id)
+        with sqlite3.connect(self.db_path) as connection:
+            rows = connection.execute(
+                """
+                SELECT
+                    event.phase,
+                    event.payload_json,
+                    metadata.payload_bytes,
+                    metadata.payload_sha256,
+                    metadata.redaction_event_kind,
+                    metadata.post_input_status,
+                    metadata.post_input_diagnostic_code,
+                    metadata.post_input_bytes,
+                    metadata.post_input_sha256
+                FROM events AS event
+                JOIN event_payload_metadata AS metadata
+                  ON metadata.event_id = event.event_id
+                ORDER BY event.sequence_no
+                """
+            ).fetchall()
+            metadata_count = connection.execute(
+                "SELECT COUNT(*) FROM event_payload_metadata"
+            ).fetchone()[0]
+            event_count = connection.execute(
+                "SELECT COUNT(*) FROM events"
+            ).fetchone()[0]
+        self.assertEqual(
+            ["pre_tool_use", "post_tool_use", "stop"],
+            [row[0] for row in rows],
+        )
+        self.assertEqual(event_count, metadata_count)
+        self.assertEqual(3, metadata_count)
+        for row in rows:
+            payload_json = row[1]
+            payload_bytes = row[2]
+            self.assertEqual(len(payload_json.encode("utf-8")), payload_bytes)
+            self.assertEqual(
+                hashlib.sha256(payload_json.encode("utf-8")).hexdigest(),
+                row[3],
+            )
+            self.assertNotIn(
+                tool_input["content"],
+                json.dumps(row[3:], ensure_ascii=False),
+            )
+        self.assertNotEqual(len(rows[0][1]), rows[0][2])
+        self.assertEqual(
+            ["pre", "post", "not_applicable"],
+            [row[4] for row in rows],
+        )
+        self.assertEqual(
+            ["not_applicable", "captured", "not_applicable"],
+            [row[5] for row in rows],
+        )
+        canonical_input = json.dumps(
+            tool_input,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        self.assertIsNone(rows[1][6])
+        self.assertEqual(len(canonical_input), rows[1][7])
+        self.assertEqual(
+            hashlib.sha256(canonical_input).hexdigest(),
+            rows[1][8],
+        )
+
+    def test_event_and_payload_metadata_roll_back_on_later_core_failure(
+        self,
+    ) -> None:
+        event = normalize_event(
+            "pre_tool_use",
+            {
+                "session_id": "rollback-session",
+                "turn_id": "rollback-turn",
+                "tool_use_id": "payload-metadata-rollback",
+                "tool_name": PROFILED_TOOL,
+                "cwd": str(self.workspace_a),
+                "tool_input": {"content": PUBLIC_TEXT},
+            },
+        )
+        artifacts = build_artifacts(event)
+        with sqlite3.connect(self.db_path) as connection:
+            connection.execute(
+                """
+                CREATE TRIGGER abort_artifact_after_payload_metadata
+                BEFORE INSERT ON artifacts
+                BEGIN
+                    SELECT RAISE(ABORT, 'injected artifact failure');
+                END
+                """
+            )
+
+        with self.assertRaisesRegex(sqlite3.IntegrityError, "artifact failure"):
+            self.store.record(event, artifacts, build_fragments(artifacts))
+
+        with sqlite3.connect(self.db_path) as connection:
+            event_count = connection.execute(
+                "SELECT COUNT(*) FROM events WHERE event_id = ?",
+                (event.event_id,),
+            ).fetchone()[0]
+            metadata_count = connection.execute(
+                "SELECT COUNT(*) FROM event_payload_metadata WHERE event_id = ?",
+                (event.event_id,),
+            ).fetchone()[0]
+        self.assertEqual(0, event_count)
+        self.assertEqual(0, metadata_count)
+
+    def test_post_observation_is_immutable_across_registry_drift_replay(
+        self,
+    ) -> None:
+        pre_event = self._record(
+            self.workspace_a,
+            tool_use_id="post-observation-immutable-replay",
+            tool_name=PROFILED_TOOL,
+            tool_input={"content": PUBLIC_TEXT},
+        )
+        tool_input = {"content": "public replay"}
+        post_event = self._record_post(pre_event, tool_input=tool_input)
+        with sqlite3.connect(self.db_path) as connection:
+            before = connection.execute(
+                """
+                SELECT
+                    post_profile_registry_version,
+                    metadata_sha256
+                FROM event_payload_metadata
+                WHERE event_id = ?
+                """,
+                (post_event.event_id,),
+            ).fetchone()
+
+        drifted_observation = replace(
+            observe_mcp_post_input(
+                tool_name=PROFILED_TOOL,
+                tool_input=tool_input,
+            ),
+            profile_registry_version="registry-drift-v2",
+        )
+        with patch(
+            "hook_monitor.runtime.storage.observe_mcp_post_input",
+            return_value=drifted_observation,
+        ):
+            replay = self._record_post(pre_event, tool_input=tool_input)
+
+        self.assertEqual(post_event.event_id, replay.event_id)
+        with sqlite3.connect(self.db_path) as connection:
+            after = connection.execute(
+                """
+                SELECT
+                    post_profile_registry_version,
+                    metadata_sha256
+                FROM event_payload_metadata
+                WHERE event_id = ?
+                """,
+                (post_event.event_id,),
+            ).fetchone()
+        self.assertEqual(before, after)
+        self.assertTrue(self.store._redaction_audit_available)
+
+    def test_payload_metadata_insert_failure_keeps_event_and_deny(self) -> None:
+        with sqlite3.connect(self.db_path) as connection:
+            connection.execute(
+                """
+                CREATE TRIGGER abort_payload_metadata_insert
+                BEFORE INSERT ON event_payload_metadata
+                BEGIN
+                    SELECT RAISE(ABORT, 'injected metadata failure');
+                END
+                """
+            )
+        event = self._record(
+            self.workspace_a,
+            tool_use_id="payload-metadata-fail-soft",
+            tool_name=PROFILED_TOOL,
+            tool_input={"content": SECRET},
+        )
+
+        output = self._evaluate_mcp(event)
+
+        self._assert_deny_without_rewrite(output)
+        assert event.workspace_id is not None
+        self.assertEqual(
+            [],
+            self.store.list_redaction_plans(
+                workspace_id=event.workspace_id,
+                tool_use_id=event.tool_use_id,
+            ),
+        )
+        with sqlite3.connect(self.db_path) as connection:
+            event_count = connection.execute(
+                "SELECT COUNT(*) FROM events WHERE event_id = ?",
+                (event.event_id,),
+            ).fetchone()[0]
+            metadata_count = connection.execute(
+                "SELECT COUNT(*) FROM event_payload_metadata WHERE event_id = ?",
+                (event.event_id,),
+            ).fetchone()[0]
+        self.assertEqual(1, event_count)
+        self.assertEqual(0, metadata_count)
+
+    def test_post_observer_failure_keeps_core_event_and_disables_audit(
+        self,
+    ) -> None:
+        pre_event = self._record(
+            self.workspace_a,
+            tool_use_id="post-observer-fail-soft",
+            tool_name=PROFILED_TOOL,
+            tool_input={"content": SECRET},
+        )
+        self._assert_deny_without_rewrite(self._evaluate_mcp(pre_event))
+        self._simulate_future_rendered_plan(pre_event)
+
+        with patch(
+            "hook_monitor.runtime.storage.observe_mcp_post_input",
+            side_effect=RuntimeError("injected observer failure"),
+        ):
+            post_event = self._record_post(
+                pre_event,
+                tool_input={"content": REDACTION_REPLACEMENT_TEXT},
+            )
+
+        with sqlite3.connect(self.db_path) as connection:
+            event_count = connection.execute(
+                "SELECT COUNT(*) FROM events WHERE event_id = ?",
+                (post_event.event_id,),
+            ).fetchone()[0]
+            metadata_count = connection.execute(
+                "SELECT COUNT(*) FROM event_payload_metadata WHERE event_id = ?",
+                (post_event.event_id,),
+            ).fetchone()[0]
+        self.assertEqual(1, event_count)
+        self.assertEqual(0, metadata_count)
+        result = self.store.confirm_redaction_post_input(post_event)
+        self.assertEqual("not_applicable", result.disposition)
+        self.assertEqual("audit_unavailable", result.diagnostic_code)
+
+    def test_legacy_events_are_not_backfilled_during_metadata_migration(
+        self,
+    ) -> None:
+        event = self._record(
+            self.workspace_a,
+            tool_use_id="payload-metadata-no-backfill",
+            tool_name=PROFILED_TOOL,
+            tool_input={"content": PUBLIC_TEXT},
+        )
+        with sqlite3.connect(self.db_path) as connection:
+            connection.execute("DROP TABLE event_payload_metadata")
+            connection.execute(
+                """
+                DELETE FROM analysis_state
+                WHERE key = 'migration.event_payload_metadata.v1'
+                """
+            )
+
+        self.store.initialize()
+
+        with sqlite3.connect(self.db_path) as connection:
+            event_count = connection.execute(
+                "SELECT COUNT(*) FROM events WHERE event_id = ?",
+                (event.event_id,),
+            ).fetchone()[0]
+            metadata_count = connection.execute(
+                "SELECT COUNT(*) FROM event_payload_metadata"
+            ).fetchone()[0]
+        self.assertEqual(1, event_count)
+        self.assertEqual(0, metadata_count)
+
+    def test_completed_payload_metadata_migration_does_not_repair_drift(
+        self,
+    ) -> None:
+        with sqlite3.connect(self.db_path) as connection:
+            connection.execute("DROP TABLE event_payload_metadata")
+
+        self.store.initialize()
+        event = self._record(
+            self.workspace_a,
+            tool_use_id="payload-metadata-schema-drift",
+            tool_name=PROFILED_TOOL,
+            tool_input={"content": SECRET},
+        )
+
+        self._assert_deny_without_rewrite(self._evaluate_mcp(event))
+        assert event.workspace_id is not None
+        self.assertEqual(
+            [],
+            self.store.list_redaction_plans(
+                workspace_id=event.workspace_id,
+                tool_use_id=event.tool_use_id,
+            ),
+        )
+        with sqlite3.connect(self.db_path) as connection:
+            table_exists = connection.execute(
+                """
+                SELECT 1 FROM sqlite_master
+                WHERE type = 'table' AND name = 'event_payload_metadata'
+                """
+            ).fetchone()
+            event_count = connection.execute(
+                "SELECT COUNT(*) FROM events WHERE event_id = ?",
+                (event.event_id,),
+            ).fetchone()[0]
+        self.assertIsNone(table_exists)
+        self.assertEqual(1, event_count)
+
     def test_schema_initialization_is_idempotent(self) -> None:
         self.store.initialize()
         self.store.initialize()
@@ -1391,20 +2023,142 @@ class RedactionAuditTest(unittest.TestCase):
                   AND value = 'complete'
                 """
             ).fetchone()[0]
+            payload_marker_count = connection.execute(
+                """
+                SELECT COUNT(*)
+                FROM analysis_state
+                WHERE key = 'migration.event_payload_metadata.v1'
+                  AND value = 'complete'
+                """
+            ).fetchone()[0]
             indexes = {
                 row[0]
                 for row in connection.execute(
                     """
                     SELECT name FROM sqlite_master
-                    WHERE type = 'index' AND name LIKE 'idx_redaction_%'
+                    WHERE type = 'index'
                     """
                 ).fetchall()
             }
+            payload_query_plan = connection.execute(
+                """
+                EXPLAIN QUERY PLAN
+                SELECT payload_bytes
+                FROM event_payload_metadata
+                WHERE event_id = 'probe'
+                """
+            ).fetchall()
+            scope_query_plan = connection.execute(
+                """
+                EXPLAIN QUERY PLAN
+                SELECT event_id
+                FROM event_payload_metadata
+                WHERE redaction_scope_sha256 = ?
+                  AND redaction_event_kind = 'post'
+                  AND sequence_no > 0
+                ORDER BY sequence_no, event_id
+                LIMIT 1
+                """,
+                ("0" * 64,),
+            ).fetchall()
         self.assertIn("redaction_plans", tables)
         self.assertIn("redaction_targets", tables)
+        self.assertIn("event_payload_metadata", tables)
         self.assertEqual(1, marker_count)
+        self.assertEqual(1, payload_marker_count)
         self.assertIn("idx_redaction_plans_event_version", indexes)
         self.assertIn("idx_redaction_targets_finding", indexes)
+        self.assertIn(
+            "idx_event_payload_metadata_redaction_scope_sequence",
+            indexes,
+        )
+        self.assertTrue(
+            any(
+                "event_payload_metadata" in str(row[3])
+                and "INDEX" in str(row[3]).upper()
+                for row in payload_query_plan
+            )
+        )
+        self.assertTrue(
+            any(
+                "idx_event_payload_metadata_redaction_scope_sequence"
+                in str(row[3])
+                for row in scope_query_plan
+            )
+        )
+
+    def test_event_metadata_schema_rejects_impossible_observation_rows(
+        self,
+    ) -> None:
+        pre_event = self._record(
+            self.workspace_a,
+            tool_use_id="event-metadata-schema-invariants",
+            tool_name=PROFILED_TOOL,
+            tool_input={"content": PUBLIC_TEXT},
+        )
+        post_event = self._record_post(
+            pre_event,
+            tool_input={"content": "public output"},
+        )
+        oversize_post = self._record_post(
+            replace(pre_event, tool_use_id="event-metadata-schema-oversize"),
+            tool_input={"content": "public output"},
+            tool_response={"body": "x" * (1024 * 1024)},
+        )
+
+        required_captured_columns = (
+            "redaction_scope_sha256",
+            "post_input_observer_version",
+            "post_profile_id",
+            "post_profile_version",
+            "post_profile_registry_version",
+            "post_input_bytes",
+            "post_input_sha256",
+            "post_structure_sha256",
+        )
+        with sqlite3.connect(self.db_path) as connection:
+            for column in required_captured_columns:
+                with self.assertRaises(sqlite3.IntegrityError):
+                    connection.execute(
+                        f"""
+                        UPDATE event_payload_metadata
+                        SET {column} = NULL
+                        WHERE event_id = ?
+                        """,
+                        (post_event.event_id,),
+                    )
+                connection.rollback()
+
+            with self.assertRaises(sqlite3.IntegrityError):
+                connection.execute(
+                    """
+                    UPDATE event_payload_metadata
+                    SET post_profile_id = ?
+                    WHERE event_id = ?
+                    """,
+                    (sqlite3.Binary(b"profile"), post_event.event_id),
+                )
+            connection.rollback()
+            with self.assertRaises(sqlite3.IntegrityError):
+                connection.execute(
+                    """
+                    UPDATE event_payload_metadata
+                    SET post_input_diagnostic_code = NULL
+                    WHERE event_id = ?
+                    """,
+                    (oversize_post.event_id,),
+                )
+            connection.rollback()
+            with self.assertRaises(sqlite3.IntegrityError):
+                connection.execute(
+                    """
+                    UPDATE event_payload_metadata
+                    SET post_input_sha256 = ?
+                    WHERE event_id = ?
+                    """,
+                    ("0" * 64, pre_event.event_id),
+                )
+            connection.rollback()
 
     def test_schema_mismatch_disables_audit_without_weakening_deny(self) -> None:
         with sqlite3.connect(self.db_path) as connection:
@@ -1719,6 +2473,38 @@ class RedactionAuditTest(unittest.TestCase):
             current_event=event,
             enabled_adapters=frozenset({"mcp"}),
         )
+
+    def _confirm_without_event_reads(self, post_event, **kwargs):
+        event_reads: list[tuple[str | None, str | None]] = []
+        connection = self.store._connect_redaction_audit()
+
+        def authorize(action, table, column, _database, _trigger):
+            if action == sqlite3.SQLITE_READ and table == "events":
+                event_reads.append((table, column))
+                return sqlite3.SQLITE_DENY
+            return sqlite3.SQLITE_OK
+
+        connection.set_authorizer(authorize)
+        error = None
+        try:
+            with patch.object(
+                self.store,
+                "_connect_redaction_audit",
+                return_value=connection,
+            ):
+                try:
+                    result = self.store.confirm_redaction_post_input(
+                        post_event,
+                        **kwargs,
+                    )
+                except Exception as exc:
+                    error = exc
+        finally:
+            connection.close()
+        self.assertEqual([], event_reads)
+        if error is not None:
+            raise error
+        return result
 
     def _assert_deny_without_rewrite(self, output: dict[str, object]) -> None:
         hook_output = output["hookSpecificOutput"]

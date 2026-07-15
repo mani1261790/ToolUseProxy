@@ -7,7 +7,7 @@ import re
 import sqlite3
 import time
 import uuid
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -30,8 +30,12 @@ from hook_monitor.runtime.redaction_integrity import (
     REDACTION_REPLACEMENT_PROFILE,
 )
 from hook_monitor.runtime.redaction_confirmation import (
+    PostRedactionInputObservation,
+    REDACTION_POST_INPUT_DIAGNOSTIC_CODES,
+    REDACTION_POST_INPUT_OBSERVER_VERSION,
     RedactionPostConfirmationResult,
-    compare_mcp_post_input,
+    compare_mcp_post_observation,
+    observe_mcp_post_input,
 )
 
 from hook_monitor.runtime.models import (
@@ -79,7 +83,27 @@ REDACTION_AUDIT_MAX_CURRENT_SINKS = 2 * DEFAULT_MCP_INPUT_LIMITS.max_fields
 REDACTION_AUDIT_MAX_IDENTIFIER_BYTES = MCP_TOOL_NAME_MAX_BYTES
 REDACTION_AUDIT_MAX_SINK_METADATA_BYTES = 64 * 1024
 REDACTION_AUDIT_MAX_SINK_BYTES_TOTAL = 512 * 1024
+_EVENT_PAYLOAD_METADATA_VERSION = "event-payload-metadata-v1"
 _LOWER_SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
+_EVENT_PAYLOAD_METADATA_COLUMNS = """
+    event_id,
+    metadata_version,
+    metadata_sha256,
+    payload_bytes,
+    payload_sha256,
+    sequence_no,
+    redaction_event_kind,
+    redaction_scope_sha256,
+    post_input_status,
+    post_input_observer_version,
+    post_input_diagnostic_code,
+    post_profile_id,
+    post_profile_version,
+    post_profile_registry_version,
+    post_input_bytes,
+    post_input_sha256,
+    post_structure_sha256
+"""
 _REDACTION_PLAN_VALUE_COLUMNS = """
     plan_id,
     analysis_run_id,
@@ -145,6 +169,17 @@ _REDACTION_TARGET_VALUE_COLUMNS = """
     original_value_sha256,
     replacement_profile
 """
+
+
+@dataclass(frozen=True)
+class _EventPayloadMetadata:
+    event_id: str
+    payload_bytes: int
+    payload_sha256: str
+    sequence_no: int
+    redaction_event_kind: str
+    redaction_scope_sha256: str | None
+    post_input_observation: PostRedactionInputObservation
 
 
 class EventStore:
@@ -975,6 +1010,14 @@ class EventStore:
         resource_snapshots: list[ResourceSnapshot] | None = None,
     ) -> None:
         _validate_event_workspace(event)
+        payload_json = json.dumps(
+            event.raw_payload,
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        payload_json_bytes = payload_json.encode("utf-8")
+        payload_bytes = len(payload_json_bytes)
+        payload_sha256 = hashlib.sha256(payload_json_bytes).hexdigest()
         validated_operation_ids = tuple(sorted(set(post_operation_ids)))
         if post_outcome is not None and not validated_operation_ids:
             raise ValueError("post outcome requires validated operation ids")
@@ -999,6 +1042,32 @@ class EventStore:
                 if existing and existing[0] is not None
                 else self._next_sequence_no(conn)
             )
+            if self._redaction_audit_available is True:
+                try:
+                    (
+                        redaction_event_kind,
+                        redaction_scope_sha256,
+                        post_input_observation,
+                    ) = (
+                        _redaction_post_input_observation(
+                            event,
+                            payload_bytes=payload_bytes,
+                        )
+                    )
+                except Exception:
+                    # Optional audit observation must never lose the core event.
+                    self._redaction_audit_available = False
+                    redaction_event_kind = "not_applicable"
+                    redaction_scope_sha256 = None
+                    post_input_observation = PostRedactionInputObservation(
+                        "not_applicable"
+                    )
+            else:
+                redaction_event_kind = "not_applicable"
+                redaction_scope_sha256 = None
+                post_input_observation = PostRedactionInputObservation(
+                    "not_applicable"
+                )
             conn.execute(
                 """
                 INSERT OR REPLACE INTO events (
@@ -1047,9 +1116,19 @@ class EventStore:
                     event.workspace_status,
                     event.workspace_source,
                     event.workspace_namespace_id,
-                    json.dumps(event.raw_payload, ensure_ascii=False, sort_keys=True),
+                    payload_json,
                     sequence_no,
                 ),
+            )
+            self._record_event_payload_metadata(
+                conn,
+                event_id=event.event_id,
+                payload_bytes=payload_bytes,
+                payload_sha256=payload_sha256,
+                sequence_no=int(sequence_no),
+                redaction_event_kind=redaction_event_kind,
+                redaction_scope_sha256=redaction_scope_sha256,
+                post_input_observation=post_input_observation,
             )
             conn.executemany(
                 """
@@ -3463,17 +3542,8 @@ class EventStore:
                 "not_applicable",
                 diagnostic_code="audit_unavailable",
             )
-        if (
-            post_event.phase != "post_tool_use"
-            or post_event.workspace_status != "ready"
-            or post_event.workspace_id is None
-            or post_event.workspace_root is None
-            or post_event.workspace_execution_cwd is None
-            or post_event.session_id is None
-            or post_event.tool_use_id is None
-            or post_event.tool_name is None
-            or parse_mcp_tool_name(post_event.tool_name) is None
-        ):
+        expected_scope_sha256 = _redaction_call_scope_sha256(post_event)
+        if post_event.phase != "post_tool_use" or expected_scope_sha256 is None:
             return RedactionPostConfirmationResult(
                 "not_applicable",
                 diagnostic_code="unsupported_post_scope",
@@ -3504,21 +3574,10 @@ class EventStore:
                     plan.post_event_id,
                     plan.rendered_at,
                     plan.confirmed_at,
-                    pre.phase,
-                    pre.session_id,
-                    pre.turn_id,
-                    pre.tool_use_id,
-                    pre.tool_name,
-                    pre.workspace_id,
-                    pre.workspace_root,
-                    pre.workspace_execution_cwd,
-                    pre.workspace_status,
-                    pre.sequence_no,
                     analysis.workspace_id,
                     analysis.session_id,
                     analysis.completed_at
                 FROM redaction_plans AS plan
-                LEFT JOIN events AS pre ON pre.event_id = plan.pre_event_id
                 LEFT JOIN analysis_runs AS analysis
                   ON analysis.analysis_run_id = plan.analysis_run_id
                 WHERE plan.workspace_id = ?
@@ -3549,48 +3608,72 @@ class EventStore:
                     diagnostic_code="ambiguous_rendered_plan",
                 )
 
-            # Only future rendered plans pay the cost of touching their Post
-            # event row. In SQLite a large payload can live in the same record
-            # even when it is not selected, so query plans first for the normal
-            # production no-op path.
-            stored_post = conn.execute(
-                """
-                SELECT
-                    phase,
-                    session_id,
-                    turn_id,
-                    tool_use_id,
-                    tool_name,
-                    workspace_id,
-                    workspace_root,
-                    workspace_execution_cwd,
-                    workspace_status,
-                    sequence_no
-                FROM events
+            # Only future rendered plans touch the physically narrow sidecar.
+            # Never read the Post events row: upgraded identity columns can sit
+            # after an unbounded payload on overflow pages. Legacy rows remain
+            # deliberately unavailable instead of being backfilled.
+            post_metadata_row = conn.execute(
+                f"""
+                SELECT {_EVENT_PAYLOAD_METADATA_COLUMNS}
+                FROM event_payload_metadata
                 WHERE event_id = ?
                 """,
                 (post_event.event_id,),
             ).fetchone()
-            expected_post = (
-                post_event.phase,
-                post_event.session_id,
-                post_event.turn_id,
-                post_event.tool_use_id,
-                post_event.tool_name,
-                post_event.workspace_id,
-                post_event.workspace_root,
-                post_event.workspace_execution_cwd,
-                post_event.workspace_status,
+            if post_metadata_row is None:
+                return RedactionPostConfirmationResult(
+                    "unobserved",
+                    plan_id=rows[0][0],
+                    diagnostic_code="post_payload_bytes_unavailable",
+                )
+            post_metadata = _event_payload_metadata_from_row(
+                post_metadata_row
             )
+            if post_metadata is None:
+                return RedactionPostConfirmationResult(
+                    "unobserved",
+                    plan_id=rows[0][0],
+                    diagnostic_code="post_payload_metadata_invalid",
+                )
             if (
-                stored_post is None
-                or stored_post[:9] != expected_post
-                or stored_post[9] is None
+                post_metadata.event_id != post_event.event_id
+                or post_metadata.redaction_event_kind != "post"
+                or post_metadata.redaction_scope_sha256
+                != expected_scope_sha256
             ):
                 raise ValueError(
-                    "redaction confirmation PostToolUse event is not recorded"
+                    "redaction confirmation PostToolUse metadata identity mismatch"
                 )
-            post_sequence_no = int(stored_post[9])
+            post_observation = post_metadata.post_input_observation
+            if (
+                post_metadata.payload_bytes
+                > REDACTION_AUDIT_EVENT_PAYLOAD_MAX_BYTES
+            ):
+                if (
+                    post_observation.status != "unobserved"
+                    or post_observation.diagnostic_code
+                    != "post_payload_bytes_exceeded"
+                ):
+                    return RedactionPostConfirmationResult(
+                        "unobserved",
+                        plan_id=rows[0][0],
+                        diagnostic_code="post_payload_metadata_invalid",
+                    )
+                return RedactionPostConfirmationResult(
+                    "unobserved",
+                    plan_id=rows[0][0],
+                    diagnostic_code="post_payload_bytes_exceeded",
+                )
+            if (
+                post_observation.diagnostic_code
+                == "post_payload_bytes_exceeded"
+            ):
+                return RedactionPostConfirmationResult(
+                    "unobserved",
+                    plan_id=rows[0][0],
+                    diagnostic_code="post_payload_metadata_invalid",
+                )
+            post_sequence_no = post_metadata.sequence_no
 
             (
                 plan_id,
@@ -3611,16 +3694,6 @@ class EventStore:
                 linked_post_event_id,
                 rendered_at,
                 confirmed_at,
-                pre_phase,
-                pre_session_id,
-                pre_turn_id,
-                pre_tool_use_id,
-                pre_tool_name,
-                pre_workspace_id,
-                pre_workspace_root,
-                pre_execution_cwd,
-                pre_workspace_status,
-                pre_sequence_no,
                 analysis_workspace_id,
                 analysis_session_id,
                 analysis_completed_at,
@@ -3658,113 +3731,63 @@ class EventStore:
                 or not rendered_at
             ):
                 raise ValueError("rendered redaction plan integrity mismatch")
+            pre_metadata_row = conn.execute(
+                f"""
+                SELECT {_EVENT_PAYLOAD_METADATA_COLUMNS}
+                FROM event_payload_metadata
+                WHERE event_id = ?
+                """,
+                (pre_event_id,),
+            ).fetchone()
+            pre_metadata = _event_payload_metadata_from_row(pre_metadata_row)
             if (
-                pre_phase,
-                pre_session_id,
-                pre_turn_id,
-                pre_tool_use_id,
-                pre_tool_name,
-                pre_workspace_id,
-                pre_workspace_root,
-                pre_execution_cwd,
-                pre_workspace_status,
-                analysis_workspace_id,
-                analysis_session_id,
-            ) != (
-                "pre_tool_use",
-                post_event.session_id,
-                post_event.turn_id,
-                post_event.tool_use_id,
-                post_event.tool_name,
-                post_event.workspace_id,
-                post_event.workspace_root,
-                post_event.workspace_execution_cwd,
-                "ready",
-                post_event.workspace_id,
-                post_event.session_id,
-            ) or (
-                pre_sequence_no is None
-                or int(pre_sequence_no) >= post_sequence_no
+                pre_metadata is None
+                or pre_metadata.redaction_event_kind != "pre"
+                or pre_metadata.redaction_scope_sha256
+                != expected_scope_sha256
+                or pre_metadata.sequence_no >= post_sequence_no
+                or analysis_workspace_id != post_event.workspace_id
+                or analysis_session_id != post_event.session_id
                 or analysis_completed_at is None
             ):
                 raise ValueError("redaction confirmation owner mismatch")
 
-            earliest_post = conn.execute(
-                """
-                SELECT event_id
-                FROM events
-                WHERE phase = 'post_tool_use'
-                  AND workspace_status = 'ready'
-                  AND workspace_id = ?
-                  AND workspace_root = ?
-                  AND workspace_execution_cwd = ?
-                  AND session_id = ?
-                  AND turn_id IS ?
-                  AND tool_use_id = ?
-                  AND tool_name = ?
+            earliest_post_row = conn.execute(
+                f"""
+                SELECT {_EVENT_PAYLOAD_METADATA_COLUMNS}
+                FROM event_payload_metadata
+                WHERE redaction_scope_sha256 = ?
+                  AND redaction_event_kind = 'post'
                   AND sequence_no > ?
                 ORDER BY sequence_no, event_id
                 LIMIT 1
                 """,
                 (
-                    post_event.workspace_id,
-                    post_event.workspace_root,
-                    post_event.workspace_execution_cwd,
-                    post_event.session_id,
-                    post_event.turn_id,
-                    post_event.tool_use_id,
-                    post_event.tool_name,
-                    int(pre_sequence_no),
+                    expected_scope_sha256,
+                    pre_metadata.sequence_no,
                 ),
             ).fetchone()
-            if earliest_post is None:
+            if earliest_post_row is None:
                 raise ValueError("redaction confirmation PostToolUse event is missing")
-            if earliest_post[0] != post_event.event_id:
-                return RedactionPostConfirmationResult(
-                    "conflict",
-                    plan_id=plan_id,
-                    diagnostic_code="earlier_post_event_exists",
-                )
-
-            stored_payload_bytes = conn.execute(
-                """
-                SELECT length(CAST(payload_json AS BLOB))
-                FROM events
-                WHERE event_id = ?
-                """,
-                (post_event.event_id,),
-            ).fetchone()[0]
+            earliest_post = _event_payload_metadata_from_row(
+                earliest_post_row
+            )
             if (
-                stored_payload_bytes is None
-                or int(stored_payload_bytes)
-                > REDACTION_AUDIT_EVENT_PAYLOAD_MAX_BYTES
+                earliest_post is None
+                or earliest_post.redaction_event_kind != "post"
+                or earliest_post.redaction_scope_sha256
+                != expected_scope_sha256
             ):
                 return RedactionPostConfirmationResult(
                     "unobserved",
                     plan_id=plan_id,
-                    diagnostic_code="post_payload_bytes_exceeded",
+                    diagnostic_code="post_payload_metadata_invalid",
                 )
-            stored_payload_json = conn.execute(
-                "SELECT payload_json FROM events WHERE event_id = ?",
-                (post_event.event_id,),
-            ).fetchone()[0]
-            try:
-                stored_payload = json.loads(stored_payload_json)
-            except (TypeError, ValueError) as exc:
-                raise ValueError(
-                    "redaction confirmation stored payload is invalid"
-                ) from exc
-            if (
-                not isinstance(stored_payload, dict)
-                or make_event_id(
-                    post_event.phase,
-                    stored_payload,
-                    workspace_namespace_id=post_event.workspace_namespace_id,
-                )
-                != post_event.event_id
-            ):
-                raise ValueError(
-                    "redaction confirmation stored payload identity mismatch"
+            if earliest_post.event_id != post_event.event_id:
+                return RedactionPostConfirmationResult(
+                    "conflict",
+                    plan_id=plan_id,
+                    diagnostic_code="earlier_post_event_exists",
                 )
 
             enforce_values = conn.execute(
@@ -3879,9 +3902,9 @@ class EventStore:
             ):
                 raise ValueError("rendered redaction plan state is invalid")
 
-            comparison = compare_mcp_post_input(
+            comparison = compare_mcp_post_observation(
                 tool_name=post_event.tool_name,
-                tool_input=stored_payload.get("tool_input"),
+                observation=post_observation,
                 profile_id=profile_id,
                 profile_version=profile_version,
                 profile_registry_version=profile_registry_version,
@@ -6744,6 +6767,128 @@ class EventStore:
         if column not in columns:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
+    def _record_event_payload_metadata(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        event_id: str,
+        payload_bytes: int,
+        payload_sha256: str,
+        sequence_no: int,
+        redaction_event_kind: str,
+        redaction_scope_sha256: str | None,
+        post_input_observation: PostRedactionInputObservation,
+    ) -> None:
+        """Persist narrow event metadata without weakening the core event write."""
+        if self._redaction_audit_available is not True:
+            return
+        metadata_sha256 = _event_payload_metadata_sha256(
+            event_id=event_id,
+            payload_bytes=payload_bytes,
+            payload_sha256=payload_sha256,
+            sequence_no=sequence_no,
+            redaction_event_kind=redaction_event_kind,
+            redaction_scope_sha256=redaction_scope_sha256,
+            post_input_observation=post_input_observation,
+        )
+        values = (
+            event_id,
+            _EVENT_PAYLOAD_METADATA_VERSION,
+            metadata_sha256,
+            payload_bytes,
+            payload_sha256,
+            sequence_no,
+            redaction_event_kind,
+            redaction_scope_sha256,
+            post_input_observation.status,
+            post_input_observation.observer_version,
+            post_input_observation.diagnostic_code,
+            post_input_observation.profile_id,
+            post_input_observation.profile_version,
+            post_input_observation.profile_registry_version,
+            post_input_observation.input_bytes,
+            post_input_observation.input_sha256,
+            post_input_observation.structure_sha256,
+        )
+        savepoint = "event_payload_metadata_write"
+        conn.execute(f"SAVEPOINT {savepoint}")
+        try:
+            conn.execute(
+                """
+                INSERT INTO event_payload_metadata (
+                    event_id,
+                    metadata_version,
+                    metadata_sha256,
+                    payload_bytes,
+                    payload_sha256,
+                    sequence_no,
+                    redaction_event_kind,
+                    redaction_scope_sha256,
+                    post_input_status,
+                    post_input_observer_version,
+                    post_input_diagnostic_code,
+                    post_profile_id,
+                    post_profile_version,
+                    post_profile_registry_version,
+                    post_input_bytes,
+                    post_input_sha256,
+                    post_structure_sha256
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(event_id) DO NOTHING
+                """,
+                values,
+            )
+            stored_values = conn.execute(
+                """
+                SELECT
+                    event_id,
+                    metadata_version,
+                    metadata_sha256,
+                    payload_bytes,
+                    payload_sha256,
+                    sequence_no,
+                    redaction_event_kind,
+                    redaction_scope_sha256,
+                    post_input_status,
+                    post_input_observer_version,
+                    post_input_diagnostic_code,
+                    post_profile_id,
+                    post_profile_version,
+                    post_profile_registry_version,
+                    post_input_bytes,
+                    post_input_sha256,
+                    post_structure_sha256
+                FROM event_payload_metadata
+                WHERE event_id = ?
+                """,
+                (event_id,),
+            ).fetchone()
+            if stored_values != values:
+                stored_metadata = _event_payload_metadata_from_row(
+                    stored_values
+                )
+                if (
+                    stored_metadata is None
+                    or stored_metadata.event_id != event_id
+                    or stored_metadata.payload_bytes != payload_bytes
+                    or stored_metadata.payload_sha256 != payload_sha256
+                    or stored_metadata.sequence_no != sequence_no
+                    or stored_metadata.redaction_event_kind
+                    != redaction_event_kind
+                    or stored_metadata.redaction_scope_sha256
+                    != redaction_scope_sha256
+                ):
+                    raise sqlite3.IntegrityError(
+                        "event payload metadata replay mismatch"
+                    )
+        except sqlite3.Error:
+            conn.execute(f"ROLLBACK TO {savepoint}")
+            conn.execute(f"RELEASE {savepoint}")
+            self._redaction_audit_available = False
+        else:
+            conn.execute(f"RELEASE {savepoint}")
+
     def _initialize_redaction_preview_audit(
         self,
         conn: sqlite3.Connection,
@@ -6753,6 +6898,7 @@ class EventStore:
         conn.execute(f"SAVEPOINT {savepoint}")
         try:
             self._migrate_redaction_preview_audit(conn)
+            self._migrate_event_payload_metadata(conn)
         except (RuntimeError, sqlite3.Error):
             conn.execute(f"ROLLBACK TO {savepoint}")
             conn.execute(f"RELEASE {savepoint}")
@@ -6934,6 +7080,328 @@ class EventStore:
             """,
             (migration_key,),
         )
+
+    def _migrate_event_payload_metadata(
+        self,
+        conn: sqlite3.Connection,
+    ) -> None:
+        """Create sparse O(1) event metadata without legacy backfill."""
+        migration_key = "migration.event_payload_metadata.v1"
+        migration_complete = conn.execute(
+            """
+            SELECT 1
+            FROM analysis_state
+            WHERE key = ? AND value = 'complete'
+            """,
+            (migration_key,),
+        ).fetchone() is not None
+        table_exists = conn.execute(
+            """
+            SELECT 1
+            FROM sqlite_master
+            WHERE type = 'table' AND name = 'event_payload_metadata'
+            """
+        ).fetchone() is not None
+        if migration_complete:
+            self._validate_event_payload_metadata_schema(conn)
+            return
+        if not table_exists:
+            diagnostic_codes = ", ".join(
+                f"'{code}'"
+                for code in sorted(REDACTION_POST_INPUT_DIAGNOSTIC_CODES)
+            )
+            conn.execute(
+                f"""
+                CREATE TABLE event_payload_metadata (
+                    event_id TEXT PRIMARY KEY NOT NULL,
+                    metadata_version TEXT NOT NULL CHECK (
+                        typeof(metadata_version) = 'text'
+                        AND metadata_version =
+                            '{_EVENT_PAYLOAD_METADATA_VERSION}'
+                    ),
+                    metadata_sha256 TEXT NOT NULL CHECK (
+                        typeof(metadata_sha256) = 'text'
+                        AND length(metadata_sha256) = 64
+                        AND metadata_sha256 NOT GLOB '*[^0-9a-f]*'
+                    ),
+                    payload_bytes INTEGER NOT NULL CHECK (
+                        typeof(payload_bytes) = 'integer'
+                        AND payload_bytes >= 0
+                    ),
+                    payload_sha256 TEXT NOT NULL CHECK (
+                        typeof(payload_sha256) = 'text'
+                        AND length(payload_sha256) = 64
+                        AND payload_sha256 NOT GLOB '*[^0-9a-f]*'
+                    ),
+                    sequence_no INTEGER NOT NULL CHECK (
+                        typeof(sequence_no) = 'integer'
+                        AND sequence_no >= 1
+                    ),
+                    redaction_event_kind TEXT NOT NULL CHECK (
+                        typeof(redaction_event_kind) = 'text'
+                        AND redaction_event_kind IN (
+                            'not_applicable',
+                            'pre',
+                            'post'
+                        )
+                    ),
+                    redaction_scope_sha256 TEXT CHECK (
+                        redaction_scope_sha256 IS NULL
+                        OR (
+                            typeof(redaction_scope_sha256) = 'text'
+                            AND length(redaction_scope_sha256) = 64
+                            AND redaction_scope_sha256
+                                NOT GLOB '*[^0-9a-f]*'
+                        )
+                    ),
+                    post_input_status TEXT NOT NULL CHECK (
+                        typeof(post_input_status) = 'text'
+                        AND post_input_status IN (
+                            'not_applicable',
+                            'captured',
+                            'unobserved'
+                        )
+                    ),
+                    post_input_observer_version TEXT,
+                    post_input_diagnostic_code TEXT,
+                    post_profile_id TEXT,
+                    post_profile_version TEXT,
+                    post_profile_registry_version TEXT,
+                    post_input_bytes INTEGER,
+                    post_input_sha256 TEXT,
+                    post_structure_sha256 TEXT,
+                    CHECK (
+                        (
+                            redaction_event_kind = 'not_applicable'
+                            AND redaction_scope_sha256 IS NULL
+                        )
+                        OR (
+                            redaction_event_kind IN ('pre', 'post')
+                            AND redaction_scope_sha256 IS NOT NULL
+                        )
+                    ),
+                    CHECK (
+                        (
+                            post_input_status = 'not_applicable'
+                            AND redaction_event_kind != 'post'
+                            AND post_input_observer_version IS NULL
+                            AND post_input_diagnostic_code IS NULL
+                            AND post_profile_id IS NULL
+                            AND post_profile_version IS NULL
+                            AND post_profile_registry_version IS NULL
+                            AND post_input_bytes IS NULL
+                            AND post_input_sha256 IS NULL
+                            AND post_structure_sha256 IS NULL
+                        )
+                        OR (
+                            post_input_status = 'unobserved'
+                            AND redaction_event_kind = 'post'
+                            AND typeof(post_input_observer_version) = 'text'
+                            AND post_input_observer_version =
+                                '{REDACTION_POST_INPUT_OBSERVER_VERSION}'
+                            AND post_input_diagnostic_code IS NOT NULL
+                            AND typeof(post_input_diagnostic_code) = 'text'
+                            AND post_input_diagnostic_code IN (
+                                {diagnostic_codes}
+                            )
+                            AND post_profile_id IS NULL
+                            AND post_profile_version IS NULL
+                            AND post_profile_registry_version IS NULL
+                            AND post_input_bytes IS NULL
+                            AND post_input_sha256 IS NULL
+                            AND post_structure_sha256 IS NULL
+                        )
+                        OR (
+                            post_input_status = 'captured'
+                            AND redaction_event_kind = 'post'
+                            AND payload_bytes <=
+                                {REDACTION_AUDIT_EVENT_PAYLOAD_MAX_BYTES}
+                            AND typeof(post_input_observer_version) = 'text'
+                            AND post_input_observer_version =
+                                '{REDACTION_POST_INPUT_OBSERVER_VERSION}'
+                            AND post_input_diagnostic_code IS NULL
+                            AND post_profile_id IS NOT NULL
+                            AND typeof(post_profile_id) = 'text'
+                            AND length(
+                                CAST(post_profile_id AS BLOB)
+                            ) BETWEEN 1 AND {MCP_TOOL_NAME_MAX_BYTES}
+                            AND post_profile_version IS NOT NULL
+                            AND typeof(post_profile_version) = 'text'
+                            AND length(
+                                CAST(post_profile_version AS BLOB)
+                            ) BETWEEN 1 AND {MCP_TOOL_NAME_MAX_BYTES}
+                            AND post_profile_registry_version IS NOT NULL
+                            AND typeof(post_profile_registry_version) = 'text'
+                            AND length(
+                                CAST(post_profile_registry_version AS BLOB)
+                            ) BETWEEN 1 AND {MCP_TOOL_NAME_MAX_BYTES}
+                            AND post_input_bytes IS NOT NULL
+                            AND typeof(post_input_bytes) = 'integer'
+                            AND post_input_bytes BETWEEN 0 AND
+                                {DEFAULT_MCP_INPUT_LIMITS.max_input_bytes}
+                            AND post_input_sha256 IS NOT NULL
+                            AND typeof(post_input_sha256) = 'text'
+                            AND length(post_input_sha256) = 64
+                            AND post_input_sha256
+                                NOT GLOB '*[^0-9a-f]*'
+                            AND post_structure_sha256 IS NOT NULL
+                            AND typeof(post_structure_sha256) = 'text'
+                            AND length(post_structure_sha256) = 64
+                            AND post_structure_sha256
+                                NOT GLOB '*[^0-9a-f]*'
+                        )
+                    ),
+                    FOREIGN KEY (event_id) REFERENCES events (event_id)
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX idx_event_payload_metadata_redaction_scope_sequence
+                ON event_payload_metadata (
+                    redaction_scope_sha256,
+                    redaction_event_kind,
+                    sequence_no,
+                    event_id
+                )
+                WHERE redaction_scope_sha256 IS NOT NULL
+                """
+            )
+        self._validate_event_payload_metadata_schema(conn)
+        conn.execute(
+            """
+            INSERT INTO analysis_state (key, value)
+            VALUES (?, 'complete')
+            ON CONFLICT(key) DO UPDATE SET
+                value = excluded.value,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (migration_key,),
+        )
+
+    def _validate_event_payload_metadata_schema(
+        self,
+        conn: sqlite3.Connection,
+    ) -> None:
+        rows = conn.execute(
+            "PRAGMA table_info(event_payload_metadata)"
+        ).fetchall()
+        actual = {
+            row[1]: (str(row[2]).upper(), bool(row[3]), int(row[5]))
+            for row in rows
+        }
+        expected = {
+            "event_id": ("TEXT", True, 1),
+            "metadata_version": ("TEXT", True, 0),
+            "metadata_sha256": ("TEXT", True, 0),
+            "payload_bytes": ("INTEGER", True, 0),
+            "payload_sha256": ("TEXT", True, 0),
+            "sequence_no": ("INTEGER", True, 0),
+            "redaction_event_kind": ("TEXT", True, 0),
+            "redaction_scope_sha256": ("TEXT", False, 0),
+            "post_input_status": ("TEXT", True, 0),
+            "post_input_observer_version": ("TEXT", False, 0),
+            "post_input_diagnostic_code": ("TEXT", False, 0),
+            "post_profile_id": ("TEXT", False, 0),
+            "post_profile_version": ("TEXT", False, 0),
+            "post_profile_registry_version": ("TEXT", False, 0),
+            "post_input_bytes": ("INTEGER", False, 0),
+            "post_input_sha256": ("TEXT", False, 0),
+            "post_structure_sha256": ("TEXT", False, 0),
+        }
+        if actual != expected:
+            raise RuntimeError(
+                "redaction audit schema mismatch: event_payload_metadata"
+            )
+        table_sql_row = conn.execute(
+            """
+            SELECT sql
+            FROM sqlite_master
+            WHERE type = 'table' AND name = 'event_payload_metadata'
+            """
+        ).fetchone()
+        table_sql = "" if table_sql_row is None else str(table_sql_row[0])
+        normalized_table_sql = "".join(table_sql.casefold().split())
+        if re.search(
+            r"CHECK\s*\(\s*typeof\s*\(\s*payload_bytes\s*\)\s*"
+            r"=\s*'integer'\s+AND\s+payload_bytes\s*>=\s*0\s*\)",
+            table_sql,
+            flags=re.IGNORECASE,
+        ) is None:
+            raise RuntimeError(
+                "redaction audit payload byte constraint mismatch"
+            )
+        required_sql_fragments = {
+            "typeof(metadata_version)='text'",
+            f"metadata_version='{_EVENT_PAYLOAD_METADATA_VERSION}'",
+            "typeof(metadata_sha256)='text'",
+            "length(metadata_sha256)=64",
+            "metadata_sha256notglob'*[^0-9a-f]*'",
+            "typeof(payload_sha256)='text'",
+            "length(payload_sha256)=64",
+            "payload_sha256notglob'*[^0-9a-f]*'",
+            "sequence_no>=1",
+            "typeof(redaction_event_kind)='text'",
+            "redaction_event_kindin('not_applicable','pre','post')",
+            "typeof(redaction_scope_sha256)='text'",
+            "typeof(post_input_status)='text'",
+            "post_input_statusin('not_applicable','captured','unobserved')",
+            (
+                "post_input_observer_version="
+                f"'{REDACTION_POST_INPUT_OBSERVER_VERSION}'"
+            ),
+            "post_input_status='not_applicable'",
+            "post_input_status='unobserved'",
+            "post_input_status='captured'",
+            "typeof(post_profile_id)='text'",
+            "typeof(post_profile_version)='text'",
+            "typeof(post_profile_registry_version)='text'",
+            "typeof(post_input_sha256)='text'",
+            "post_input_sha256notglob'*[^0-9a-f]*'",
+            "typeof(post_structure_sha256)='text'",
+            "post_structure_sha256notglob'*[^0-9a-f]*'",
+        }
+        required_sql_fragments.update(
+            f"'{code}'" for code in REDACTION_POST_INPUT_DIAGNOSTIC_CODES
+        )
+        if any(
+            fragment.casefold() not in normalized_table_sql
+            for fragment in required_sql_fragments
+        ):
+            raise RuntimeError(
+                "redaction audit event metadata constraint mismatch"
+            )
+        foreign_keys = conn.execute(
+            "PRAGMA foreign_key_list(event_payload_metadata)"
+        ).fetchall()
+        if not any(
+            row[2] == "events" and row[3] == "event_id" and row[4] == "event_id"
+            for row in foreign_keys
+        ):
+            raise RuntimeError(
+                "redaction audit payload metadata owner mismatch"
+            )
+        index_row = conn.execute(
+            """
+            SELECT sql
+            FROM sqlite_master
+            WHERE type = 'index'
+              AND name = 'idx_event_payload_metadata_redaction_scope_sequence'
+            """
+        ).fetchone()
+        index_sql = "" if index_row is None else str(index_row[0])
+        normalized_index_sql = "".join(index_sql.casefold().split())
+        if (
+            "on event_payload_metadata (".replace(" ", "")
+            not in normalized_index_sql
+            or "(redaction_scope_sha256,redaction_event_kind,sequence_no,event_id)"
+            not in normalized_index_sql
+            or "whereredaction_scope_sha256isnotnull"
+            not in normalized_index_sql
+        ):
+            raise RuntimeError(
+                "redaction audit event metadata index mismatch"
+            )
 
     def _validate_redaction_preview_audit_schema(
         self,
@@ -7642,6 +8110,301 @@ class EventStore:
             f"PRAGMA busy_timeout = {REDACTION_AUDIT_BUSY_TIMEOUT_MS}"
         )
         return conn
+
+
+def _redaction_post_input_observation(
+    event: NormalizedEvent,
+    *,
+    payload_bytes: int,
+) -> tuple[str, str | None, PostRedactionInputObservation]:
+    """Bind a redaction call scope to bounded, hash-only Post metadata."""
+    scope_sha256 = _redaction_call_scope_sha256(event)
+    if scope_sha256 is None:
+        return (
+            "not_applicable",
+            None,
+            PostRedactionInputObservation("not_applicable"),
+        )
+
+    if event.phase == "pre_tool_use":
+        return (
+            "pre",
+            scope_sha256,
+            PostRedactionInputObservation("not_applicable"),
+        )
+    if payload_bytes > REDACTION_AUDIT_EVENT_PAYLOAD_MAX_BYTES:
+        return (
+            "post",
+            scope_sha256,
+            PostRedactionInputObservation(
+                "unobserved",
+                observer_version=REDACTION_POST_INPUT_OBSERVER_VERSION,
+                diagnostic_code="post_payload_bytes_exceeded",
+            ),
+        )
+    observation = observe_mcp_post_input(
+        tool_name=event.tool_name,
+        tool_input=event.raw_payload.get("tool_input"),
+    )
+    return "post", scope_sha256, observation
+
+
+def _redaction_call_scope_sha256(event: NormalizedEvent) -> str | None:
+    if (
+        event.phase not in {"pre_tool_use", "post_tool_use"}
+        or event.workspace_status != "ready"
+        or event.workspace_id is None
+        or event.workspace_root is None
+        or event.workspace_execution_cwd is None
+        or event.session_id is None
+        or event.tool_use_id is None
+        or event.tool_name is None
+        or not all(
+            _bounded_audit_identifier(value)
+            for value in (
+                event.workspace_id,
+                event.workspace_root,
+                event.workspace_execution_cwd,
+                event.session_id,
+                event.tool_use_id,
+                event.tool_name,
+            )
+        )
+        or (
+            event.turn_id is not None
+            and not _bounded_audit_identifier(event.turn_id)
+        )
+        or (
+            event.workspace_namespace_id is not None
+            and not _bounded_audit_identifier(event.workspace_namespace_id)
+        )
+        or parse_mcp_tool_name(event.tool_name) is None
+    ):
+        return None
+    scope_json = json.dumps(
+        [
+            "tooluseproxy:redaction-call-scope:v1",
+            event.workspace_status,
+            event.workspace_id,
+            event.workspace_root,
+            event.workspace_execution_cwd,
+            event.workspace_namespace_id,
+            event.session_id,
+            event.turn_id,
+            event.tool_use_id,
+            event.tool_name,
+        ],
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(scope_json).hexdigest()
+
+
+def _event_payload_metadata_sha256(
+    *,
+    event_id: str,
+    payload_bytes: int,
+    payload_sha256: str,
+    sequence_no: int,
+    redaction_event_kind: str,
+    redaction_scope_sha256: str | None,
+    post_input_observation: PostRedactionInputObservation,
+) -> str:
+    encoded = json.dumps(
+        [
+            "tooluseproxy:event-payload-metadata-integrity:v1",
+            event_id,
+            _EVENT_PAYLOAD_METADATA_VERSION,
+            payload_bytes,
+            payload_sha256,
+            sequence_no,
+            redaction_event_kind,
+            redaction_scope_sha256,
+            post_input_observation.status,
+            post_input_observation.observer_version,
+            post_input_observation.diagnostic_code,
+            post_input_observation.profile_id,
+            post_input_observation.profile_version,
+            post_input_observation.profile_registry_version,
+            post_input_observation.input_bytes,
+            post_input_observation.input_sha256,
+            post_input_observation.structure_sha256,
+        ],
+        ensure_ascii=False,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _event_payload_metadata_from_row(
+    row: tuple[object, ...] | None,
+) -> _EventPayloadMetadata | None:
+    if row is None or len(row) != 17:
+        return None
+    (
+        event_id,
+        metadata_version,
+        metadata_sha256,
+        payload_bytes,
+        payload_sha256,
+        sequence_no,
+        redaction_event_kind,
+        redaction_scope_sha256,
+        post_input_status,
+        post_input_observer_version,
+        post_input_diagnostic_code,
+        post_profile_id,
+        post_profile_version,
+        post_profile_registry_version,
+        post_input_bytes,
+        post_input_sha256,
+        post_structure_sha256,
+    ) = row
+    optional_text = (
+        redaction_scope_sha256,
+        post_input_observer_version,
+        post_input_diagnostic_code,
+        post_profile_id,
+        post_profile_version,
+        post_profile_registry_version,
+        post_input_sha256,
+        post_structure_sha256,
+    )
+    if (
+        not isinstance(event_id, str)
+        or not event_id
+        or metadata_version != _EVENT_PAYLOAD_METADATA_VERSION
+        or not isinstance(metadata_sha256, str)
+        or _LOWER_SHA256_RE.fullmatch(metadata_sha256) is None
+        or type(payload_bytes) is not int
+        or payload_bytes < 0
+        or not isinstance(payload_sha256, str)
+        or _LOWER_SHA256_RE.fullmatch(payload_sha256) is None
+        or type(sequence_no) is not int
+        or sequence_no < 1
+        or redaction_event_kind
+        not in {"not_applicable", "pre", "post"}
+        or post_input_status
+        not in {"not_applicable", "captured", "unobserved"}
+        or any(
+            value is not None and not isinstance(value, str)
+            for value in optional_text
+        )
+        or (
+            post_input_bytes is not None
+            and type(post_input_bytes) is not int
+        )
+    ):
+        return None
+    if redaction_event_kind == "not_applicable":
+        if redaction_scope_sha256 is not None:
+            return None
+    elif (
+        not isinstance(redaction_scope_sha256, str)
+        or _LOWER_SHA256_RE.fullmatch(redaction_scope_sha256) is None
+    ):
+        return None
+
+    observation = PostRedactionInputObservation(
+        status=post_input_status,
+        observer_version=post_input_observer_version,
+        diagnostic_code=post_input_diagnostic_code,
+        profile_id=post_profile_id,
+        profile_version=post_profile_version,
+        profile_registry_version=post_profile_registry_version,
+        input_bytes=post_input_bytes,
+        input_sha256=post_input_sha256,
+        structure_sha256=post_structure_sha256,
+    )
+    observation_values = (
+        observation.observer_version,
+        observation.diagnostic_code,
+        observation.profile_id,
+        observation.profile_version,
+        observation.profile_registry_version,
+        observation.input_bytes,
+        observation.input_sha256,
+        observation.structure_sha256,
+    )
+    if observation.status == "not_applicable":
+        if redaction_event_kind == "post" or any(
+            value is not None for value in observation_values
+        ):
+            return None
+    elif observation.status == "unobserved":
+        if (
+            redaction_event_kind != "post"
+            or observation.observer_version
+            != REDACTION_POST_INPUT_OBSERVER_VERSION
+            or observation.diagnostic_code
+            not in REDACTION_POST_INPUT_DIAGNOSTIC_CODES
+            or any(
+                value is not None
+                for value in (
+                    observation.profile_id,
+                    observation.profile_version,
+                    observation.profile_registry_version,
+                    observation.input_bytes,
+                    observation.input_sha256,
+                    observation.structure_sha256,
+                )
+            )
+        ):
+            return None
+    elif (
+        redaction_event_kind != "post"
+        or payload_bytes > REDACTION_AUDIT_EVENT_PAYLOAD_MAX_BYTES
+        or observation.observer_version
+        != REDACTION_POST_INPUT_OBSERVER_VERSION
+        or observation.diagnostic_code is not None
+        or not _bounded_audit_identifier(observation.profile_id)
+        or not _bounded_audit_identifier(observation.profile_version)
+        or not _bounded_audit_identifier(
+            observation.profile_registry_version
+        )
+        or type(observation.input_bytes) is not int
+        or not 0
+        <= observation.input_bytes
+        <= DEFAULT_MCP_INPUT_LIMITS.max_input_bytes
+        or not isinstance(observation.input_sha256, str)
+        or _LOWER_SHA256_RE.fullmatch(observation.input_sha256) is None
+        or not isinstance(observation.structure_sha256, str)
+        or _LOWER_SHA256_RE.fullmatch(observation.structure_sha256) is None
+    ):
+        return None
+
+    expected_metadata_sha256 = _event_payload_metadata_sha256(
+        event_id=event_id,
+        payload_bytes=payload_bytes,
+        payload_sha256=payload_sha256,
+        sequence_no=sequence_no,
+        redaction_event_kind=redaction_event_kind,
+        redaction_scope_sha256=redaction_scope_sha256,
+        post_input_observation=observation,
+    )
+    if metadata_sha256 != expected_metadata_sha256:
+        return None
+    return _EventPayloadMetadata(
+        event_id=event_id,
+        payload_bytes=payload_bytes,
+        payload_sha256=payload_sha256,
+        sequence_no=sequence_no,
+        redaction_event_kind=redaction_event_kind,
+        redaction_scope_sha256=redaction_scope_sha256,
+        post_input_observation=observation,
+    )
+
+
+def _bounded_audit_identifier(value: object) -> bool:
+    if not isinstance(value, str) or not value:
+        return False
+    if len(value) > MCP_TOOL_NAME_MAX_BYTES:
+        return False
+    try:
+        return len(value.encode("utf-8")) <= MCP_TOOL_NAME_MAX_BYTES
+    except UnicodeEncodeError:
+        return False
 
 
 def _validate_event_workspace(event: NormalizedEvent) -> None:
