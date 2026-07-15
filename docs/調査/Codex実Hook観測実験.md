@@ -453,8 +453,8 @@ PreToolUse
 
 ## 次の検証順序
 
-1. critical findingをblockしたままredaction preview planを検証する
-2. preview auditをworkspace / session scopeで保存する
+1. 実装済みredaction preview plan / targetをworkspace / session scopeでhash-only保存する
+2. stable profileのPostToolUse input hashをdormantに照合する
 3. offline staging/promoteとruntime履歴snapshotの必要性を評価する
 4. embedding候補検索の評価
 

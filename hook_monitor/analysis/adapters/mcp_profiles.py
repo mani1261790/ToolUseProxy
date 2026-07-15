@@ -47,8 +47,9 @@ class McpInputLimits:
     max_depth: int = 8
 
     def __post_init__(self) -> None:
-        if min(self.max_input_bytes, self.max_fields, self.max_depth) < 1:
-            raise ValueError("MCP input limits must be positive")
+        values = (self.max_input_bytes, self.max_fields, self.max_depth)
+        if any(type(value) is not int for value in values) or min(values) < 1:
+            raise ValueError("MCP input limits must be positive integers")
 
 
 @dataclass(frozen=True)
@@ -126,22 +127,25 @@ class McpToolProfile:
         return next((field for field in self.fields if field.pointer == pointer), None)
 
     def validate(self, arguments: dict[str, Any]) -> McpProfileValidation:
+        fields_by_pointer = {field.pointer: field for field in self.fields}
+        if len(arguments) > len(fields_by_pointer):
+            return McpProfileValidation(False, "unknown_field")
+
         observed: dict[str, Any] = {}
-        for key, value in arguments.items():
+        for key, value in sorted(arguments.items(), key=lambda item: str(item[0])):
             pointer = f"/{escape_json_pointer_segment(str(key))}"
-            if isinstance(value, (dict, list)):
-                return McpProfileValidation(False, "unsupported_nesting")
-            if value is None:
-                return McpProfileValidation(False, "unsupported_null")
             observed[pointer] = value
 
-        fields_by_pointer = {field.pointer: field for field in self.fields}
         if any(pointer not in fields_by_pointer for pointer in observed):
             return McpProfileValidation(False, "unknown_field")
         if any(
             field.required and field.pointer not in observed for field in self.fields
         ):
             return McpProfileValidation(False, "missing_required_field")
+        if any(isinstance(value, (dict, list)) for value in observed.values()):
+            return McpProfileValidation(False, "unsupported_nesting")
+        if any(value is None for value in observed.values()):
+            return McpProfileValidation(False, "unsupported_null")
         if any(
             _json_scalar_type(value) != fields_by_pointer[pointer].value_type
             for pointer, value in observed.items()
@@ -293,15 +297,19 @@ def inspect_mcp_input(
                 max_depth_seen=max_depth_seen,
             )
         if isinstance(value, dict):
-            for key, child in value.items():
+            if field_count + len(value) > limits.max_fields:
+                return McpInputInspection(
+                    False,
+                    "field_count_exceeded",
+                    field_count=field_count + len(value),
+                    max_depth_seen=max_depth_seen,
+                )
+            for key, child in sorted(
+                value.items(),
+                key=lambda item: str(item[0]),
+                reverse=True,
+            ):
                 field_count += 1
-                if field_count > limits.max_fields:
-                    return McpInputInspection(
-                        False,
-                        "field_count_exceeded",
-                        field_count=field_count,
-                        max_depth_seen=max_depth_seen,
-                    )
                 key_text = str(key)
                 character_count += len(key_text)
                 if character_count > limits.max_input_bytes:
@@ -314,15 +322,15 @@ def inspect_mcp_input(
                 stack.append((child, depth + 1))
             continue
         if isinstance(value, list):
-            for child in value:
+            if field_count + len(value) > limits.max_fields:
+                return McpInputInspection(
+                    False,
+                    "field_count_exceeded",
+                    field_count=field_count + len(value),
+                    max_depth_seen=max_depth_seen,
+                )
+            for child in reversed(value):
                 field_count += 1
-                if field_count > limits.max_fields:
-                    return McpInputInspection(
-                        False,
-                        "field_count_exceeded",
-                        field_count=field_count,
-                        max_depth_seen=max_depth_seen,
-                    )
                 stack.append((child, depth + 1))
             continue
         if isinstance(value, str):

@@ -71,6 +71,30 @@ class McpProfileTest(unittest.TestCase):
             profile.validate({"content": ["public"]}).rejection_code,
         )
 
+    def test_profile_rejection_is_independent_of_key_insertion_order(self) -> None:
+        profile = McpToolProfile(
+            profile_id="fixture/deterministic",
+            server="fixture",
+            tool="deterministic",
+            sink_type="external_api_call",
+            fields=(
+                McpFieldSpec("/a", "string", "data"),
+                McpFieldSpec("/b", "string", "data"),
+            ),
+            post_input_stable=True,
+        )
+        forward = {"a": {}, "b": None}
+        reverse = {"b": None, "a": {}}
+
+        self.assertEqual(
+            profile.validate(forward),
+            profile.validate(reverse),
+        )
+        self.assertEqual(
+            "unsupported_nesting",
+            profile.validate(forward).rejection_code,
+        )
+
     def test_profile_and_registry_versions_follow_semantics(self) -> None:
         profile = TOOLUSEPROXY_E2E_PUBLISH_TEXT_PROFILE
         changed = replace(
@@ -140,6 +164,10 @@ class McpProfileTest(unittest.TestCase):
     def test_input_limits_must_be_positive(self) -> None:
         with self.assertRaisesRegex(ValueError, "positive"):
             McpInputLimits(max_fields=0)
+        for invalid in (True, 1.5, float("nan"), float("inf")):
+            with self.subTest(invalid=invalid):
+                with self.assertRaisesRegex(ValueError, "positive integers"):
+                    McpInputLimits(max_input_bytes=invalid)  # type: ignore[arg-type]
 
     def test_input_inspection_uses_canonical_utf8_byte_boundary(self) -> None:
         overhead = len(b'{"content":""}')
@@ -181,6 +209,18 @@ class McpProfileTest(unittest.TestCase):
             "nesting_depth_exceeded",
             inspect_mcp_input(depth_nine).rejection_code,
         )
+
+    def test_input_inspection_rejection_is_insertion_order_independent(self) -> None:
+        limits = McpInputLimits(max_input_bytes=32, max_fields=8, max_depth=2)
+        deep = {"child": {"child": "value"}}
+        forward = {"a_large": "x" * 64, "b_deep": deep}
+        reverse = {"b_deep": deep, "a_large": "x" * 64}
+
+        forward_result = inspect_mcp_input(forward, limits)
+        reverse_result = inspect_mcp_input(reverse, limits)
+
+        self.assertEqual(forward_result, reverse_result)
+        self.assertEqual("input_bytes_exceeded", forward_result.rejection_code)
 
     def test_input_inspection_handles_empty_and_unsupported_values(self) -> None:
         empty = inspect_mcp_input({})

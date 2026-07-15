@@ -16,7 +16,7 @@ Redactは、protected source由来の情報を含むtool inputから、送信し
 
 従って、最初の到達点は`redact-preview`です。previewは「このcallなら、どのfieldをどう置き換えられるか」を監査可能なplanとして出しますが、Hook stdoutへ`updatedInput`を返さず、現在のcritical findingは引き続きblockします。
 
-2026-07-15時点で、最初の基盤であるversioned exact profile registryとMCP sink coverageは実装済みです。valid profileはdata / controlの全present scalar pointerを個別sink化し、shape不一致とunprofiled write-like toolはarguments内の全scalar valueとJSON object keyへ保守的fallbackします。key nameのlineageはraw exact一致だけに限定し、同値fieldはpointer別fragmentとして残します。初期exact profileは実Codexで観測したlocal E2E `publish_text(content)`だけで、実schema未確認の外部serviceはpreview適格にしません。real MCP inputは32 KiB / 32 fields / depth 8のbounded preflightをartifact生成より前に受け、超過したexternal writeはdeny、read-only / unsinked callは保存せず空stdoutでbypassします。runtime outputは従来のdeny / 空stdoutのままで、preview plannerと`updatedInput`はまだありません。
+2026-07-15時点で、versioned exact profile registry、MCP sink coverage、pure preview plannerまで実装済みです。valid profileはdata / controlの全present scalar pointerを個別sink化し、shape不一致とunprofiled write-like toolはarguments内の全scalar valueとJSON object keyへ保守的fallbackします。plannerはcurrent event / workspace / session / tool use / sequence、profile / registry version、全present sink coverageを閉じ、全critical findingをsource chunkとtarget pointerの直接参照で集約します。1件でも非対応ならpartial targetと候補本文を破棄し、全件でraw case-sensitive matchを確認できた場合だけdeep copy上のwhole-field候補、canonical input hash、structure hash、finding単位targetを返します。初期exact profileは実Codexで観測したlocal E2E `publish_text(content)`だけで、実schema未確認の外部serviceはpreview適格にしません。real MCP inputは32 KiB / 32 fields / depth 8のbounded preflightをartifact生成より前に受け、超過したexternal writeはdeny、read-only / unsinked callは保存せず空stdoutでbypassします。preview plannerはまだHook runnerやDBへ接続しておらず、runtime outputは従来のdeny / 空stdoutのままです。`updatedInput`も返しません。
 
 ## Codexの実契約
 
@@ -126,7 +126,7 @@ profileはplannerだけの設定にしません。profiled toolでは同じversi
 
 lineage scoreや5-gram類似だけをrewrite位置に使いません。shingle-only、whitespace / case normalizationだけの一致、encoded value、hash-only resource lineage、protected fileからstdinへ流れる値は位置不明としてblockします。将来部分redactへ進む場合も、current outgoing leaf上のraw case-sensitive span、全findingのspan、overlapのdeterministic merge、rewrite後の再検索を必須にします。
 
-profileとfixture、全scalar value / JSON key fallbackは実装済みです。次のplannerはsink metadataのprofile / registry version、pointer、field classを直接使い、adapterと異なるfield推定を再実装しません。実service profileは実Hook payloadとtool schemaを確認した後に別commitで追加します。
+profileとfixture、全scalar value / JSON key fallbackに加え、plannerも実装済みです。plannerはsink metadataのprofile / registry version、pointer、field classを直接使い、adapterと異なるfield推定を再実装しません。source本文はplanへ含めず、候補JSONもeligible resultの非表示fieldにだけ保持し、rejected resultには残しません。実service profileは実Hook payloadとtool schemaを確認した後に別commitで追加します。
 
 Codexは一部MCP toolで、PreToolUse後かつserver送信前にOpenAI file argumentsを内部変換し、その変換後objectをPostToolUseの`tool_input`へ載せます。この場合、正当な内部変換でもfull-input hashは不一致になります。初期profileはこのtool / fieldを対象外とし、`post_input_stable: true`を確認できるtoolだけでfull-input hashを使います。将来対応する場合は、Codexが変更しないcontrol / redactable pointerだけのprojected hashを別schemaで導入し、`post_transformed`とcompeting Hookによる`post_override`を区別してから対象へ加えます。
 
@@ -184,13 +184,15 @@ CREATE TABLE redaction_plans (
     adapter TEXT NOT NULL,
     profile_id TEXT NOT NULL,
     profile_version TEXT NOT NULL,
+    profile_registry_version TEXT NOT NULL,
     mode TEXT NOT NULL,              -- preview / enforce
     status TEXT NOT NULL,            -- eligible / rejected / rendered / post_confirmed / post_mismatch
     planner_version TEXT NOT NULL,
-    original_input_sha256 TEXT NOT NULL,
+    original_input_sha256 TEXT,
     rewritten_input_sha256 TEXT,
-    structure_sha256_before TEXT NOT NULL,
+    structure_sha256_before TEXT,
     structure_sha256_after TEXT,
+    critical_finding_count INTEGER NOT NULL,
     replacement_count INTEGER NOT NULL,
     rejection_code TEXT,
     post_event_id TEXT,
@@ -216,7 +218,8 @@ CREATE TABLE redaction_targets (
 
 CREATE UNIQUE INDEX redaction_plans_event_version
     ON redaction_plans(
-        workspace_id, pre_event_id, planner_version, profile_version, mode
+        workspace_id, pre_event_id, analysis_run_id,
+        planner_version, profile_version, mode
     );
 
 CREATE INDEX redaction_plans_tool_use
@@ -224,6 +227,10 @@ CREATE INDEX redaction_plans_tool_use
 ```
 
 exact profileがないreject planでは、`profile_id`に`unprofiled:<server>/<tool>`、`profile_version`にregistry versionを入れ、nullable keyによる重複を避けます。これは適格profileが存在することを意味せず、`rejection_code = 'unknown_profile'`と対で扱います。
+
+input size、field count、depthなどcanonicalization前にrejectするcaseでは、bounded workを優先して`original_input_sha256`と`structure_sha256_before`を`NULL`にします。scope自体が不整合なcaseはpersist可能なplanを作らず、`invalid_call_scope`のdiagnostic resultだけを返します。これによりevent側workspaceと別analysis runを1 rowへ混ぜません。
+
+`plan_id`とunique indexには`analysis_run_id`を含めます。同じanalysis run内の再保存は冪等ですが、同じeventを新しいruntime analysis runで再評価した場合は別planとして残します。finding / decision IDもanalysis runに依存するため、runを跨いで同じplan IDへ異なるtargetを上書きしません。
 
 hash対象はtool inputのcanonical JSONです。Bash / apply_patchも`{"command": ...}`として同じ規則を使います。`structure_sha256`はJSON Pointerとvalue typeだけを並べたcanonical shapeのhashとし、value本文を含めません。hashは同一性確認であり、暗号化ではありません。
 
@@ -258,7 +265,7 @@ current PreToolUse event
   -> 将来enforce段階だけupdatedInputをrender
 ```
 
-plannerは既存の`session-incremental`結果を入力にし、全DBやworkspace全体を再解析しません。source chunk、current event fragment、sink metadataはworkspace / session / sequenceで絞ったqueryだけを使います。
+plannerは既存の`session-incremental`結果を入力にし、全DBやworkspace全体を再解析しません。入力findingは`select_strongest_decision()`後の1件ではなく、`detect_leaks()`がcurrent callへ返した全critical findingのbounded tupleをそのまま渡します。source chunk、current event fragment、sink metadataはworkspace / session / sequenceで絞ったqueryだけを使います。
 
 ## failure fallback
 
@@ -320,6 +327,8 @@ redact plannerはlocal JSON、indexed DB row、hash、tool profileだけを使�
 - PreToolUse全体p95 `< 300 ms`
 - network call、embedding、workspace scan、全DB graph loadは0回
 
+2026-07-15のpure planner実測では、fixture構築を除外し、200 warmup後に各2,000回をinterleaveした結果、単一targetはp95 0.0729 ms、32 fields / 32 KiB / 16 targetの最大eligible caseはp95 2.9471 ms、同じ最大caseの16件目でraw mismatchになるrejectはp95 2.6957 msでした。unit testでも3 caseをinterleaveして各p95 10 ms以下とする回帰gate、defaultの32 finding / 16 target境界、50 ms exact deadlineとlate crossing、oversize inputがcanonical hashより前にrejectされることを固定しています。
+
 benchmarkはeligible、rejected、複数targetの3caseを同じroundで測り、no-redactのPreToolUseとの差をpaired sampleで計算します。Post confirmationは別HookなのでPre budgetへ混ぜません。
 
 ## 実装・commit単位
@@ -332,7 +341,7 @@ benchmarkはeligible、rejected、複数targetの3caseを同じroundで測り、
    - 同じprofileから全outbound pointerをadapterのfragment / sinkへ変換
    - unknown shapeのreject
    - server固有fixture
-2. `Add redaction preview planner`
+2. `Add redaction preview planner`（実装済み）
    - call内全finding集約
    - whole-field replacement plan
    - structural validation
@@ -357,6 +366,8 @@ benchmarkはeligible、rejected、複数targetの3caseを同じroundで測り、
 
 ### planner unit test
 
+pure plannerは32 testsで、以下のhappy path、all-or-nothing、実MCP adapter metadata、profile coverage、scope、source evidence、cap、determinism、latencyを検証済みです。DB保存とHook runtime testは次の作業単位へ分離しています。
+
 - exact profileの単一string fieldをwhole-field replacementできる
 - 元inputをmutateせず、予定pointer以外のdiffがない
 - 複数source / 複数fieldを1 planで全て置換する
@@ -378,7 +389,7 @@ benchmarkはeligible、rejected、複数targetの3caseを同じroundで測り、
 - planと全targetをtransactionで保存する
 - plaintext inputをplan tableへ複製しない
 - canonical input hashが安定する
-- duplicate event / retryでplan IDとtargetが冪等になる
+- 同じanalysis runの再保存でplan IDとtargetが冪等になり、新しいanalysis runでは別plan IDになる
 - stable profileのPost input一致を`post_confirmed`、不一致を`post_mismatch`にする
 - Codex管理file inputをfull-input hashでoverride判定しない
 - Postなしをapplied扱いしない

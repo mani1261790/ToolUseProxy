@@ -559,7 +559,7 @@ python3 /Users/mani/Developer/ToolUseProxy/scripts/rebuild_lineage.py \
 - 類似度計算や source 追跡を変えたいなら `hook_monitor/analysis/`
 - 情報流エッジを強化したいなら `analysis` 側に拡張を足す
 
-現在の`hook_monitor/`は記録の骨格に加え、workspace・session差分graph、漏えい検知、Stop継続、Bash/MCP PreToolUse deny、operation単位lineage、PostToolUse snapshot、複数workspace分離、offline run snapshot、MCP exact profileと全scalar value / JSON key sink coverageまでを接続しています。PermissionRequestは実payloadとdeny / allowを評価しましたが、PreToolUseの代替にならず、payloadにstableなcall IDがなく、`allow`が通常承認を自動通過させるため、production Hookには設定しません。将来接続する場合もdeny-onlyの独立adapterとし、判断なしは空stdoutでCodex本来の承認へ委ねます。redactも現時点ではproduction Hookに設定せず、次にblockを維持するpreview plannerとauditを検証します。詳細は [Redact設計](../設計/Redact.md) を参照してください。
+現在の`hook_monitor/`は記録の骨格に加え、workspace・session差分graph、漏えい検知、Stop継続、Bash/MCP PreToolUse deny、operation単位lineage、PostToolUse snapshot、複数workspace分離、offline run snapshot、MCP exact profileと全scalar value / JSON key sink coverageまでを接続しています。PermissionRequestは実payloadとdeny / allowを評価しましたが、PreToolUseの代替にならず、payloadにstableなcall IDがなく、`allow`が通常承認を自動通過させるため、production Hookには設定しません。将来接続する場合もdeny-onlyの独立adapterとし、判断なしは空stdoutでCodex本来の承認へ委ねます。redactはblockを維持するpure preview plannerまで実装しましたが、runner、DB、Hook stdoutには接続していません。次にhash-only auditを検証し、複数rewrite競合のgateが解消するまでproduction Hookへ`updatedInput`を追加しません。詳細は [Redact設計](../設計/Redact.md) を参照してください。
 
 ## この研究の位置づけ
 
