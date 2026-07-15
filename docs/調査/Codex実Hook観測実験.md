@@ -529,9 +529,19 @@ Post confirmationはtarget cloneと全decision linkをterminal replay / compare-
 
 Python 3.9.6 / SQLite 3.54.0のlocal component benchmarkでは、fixture構築とevent保存を除外した。single-finding新規prepare 80 sampleはp95 5.121 ms、exact replay 500 sampleはp95 1.299 ms、32-finding exact replay 300 sampleはp95 3.507 msだった。32-finding新規insertは1回の境界観測で7.570 msであり、p95とは扱わない。prepare write-lock failure 50 sampleはp95 1.187 ms、別writer lock中のexact replay 300 sampleはp95 1.155 msだった。link再証明後のconfirmationはno-plan 1,000 sample p95 0.724 ms、terminal replay 500 sample p95 0.940 ms、新規transition 60 sample p95 3.173 ms、missing Pre scope fallback 500 sample p95 0.555 msで、全p95が10 ms budget内だった。
 
+## Offline atomic publishとruntime履歴の判断
+
+次の作業単位では、`rebuild_lineage.py`が順番にlive tableを置換していた境界を、単一のoffline publish transactionへ変更した。adapter、artifact graph、source binding、lineageは先にPythonメモリ上で計算し、selected workspaceのinput revision、直前のcompleted offline run、graph stateをCASしてから、live source/resource/sink/graph、immutable run snapshot、assignment、completionをまとめて保存する。completion直前に失敗を注入しても旧live derived rows/state、runtime cursor、旧run snapshotが残り、新runや孤立node snapshotは残らない。
+
+重いinput revision計算はdeferred WAL read snapshotで行い、Hook writerを先に待たせない。同時writerによりread snapshotをwriteへupgradeできない場合は全rollbackし、最大3 attemptまでrevisionとCASをやり直す。同workspaceのevidenceが変わればstale publishとして拒否し、別workspaceだけの変更なら再試行後に完了する。workspaceの`protected_sources.json`も存在状態とsource/chunk本文を含むfingerprintをpublish直前に再確認する。local syntheticの単発writer phaseは1,000 resource / 999 edgeで約59 ms、5,000規模で約270 ms、10,000規模で約558 msだった。これはp95ではなくscale観測である。1,000規模の回帰ではoffline writer transaction中に別workspaceのHook writeを開始して1秒未満で完了する上限を固定した。SQLite single-writerのためHook writeはwriter phase中に待つ可能性がある。
+
+一方、runtime runは現在sessionのmutable graph viewのままとした。各Hook runで全graphをimmutable copyすると、session成長に対して保存rowとHook latencyが二次的に増え、artifact/source plaintextのretention範囲も広がる。過去のnon-allow判断を再現する要件が具体化した場合に、全run snapshotではなくbounded decision evidence capsuleまたはsession checkpointを設計する。
+
+この変更はoffline CLIとstorage APIだけであり、Hook設定、runner、stdout、policy判断、外部副作用経路を変更していない。そのためWU8単体の実Codex E2Eは追加せず、atomic failure、concurrent Hook writer、workspace CAS、graph reuse、source config raceをlocal integration testで検証した。既存の実Codex deny / allow / Stop契約に新しいruntime分岐はない。
+
 ## 次の検証順序
 
-1. offline staging/promoteとruntime履歴snapshotの必要性を評価する
+1. 過去runtime判断を再現する具体的な監査要件が生じた場合だけ、bounded evidence capsuleまたはsession checkpointを設計する
 2. exclusive rewriteまたは完全管理singleton配備境界が成立した場合だけruntime rendererを再評価する
 3. embedding候補検索の評価
 

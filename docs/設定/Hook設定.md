@@ -578,10 +578,14 @@ python3 /Users/mani/Developer/ToolUseProxy/scripts/rebuild_lineage.py \
 このコマンドは次を行います。
 
 1. 過去artifactからfragmentを補完する
-2. source非依存のartifact間グラフを構築または再利用する
-3. `protected_sources.json` を読み、sourceをchunkに分割する
-4. source chunkをartifactグラフへ接続する
-5. sourceからのlineageを計算する
+2. selected workspaceの入力revisionを固定してartifact、operation、snapshotを読む
+3. source非依存のartifact間グラフをメモリ上で構築または再利用する
+4. `protected_sources.json` を読み、sourceをchunkに分割する
+5. source chunkをartifactグラフへ接続し、sourceからのlineageをメモリ上で計算する
+6. source設定の存在状態とcatalog fingerprintをpublish直前に再確認する
+7. 入力revision、直前run、graph stateをCASし、live derived stateとcompleted run snapshotを1 transactionでpublishする
+
+途中でvalidation、CAS、保存、completionのいずれかが失敗した場合は全transactionをrollbackし、旧live derived rows/stateと旧latest completed runを維持します。重いrevision読込はdeferred WAL snapshotで行い、その間のHook writerを塞ぎません。writer競合はbounded retryします。このatomic publish APIはoffline CLI専用であり、PreToolUse / PostToolUse / StopのHook経路からは呼びません。
 
 詳細な設計は [情報流追跡.md](../設計/情報流追跡.md) にまとめています。
 
@@ -593,7 +597,7 @@ python3 /Users/mani/Developer/ToolUseProxy/scripts/rebuild_lineage.py \
 - 類似度計算や source 追跡を変えたいなら `hook_monitor/analysis/`
 - 情報流エッジを強化したいなら `analysis` 側に拡張を足す
 
-現在の`hook_monitor/`は記録の骨格に加え、workspace・session差分graph、漏えい検知、Stop継続、Bash/MCP PreToolUse deny、operation単位lineage、PostToolUse snapshot、複数workspace分離、offline run snapshot、MCP exact profileと全scalar value / JSON key sink coverageまでを接続しています。PermissionRequestは実payloadとdeny / allowを評価しましたが、PreToolUseの代替にならず、payloadにstableなcall IDがなく、`allow`が通常承認を自動通過させるため、production Hookには設定しません。将来接続する場合もdeny-onlyの独立adapterとし、判断なしは空stdoutでCodex本来の承認へ委ねます。redactはblockを維持するpure preview planner、immutableなhash-only audit、future renderer向けのdormant decision linkage、rendered planだけを対象にしたPost confirmationまでDBへ追加しました。runnerはprepare APIやrendererを呼ばず、Hook stdoutは従来のdenyのままで`updatedInput`をrenderしません。複数rewrite競合のgateが解消するまでproduction Hookへruntime rewriteを追加しません。詳細は [Redact設計](../設計/Redact.md) を参照してください。
+現在の`hook_monitor/`は記録の骨格に加え、workspace・session差分graph、漏えい検知、Stop継続、Bash/MCP PreToolUse deny、operation単位lineage、PostToolUse snapshot、複数workspace分離、offline run snapshotとatomic publish、MCP exact profileと全scalar value / JSON key sink coverageまでを接続しています。PermissionRequestは実payloadとdeny / allowを評価しましたが、PreToolUseの代替にならず、payloadにstableなcall IDがなく、`allow`が通常承認を自動通過させるため、production Hookには設定しません。将来接続する場合もdeny-onlyの独立adapterとし、判断なしは空stdoutでCodex本来の承認へ委ねます。redactはblockを維持するpure preview planner、immutableなhash-only audit、future renderer向けのdormant decision linkage、rendered planだけを対象にしたPost confirmationまでDBへ追加しました。runnerはprepare APIやrendererを呼ばず、Hook stdoutは従来のdenyのままで`updatedInput`をrenderしません。複数rewrite競合のgateが解消するまでproduction Hookへruntime rewriteを追加しません。詳細は [Redact設計](../設計/Redact.md) を参照してください。
 
 ## この研究の位置づけ
 

@@ -8,11 +8,16 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from contextlib import ExitStack, redirect_stderr, redirect_stdout
 from dataclasses import dataclass, replace
 from pathlib import Path
 from unittest.mock import patch
+
+import hook_monitor.runtime.storage as runtime_storage
+from scripts import rebuild_lineage
 
 from hook_monitor.analysis.graph import (
     build_artifact_flow_edges,
@@ -91,7 +96,7 @@ from hook_monitor.runtime.models import (
     StoredPolicyDecision,
     ToolOperation,
 )
-from hook_monitor.runtime.storage import EventStore
+from hook_monitor.runtime.storage import EventStore, make_analysis_run_id
 
 
 SECRET = "alpha secret design threshold 0.73"
@@ -4074,6 +4079,1176 @@ class InformationFlowTest(unittest.TestCase):
         )
         self.assertEqual("full", self.store.get_analysis_run_graph_coverage(run_id))
         self.assertEqual([], self.store.list_analysis_run_flow_edges(run_id))
+        cursor = AnalysisCursor(
+            workspace_id=workspace_a_id,
+            session_id="session-rebuild-a",
+            detector_version="runtime-v1",
+            source_digest="rebuild-a-digest",
+            last_sequence_no=1,
+            status="ready",
+        )
+        self.store.upsert_analysis_cursor(cursor)
+
+        reused = subprocess.run(
+            [
+                sys.executable,
+                str(REPO_ROOT / "scripts" / "rebuild_lineage.py"),
+                "--db",
+                str(self.db_path),
+                "--workspace-root",
+                str(workspace_a),
+            ],
+            cwd=REPO_ROOT,
+            check=True,
+            text=True,
+            capture_output=True,
+        )
+        reused_fields = dict(
+            token.split("=", 1)
+            for token in reused.stdout.split()
+            if "=" in token
+        )
+        self.assertEqual("reused", reused_fields["graph"])
+        self.assertNotEqual(run_id, reused_fields["analysis_run_id"])
+        self.assertEqual(
+            cursor,
+            self.store.get_analysis_cursor(
+                "session-rebuild-a",
+                workspace_id=workspace_a_id,
+            ),
+        )
+
+    def test_rebuild_lineage_rejects_removed_source_config_before_publish(
+        self,
+    ) -> None:
+        workspace = Path(self.temporary_directory.name) / "source-config-removed"
+        workspace.mkdir(parents=True)
+        config_path = workspace / "protected_sources.json"
+        config_path.write_text('{"sources": []}', encoding="utf-8")
+        workspace_id = self._register_empty_workspace(
+            workspace,
+            "source-config-removed",
+        )
+        old_source, old_chunk = self._workspace_source_fixture(
+            workspace,
+            workspace_id,
+            "source-config-removed-old",
+            "protected catalog must survive",
+        )
+        self.store.replace_sources_for_workspace(
+            workspace_id,
+            [old_source],
+            [old_chunk],
+        )
+        original_loader = rebuild_lineage.load_sources_and_chunks
+
+        def remove_after_first_load(*args, **kwargs):
+            result = original_loader(*args, **kwargs)
+            config_path.unlink()
+            return result
+
+        stderr = io.StringIO()
+        with (
+            patch.object(
+                rebuild_lineage,
+                "load_sources_and_chunks",
+                side_effect=remove_after_first_load,
+            ),
+            patch.object(
+                sys,
+                "argv",
+                [
+                    "rebuild_lineage.py",
+                    "--db",
+                    str(self.db_path),
+                    "--workspace-root",
+                    str(workspace),
+                ],
+            ),
+            redirect_stderr(stderr),
+        ):
+            exit_code = rebuild_lineage.main()
+
+        self.assertEqual(1, exit_code)
+        self.assertIn("source catalog presence changed", stderr.getvalue())
+        self.assertEqual(
+            [old_source],
+            self.store.list_protected_sources_for_workspace(workspace_id),
+        )
+        self.assertEqual(
+            [],
+            self.store.list_analysis_runs_for_workspace(
+                workspace_id,
+                completed_only=True,
+            ),
+        )
+
+    def test_rebuild_lineage_rejects_added_source_config_before_publish(
+        self,
+    ) -> None:
+        workspace = Path(self.temporary_directory.name) / "source-config-added"
+        workspace_id = self._register_empty_workspace(
+            workspace,
+            "source-config-added",
+        )
+        old_source, old_chunk = self._workspace_source_fixture(
+            workspace,
+            workspace_id,
+            "source-config-added-old",
+            "protected catalog must survive",
+        )
+        self.store.replace_sources_for_workspace(
+            workspace_id,
+            [old_source],
+            [old_chunk],
+        )
+        config_path = workspace / "protected_sources.json"
+        original_propagate = rebuild_lineage.propagate_lineage
+
+        def add_before_publish(*args, **kwargs):
+            config_path.write_text('{"sources": []}', encoding="utf-8")
+            return original_propagate(*args, **kwargs)
+
+        stderr = io.StringIO()
+        with (
+            patch.object(
+                rebuild_lineage,
+                "propagate_lineage",
+                side_effect=add_before_publish,
+            ),
+            patch.object(
+                sys,
+                "argv",
+                [
+                    "rebuild_lineage.py",
+                    "--db",
+                    str(self.db_path),
+                    "--workspace-root",
+                    str(workspace),
+                ],
+            ),
+            redirect_stderr(stderr),
+        ):
+            exit_code = rebuild_lineage.main()
+
+        self.assertEqual(1, exit_code)
+        self.assertIn("source catalog presence changed", stderr.getvalue())
+        self.assertEqual(
+            [old_source],
+            self.store.list_protected_sources_for_workspace(workspace_id),
+        )
+        self.assertEqual(
+            [],
+            self.store.list_analysis_runs_for_workspace(
+                workspace_id,
+                completed_only=True,
+            ),
+        )
+
+    def test_rebuild_lineage_rejects_source_content_change_before_publish(
+        self,
+    ) -> None:
+        workspace = self._write_runtime_source_config(
+            Path(self.temporary_directory.name) / "source-content-changed",
+            secret="initial protected source text",
+        )
+        workspace_id = self._register_empty_workspace(
+            workspace,
+            "source-content-changed",
+        )
+        original_loader = rebuild_lineage.load_sources_and_chunks
+        load_count = 0
+
+        def mutate_after_first_load(*args, **kwargs):
+            nonlocal load_count
+            result = original_loader(*args, **kwargs)
+            load_count += 1
+            if load_count == 1:
+                (workspace / "private.py").write_text(
+                    "changed protected source text",
+                    encoding="utf-8",
+                )
+            return result
+
+        stderr = io.StringIO()
+        with (
+            patch.object(
+                rebuild_lineage,
+                "load_sources_and_chunks",
+                side_effect=mutate_after_first_load,
+            ),
+            patch.object(
+                sys,
+                "argv",
+                [
+                    "rebuild_lineage.py",
+                    "--db",
+                    str(self.db_path),
+                    "--workspace-root",
+                    str(workspace),
+                ],
+            ),
+            redirect_stderr(stderr),
+        ):
+            exit_code = rebuild_lineage.main()
+
+        self.assertEqual(1, exit_code)
+        self.assertEqual(2, load_count)
+        self.assertIn("source catalog changed", stderr.getvalue())
+        self.assertEqual(
+            [],
+            self.store.list_protected_sources_for_workspace(workspace_id),
+        )
+        self.assertEqual(
+            [],
+            self.store.list_analysis_runs_for_workspace(
+                workspace_id,
+                completed_only=True,
+            ),
+        )
+
+    def test_offline_publish_atomically_swaps_live_state_and_completed_run(self) -> None:
+        base = Path(self.temporary_directory.name)
+        workspace_a = base / "atomic-publish-a"
+        workspace_b = base / "atomic-publish-b"
+        workspace_a_id = self._register_empty_workspace(
+            workspace_a,
+            "atomic-publish-a",
+        )
+        workspace_b_id = self._register_empty_workspace(
+            workspace_b,
+            "atomic-publish-b",
+        )
+        old_resource, old_sink, old_edge = self._workspace_graph_fixture(
+            workspace_a_id,
+            "atomic-old",
+        )
+        new_resource, new_sink, new_edge = self._workspace_graph_fixture(
+            workspace_a_id,
+            "atomic-new",
+        )
+        resource_b, sink_b, edge_b = self._workspace_graph_fixture(
+            workspace_b_id,
+            "atomic-b",
+        )
+        source_id = make_scoped_source_id(workspace_a_id, "atomic-source")
+        (workspace_a / "private.txt").write_text(
+            "atomic private text",
+            encoding="utf-8",
+        )
+        source = ProtectedSource(
+            source_id=source_id,
+            source_key="atomic-source",
+            path="private.txt",
+            source_type="file",
+            sensitivity="high",
+            policy_tags=("confidential",),
+            workspace_id=workspace_a_id,
+        )
+        chunk_text = "atomic private text"
+        chunk = SourceChunk(
+            chunk_id=make_source_chunk_id(source_id, 0, chunk_text),
+            source_id=source_id,
+            ordinal=0,
+            text=chunk_text,
+            normalized_text=chunk_text,
+            text_hash=hashlib.sha256(chunk_text.encode("utf-8")).hexdigest(),
+            shingle_fingerprint="atomic-source-fingerprint",
+            token_count=3,
+            workspace_id=workspace_a_id,
+        )
+        source_edge = FlowEdge(
+            edge_id="atomic-source-edge",
+            src_node_kind="source_chunk",
+            src_node_id=chunk.chunk_id,
+            dst_node_kind="resource_version",
+            dst_node_id=new_resource.node_id,
+            relation="source_similarity",
+            evidence_level="exact",
+            method="test_fixture",
+            score=1.0,
+            reason="atomic source edge",
+        )
+        self.store.replace_resource_versions_for_workspace(
+            workspace_a_id,
+            [old_resource],
+        )
+        self.store.replace_sink_candidates_for_workspace(workspace_a_id, [old_sink])
+        self.store.replace_information_flow_edges_for_workspace(
+            workspace_a_id,
+            [old_edge],
+        )
+        self.store.replace_resource_versions_for_workspace(workspace_b_id, [resource_b])
+        self.store.replace_sink_candidates_for_workspace(workspace_b_id, [sink_b])
+        self.store.replace_information_flow_edges_for_workspace(
+            workspace_b_id,
+            [edge_b],
+        )
+        state_keys = ("test.graph.fingerprint", "test.graph.version")
+        expected_state = dict(zip(state_keys, ("old-fingerprint", "old-version")))
+        next_state = dict(zip(state_keys, ("new-fingerprint", "new-version")))
+        for key, value in expected_state.items():
+            self.store.set_workspace_analysis_state(workspace_a_id, key, value)
+        old_run_id = self._completed_workspace_run(
+            workspace_a_id,
+            edges=[old_edge],
+        )
+        input_revision = self.store.get_workspace_analysis_input_revision(
+            workspace_a_id
+        )
+        new_run_id = make_analysis_run_id()
+        assignments = propagate_lineage(
+            new_run_id,
+            [source_edge, new_edge],
+        )
+
+        published_id = self.store.publish_workspace_analysis_run(
+            analysis_run_id=new_run_id,
+            detector_version="test-atomic-publish-v1",
+            config={"input_revision": input_revision},
+            workspace_id=workspace_a_id,
+            expected_input_revision=input_revision,
+            expected_previous_analysis_run_id=old_run_id,
+            expected_analysis_state=expected_state,
+            analysis_state=next_state,
+            sources=[source],
+            chunks=[chunk],
+            resources=[new_resource],
+            sinks=[new_sink],
+            artifact_edges=[new_edge],
+            source_edges=[source_edge],
+            assignments=assignments,
+            replace_graph=True,
+        )
+
+        self.assertEqual(new_run_id, published_id)
+        self.assertEqual(
+            [new_resource],
+            self.store.list_resource_versions_for_workspace(workspace_a_id),
+        )
+        self.assertEqual(
+            [new_sink],
+            self.store.list_sink_candidates_for_workspace(workspace_a_id),
+        )
+        self.assertEqual(
+            [new_edge],
+            self.store.list_information_flow_edges_for_workspace(workspace_a_id),
+        )
+        self.assertEqual(
+            {new_edge, source_edge},
+            set(self.store.list_analysis_run_flow_edges(new_run_id)),
+        )
+        self.assertEqual(
+            [source_edge],
+            self.store.list_source_binding_edges(new_run_id),
+        )
+        self.assertEqual(
+            assignments,
+            self.store.list_lineage_assignments(new_run_id),
+        )
+        self.assertEqual(
+            [source],
+            self.store.list_protected_sources_for_workspace(workspace_a_id),
+        )
+        self.assertEqual(
+            [chunk],
+            self.store.list_source_chunks_for_workspace(workspace_a_id),
+        )
+        self.assertEqual(
+            [old_edge],
+            self.store.list_analysis_run_flow_edges(old_run_id),
+        )
+        self.assertIsNotNone(self.store.get_analysis_run(new_run_id).completed_at)
+        self.assertEqual(
+            [resource_b],
+            self.store.list_resource_versions_for_workspace(workspace_b_id),
+        )
+        self.assertEqual(
+            [sink_b],
+            self.store.list_sink_candidates_for_workspace(workspace_b_id),
+        )
+        self.assertEqual(
+            [edge_b],
+            self.store.list_information_flow_edges_for_workspace(workspace_b_id),
+        )
+        for key, value in next_state.items():
+            self.assertEqual(
+                value,
+                self.store.get_workspace_analysis_state(workspace_a_id, key),
+            )
+
+    def test_offline_publish_failure_rolls_back_every_published_table(self) -> None:
+        workspace = Path(self.temporary_directory.name) / "atomic-rollback"
+        workspace_id = self._register_empty_workspace(workspace, "atomic-rollback")
+        old_resource, old_sink, old_edge = self._workspace_graph_fixture(
+            workspace_id,
+            "rollback-old",
+        )
+        new_resource, new_sink, new_edge = self._workspace_graph_fixture(
+            workspace_id,
+            "rollback-new",
+        )
+        old_source, old_chunk = self._workspace_source_fixture(
+            workspace,
+            workspace_id,
+            "rollback-old-source",
+            "old protected rollback text",
+        )
+        new_source, new_chunk = self._workspace_source_fixture(
+            workspace,
+            workspace_id,
+            "rollback-new-source",
+            "new protected rollback text",
+        )
+        new_source_edge = FlowEdge(
+            edge_id="rollback-new-source-edge",
+            src_node_kind="source_chunk",
+            src_node_id=new_chunk.chunk_id,
+            dst_node_kind="resource_version",
+            dst_node_id=new_resource.node_id,
+            relation="source_similarity",
+            evidence_level="exact",
+            method="test_fixture",
+            score=1.0,
+            reason="rollback source edge",
+        )
+        self.store.replace_sources_for_workspace(
+            workspace_id,
+            [old_source],
+            [old_chunk],
+        )
+        self.store.replace_resource_versions_for_workspace(workspace_id, [old_resource])
+        self.store.replace_sink_candidates_for_workspace(workspace_id, [old_sink])
+        self.store.replace_information_flow_edges_for_workspace(
+            workspace_id,
+            [old_edge],
+        )
+        state_keys = ("test.graph.fingerprint", "test.graph.version")
+        expected_state = dict(zip(state_keys, ("old-fingerprint", "old-version")))
+        next_state = dict(zip(state_keys, ("new-fingerprint", "new-version")))
+        for key, value in expected_state.items():
+            self.store.set_workspace_analysis_state(workspace_id, key, value)
+        old_run_id = self._completed_workspace_run(workspace_id, edges=[old_edge])
+        cursor = AnalysisCursor(
+            workspace_id=workspace_id,
+            session_id="session-atomic-rollback",
+            detector_version="runtime-v1",
+            source_digest="rollback-digest",
+            last_sequence_no=1,
+            status="ready",
+        )
+        self.store.upsert_analysis_cursor(cursor)
+        with sqlite3.connect(self.db_path) as conn:
+            old_node_snapshot_count = conn.execute(
+                "SELECT COUNT(*) FROM analysis_node_snapshots"
+            ).fetchone()[0]
+        input_revision = self.store.get_workspace_analysis_input_revision(workspace_id)
+        new_run_id = make_analysis_run_id()
+        assignments = propagate_lineage(
+            new_run_id,
+            [new_source_edge, new_edge],
+        )
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                f"""
+                CREATE TRIGGER fail_atomic_offline_publish
+                BEFORE UPDATE OF completed_at ON analysis_runs
+                WHEN NEW.analysis_run_id = '{new_run_id}'
+                  AND NEW.completed_at IS NOT NULL
+                BEGIN
+                    SELECT RAISE(ABORT, 'injected offline publish failure');
+                END
+                """
+            )
+
+        with self.assertRaisesRegex(sqlite3.IntegrityError, "injected"):
+            self.store.publish_workspace_analysis_run(
+                analysis_run_id=new_run_id,
+                detector_version="test-atomic-rollback-v1",
+                config={},
+                workspace_id=workspace_id,
+                expected_input_revision=input_revision,
+                expected_previous_analysis_run_id=old_run_id,
+                expected_analysis_state=expected_state,
+                analysis_state=next_state,
+                sources=[new_source],
+                chunks=[new_chunk],
+                resources=[new_resource],
+                sinks=[new_sink],
+                artifact_edges=[new_edge],
+                source_edges=[new_source_edge],
+                assignments=assignments,
+                replace_graph=True,
+            )
+
+        self.assertIsNone(self.store.get_analysis_run(new_run_id))
+        self.assertIsNone(self.store.get_analysis_run_graph_coverage(new_run_id))
+        self.assertEqual([], self.store.list_analysis_run_flow_edges(new_run_id))
+        self.assertEqual([], self.store.list_source_binding_edges(new_run_id))
+        self.assertEqual([], self.store.list_lineage_assignments(new_run_id))
+        self.assertEqual(
+            [old_source],
+            self.store.list_protected_sources_for_workspace(workspace_id),
+        )
+        self.assertEqual(
+            [old_chunk],
+            self.store.list_source_chunks_for_workspace(workspace_id),
+        )
+        self.assertEqual(
+            old_run_id,
+            self.store.list_analysis_runs_for_workspace(
+                workspace_id,
+                completed_only=True,
+            )[0].analysis_run_id,
+        )
+        self.assertEqual(
+            [old_resource],
+            self.store.list_resource_versions_for_workspace(workspace_id),
+        )
+        self.assertEqual(
+            [old_sink],
+            self.store.list_sink_candidates_for_workspace(workspace_id),
+        )
+        self.assertEqual(
+            [old_edge],
+            self.store.list_information_flow_edges_for_workspace(workspace_id),
+        )
+        self.assertEqual(
+            cursor,
+            self.store.get_analysis_cursor(
+                "session-atomic-rollback",
+                workspace_id=workspace_id,
+            ),
+        )
+        with sqlite3.connect(self.db_path) as conn:
+            self.assertEqual(
+                old_node_snapshot_count,
+                conn.execute(
+                    "SELECT COUNT(*) FROM analysis_node_snapshots"
+                ).fetchone()[0],
+            )
+        for key, value in expected_state.items():
+            self.assertEqual(
+                value,
+                self.store.get_workspace_analysis_state(workspace_id, key),
+            )
+
+    def test_offline_publish_cas_is_workspace_scoped_and_detects_input_drift(
+        self,
+    ) -> None:
+        base = Path(self.temporary_directory.name)
+        workspace_a = base / "publish-cas-a"
+        workspace_b = base / "publish-cas-b"
+        workspace_a_id = self._register_empty_workspace(workspace_a, "publish-cas-a")
+        self._register_empty_workspace(workspace_b, "publish-cas-b")
+        input_revision = self.store.get_workspace_analysis_input_revision(
+            workspace_a_id
+        )
+        event_b = normalize_event(
+            "pre_tool_use",
+            {
+                "session_id": "session-publish-cas-b-new",
+                "turn_id": "turn-publish-cas-b-new",
+                "tool_use_id": "tool-publish-cas-b-new",
+                "tool_name": "Search",
+                "cwd": str(workspace_b),
+                "tool_input": {"query": "other workspace"},
+            },
+        )
+        artifacts_b = build_artifacts(event_b)
+        self.store.record(event_b, artifacts_b, build_fragments(artifacts_b))
+        state = {"test.graph.fingerprint": "empty", "test.graph.version": "v1"}
+        first_run_id = make_analysis_run_id()
+
+        self.store.publish_workspace_analysis_run(
+            analysis_run_id=first_run_id,
+            detector_version="test-cas-v1",
+            config={},
+            workspace_id=workspace_a_id,
+            expected_input_revision=input_revision,
+            expected_previous_analysis_run_id=None,
+            expected_analysis_state={key: None for key in state},
+            analysis_state=state,
+            sources=None,
+            chunks=None,
+            resources=[],
+            sinks=[],
+            artifact_edges=[],
+            source_edges=[],
+            assignments=[],
+            replace_graph=True,
+        )
+
+        stale_revision = self.store.get_workspace_analysis_input_revision(
+            workspace_a_id
+        )
+        event_a = normalize_event(
+            "pre_tool_use",
+            {
+                "session_id": "session-publish-cas-a-new",
+                "turn_id": "turn-publish-cas-a-new",
+                "tool_use_id": "tool-publish-cas-a-new",
+                "tool_name": "Search",
+                "cwd": str(workspace_a),
+                "tool_input": {"query": "same workspace"},
+            },
+        )
+        artifacts_a = build_artifacts(event_a)
+        self.store.record(event_a, artifacts_a, build_fragments(artifacts_a))
+        rejected_run_id = make_analysis_run_id()
+
+        with self.assertRaisesRegex(ValueError, "input changed"):
+            self.store.publish_workspace_analysis_run(
+                analysis_run_id=rejected_run_id,
+                detector_version="test-cas-v1",
+                config={},
+                workspace_id=workspace_a_id,
+                expected_input_revision=stale_revision,
+                expected_previous_analysis_run_id=first_run_id,
+                expected_analysis_state=state,
+                analysis_state=state,
+                sources=None,
+                chunks=None,
+                resources=[],
+                sinks=[],
+                artifact_edges=[],
+                source_edges=[],
+                assignments=[],
+                replace_graph=False,
+            )
+        self.assertIsNone(self.store.get_analysis_run(rejected_run_id))
+
+    def test_workspace_analysis_input_revision_detects_same_sequence_mutation(
+        self,
+    ) -> None:
+        workspace = Path(self.temporary_directory.name) / "revision-mutation"
+        workspace_id = self._register_empty_workspace(workspace, "revision-mutation")
+        event = normalize_event(
+            "pre_tool_use",
+            {
+                "session_id": "session-revision-mutation",
+                "turn_id": "turn-revision-mutation",
+                "tool_use_id": "tool-revision-mutation",
+                "tool_name": "Search",
+                "cwd": str(workspace),
+                "tool_input": {"query": "before"},
+            },
+        )
+        artifacts = build_artifacts(event)
+        fragments = build_fragments(artifacts)
+        self.store.record(event, artifacts, fragments)
+        before = self.store.get_workspace_analysis_input_revision(workspace_id)
+        sequence_no = self.store.get_event_sequence_no(event.event_id)
+
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                """
+                UPDATE artifact_fragments
+                SET text = 'mutated without a new event'
+                WHERE fragment_id = ?
+                """,
+                (fragments[0].fragment_id,),
+            )
+
+        self.assertEqual(sequence_no, self.store.get_event_sequence_no(event.event_id))
+        self.assertNotEqual(
+            before,
+            self.store.get_workspace_analysis_input_revision(workspace_id),
+        )
+
+    def test_workspace_analysis_input_revision_uses_nonblocking_read_snapshot(
+        self,
+    ) -> None:
+        workspace = Path(self.temporary_directory.name) / "revision-read-snapshot"
+        workspace_id = self._register_empty_workspace(
+            workspace,
+            "revision-read-snapshot",
+        )
+        before = self.store.get_workspace_analysis_input_revision(workspace_id)
+        events_hashed = threading.Event()
+        release_reader = threading.Event()
+        revisions: list[str] = []
+        errors: list[BaseException] = []
+        original_update = runtime_storage._update_workspace_analysis_input_revision
+
+        def pause_after_events(digest, label, rows):
+            original_update(digest, label, rows)
+            if label == "events":
+                events_hashed.set()
+                if not release_reader.wait(timeout=2):
+                    raise RuntimeError("revision read snapshot test timed out")
+
+        def read_revision() -> None:
+            try:
+                revisions.append(
+                    self.store.get_workspace_analysis_input_revision(workspace_id)
+                )
+            except BaseException as exc:  # noqa: BLE001 - thread assertion transport
+                errors.append(exc)
+
+        with patch.object(
+            runtime_storage,
+            "_update_workspace_analysis_input_revision",
+            side_effect=pause_after_events,
+        ):
+            thread = threading.Thread(target=read_revision)
+            thread.start()
+            self.assertTrue(events_hashed.wait(timeout=2))
+            event = normalize_event(
+                "pre_tool_use",
+                {
+                    "session_id": "session-revision-read-snapshot-new",
+                    "turn_id": "turn-revision-read-snapshot-new",
+                    "tool_use_id": "tool-revision-read-snapshot-new",
+                    "tool_name": "Search",
+                    "cwd": str(workspace),
+                    "tool_input": {"query": "concurrent revision input"},
+                },
+            )
+            artifacts = build_artifacts(event)
+            started = time.perf_counter()
+            self.store.record(event, artifacts, build_fragments(artifacts))
+            hook_write_seconds = time.perf_counter() - started
+            release_reader.set()
+            thread.join(timeout=2)
+
+        self.assertFalse(thread.is_alive())
+        self.assertEqual([], errors)
+        self.assertLess(hook_write_seconds, 1.0)
+        self.assertEqual([before], revisions)
+        self.assertNotEqual(
+            before,
+            self.store.get_workspace_analysis_input_revision(workspace_id),
+        )
+
+    def test_offline_publish_evidence_hash_does_not_block_hook_writer(self) -> None:
+        workspace = Path(self.temporary_directory.name) / "publish-concurrency"
+        workspace_id = self._register_empty_workspace(workspace, "publish-concurrency")
+        input_revision = self.store.get_workspace_analysis_input_revision(workspace_id)
+        run_id = make_analysis_run_id()
+        entered_revision = threading.Event()
+        release_revision = threading.Event()
+        publish_errors: list[BaseException] = []
+        original_revision = self.store._workspace_analysis_input_revision
+
+        def slow_revision(conn, selected_workspace_id):
+            revision = original_revision(conn, selected_workspace_id)
+            entered_revision.set()
+            if not release_revision.wait(timeout=2):
+                raise RuntimeError("revision test timed out")
+            return revision
+
+        def publish() -> None:
+            try:
+                self.store.publish_workspace_analysis_run(
+                    analysis_run_id=run_id,
+                    detector_version="test-concurrency-v1",
+                    config={},
+                    workspace_id=workspace_id,
+                    expected_input_revision=input_revision,
+                    expected_previous_analysis_run_id=None,
+                    expected_analysis_state={"test.graph.version": None},
+                    analysis_state={"test.graph.version": "v1"},
+                    sources=None,
+                    chunks=None,
+                    resources=[],
+                    sinks=[],
+                    artifact_edges=[],
+                    source_edges=[],
+                    assignments=[],
+                    replace_graph=True,
+                )
+            except BaseException as exc:  # noqa: BLE001 - thread assertion transport
+                publish_errors.append(exc)
+
+        with patch.object(
+            self.store,
+            "_workspace_analysis_input_revision",
+            side_effect=slow_revision,
+        ):
+            thread = threading.Thread(target=publish)
+            thread.start()
+            self.assertTrue(entered_revision.wait(timeout=2))
+            event = normalize_event(
+                "pre_tool_use",
+                {
+                    "session_id": "session-publish-concurrency-new",
+                    "turn_id": "turn-publish-concurrency-new",
+                    "tool_use_id": "tool-publish-concurrency-new",
+                    "tool_name": "Search",
+                    "cwd": str(workspace),
+                    "tool_input": {"query": "concurrent hook write"},
+                },
+            )
+            artifacts = build_artifacts(event)
+            started = time.perf_counter()
+            self.store.record(event, artifacts, build_fragments(artifacts))
+            hook_write_seconds = time.perf_counter() - started
+            release_revision.set()
+            thread.join(timeout=2)
+
+        self.assertFalse(thread.is_alive())
+        self.assertLess(hook_write_seconds, 1.0)
+        self.assertEqual(1, len(publish_errors))
+        self.assertIsInstance(publish_errors[0], ValueError)
+        self.assertIn("input changed", str(publish_errors[0]).lower())
+        self.assertIsNone(self.store.get_analysis_run(run_id))
+        self.assertEqual(
+            event.event_id,
+            self.store.list_artifacts_for_workspace(workspace_id)[-1].event_id,
+        )
+
+    def test_offline_publish_retries_unrelated_workspace_writer(self) -> None:
+        base = Path(self.temporary_directory.name)
+        workspace_a = base / "publish-retry-a"
+        workspace_b = base / "publish-retry-b"
+        workspace_a_id = self._register_empty_workspace(workspace_a, "publish-retry-a")
+        self._register_empty_workspace(workspace_b, "publish-retry-b")
+        input_revision = self.store.get_workspace_analysis_input_revision(
+            workspace_a_id
+        )
+        run_id = make_analysis_run_id()
+        entered_revision = threading.Event()
+        release_revision = threading.Event()
+        revision_calls: list[str] = []
+        publish_errors: list[BaseException] = []
+        original_revision = self.store._workspace_analysis_input_revision
+
+        def slow_revision(conn, selected_workspace_id):
+            revision = original_revision(conn, selected_workspace_id)
+            revision_calls.append(selected_workspace_id)
+            entered_revision.set()
+            if not release_revision.wait(timeout=2):
+                raise RuntimeError("revision retry test timed out")
+            return revision
+
+        def publish() -> None:
+            try:
+                self.store.publish_workspace_analysis_run(
+                    analysis_run_id=run_id,
+                    detector_version="test-retry-v1",
+                    config={},
+                    workspace_id=workspace_a_id,
+                    expected_input_revision=input_revision,
+                    expected_previous_analysis_run_id=None,
+                    expected_analysis_state={"test.graph.version": None},
+                    analysis_state={"test.graph.version": "v1"},
+                    sources=None,
+                    chunks=None,
+                    resources=[],
+                    sinks=[],
+                    artifact_edges=[],
+                    source_edges=[],
+                    assignments=[],
+                    replace_graph=True,
+                )
+            except BaseException as exc:  # noqa: BLE001 - thread assertion transport
+                publish_errors.append(exc)
+
+        with patch.object(
+            self.store,
+            "_workspace_analysis_input_revision",
+            side_effect=slow_revision,
+        ):
+            thread = threading.Thread(target=publish)
+            thread.start()
+            self.assertTrue(entered_revision.wait(timeout=2))
+            event_b = normalize_event(
+                "pre_tool_use",
+                {
+                    "session_id": "session-publish-retry-b-new",
+                    "turn_id": "turn-publish-retry-b-new",
+                    "tool_use_id": "tool-publish-retry-b-new",
+                    "tool_name": "Search",
+                    "cwd": str(workspace_b),
+                    "tool_input": {"query": "unrelated workspace write"},
+                },
+            )
+            artifacts_b = build_artifacts(event_b)
+            started = time.perf_counter()
+            self.store.record(event_b, artifacts_b, build_fragments(artifacts_b))
+            hook_write_seconds = time.perf_counter() - started
+            release_revision.set()
+            thread.join(timeout=2)
+
+        self.assertFalse(thread.is_alive())
+        self.assertLess(hook_write_seconds, 1.0)
+        self.assertEqual([], publish_errors)
+        self.assertEqual(2, len(revision_calls))
+        run = self.store.get_analysis_run(run_id)
+        self.assertIsNotNone(run)
+        assert run is not None
+        self.assertIsNotNone(run.completed_at)
+
+    def test_offline_publish_writer_phase_keeps_hook_wait_bounded(self) -> None:
+        base = Path(self.temporary_directory.name)
+        workspace_a = base / "publish-writer-budget-a"
+        workspace_b = base / "publish-writer-budget-b"
+        workspace_a_id = self._register_empty_workspace(
+            workspace_a,
+            "publish-writer-budget-a",
+        )
+        workspace_b_id = self._register_empty_workspace(
+            workspace_b,
+            "publish-writer-budget-b",
+        )
+        resources = [
+            ResourceVersion(
+                node_id=f"writer-budget-resource-{index}",
+                path=f"generated/{index}.txt",
+                content_hash=hashlib.sha256(str(index).encode("utf-8")).hexdigest(),
+                sequence_no=index + 1,
+                session_id=None,
+                origin_tool_use_id=None,
+                workspace_id=workspace_a_id,
+            )
+            for index in range(1_000)
+        ]
+        edges = [
+            FlowEdge(
+                edge_id=f"writer-budget-edge-{index}",
+                src_node_kind="resource_version",
+                src_node_id=resources[index].node_id,
+                dst_node_kind="resource_version",
+                dst_node_id=resources[index + 1].node_id,
+                relation="updated_from",
+                evidence_level="exact",
+                method="test_fixture",
+                score=1.0,
+                reason="writer budget fixture",
+            )
+            for index in range(len(resources) - 1)
+        ]
+        input_revision = self.store.get_workspace_analysis_input_revision(
+            workspace_a_id
+        )
+        run_id = make_analysis_run_id()
+        writer_locked = threading.Event()
+        hook_ready = threading.Event()
+        publish_errors: list[BaseException] = []
+        original_replace = self.store._replace_resource_versions_for_workspace
+
+        def replace_then_release_hook(conn, workspace_id, batch):
+            original_replace(conn, workspace_id, batch)
+            writer_locked.set()
+            if not hook_ready.wait(timeout=2):
+                raise RuntimeError("writer budget test timed out")
+
+        def publish() -> None:
+            try:
+                self.store.publish_workspace_analysis_run(
+                    analysis_run_id=run_id,
+                    detector_version="test-writer-budget-v1",
+                    config={},
+                    workspace_id=workspace_a_id,
+                    expected_input_revision=input_revision,
+                    expected_previous_analysis_run_id=None,
+                    expected_analysis_state={"test.graph.version": None},
+                    analysis_state={"test.graph.version": "v1"},
+                    sources=None,
+                    chunks=None,
+                    resources=resources,
+                    sinks=[],
+                    artifact_edges=edges,
+                    source_edges=[],
+                    assignments=[],
+                    replace_graph=True,
+                )
+            except BaseException as exc:  # noqa: BLE001 - thread assertion transport
+                publish_errors.append(exc)
+
+        with patch.object(
+            self.store,
+            "_replace_resource_versions_for_workspace",
+            side_effect=replace_then_release_hook,
+        ):
+            thread = threading.Thread(target=publish)
+            thread.start()
+            self.assertTrue(writer_locked.wait(timeout=2))
+            event = normalize_event(
+                "pre_tool_use",
+                {
+                    "session_id": "session-publish-writer-budget-b-new",
+                    "turn_id": "turn-publish-writer-budget-b-new",
+                    "tool_use_id": "tool-publish-writer-budget-b-new",
+                    "tool_name": "Search",
+                    "cwd": str(workspace_b),
+                    "tool_input": {"query": "writer latency budget"},
+                },
+            )
+            artifacts = build_artifacts(event)
+            hook_ready.set()
+            started = time.perf_counter()
+            self.store.record(event, artifacts, build_fragments(artifacts))
+            hook_write_seconds = time.perf_counter() - started
+            thread.join(timeout=3)
+
+        self.assertFalse(thread.is_alive())
+        self.assertEqual([], publish_errors)
+        self.assertLess(hook_write_seconds, 1.0)
+        self.assertIsNotNone(self.store.get_analysis_run(run_id).completed_at)
+        self.assertEqual(
+            event.event_id,
+            self.store.list_artifacts_for_workspace(workspace_b_id)[-1].event_id,
+        )
+
+    def test_offline_publish_graph_reuse_preserves_runtime_state_and_detects_drift(
+        self,
+    ) -> None:
+        workspace = Path(self.temporary_directory.name) / "publish-reuse"
+        workspace_id = self._register_empty_workspace(workspace, "publish-reuse")
+        resource, sink, edge = self._workspace_graph_fixture(
+            workspace_id,
+            "publish-reuse",
+        )
+        self.store.replace_resource_versions_for_workspace(workspace_id, [resource])
+        self.store.replace_sink_candidates_for_workspace(workspace_id, [sink])
+        self.store.replace_information_flow_edges_for_workspace(workspace_id, [edge])
+        state = {"test.graph.fingerprint": "same", "test.graph.version": "v1"}
+        for key, value in state.items():
+            self.store.set_workspace_analysis_state(workspace_id, key, value)
+        cursor = AnalysisCursor(
+            workspace_id=workspace_id,
+            session_id="session-publish-reuse",
+            detector_version="runtime-v1",
+            source_digest="digest-v1",
+            last_sequence_no=1,
+            status="ready",
+        )
+        self.store.upsert_analysis_cursor(cursor)
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                """
+                CREATE TRIGGER fail_reused_graph_state_update
+                BEFORE UPDATE ON workspace_analysis_state
+                WHEN OLD.workspace_id = NEW.workspace_id
+                BEGIN
+                    SELECT RAISE(ABORT, 'reused graph rewrote state');
+                END
+                """
+            )
+        input_revision = self.store.get_workspace_analysis_input_revision(workspace_id)
+        run_id = make_analysis_run_id()
+
+        self.store.publish_workspace_analysis_run(
+            analysis_run_id=run_id,
+            detector_version="test-reuse-v1",
+            config={},
+            workspace_id=workspace_id,
+            expected_input_revision=input_revision,
+            expected_previous_analysis_run_id=None,
+            expected_analysis_state=state,
+            analysis_state=state,
+            sources=None,
+            chunks=None,
+            resources=[resource],
+            sinks=[sink],
+            artifact_edges=[edge],
+            source_edges=[],
+            assignments=[],
+            replace_graph=False,
+        )
+
+        self.assertEqual(cursor, self.store.get_analysis_cursor(
+            "session-publish-reuse",
+            workspace_id=workspace_id,
+        ))
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                """
+                UPDATE information_flow_edges
+                SET reason = 'concurrent graph drift'
+                WHERE workspace_id = ? AND edge_id = ?
+                """,
+                (workspace_id, edge.edge_id),
+            )
+        rejected_run_id = make_analysis_run_id()
+        with self.assertRaisesRegex(ValueError, "graph changed"):
+            self.store.publish_workspace_analysis_run(
+                analysis_run_id=rejected_run_id,
+                detector_version="test-reuse-v1",
+                config={},
+                workspace_id=workspace_id,
+                expected_input_revision=input_revision,
+                expected_previous_analysis_run_id=run_id,
+                expected_analysis_state=state,
+                analysis_state=state,
+                sources=None,
+                chunks=None,
+                resources=[resource],
+                sinks=[sink],
+                artifact_edges=[edge],
+                source_edges=[],
+                assignments=[],
+                replace_graph=False,
+            )
+        self.assertIsNone(self.store.get_analysis_run(rejected_run_id))
+        self.assertEqual(cursor, self.store.get_analysis_cursor(
+            "session-publish-reuse",
+            workspace_id=workspace_id,
+        ))
+
+    def test_offline_publish_rejects_state_and_previous_run_drift(self) -> None:
+        workspace = Path(self.temporary_directory.name) / "publish-generation-cas"
+        workspace_id = self._register_empty_workspace(
+            workspace,
+            "publish-generation-cas",
+        )
+        input_revision = self.store.get_workspace_analysis_input_revision(workspace_id)
+        state_key = "test.graph.version"
+        self.store.set_workspace_analysis_state(workspace_id, state_key, "concurrent")
+        state_rejected_run_id = make_analysis_run_id()
+
+        with self.assertRaisesRegex(ValueError, "state changed"):
+            self.store.publish_workspace_analysis_run(
+                analysis_run_id=state_rejected_run_id,
+                detector_version="test-generation-cas-v1",
+                config={},
+                workspace_id=workspace_id,
+                expected_input_revision=input_revision,
+                expected_previous_analysis_run_id=None,
+                expected_analysis_state={state_key: None},
+                analysis_state={state_key: "next"},
+                sources=None,
+                chunks=None,
+                resources=[],
+                sinks=[],
+                artifact_edges=[],
+                source_edges=[],
+                assignments=[],
+                replace_graph=True,
+            )
+        self.assertIsNone(self.store.get_analysis_run(state_rejected_run_id))
+
+        previous_run_id = self._completed_workspace_run(workspace_id)
+        run_rejected_id = make_analysis_run_id()
+        with self.assertRaisesRegex(ValueError, "latest offline analysis run changed"):
+            self.store.publish_workspace_analysis_run(
+                analysis_run_id=run_rejected_id,
+                detector_version="test-generation-cas-v1",
+                config={},
+                workspace_id=workspace_id,
+                expected_input_revision=input_revision,
+                expected_previous_analysis_run_id=None,
+                expected_analysis_state={state_key: "concurrent"},
+                analysis_state={state_key: "next"},
+                sources=None,
+                chunks=None,
+                resources=[],
+                sinks=[],
+                artifact_edges=[],
+                source_edges=[],
+                assignments=[],
+                replace_graph=True,
+            )
+        self.assertIsNone(self.store.get_analysis_run(run_rejected_id))
+        self.assertEqual(
+            previous_run_id,
+            self.store.list_analysis_runs_for_workspace(
+                workspace_id,
+                completed_only=True,
+            )[0].analysis_run_id,
+        )
 
     def test_search_adapter_ignores_search_output_and_non_search_tools(self) -> None:
         self._record(
@@ -8567,6 +9742,38 @@ class InformationFlowTest(unittest.TestCase):
             reason=f"test edge {identity}",
         )
         return resource, sink, edge
+
+    def _workspace_source_fixture(
+        self,
+        workspace: Path,
+        workspace_id: str,
+        identity: str,
+        text: str,
+    ) -> tuple[ProtectedSource, SourceChunk]:
+        path = f"{identity}.txt"
+        (workspace / path).write_text(text, encoding="utf-8")
+        source_id = make_scoped_source_id(workspace_id, identity)
+        source = ProtectedSource(
+            source_id=source_id,
+            source_key=identity,
+            path=path,
+            source_type="file",
+            sensitivity="high",
+            policy_tags=("confidential",),
+            workspace_id=workspace_id,
+        )
+        chunk = SourceChunk(
+            chunk_id=make_source_chunk_id(source_id, 0, text),
+            source_id=source_id,
+            ordinal=0,
+            text=text,
+            normalized_text=text,
+            text_hash=hashlib.sha256(text.encode("utf-8")).hexdigest(),
+            shingle_fingerprint=f"{identity}-fingerprint",
+            token_count=len(text.split()),
+            workspace_id=workspace_id,
+        )
+        return source, chunk
 
     def _record_exact_pair(
         self,

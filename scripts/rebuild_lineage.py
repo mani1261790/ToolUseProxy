@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -27,7 +29,10 @@ from hook_monitor.analysis.query import (  # noqa: E402
 from hook_monitor.analysis.source_index import load_sources_and_chunks  # noqa: E402
 from hook_monitor.runtime.fragments import build_artifact_fragments  # noqa: E402
 from hook_monitor.runtime.source_config import DEFAULT_CONFIG_PATH  # noqa: E402
-from hook_monitor.runtime.storage import EventStore  # noqa: E402
+from hook_monitor.runtime.storage import (  # noqa: E402
+    EventStore,
+    make_analysis_run_id,
+)
 
 
 _MCP_PROFILE_GRAPH_VERSION = (
@@ -53,17 +58,40 @@ def main() -> int:
     workspace_id = workspace.workspace_id
     workspace_root = Path(workspace.canonical_root)
 
-    # 旧ログにもfragmentを追加できるよう、artifactから毎回idempotentに補完する。
-    artifacts = store.list_artifacts_for_workspace(workspace_id)
-    fragments = [
-        fragment
-        for artifact in artifacts
-        for fragment in build_artifact_fragments(artifact)
-    ]
-    store.upsert_artifact_fragments(fragments)
-    contexts = store.list_artifact_contexts_for_workspace(workspace_id)
-    operations = tuple(store.list_tool_operations_for_workspace(workspace_id))
-    snapshots = tuple(store.list_resource_snapshots_for_workspace(workspace_id))
+    # 旧ログにもfragmentを追加できるよう、artifactからidempotentに補完する。
+    # 同じworkspaceへHookが書き込んだ場合は、混在した入力をpublishしない。
+    for _ in range(3):
+        artifacts = store.list_artifacts_for_workspace(workspace_id)
+        fragments = [
+            fragment
+            for artifact in artifacts
+            for fragment in build_artifact_fragments(artifact)
+        ]
+        store.upsert_artifact_fragments(fragments)
+        try:
+            input_revision = store.get_workspace_analysis_input_revision(workspace_id)
+        except ValueError as exc:
+            if "artifact fragment backfill" not in str(exc):
+                raise
+            continue
+        contexts = store.list_artifact_contexts_for_workspace(workspace_id)
+        operations = tuple(store.list_tool_operations_for_workspace(workspace_id))
+        snapshots = tuple(store.list_resource_snapshots_for_workspace(workspace_id))
+        try:
+            loaded_revision = store.get_workspace_analysis_input_revision(workspace_id)
+        except ValueError as exc:
+            if "artifact fragment backfill" not in str(exc):
+                raise
+            continue
+        if loaded_revision == input_revision:
+            break
+    else:
+        print(
+            "workspace analysis input changed while loading; retry the rebuild",
+            file=sys.stderr,
+        )
+        return 1
+
     adapter_result = run_adapters(
         contexts,
         workspace_root,
@@ -78,49 +106,34 @@ def main() -> int:
             config_path,
             workspace_id=workspace_id,
         )
+        source_catalog_fingerprint = _source_catalog_fingerprint(sources, chunks)
     else:
         sources = store.list_protected_sources_for_workspace(workspace_id)
         chunks = store.list_source_chunks_for_workspace(workspace_id)
-
-    if config_present:
-        store.replace_sources_for_workspace(workspace_id, sources, chunks)
-    store.replace_resource_versions_for_workspace(
-        workspace_id,
-        list(adapter_result.resources),
-    )
-    store.replace_sink_candidates_for_workspace(
-        workspace_id,
-        list(adapter_result.sinks),
-    )
+        source_catalog_fingerprint = _source_catalog_fingerprint(sources, chunks)
 
     graph_fingerprint = _graph_fingerprint(contexts, operations, snapshots)
-    graph_is_stale = (
-        args.rebuild_graph
-        or store.get_workspace_analysis_state(
+    expected_analysis_state = {
+        GRAPH_FINGERPRINT_KEY: store.get_workspace_analysis_state(
             workspace_id,
             GRAPH_FINGERPRINT_KEY,
-        )
-        != graph_fingerprint
-        or store.get_workspace_analysis_state(workspace_id, GRAPH_VERSION_KEY)
-        != DETECTOR_VERSION
+        ),
+        GRAPH_VERSION_KEY: store.get_workspace_analysis_state(
+            workspace_id,
+            GRAPH_VERSION_KEY,
+        ),
+    }
+    analysis_state = {
+        GRAPH_FINGERPRINT_KEY: graph_fingerprint,
+        GRAPH_VERSION_KEY: DETECTOR_VERSION,
+    }
+    graph_is_stale = (
+        args.rebuild_graph
+        or expected_analysis_state != analysis_state
     )
     if graph_is_stale:
         similarity_edges = build_artifact_flow_edges(contexts)
         artifact_edges = list(similarity_edges) + list(adapter_result.edges)
-        store.replace_information_flow_edges_for_workspace(
-            workspace_id,
-            artifact_edges,
-        )
-        store.set_workspace_analysis_state(
-            workspace_id,
-            GRAPH_FINGERPRINT_KEY,
-            graph_fingerprint,
-        )
-        store.set_workspace_analysis_state(
-            workspace_id,
-            GRAPH_VERSION_KEY,
-            DETECTOR_VERSION,
-        )
         graph_status = "rebuilt"
     else:
         artifact_edges = store.list_information_flow_edges_for_workspace(workspace_id)
@@ -134,29 +147,81 @@ def main() -> int:
     )
     source_edges = content_source_edges + path_source_edges
 
-    analysis_run_id = store.start_workspace_analysis_run(
-        detector_version=DETECTOR_VERSION,
-        config={
-            "minimum_path_score": args.minimum_path_score,
-            "source_count": len(sources),
-            "source_chunk_count": len(chunks),
-            "graph_fingerprint": graph_fingerprint,
-        },
-        workspace_id=workspace_id,
-    )
-    store.replace_analysis_run_graph(
-        analysis_run_id,
-        source_edges + artifact_edges,
-        coverage="full",
-    )
-    store.upsert_source_binding_edges(analysis_run_id, source_edges)
+    analysis_run_id = make_analysis_run_id()
     assignments = propagate_lineage(
         analysis_run_id,
         source_edges + artifact_edges,
         minimum_path_score=args.minimum_path_score,
     )
-    store.upsert_lineage_assignments(assignments)
-    store.complete_analysis_run(analysis_run_id)
+    previous_runs = [
+        run
+        for run in store.list_analysis_runs_for_workspace(
+            workspace_id,
+            completed_only=True,
+        )
+        if run.session_id is None
+    ]
+    previous_run_id = (
+        None if not previous_runs else previous_runs[0].analysis_run_id
+    )
+    if config_path.exists() != config_present:
+        print(
+            "offline analysis source catalog presence changed before publish; "
+            "retry the rebuild",
+            file=sys.stderr,
+        )
+        return 1
+    if config_present:
+        try:
+            current_sources, current_chunks = load_sources_and_chunks(
+                workspace_root,
+                config_path,
+                workspace_id=workspace_id,
+            )
+        except (OSError, ValueError) as exc:
+            print(
+                f"offline analysis source catalog changed before publish: {exc}",
+                file=sys.stderr,
+            )
+            return 1
+        if (
+            _source_catalog_fingerprint(current_sources, current_chunks)
+            != source_catalog_fingerprint
+        ):
+            print(
+                "offline analysis source catalog changed before publish; retry the rebuild",
+                file=sys.stderr,
+            )
+            return 1
+    try:
+        store.publish_workspace_analysis_run(
+            analysis_run_id=analysis_run_id,
+            detector_version=DETECTOR_VERSION,
+            config={
+                "minimum_path_score": args.minimum_path_score,
+                "source_count": len(sources),
+                "source_chunk_count": len(chunks),
+                "source_catalog_fingerprint": source_catalog_fingerprint,
+                "graph_fingerprint": graph_fingerprint,
+                "input_revision": input_revision,
+            },
+            workspace_id=workspace_id,
+            expected_input_revision=input_revision,
+            expected_previous_analysis_run_id=previous_run_id,
+            expected_analysis_state=expected_analysis_state,
+            analysis_state=analysis_state,
+            sources=sources if config_present else None,
+            chunks=chunks if config_present else None,
+            resources=list(adapter_result.resources),
+            sinks=list(adapter_result.sinks),
+            artifact_edges=artifact_edges,
+            source_edges=source_edges,
+            assignments=assignments,
+            replace_graph=graph_is_stale,
+        )
+    except (ValueError, sqlite3.OperationalError) as exc:
+        print(f"offline analysis publish rejected: {exc}", file=sys.stderr)
+        return 1
 
     print(
         " ".join(
@@ -249,6 +314,49 @@ def _graph_fingerprint(contexts, operations=(), snapshots=()) -> str:
         ):
             digest.update((value or "-").encode("utf-8"))
             digest.update(b"\0")
+        digest.update(b"\n")
+    return digest.hexdigest()
+
+
+def _source_catalog_fingerprint(sources, chunks) -> str:
+    digest = hashlib.sha256()
+    digest.update(b"workspace-source-catalog-v1\n")
+    for source in sorted(sources, key=lambda item: item.source_id):
+        digest.update(
+            json.dumps(
+                (
+                    source.source_id,
+                    source.path,
+                    source.source_type,
+                    source.sensitivity,
+                    source.policy_tags,
+                    source.workspace_id,
+                    source.source_key,
+                ),
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        )
+        digest.update(b"\n")
+    digest.update(b"chunks\n")
+    for chunk in sorted(chunks, key=lambda item: item.chunk_id):
+        digest.update(
+            json.dumps(
+                (
+                    chunk.chunk_id,
+                    chunk.source_id,
+                    chunk.ordinal,
+                    chunk.text,
+                    chunk.normalized_text,
+                    chunk.text_hash,
+                    chunk.shingle_fingerprint,
+                    chunk.token_count,
+                    chunk.workspace_id,
+                ),
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        )
         digest.update(b"\n")
     return digest.hexdigest()
 

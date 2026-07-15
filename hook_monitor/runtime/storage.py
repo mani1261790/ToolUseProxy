@@ -7,9 +7,10 @@ import re
 import sqlite3
 import time
 import uuid
+from contextlib import nullcontext
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from hook_monitor.analysis.adapters.mcp_profiles import (
     DEFAULT_MCP_INPUT_LIMITS,
@@ -82,6 +83,7 @@ if TYPE_CHECKING:
 
 DEFAULT_DB_PATH = Path(".tooluseproxy/events.db")
 LEGACY_DERIVED_WORKSPACE_ID = "legacy_unscoped"
+WORKSPACE_ANALYSIS_INPUT_REVISION_VERSION = "workspace-analysis-input-v1"
 REDACTION_AUDIT_BUSY_TIMEOUT_MS = 10
 REDACTION_AUDIT_EVENT_PAYLOAD_MAX_BYTES = 1024 * 1024
 REDACTION_AUDIT_MAX_CURRENT_SINKS = 2 * DEFAULT_MCP_INPUT_LIMITS.max_fields
@@ -215,6 +217,11 @@ _REDACTION_DECISION_LINK_SELECT_COLUMNS = """
     metadata_sha256,
     created_at
 """
+
+
+def make_analysis_run_id() -> str:
+    """Create an analysis run identity without publishing a database row."""
+    return uuid.uuid4().hex
 
 
 @dataclass(frozen=True)
@@ -2078,30 +2085,44 @@ class EventStore:
         _validate_workspace_source_catalog(workspace_id, sources, chunks)
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            workspace_row = conn.execute(
-                "SELECT canonical_root FROM workspaces WHERE workspace_id = ?",
-                (workspace_id,),
-            ).fetchone()
-            if workspace_row is None:
-                raise ValueError("workspace source catalog requires a registered workspace")
-            workspace_root = workspace_row[0]
-            for source in sources:
-                resolve_protected_source_path(workspace_root, source.path)
-            self._reject_cross_workspace_source_catalog_collisions(
+            self._replace_sources_for_workspace(
                 conn,
                 workspace_id,
                 sources,
                 chunks,
             )
-            conn.execute(
-                "DELETE FROM source_chunks WHERE workspace_id = ?",
-                (workspace_id,),
-            )
-            conn.execute(
-                "DELETE FROM protected_sources WHERE workspace_id = ?",
-                (workspace_id,),
-            )
-            self._write_sources(conn, sources, chunks)
+
+    def _replace_sources_for_workspace(
+        self,
+        conn: sqlite3.Connection,
+        workspace_id: str,
+        sources: list[ProtectedSource],
+        chunks: list[SourceChunk],
+    ) -> None:
+        workspace_row = conn.execute(
+            "SELECT canonical_root FROM workspaces WHERE workspace_id = ?",
+            (workspace_id,),
+        ).fetchone()
+        if workspace_row is None:
+            raise ValueError("workspace source catalog requires a registered workspace")
+        workspace_root = workspace_row[0]
+        for source in sources:
+            resolve_protected_source_path(workspace_root, source.path)
+        self._reject_cross_workspace_source_catalog_collisions(
+            conn,
+            workspace_id,
+            sources,
+            chunks,
+        )
+        conn.execute(
+            "DELETE FROM source_chunks WHERE workspace_id = ?",
+            (workspace_id,),
+        )
+        conn.execute(
+            "DELETE FROM protected_sources WHERE workspace_id = ?",
+            (workspace_id,),
+        )
+        self._write_sources(conn, sources, chunks)
 
     def _reject_legacy_source_catalog_collisions(
         self,
@@ -2381,9 +2402,258 @@ class EventStore:
             )
         return analysis_run_id
 
-    def complete_analysis_run(self, analysis_run_id: str) -> None:
+    def publish_workspace_analysis_run(
+        self,
+        *,
+        analysis_run_id: str,
+        detector_version: str,
+        config: dict[str, object],
+        workspace_id: str,
+        expected_input_revision: str,
+        expected_previous_analysis_run_id: str | None,
+        expected_analysis_state: dict[str, str | None],
+        analysis_state: dict[str, str],
+        sources: list[ProtectedSource] | None,
+        chunks: list[SourceChunk] | None,
+        resources: list[ResourceVersion],
+        sinks: list[SinkCandidate],
+        artifact_edges: list[FlowEdge],
+        source_edges: list[FlowEdge],
+        assignments: list[LineageAssignment],
+        replace_graph: bool,
+        _busy_retry_count: int = 0,
+    ) -> str:
+        """Atomically promote one fully computed offline workspace analysis."""
+        if not isinstance(_busy_retry_count, int) or not 0 <= _busy_retry_count <= 2:
+            raise ValueError("offline publish retry count is invalid")
+        if re.fullmatch(r"[0-9a-f]{32}", analysis_run_id) is None:
+            raise ValueError("offline analysis run id is invalid")
+        if not isinstance(detector_version, str) or not detector_version:
+            raise ValueError("offline detector version is invalid")
+        if _LOWER_SHA256_RE.fullmatch(expected_input_revision) is None:
+            raise ValueError("offline analysis input revision is invalid")
+        if (sources is None) != (chunks is None):
+            raise ValueError("offline source catalog replacement is incomplete")
+        if sources is not None and chunks is not None:
+            _validate_workspace_source_catalog(workspace_id, sources, chunks)
+        if any(resource.workspace_id != workspace_id for resource in resources):
+            raise ValueError("resource version workspace does not match publish scope")
+        if any(sink.workspace_id != workspace_id for sink in sinks):
+            raise ValueError("sink candidate workspace does not match publish scope")
+        _validate_node_workspace_owners(
+            [(resource.node_id, resource.workspace_id) for resource in resources]
+        )
+        _validate_node_workspace_owners(
+            [(sink.node_id, sink.workspace_id) for sink in sinks]
+        )
+        if any(
+            assignment.analysis_run_id != analysis_run_id
+            for assignment in assignments
+        ):
+            raise ValueError("lineage assignment does not match offline analysis run")
+        if (
+            not expected_analysis_state
+            or set(expected_analysis_state) != set(analysis_state)
+            or any(
+                not isinstance(key, str) or not key
+                for key in expected_analysis_state
+            )
+            or any(
+                value is not None and not isinstance(value, str)
+                for value in expected_analysis_state.values()
+            )
+            or any(not isinstance(value, str) for value in analysis_state.values())
+        ):
+            raise ValueError("offline analysis state transition is invalid")
+        if not replace_graph and expected_analysis_state != analysis_state:
+            raise ValueError("reused offline graph cannot change analysis state")
+        config_json = json.dumps(config, ensure_ascii=False, sort_keys=True)
+
         with self._connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
+            # Hash and CAS against one WAL read snapshot without blocking Hook writers.
+            # If another writer commits before the first promote write, SQLite refuses
+            # the stale read-to-write upgrade and the whole publication is retried.
+            conn.execute("BEGIN")
+            self._validate_registered_workspace(conn, workspace_id)
+            current_input_revision = self._workspace_analysis_input_revision(
+                conn,
+                workspace_id,
+            )
+            if current_input_revision != expected_input_revision:
+                raise ValueError("workspace analysis input changed before publish")
+
+            previous_run_row = conn.execute(
+                """
+                SELECT analysis_run_id
+                FROM analysis_runs
+                WHERE workspace_id = ?
+                  AND session_id IS NULL
+                  AND completed_at IS NOT NULL
+                ORDER BY started_at DESC, rowid DESC
+                LIMIT 1
+                """,
+                (workspace_id,),
+            ).fetchone()
+            previous_run_id = None if previous_run_row is None else previous_run_row[0]
+            if previous_run_id != expected_previous_analysis_run_id:
+                raise ValueError("latest offline analysis run changed before publish")
+
+            for key, expected_value in sorted(expected_analysis_state.items()):
+                state_row = conn.execute(
+                    """
+                    SELECT value
+                    FROM workspace_analysis_state
+                    WHERE workspace_id = ? AND key = ?
+                    """,
+                    (workspace_id, key),
+                ).fetchone()
+                current_value = None if state_row is None else str(state_row[0])
+                if current_value != expected_value:
+                    raise ValueError("workspace analysis state changed before publish")
+
+            try:
+                if sources is not None and chunks is not None:
+                    self._replace_sources_for_workspace(
+                        conn,
+                        workspace_id,
+                        sources,
+                        chunks,
+                    )
+                self._replace_resource_versions_for_workspace(
+                    conn,
+                    workspace_id,
+                    resources,
+                )
+                self._replace_sink_candidates_for_workspace(
+                    conn,
+                    workspace_id,
+                    sinks,
+                )
+            except sqlite3.OperationalError as exc:
+                if _sqlite_is_busy(exc) and _busy_retry_count < 2:
+                    conn.rollback()
+                    return self.publish_workspace_analysis_run(
+                        analysis_run_id=analysis_run_id,
+                        detector_version=detector_version,
+                        config=config,
+                        workspace_id=workspace_id,
+                        expected_input_revision=expected_input_revision,
+                        expected_previous_analysis_run_id=(
+                            expected_previous_analysis_run_id
+                        ),
+                        expected_analysis_state=expected_analysis_state,
+                        analysis_state=analysis_state,
+                        sources=sources,
+                        chunks=chunks,
+                        resources=resources,
+                        sinks=sinks,
+                        artifact_edges=artifact_edges,
+                        source_edges=source_edges,
+                        assignments=assignments,
+                        replace_graph=replace_graph,
+                        _busy_retry_count=_busy_retry_count + 1,
+                    )
+                raise
+            if replace_graph:
+                self._replace_information_flow_edges_for_workspace(
+                    conn,
+                    workspace_id,
+                    artifact_edges,
+                )
+            else:
+                self._validate_reused_workspace_graph(
+                    conn,
+                    workspace_id,
+                    artifact_edges,
+                )
+
+            conn.execute(
+                """
+                INSERT INTO analysis_runs (
+                    analysis_run_id,
+                    detector_version,
+                    config_json,
+                    workspace_id,
+                    session_id
+                ) VALUES (?, ?, ?, ?, NULL)
+                """,
+                (
+                    analysis_run_id,
+                    detector_version,
+                    config_json,
+                    workspace_id,
+                ),
+            )
+            self.replace_analysis_run_graph(
+                analysis_run_id,
+                source_edges + artifact_edges,
+                coverage="full",
+                _connection=conn,
+            )
+            self.upsert_source_binding_edges(
+                analysis_run_id,
+                source_edges,
+                _connection=conn,
+            )
+            self.upsert_lineage_assignments(
+                assignments,
+                _connection=conn,
+            )
+            if replace_graph:
+                for key, value in sorted(analysis_state.items()):
+                    self._set_workspace_analysis_state(
+                        conn,
+                        workspace_id,
+                        key,
+                        value,
+                    )
+            self.complete_analysis_run(
+                analysis_run_id,
+                _connection=conn,
+            )
+        return analysis_run_id
+
+    def _validate_reused_workspace_graph(
+        self,
+        conn: sqlite3.Connection,
+        workspace_id: str,
+        edges: list[FlowEdge],
+    ) -> None:
+        expected: dict[str, tuple[object, ...]] = {}
+        for edge in edges:
+            values = _flow_edge_values(edge)[1:]
+            previous = expected.get(edge.edge_id)
+            if previous is not None and previous != values:
+                raise ValueError("reused workspace graph has conflicting edge payloads")
+            expected[edge.edge_id] = values
+        rows = conn.execute(
+            """
+            SELECT edge_id, src_node_kind, src_node_id,
+                   dst_node_kind, dst_node_id, relation,
+                   evidence_level, method, score, reason
+            FROM information_flow_edges
+            WHERE workspace_id = ?
+            ORDER BY edge_id
+            """,
+            (workspace_id,),
+        ).fetchall()
+        current = {row[0]: tuple(row[1:]) for row in rows}
+        if current != expected:
+            raise ValueError("reused workspace graph changed before publish")
+
+    def complete_analysis_run(
+        self,
+        analysis_run_id: str,
+        *,
+        _connection: sqlite3.Connection | None = None,
+    ) -> None:
+        owns_connection = _connection is None
+        connection_context = (
+            self._connect() if owns_connection else nullcontext(_connection)
+        )
+        with connection_context as conn:
+            if owns_connection:
+                conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
                 """
                 SELECT workspace_id, session_id, completed_at
@@ -2543,6 +2813,7 @@ class EventStore:
         edges: list[FlowEdge],
         *,
         coverage: str = "full",
+        _connection: sqlite3.Connection | None = None,
     ) -> None:
         if coverage not in {"full", "lineage"}:
             raise ValueError("analysis run graph coverage is invalid")
@@ -2556,8 +2827,13 @@ class EventStore:
                 raise ValueError("analysis run edge has conflicting batch payloads")
             batch[edge.edge_id] = values
 
-        with self._connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
+        owns_connection = _connection is None
+        connection_context = (
+            self._connect() if owns_connection else nullcontext(_connection)
+        )
+        with connection_context as conn:
+            if owns_connection:
+                conn.execute("BEGIN IMMEDIATE")
             run = conn.execute(
                 """
                 SELECT workspace_id, completed_at
@@ -4958,59 +5234,68 @@ class EventStore:
     ) -> None:
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            self._validate_registered_workspace(conn, workspace_id)
-            self._reject_cross_workspace_flow_edge_collisions(
+            self._replace_information_flow_edges_for_workspace(
                 conn,
                 workspace_id,
                 edges,
             )
-            self._validate_analysis_run_graph_node_owners(
-                conn,
+
+    def _replace_information_flow_edges_for_workspace(
+        self,
+        conn: sqlite3.Connection,
+        workspace_id: str,
+        edges: list[FlowEdge],
+    ) -> None:
+        self._validate_registered_workspace(conn, workspace_id)
+        self._reject_cross_workspace_flow_edge_collisions(
+            conn,
+            workspace_id,
+            edges,
+        )
+        self._validate_analysis_run_graph_node_owners(
+            conn,
+            workspace_id,
+            edges,
+        )
+        for table in (
+            "information_flow_edge_scopes",
+            "analysis_cursors",
+            "runtime_lineage_state",
+            "runtime_source_binding_edges",
+            "information_flow_edges",
+        ):
+            conn.execute(
+                f"DELETE FROM {table} WHERE workspace_id = ?",
+                (workspace_id,),
+            )
+        conn.executemany(
+            """
+            INSERT INTO information_flow_edges (
                 workspace_id,
-                edges,
-            )
-            for table in (
-                "information_flow_edge_scopes",
-                "analysis_cursors",
-                "runtime_lineage_state",
-                "runtime_source_binding_edges",
-                "information_flow_edges",
-            ):
-                conn.execute(
-                    f"DELETE FROM {table} WHERE workspace_id = ?",
-                    (workspace_id,),
-                )
-            conn.executemany(
-                """
-                INSERT INTO information_flow_edges (
-                    workspace_id,
-                    edge_id,
-                    src_node_kind,
-                    src_node_id,
-                    dst_node_kind,
-                    dst_node_id,
-                    relation,
-                    evidence_level,
-                    method,
-                    score,
-                    reason
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(workspace_id, edge_id) DO UPDATE SET
-                    src_node_kind = excluded.src_node_kind,
-                    src_node_id = excluded.src_node_id,
-                    dst_node_kind = excluded.dst_node_kind,
-                    dst_node_id = excluded.dst_node_id,
-                    relation = excluded.relation,
-                    evidence_level = excluded.evidence_level,
-                    method = excluded.method,
-                    score = excluded.score,
-                    reason = excluded.reason
-                """,
-                [
-                    (workspace_id, *_flow_edge_values(edge))
-                    for edge in edges
-                ],
-            )
+                edge_id,
+                src_node_kind,
+                src_node_id,
+                dst_node_kind,
+                dst_node_id,
+                relation,
+                evidence_level,
+                method,
+                score,
+                reason
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(workspace_id, edge_id) DO UPDATE SET
+                src_node_kind = excluded.src_node_kind,
+                src_node_id = excluded.src_node_id,
+                dst_node_kind = excluded.dst_node_kind,
+                dst_node_id = excluded.dst_node_id,
+                relation = excluded.relation,
+                evidence_level = excluded.evidence_level,
+                method = excluded.method,
+                score = excluded.score,
+                reason = excluded.reason
+            """,
+            [(workspace_id, *_flow_edge_values(edge)) for edge in edges],
+        )
 
     def upsert_information_flow_edges_for_session(
         self,
@@ -5232,34 +5517,46 @@ class EventStore:
         _validate_node_workspace_owners(nodes)
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            self._validate_registered_workspace(conn, workspace_id)
-            self._reject_cross_workspace_node_collisions(
+            self._replace_resource_versions_for_workspace(
                 conn,
-                "resource_versions",
-                [(node_id, workspace_id) for node_id, _ in nodes],
+                workspace_id,
+                resources,
             )
-            conn.execute(
-                "DELETE FROM resource_versions WHERE workspace_id = ?",
-                (workspace_id,),
-            )
-            conn.executemany(
-                """
-                INSERT INTO resource_versions (
-                    node_id,
-                    workspace_id,
-                    path,
-                    content_hash,
-                    sequence_no,
-                    session_id,
-                    origin_tool_use_id,
-                    operation_id,
-                    operation_index,
-                    snapshot_id,
-                    resource_state
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                [_resource_values(resource) for resource in resources],
-            )
+
+    def _replace_resource_versions_for_workspace(
+        self,
+        conn: sqlite3.Connection,
+        workspace_id: str,
+        resources: list[ResourceVersion],
+    ) -> None:
+        self._validate_registered_workspace(conn, workspace_id)
+        self._reject_cross_workspace_node_collisions(
+            conn,
+            "resource_versions",
+            [(resource.node_id, workspace_id) for resource in resources],
+        )
+        conn.execute(
+            "DELETE FROM resource_versions WHERE workspace_id = ?",
+            (workspace_id,),
+        )
+        conn.executemany(
+            """
+            INSERT INTO resource_versions (
+                node_id,
+                workspace_id,
+                path,
+                content_hash,
+                sequence_no,
+                session_id,
+                origin_tool_use_id,
+                operation_id,
+                operation_index,
+                snapshot_id,
+                resource_state
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [_resource_values(resource) for resource in resources],
+        )
 
     def upsert_resource_versions(
         self,
@@ -5383,32 +5680,44 @@ class EventStore:
         _validate_node_workspace_owners(nodes)
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            self._validate_registered_workspace(conn, workspace_id)
-            self._reject_cross_workspace_node_collisions(
+            self._replace_sink_candidates_for_workspace(
                 conn,
-                "sink_candidates",
-                [(node_id, workspace_id) for node_id, _ in nodes],
+                workspace_id,
+                sinks,
             )
-            conn.execute(
-                "DELETE FROM sink_candidates WHERE workspace_id = ?",
-                (workspace_id,),
-            )
-            conn.executemany(
-                """
-                INSERT INTO sink_candidates (
-                    node_id,
-                    workspace_id,
-                    sink_type,
-                    label,
-                    tool_name,
-                    tool_use_id,
-                    session_id,
-                    sequence_no,
-                    metadata_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                [_sink_values(sink) for sink in sinks],
-            )
+
+    def _replace_sink_candidates_for_workspace(
+        self,
+        conn: sqlite3.Connection,
+        workspace_id: str,
+        sinks: list[SinkCandidate],
+    ) -> None:
+        self._validate_registered_workspace(conn, workspace_id)
+        self._reject_cross_workspace_node_collisions(
+            conn,
+            "sink_candidates",
+            [(sink.node_id, workspace_id) for sink in sinks],
+        )
+        conn.execute(
+            "DELETE FROM sink_candidates WHERE workspace_id = ?",
+            (workspace_id,),
+        )
+        conn.executemany(
+            """
+            INSERT INTO sink_candidates (
+                node_id,
+                workspace_id,
+                sink_type,
+                label,
+                tool_name,
+                tool_use_id,
+                session_id,
+                sequence_no,
+                metadata_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [_sink_values(sink) for sink in sinks],
+        )
 
     def upsert_sink_candidates(
         self,
@@ -5589,6 +5898,8 @@ class EventStore:
         self,
         analysis_run_id: str,
         edges: list[FlowEdge],
+        *,
+        _connection: sqlite3.Connection | None = None,
     ) -> None:
         batch: dict[str, tuple[object, ...]] = {}
         for edge in edges:
@@ -5599,8 +5910,13 @@ class EventStore:
             if previous is not None and previous != values:
                 raise ValueError("source binding edge has conflicting batch payloads")
             batch[edge.edge_id] = values
-        with self._connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
+        owns_connection = _connection is None
+        connection_context = (
+            self._connect() if owns_connection else nullcontext(_connection)
+        )
+        with connection_context as conn:
+            if owns_connection:
+                conn.execute("BEGIN IMMEDIATE")
             workspace_id, session_id = self._validate_mutable_analysis_run(
                 conn,
                 analysis_run_id,
@@ -6589,16 +6905,30 @@ class EventStore:
         value: str,
     ) -> None:
         with self._connect() as conn:
-            conn.execute(
-                """
-                INSERT INTO workspace_analysis_state (workspace_id, key, value)
-                VALUES (?, ?, ?)
-                ON CONFLICT(workspace_id, key) DO UPDATE SET
-                    value = excluded.value,
-                    updated_at = CURRENT_TIMESTAMP
-                """,
-                (workspace_id, key, value),
+            self._set_workspace_analysis_state(
+                conn,
+                workspace_id,
+                key,
+                value,
             )
+
+    def _set_workspace_analysis_state(
+        self,
+        conn: sqlite3.Connection,
+        workspace_id: str,
+        key: str,
+        value: str,
+    ) -> None:
+        conn.execute(
+            """
+            INSERT INTO workspace_analysis_state (workspace_id, key, value)
+            VALUES (?, ?, ?)
+            ON CONFLICT(workspace_id, key) DO UPDATE SET
+                value = excluded.value,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (workspace_id, key, value),
+        )
 
     def get_analysis_cursor(
         self,
@@ -6784,6 +7114,8 @@ class EventStore:
     def upsert_lineage_assignments(
         self,
         assignments: list[LineageAssignment],
+        *,
+        _connection: sqlite3.Connection | None = None,
     ) -> None:
         if not assignments:
             return
@@ -6793,8 +7125,13 @@ class EventStore:
         if len(analysis_run_ids) != 1:
             raise ValueError("lineage assignments span multiple analysis runs")
         analysis_run_id = next(iter(analysis_run_ids))
-        with self._connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
+        owns_connection = _connection is None
+        connection_context = (
+            self._connect() if owns_connection else nullcontext(_connection)
+        )
+        with connection_context as conn:
+            if owns_connection:
+                conn.execute("BEGIN IMMEDIATE")
             workspace_id, _ = self._validate_mutable_analysis_run(
                 conn,
                 analysis_run_id,
@@ -7051,6 +7388,174 @@ class EventStore:
         if row is None:
             raise KeyError(f"event not found: {event_id}")
         return row[0]
+
+    def get_workspace_analysis_input_revision(self, workspace_id: str) -> str:
+        """Hash the DB evidence consumed by one offline workspace rebuild."""
+        with self._connect() as conn:
+            conn.execute("BEGIN")
+            self._validate_registered_workspace(conn, workspace_id)
+            return self._workspace_analysis_input_revision(conn, workspace_id)
+
+    def _workspace_analysis_input_revision(
+        self,
+        conn: sqlite3.Connection,
+        workspace_id: str,
+    ) -> str:
+        missing_root = conn.execute(
+            """
+            SELECT a.artifact_id
+            FROM artifacts AS a
+            JOIN events AS e ON e.event_id = a.event_id
+            WHERE e.workspace_id = ?
+              AND e.workspace_status = 'ready'
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM artifact_fragments AS fragment
+                  WHERE fragment.artifact_id = a.artifact_id
+                    AND fragment.json_pointer = '/'
+              )
+            LIMIT 1
+            """,
+            (workspace_id,),
+        ).fetchone()
+        if missing_root is not None:
+            raise ValueError(
+                "workspace analysis evidence requires artifact fragment backfill"
+            )
+
+        digest = hashlib.sha256()
+        digest.update(WORKSPACE_ANALYSIS_INPUT_REVISION_VERSION.encode("ascii"))
+        digest.update(b"\n")
+        queries = (
+            (
+                "workspace",
+                """
+                SELECT workspace_id, canonical_root, lexical_root, discovered_by
+                FROM workspaces
+                WHERE workspace_id = ?
+                ORDER BY workspace_id
+                """,
+            ),
+            (
+                "events",
+                """
+                SELECT event_id, phase, session_id, turn_id, tool_use_id,
+                       tool_name, cwd, model, permission_mode, transcript_path,
+                       payload_json, sequence_no, stop_hook_active, workspace_id,
+                       workspace_root, workspace_lexical_root,
+                       workspace_execution_cwd, workspace_status,
+                       workspace_source, workspace_namespace_id
+                FROM events
+                WHERE workspace_id = ? AND workspace_status = 'ready'
+                ORDER BY sequence_no, event_id
+                """,
+            ),
+            (
+                "artifacts",
+                """
+                SELECT a.artifact_id, a.event_id, a.role, a.text,
+                       a.text_hash, a.normalized_text, a.token_count
+                FROM artifacts AS a
+                JOIN events AS e ON e.event_id = a.event_id
+                WHERE e.workspace_id = ? AND e.workspace_status = 'ready'
+                ORDER BY a.artifact_id
+                """,
+            ),
+            (
+                "artifact_fragments",
+                """
+                SELECT fragment.fragment_id, fragment.artifact_id,
+                       fragment.json_pointer, fragment.semantic_role,
+                       fragment.text, fragment.text_hash,
+                       fragment.normalized_text, fragment.token_count,
+                       fragment.fragment_kind, fragment.parent_fragment_id,
+                       fragment.operation_id
+                FROM artifact_fragments AS fragment
+                JOIN artifacts AS a ON a.artifact_id = fragment.artifact_id
+                JOIN events AS e ON e.event_id = a.event_id
+                WHERE e.workspace_id = ? AND e.workspace_status = 'ready'
+                ORDER BY fragment.fragment_id
+                """,
+            ),
+            (
+                "tool_operations",
+                """
+                SELECT operation.operation_id, operation.event_id,
+                       operation.artifact_id, operation.parent_fragment_id,
+                       operation.session_id, operation.tool_use_id,
+                       operation.tool_name, operation.adapter,
+                       operation.operation_index, operation.operation_kind,
+                       operation.source_path, operation.target_path,
+                       operation.segment_index, operation.connector,
+                       operation.content_fragment_id, operation.outcome,
+                       operation.outcome_evidence
+                FROM tool_operations AS operation
+                JOIN events AS owner ON owner.event_id = operation.event_id
+                WHERE owner.workspace_id = ? AND owner.workspace_status = 'ready'
+                ORDER BY operation.operation_id
+                """,
+            ),
+            (
+                "tool_operation_outcomes",
+                """
+                SELECT outcome.post_event_id, outcome.operation_id,
+                       outcome.session_id, outcome.tool_use_id,
+                       outcome.outcome, outcome.outcome_evidence
+                FROM tool_operation_outcomes AS outcome
+                JOIN tool_operations AS operation
+                  ON operation.operation_id = outcome.operation_id
+                JOIN events AS owner ON owner.event_id = operation.event_id
+                WHERE owner.workspace_id = ? AND owner.workspace_status = 'ready'
+                ORDER BY outcome.operation_id, outcome.post_event_id
+                """,
+            ),
+            (
+                "resource_snapshots",
+                """
+                SELECT snapshot.snapshot_id, snapshot.post_event_id,
+                       snapshot.operation_id, snapshot.session_id,
+                       snapshot.tool_use_id, snapshot.path_role,
+                       snapshot.requested_path, snapshot.workspace_root,
+                       snapshot.lexical_path, snapshot.resource_state,
+                       snapshot.capture_status, snapshot.file_kind,
+                       snapshot.byte_size, snapshot.captured_bytes,
+                       snapshot.content_sha256, snapshot.encoding,
+                       snapshot.body_text, snapshot.error_code,
+                       snapshot.duration_ms
+                FROM resource_snapshots AS snapshot
+                JOIN tool_operations AS operation
+                  ON operation.operation_id = snapshot.operation_id
+                JOIN events AS owner ON owner.event_id = operation.event_id
+                WHERE owner.workspace_id = ? AND owner.workspace_status = 'ready'
+                ORDER BY snapshot.snapshot_id
+                """,
+            ),
+            (
+                "protected_sources",
+                """
+                SELECT source_id, workspace_id, source_key, path, source_type,
+                       sensitivity, policy_tags_json
+                FROM protected_sources
+                WHERE workspace_id = ?
+                ORDER BY source_id
+                """,
+            ),
+            (
+                "source_chunks",
+                """
+                SELECT chunk_id, source_id, workspace_id, ordinal, text,
+                       normalized_text, text_hash, shingle_fingerprint,
+                       token_count
+                FROM source_chunks
+                WHERE workspace_id = ?
+                ORDER BY chunk_id
+                """,
+            ),
+        )
+        for label, query in queries:
+            rows = conn.execute(query, (workspace_id,)).fetchall()
+            _update_workspace_analysis_input_revision(digest, label, rows)
+        return digest.hexdigest()
 
     def get_event_workspace_context(self, event_id: str) -> WorkspaceContext:
         with self._connect() as conn:
@@ -8947,6 +9452,35 @@ class EventStore:
             f"PRAGMA busy_timeout = {REDACTION_AUDIT_BUSY_TIMEOUT_MS}"
         )
         return conn
+
+
+def _update_workspace_analysis_input_revision(
+    digest: Any,
+    label: str,
+    rows: list[tuple[object, ...]],
+) -> None:
+    digest.update(label.encode("ascii"))
+    digest.update(b"\0")
+    digest.update(str(len(rows)).encode("ascii"))
+    digest.update(b"\n")
+    for row in rows:
+        digest.update(
+            json.dumps(
+                row,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        )
+        digest.update(b"\n")
+
+
+def _sqlite_is_busy(exc: sqlite3.OperationalError) -> bool:
+    error_code = getattr(exc, "sqlite_errorcode", None)
+    if isinstance(error_code, int):
+        primary_code = error_code & 0xFF
+        return primary_code in {sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED}
+    message = str(exc).lower()
+    return "locked" in message or "busy" in message
 
 
 def _redaction_post_input_observation(
