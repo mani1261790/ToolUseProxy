@@ -3,10 +3,12 @@ from __future__ import annotations
 import hashlib
 import json
 from collections import defaultdict
+from itertools import groupby
 from pathlib import Path
 
-from hook_monitor.analysis.adapters.common import make_structured_edge
+from hook_monitor.analysis.adapters.common import make_structured_edge, normalize_tool_name
 from hook_monitor.analysis.similarity import compare_text, make_shingles
+from hook_monitor.runtime.fragments import is_artifact_root_fragment
 from hook_monitor.runtime.models import (
     ArtifactContext,
     FlowEdge,
@@ -36,7 +38,25 @@ def select_canonical_similarity_contexts(
     contexts: list[ArtifactContext],
 ) -> list[ArtifactContext]:
     """観測fragmentを保持したまま、内容比較に使う代表fragmentだけを選ぶ。"""
-    return [context for context in contexts if _is_similarity_context(context)]
+    selected: list[ArtifactContext] = []
+    seen_payloads: set[tuple[str, str, str]] = set()
+    for context in contexts:
+        if not _is_similarity_context(context):
+            continue
+        if (
+            context.fragment.fragment_kind in {"artifact_root", "payload"}
+            and not _is_mcp_argument_scalar(context)
+        ):
+            identity = (
+                context.fragment.artifact_id,
+                context.fragment.semantic_role,
+                context.fragment.normalized_text,
+            )
+            if identity in seen_payloads:
+                continue
+            seen_payloads.add(identity)
+        selected.append(context)
+    return selected
 
 
 def build_artifact_flow_edges(
@@ -48,29 +68,42 @@ def build_artifact_flow_edges(
         key=lambda item: (item.sequence_no, item.fragment.fragment_id),
     )
     by_id = {item.fragment.fragment_id: item for item in ordered}
-    hash_index: dict[tuple[tuple[str, str, str], str], list[str]] = defaultdict(list)
+    hash_index: dict[tuple[tuple[str, str, str], str], str] = {}
     shingle_index: dict[tuple[tuple[str, str, str], str], set[str]] = defaultdict(set)
     edges: dict[tuple[str, str], FlowEdge] = {}
 
-    for current in ordered:
-        scope = _comparison_scope(current)
-        if scope is None:
-            continue
-        candidate_ids = _candidate_ids(current, hash_index, shingle_index)
-        for candidate_id in candidate_ids:
-            previous = by_id[candidate_id]
-            edge = _compare_artifact_pair(previous, current)
-            if edge is None:
+    for _sequence_no, sequence_contexts_iter in groupby(
+        ordered,
+        key=lambda item: item.sequence_no,
+    ):
+        sequence_contexts = list(sequence_contexts_iter)
+        # Do not let fragments from the same Hook event evict prior evidence or
+        # become candidates for one another. All comparisons are time-forward.
+        for current in sequence_contexts:
+            scope = _comparison_scope(current)
+            if scope is None:
                 continue
-            key = (edge.src_node_id, edge.dst_node_id)
-            if key not in edges or edge.score > edges[key].score:
-                edges[key] = edge
+            candidate_ids = _candidate_ids(current, hash_index, shingle_index)
+            for candidate_id in candidate_ids:
+                previous = by_id[candidate_id]
+                edge = _compare_artifact_pair(previous, current)
+                if edge is None:
+                    continue
+                key = (edge.src_node_id, edge.dst_node_id)
+                if key not in edges or edge.score > edges[key].score:
+                    edges[key] = edge
 
-        hash_index[(scope, current.fragment.text_hash)].append(
-            current.fragment.fragment_id
-        )
-        for shingle in make_shingles(current.fragment.normalized_text):
-            shingle_index[(scope, shingle)].add(current.fragment.fragment_id)
+        for current in sequence_contexts:
+            scope = _comparison_scope(current)
+            if scope is None:
+                continue
+            hash_index[(scope, current.fragment.text_hash)] = (
+                current.fragment.fragment_id
+            )
+            for shingle in make_shingles(current.fragment.normalized_text):
+                shingle_index[(scope, shingle)].add(
+                    current.fragment.fragment_id
+                )
 
     return list(edges.values())
 
@@ -91,8 +124,16 @@ def build_source_binding_edges(
     source_chunks: list[SourceChunk],
     contexts: list[ArtifactContext],
     artifact_edges: list[FlowEdge] | None = None,
+    *,
+    target_fragment_ids: set[str] | None = None,
 ) -> list[FlowEdge]:
-    """protected sourceを既存グラフの上流側にある一致nodeへ接続する。"""
+    """protected sourceを既存グラフの上流側にある一致nodeへ接続する。
+
+    Incremental callers may include bounded predecessor contexts solely to
+    suppress redundant direct bindings. ``target_fragment_ids`` keeps emitted
+    edges restricted to the actual delta while those predecessors remain
+    available for the same topology decision as a full rebuild.
+    """
     canonical_contexts = select_canonical_similarity_contexts(contexts)
     by_id = {
         context.fragment.fragment_id: context for context in canonical_contexts
@@ -133,14 +174,34 @@ def build_source_binding_edges(
                 overlap_counts[fragment_id] += 1
         ranked = sorted(
             overlap_counts,
-            key=lambda fragment_id: overlap_counts[fragment_id],
-            reverse=True,
+            key=lambda fragment_id: (
+                -overlap_counts[fragment_id],
+                fragment_id,
+            ),
         )
         candidate_ids.update(ranked[:MAX_SOURCE_CANDIDATES])
 
         matched: dict[str, FlowEdge] = {}
         for fragment_id in candidate_ids:
             context = by_id[fragment_id]
+            if context.fragment.fragment_kind == "json_key":
+                if (
+                    chunk.text_hash != context.fragment.text_hash
+                    or chunk.text != context.fragment.text
+                ):
+                    continue
+                matched[fragment_id] = _make_edge(
+                    src_kind="source_chunk",
+                    src_id=chunk.chunk_id,
+                    dst_kind="artifact_fragment",
+                    dst_id=context.fragment.fragment_id,
+                    relation="source_binding",
+                    evidence_level="content_exact",
+                    method="exact",
+                    score=1.0,
+                    reason="identical JSON key text hash",
+                )
+                continue
             decision = compare_text(
                 left_text=chunk.text,
                 left_normalized=chunk.normalized_text,
@@ -170,6 +231,11 @@ def build_source_binding_edges(
         for fragment_id, edge in matched.items():
             matching_predecessors = incoming_from_artifact[fragment_id] & matched_ids
             if matching_predecessors:
+                continue
+            if (
+                target_fragment_ids is not None
+                and fragment_id not in target_fragment_ids
+            ):
                 continue
             edges.append(edge)
     return edges
@@ -217,13 +283,15 @@ def build_protected_source_resource_edges(
 
 def _candidate_ids(
     current: ArtifactContext,
-    hash_index: dict[tuple[tuple[str, str, str], str], list[str]],
+    hash_index: dict[tuple[tuple[str, str, str], str], str],
     shingle_index: dict[tuple[tuple[str, str, str], str], set[str]],
 ) -> set[str]:
     scope = _comparison_scope(current)
     if scope is None:
         return set()
-    candidates = set(hash_index[(scope, current.fragment.text_hash)])
+    exact_candidate = hash_index.get((scope, current.fragment.text_hash))
+    if exact_candidate is not None:
+        return {exact_candidate}
 
     overlap_counts: dict[str, int] = defaultdict(int)
     for shingle in make_shingles(current.fragment.normalized_text):
@@ -232,11 +300,12 @@ def _candidate_ids(
 
     ranked = sorted(
         overlap_counts,
-        key=lambda fragment_id: overlap_counts[fragment_id],
-        reverse=True,
+        key=lambda fragment_id: (
+            -overlap_counts[fragment_id],
+            fragment_id,
+        ),
     )
-    candidates.update(ranked[:MAX_LEXICAL_CANDIDATES])
-    return candidates
+    return set(ranked[:MAX_LEXICAL_CANDIDATES])
 
 
 def _is_similarity_context(context: ArtifactContext) -> bool:
@@ -251,13 +320,42 @@ def _is_similarity_context(context: ArtifactContext) -> bool:
         and context.artifact_role == "tool_input"
     ):
         return False
-    if context.fragment.semantic_role not in CONTENT_BEARING_ROLES:
+    if not context.fragment.normalized_text:
         return False
-    if context.fragment.json_pointer == "/" and _is_json_container(
+    if (
+        context.fragment.semantic_role not in CONTENT_BEARING_ROLES
+        and not _is_mcp_argument_scalar(context)
+    ):
+        return False
+    if is_artifact_root_fragment(context.fragment) and _is_json_container(
         context.fragment.text
     ):
         return False
     return True
+
+
+def _is_mcp_argument_scalar(context: ArtifactContext) -> bool:
+    if (
+        context.phase != "pre_tool_use"
+        or context.artifact_role != "tool_input"
+        or is_artifact_root_fragment(context.fragment)
+    ):
+        return False
+    tool_name = context.tool_name or ""
+    parts = tool_name.split("__", 2)
+    if len(parts) == 3 and parts[0].lower() == "mcp" and parts[1] and parts[2]:
+        return True
+    if normalize_tool_name(tool_name) not in {
+        "mcp",
+        "mcp_call",
+        "mcp_tool_call",
+        "mcp_server_tool_call",
+        "mcpserver_tool_call",
+    }:
+        return False
+    return context.fragment.json_pointer.startswith(
+        ("/arguments/", "/args/", "/input/")
+    )
 
 
 def _is_json_container(text: str) -> bool:
@@ -300,6 +398,27 @@ def _compare_artifact_pair(
         return None
     if previous.fragment.artifact_id == current.fragment.artifact_id:
         return None
+
+    if "json_key" in {
+        previous.fragment.fragment_kind,
+        current.fragment.fragment_kind,
+    }:
+        if (
+            previous.fragment.text_hash != current.fragment.text_hash
+            or previous.fragment.text != current.fragment.text
+        ):
+            return None
+        return _make_edge(
+            src_kind="artifact_fragment",
+            src_id=previous.fragment.fragment_id,
+            dst_kind="artifact_fragment",
+            dst_id=current.fragment.fragment_id,
+            relation="derived_from",
+            evidence_level="content_exact",
+            method="exact",
+            score=1.0,
+            reason="identical JSON key text hash",
+        )
 
     decision = compare_text(
         left_text=previous.fragment.text,

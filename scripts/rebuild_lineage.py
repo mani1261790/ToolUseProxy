@@ -16,6 +16,9 @@ from hook_monitor.analysis.graph import (  # noqa: E402
     build_source_binding_edges,
 )
 from hook_monitor.analysis.adapters.registry import run_adapters  # noqa: E402
+from hook_monitor.analysis.adapters.mcp_profiles import (  # noqa: E402
+    DEFAULT_MCP_PROFILE_REGISTRY,
+)
 from hook_monitor.analysis.lineage import propagate_lineage  # noqa: E402
 from hook_monitor.analysis.query import (  # noqa: E402
     AnalysisScopeError,
@@ -27,7 +30,10 @@ from hook_monitor.runtime.source_config import DEFAULT_CONFIG_PATH  # noqa: E402
 from hook_monitor.runtime.storage import EventStore  # noqa: E402
 
 
-DETECTOR_VERSION = "artifact-graph-v13-workspace-scope"
+_MCP_PROFILE_GRAPH_VERSION = (
+    DEFAULT_MCP_PROFILE_REGISTRY.registry_version.rsplit(":", 1)[-1][:12]
+)
+DETECTOR_VERSION = f"artifact-graph-v17-mcp-profiles-{_MCP_PROFILE_GRAPH_VERSION}"
 GRAPH_IDENTITY_VERSION = "workspace-graph-v2"
 GRAPH_FINGERPRINT_KEY = "artifact_graph_fingerprint"
 GRAPH_VERSION_KEY = "artifact_graph_detector_version"

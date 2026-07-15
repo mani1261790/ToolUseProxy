@@ -6,6 +6,7 @@ import re
 from collections import defaultdict
 from typing import Any
 
+from hook_monitor.runtime.fragments import is_artifact_root_fragment
 from hook_monitor.runtime.models import ArtifactContext, FlowEdge, SinkCandidate
 
 
@@ -63,7 +64,7 @@ def tool_input_payload(group: list[ArtifactContext]) -> dict[str, Any] | None:
         for context in group
         if context.phase == "pre_tool_use"
         and context.artifact_role == "tool_input"
-        and context.fragment.json_pointer == "/"
+        and is_artifact_root_fragment(context.fragment)
     ]
     if not roots:
         return None

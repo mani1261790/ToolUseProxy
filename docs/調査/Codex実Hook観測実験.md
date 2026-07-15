@@ -453,8 +453,8 @@ PreToolUse
 
 ## 次の検証順序
 
-1. redact前提となるMCP server/tool固有field profileとfixtureを作る
-2. critical findingをblockしたままredaction preview planを検証する
+1. critical findingをblockしたままredaction preview planを検証する
+2. preview auditをworkspace / session scopeで保存する
 3. offline staging/promoteとruntime履歴snapshotの必要性を評価する
 4. embedding候補検索の評価
 

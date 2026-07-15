@@ -1,0 +1,11 @@
+{
+  "session_id": "session-mcp-profile",
+  "turn_id": "turn-mcp-profile",
+  "tool_use_id": "mcp-profile-publish-1",
+  "hook_event_name": "PreToolUse",
+  "tool_name": "mcp__tooluseproxy_e2e__publish_text",
+  "cwd": "/tmp/tooluseproxy-workspace",
+  "tool_input": {
+    "content": "SANITIZED_PROTECTED_MARKER"
+  }
+}

@@ -789,6 +789,18 @@ class EventStore:
             )
             conn.execute(
                 """
+                CREATE INDEX IF NOT EXISTS idx_fragment_exact_lookup
+                ON fragment_exact_index (
+                    workspace_id,
+                    session_id,
+                    text_hash,
+                    sequence_no DESC,
+                    fragment_id DESC
+                )
+                """
+            )
+            conn.execute(
+                """
                 CREATE INDEX IF NOT EXISTS idx_edge_scopes_session_sequence
                 ON information_flow_edge_scopes (
                     workspace_id,
@@ -4019,6 +4031,13 @@ class EventStore:
             )
             conn.execute(
                 """
+                DELETE FROM fragment_exact_index
+                WHERE workspace_id = ? AND session_id = ?
+                """,
+                (workspace_id, session_id),
+            )
+            conn.execute(
+                """
                 DELETE FROM runtime_lineage_state
                 WHERE workspace_id = ? AND session_id = ?
                 """,
@@ -4868,19 +4887,42 @@ class EventStore:
                 set(),
             )
         ]
-        if not rows:
+        exact_rows = [
+            (
+                workspace_id,
+                session_id,
+                context.fragment.fragment_id,
+                context.sequence_no,
+                context.fragment.text_hash,
+            )
+            for context in contexts
+        ]
+        if not rows and not exact_rows:
             return
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             self._validate_runtime_scope_owner(conn, workspace_id, session_id)
-            conn.executemany(
-                """
-                INSERT OR IGNORE INTO fragment_shingles (
-                    workspace_id, session_id, fragment_id, sequence_no, shingle
-                ) VALUES (?, ?, ?, ?, ?)
-                """,
-                rows,
-            )
+            if rows:
+                conn.executemany(
+                    """
+                    INSERT OR IGNORE INTO fragment_shingles (
+                        workspace_id, session_id, fragment_id, sequence_no, shingle
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """,
+                    rows,
+                )
+            if exact_rows:
+                conn.executemany(
+                    """
+                    INSERT INTO fragment_exact_index (
+                        workspace_id, session_id, fragment_id, sequence_no, text_hash
+                    ) VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(workspace_id, session_id, fragment_id) DO UPDATE SET
+                        sequence_no = excluded.sequence_no,
+                        text_hash = excluded.text_hash
+                    """,
+                    exact_rows,
+                )
 
     def find_similarity_candidate_fragment_ids(
         self,
@@ -4897,23 +4939,20 @@ class EventStore:
                 row[0]
                 for row in conn.execute(
                     """
-                    SELECT DISTINCT f.fragment_id
-                    FROM artifact_fragments AS f
-                    JOIN artifacts AS a ON a.artifact_id = f.artifact_id
-                    JOIN events AS e ON e.event_id = a.event_id
-                    JOIN fragment_shingles AS i
-                      ON i.workspace_id = e.workspace_id
-                     AND i.session_id = e.session_id
-                     AND i.fragment_id = f.fragment_id
-                    WHERE e.workspace_id = ?
-                      AND e.workspace_status = 'ready'
-                      AND e.session_id = ?
-                      AND e.sequence_no < ?
-                      AND f.text_hash = ?
+                    SELECT fragment_id
+                    FROM fragment_exact_index
+                    WHERE workspace_id = ?
+                      AND session_id = ?
+                      AND text_hash = ?
+                      AND sequence_no < ?
+                    ORDER BY sequence_no DESC, fragment_id DESC
+                    LIMIT 1
                     """,
-                    (workspace_id, session_id, before_sequence_no, text_hash),
+                    (workspace_id, session_id, text_hash, before_sequence_no),
                 ).fetchall()
             ]
+            if exact:
+                return exact
             overlap: list[str] = []
             if shingles:
                 values = sorted(shingles)
@@ -5165,19 +5204,32 @@ class EventStore:
         self,
         workspace_id: str,
         session_id: str,
-        fragment_ids: list[str],
+        fragment_ids: list[str] | set[str],
     ) -> list[ArtifactContext]:
         if not fragment_ids:
             return []
-        placeholders = ",".join("?" for _ in fragment_ids)
-        return self._list_artifact_contexts_where(
-            f"""
-            WHERE e.workspace_id = ?
-              AND e.workspace_status = 'ready'
-              AND e.session_id = ?
-              AND f.fragment_id IN ({placeholders})
-            """,
-            (workspace_id, session_id, *fragment_ids),
+        contexts: list[ArtifactContext] = []
+        ordered_ids = sorted(set(fragment_ids))
+        for start in range(0, len(ordered_ids), 300):
+            current_ids = ordered_ids[start : start + 300]
+            placeholders = ",".join("?" for _ in current_ids)
+            contexts.extend(
+                self._list_artifact_contexts_where(
+                    f"""
+                    WHERE e.workspace_id = ?
+                      AND e.workspace_status = 'ready'
+                      AND e.session_id = ?
+                      AND f.fragment_id IN ({placeholders})
+                    """,
+                    (workspace_id, session_id, *current_ids),
+                )
+            )
+        return sorted(
+            contexts,
+            key=lambda context: (
+                context.sequence_no,
+                context.fragment.fragment_id,
+            ),
         )
 
     def get_event_sequence_no(self, event_id: str) -> int:
@@ -5522,6 +5574,7 @@ class EventStore:
             "runtime_lineage_state",
             "runtime_source_binding_edges",
             "fragment_shingles",
+            "fragment_exact_index",
             "analysis_cursors",
             "resource_versions",
             "sink_candidates",
@@ -5635,6 +5688,18 @@ class EventStore:
         )
         conn.execute(
             """
+            CREATE TABLE fragment_exact_index (
+                workspace_id TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                fragment_id TEXT NOT NULL,
+                sequence_no INTEGER NOT NULL,
+                text_hash TEXT NOT NULL,
+                PRIMARY KEY (workspace_id, session_id, fragment_id)
+            )
+            """
+        )
+        conn.execute(
+            """
             CREATE TABLE runtime_lineage_state (
                 workspace_id TEXT NOT NULL,
                 session_id TEXT NOT NULL,
@@ -5723,6 +5788,10 @@ class EventStore:
                 "workspace_id", "session_id", "fragment_id", "sequence_no",
                 "shingle",
             },
+            "fragment_exact_index": {
+                "workspace_id", "session_id", "fragment_id", "sequence_no",
+                "text_hash",
+            },
             "runtime_lineage_state": {
                 "workspace_id", "session_id", "source_node_kind",
                 "source_node_id", "node_kind", "node_id", "best_path_score",
@@ -5752,6 +5821,11 @@ class EventStore:
                 "session_id",
                 "fragment_id",
                 "shingle",
+            ),
+            "fragment_exact_index": (
+                "workspace_id",
+                "session_id",
+                "fragment_id",
             ),
             "runtime_lineage_state": (
                 "workspace_id",

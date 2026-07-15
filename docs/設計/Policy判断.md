@@ -293,7 +293,7 @@ JSON output:
 2. 実CodexのMCP tool名とraw argumentsをadapterへ接続
 3. 二段階opt-inでMCP external sinkを`PreToolUse` denyへ接続
 
-operation単位fragment、snapshot capture、複数workspaceのsource/cursor/resource分離は実装済みです。`PermissionRequest`は公式source、実payload、deny / allow E2Eを検証し、汎用runtime接続を追加しないと判断しました。redactは書換契約を設計済みですが、現行Codexでは複数matching Hookの最後に完了したrewriteだけが採用されるため、まずMCP profileと実行しないpreview plannerを作り、critical findingのblockを維持します。
+operation単位fragment、snapshot capture、複数workspaceのsource/cursor/resource分離、MCP exact profileと全scalar value / JSON key sink coverageは実装済みです。`PermissionRequest`は公式source、実payload、deny / allow E2Eを検証し、汎用runtime接続を追加しないと判断しました。redactは書換契約を設計済みですが、現行Codexでは複数matching Hookの最後に完了したrewriteだけが採用されるため、次は実行しないpreview plannerを作り、critical findingのblockを維持します。
 
 Stop hook内の解析はsession差分更新へ移行済みです。初回または解析条件変更時は`session-full`、通常時は`session-incremental`としてanalysis runへ記録します。Hook内ではlocal DB、static adapter、indexed lexical候補、差分lineageだけを扱い、embeddingやnetwork accessは行いません。
 

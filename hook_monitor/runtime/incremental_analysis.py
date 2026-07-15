@@ -20,6 +20,9 @@ from hook_monitor.analysis.lineage import (
     propagate_lineage,
     propagate_lineage_incremental,
 )
+from hook_monitor.analysis.adapters.mcp_profiles import (
+    DEFAULT_MCP_PROFILE_REGISTRY,
+)
 from hook_monitor.analysis.similarity import make_shingles
 from hook_monitor.analysis.source_index import load_sources_and_chunks
 from hook_monitor.runtime.models import (
@@ -39,7 +42,12 @@ from hook_monitor.runtime.source_config import (
 from hook_monitor.runtime.storage import EventStore
 
 
-RUNTIME_GRAPH_DETECTOR_VERSION = "runtime-graph-v11-workspace-state"
+_MCP_PROFILE_GRAPH_VERSION = (
+    DEFAULT_MCP_PROFILE_REGISTRY.registry_version.rsplit(":", 1)[-1][:12]
+)
+RUNTIME_GRAPH_DETECTOR_VERSION = (
+    f"runtime-graph-v15-mcp-profiles-{_MCP_PROFILE_GRAPH_VERSION}"
+)
 
 
 @dataclass(frozen=True)
@@ -359,10 +367,31 @@ def _update_session_delta(
         session_id=session_id,
     )
 
+    predecessor_fragment_ids = {
+        edge.src_node_id
+        for edge in similarity_edges
+        if edge.src_node_kind == "artifact_fragment"
+        and edge.dst_node_kind == "artifact_fragment"
+    }
+    predecessor_contexts = (
+        store.list_artifact_contexts_for_scope_by_fragment_ids(
+            workspace_id,
+            session_id,
+            predecessor_fragment_ids,
+        )
+        if predecessor_fragment_ids
+        else []
+    )
+    source_binding_contexts = _deduplicate_contexts(
+        delta_contexts + predecessor_contexts
+    )
     source_edges = build_source_binding_edges(
         chunks,
-        delta_contexts,
+        source_binding_contexts,
         artifact_edges,
+        target_fragment_ids={
+            context.fragment.fragment_id for context in delta_contexts
+        },
     )
     source_edges += build_protected_source_resource_edges(
         sources,

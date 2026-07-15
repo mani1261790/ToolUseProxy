@@ -6,18 +6,27 @@ import re
 import sys
 from pathlib import Path
 
+from hook_monitor.analysis.adapters.mcp import (
+    classify_mcp_sink_type,
+    parse_mcp_tool_name,
+)
 from hook_monitor.runtime.parser import (
     HookPayloadError,
+    HookPayloadLimitError,
     build_artifacts,
     build_fragments,
+    extract_top_level_json_strings,
+    json_nesting_exceeds_limit,
     normalize_event,
     parse_hook_payload,
 )
 from hook_monitor.runtime.operations import extract_tool_operations
 from hook_monitor.runtime.models import NormalizedEvent, ResourceSnapshot, ToolOperation
 from hook_monitor.runtime.pre_tool_policy import (
+    evaluate_pre_tool_input_bounds,
     evaluate_pre_tool_hook_policy,
     pre_tool_adapter,
+    render_mcp_input_limit_deny,
 )
 from hook_monitor.runtime.storage import DEFAULT_DB_PATH, EventStore
 from hook_monitor.runtime.snapshot_capture import (
@@ -27,15 +36,84 @@ from hook_monitor.runtime.snapshot_capture import (
 )
 from hook_monitor.runtime.stop_policy import evaluate_stop_hook_policy
 from hook_monitor.runtime.tool_outcome import ToolOutcome, classify_post_tool_outcome
-from hook_monitor.runtime.workspace import WORKSPACE_ROOT_ENV
+from hook_monitor.runtime.workspace import WORKSPACE_ROOT_ENV, WorkspaceContext, resolve_workspace
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+PRE_TOOL_RAW_JSON_MAX_BYTES = 1024 * 1024
+PRE_TOOL_RAW_JSON_MAX_DEPTH = 64
+PRE_TOOL_RAW_JSON_MAX_NUMBER_CHARS = 128
+PRE_TOOL_ENVELOPE_STRING_MAX_BYTES = 4096
+PRE_TOOL_ENVELOPE_KEYS = frozenset({"cwd", "tool_name"})
 
 
 def run_hook(phase: str) -> int:
-    raw_payload = sys.stdin.buffer.read()
+    bounded_pre_tool_input = (
+        phase == "pre_tool_use"
+        and _pre_tool_policy_enabled()
+        and _pre_tool_mcp_policy_enabled()
+    )
+    raw_payload = sys.stdin.buffer.read(
+        PRE_TOOL_RAW_JSON_MAX_BYTES + 1
+        if bounded_pre_tool_input
+        else -1
+    )
+    raw_mcp_tool_name: str | None = None
+    raw_mcp_workspace: WorkspaceContext | None = None
+    if bounded_pre_tool_input:
+        envelope = extract_top_level_json_strings(
+            raw_payload,
+            PRE_TOOL_ENVELOPE_KEYS,
+            max_value_bytes=PRE_TOOL_ENVELOPE_STRING_MAX_BYTES,
+        )
+        candidate_tool_name = envelope.get("tool_name")
+        if parse_mcp_tool_name(candidate_tool_name) is not None:
+            raw_mcp_tool_name = candidate_tool_name
+            raw_mcp_workspace = resolve_workspace(
+                envelope.get("cwd"),
+                os.environ.get(WORKSPACE_ROOT_ENV),
+            )
+
+        if len(raw_payload) > PRE_TOOL_RAW_JSON_MAX_BYTES:
+            if raw_mcp_tool_name is not None:
+                _render_raw_mcp_rejection(
+                    raw_mcp_tool_name,
+                    raw_mcp_workspace,
+                    "json_envelope_bytes_exceeded",
+                )
+                return 0
+            if candidate_tool_name is None:
+                # The bounded prefix cannot prove which adapter owns the call.
+                # Preserve the Hook fail-open contract without materializing it.
+                return 0
+            # A known non-MCP call is outside this gate and keeps its prior path.
+            raw_payload += sys.stdin.buffer.read()
+        elif raw_mcp_tool_name is not None and json_nesting_exceeds_limit(
+            raw_payload,
+            PRE_TOOL_RAW_JSON_MAX_DEPTH,
+        ):
+            _render_raw_mcp_rejection(
+                raw_mcp_tool_name,
+                raw_mcp_workspace,
+                "json_envelope_nesting_exceeded",
+            )
+            return 0
     try:
-        payload = parse_hook_payload(raw_payload)
+        payload = parse_hook_payload(
+            raw_payload,
+            max_number_chars=(
+                PRE_TOOL_RAW_JSON_MAX_NUMBER_CHARS
+                if raw_mcp_tool_name is not None
+                else None
+            ),
+        )
+    except HookPayloadLimitError as exc:
+        assert raw_mcp_tool_name is not None
+        _render_raw_mcp_rejection(
+            raw_mcp_tool_name,
+            raw_mcp_workspace,
+            exc.rejection_code,
+        )
+        return 0
     except HookPayloadError as exc:
         print(str(exc), file=sys.stderr)
         return 1
@@ -45,6 +123,22 @@ def run_hook(phase: str) -> int:
         payload,
         workspace_root=os.environ.get(WORKSPACE_ROOT_ENV),
     )
+    enabled_pre_tool_adapters = _enabled_pre_tool_adapters()
+    if (
+        phase == "pre_tool_use"
+        and pre_tool_adapter(event.tool_name) in enabled_pre_tool_adapters
+        and _runtime_policy_workspace_enabled(event)
+    ):
+        bounded_input_guard = evaluate_pre_tool_input_bounds(
+            event,
+            enabled_adapters=enabled_pre_tool_adapters,
+        )
+        if bounded_input_guard.disposition == "deny":
+            print(json.dumps(bounded_input_guard.hook_output, ensure_ascii=False))
+            return 0
+        if bounded_input_guard.disposition == "bypass":
+            return 0
+
     artifacts = build_artifacts(event)
     fragments = build_fragments(artifacts)
     extraction = extract_tool_operations(event, artifacts, fragments)
@@ -77,7 +171,6 @@ def run_hook(phase: str) -> int:
         post_operation_ids=post_operation_ids,
         resource_snapshots=post_snapshots,
     )
-    enabled_pre_tool_adapters = _enabled_pre_tool_adapters()
     if phase == "pre_tool_use" and pre_tool_adapter(
         event.tool_name
     ) in enabled_pre_tool_adapters:
@@ -158,6 +251,23 @@ def _runtime_policy_workspace_enabled(event: NormalizedEvent) -> bool:
         and event.workspace_id is not None
         and event.workspace_root is not None
         and event.workspace_execution_cwd is not None
+    )
+
+
+def _render_raw_mcp_rejection(
+    tool_name: str,
+    workspace: WorkspaceContext | None,
+    rejection_code: str,
+) -> None:
+    if workspace is None or not workspace.ready:
+        return
+    if classify_mcp_sink_type(tool_name, {}) is None:
+        return
+    print(
+        json.dumps(
+            render_mcp_input_limit_deny(rejection_code),
+            ensure_ascii=False,
+        )
     )
 
 

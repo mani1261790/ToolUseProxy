@@ -16,6 +16,8 @@ Redactは、protected source由来の情報を含むtool inputから、送信し
 
 従って、最初の到達点は`redact-preview`です。previewは「このcallなら、どのfieldをどう置き換えられるか」を監査可能なplanとして出しますが、Hook stdoutへ`updatedInput`を返さず、現在のcritical findingは引き続きblockします。
 
+2026-07-15時点で、最初の基盤であるversioned exact profile registryとMCP sink coverageは実装済みです。valid profileはdata / controlの全present scalar pointerを個別sink化し、shape不一致とunprofiled write-like toolはarguments内の全scalar valueとJSON object keyへ保守的fallbackします。key nameのlineageはraw exact一致だけに限定し、同値fieldはpointer別fragmentとして残します。初期exact profileは実Codexで観測したlocal E2E `publish_text(content)`だけで、実schema未確認の外部serviceはpreview適格にしません。real MCP inputは32 KiB / 32 fields / depth 8のbounded preflightをartifact生成より前に受け、超過したexternal writeはdeny、read-only / unsinked callは保存せず空stdoutでbypassします。runtime outputは従来のdeny / 空stdoutのままで、preview plannerと`updatedInput`はまだありません。
+
 ## Codexの実契約
 
 PreToolUseでrewriteを返す形式は次です。
@@ -98,7 +100,7 @@ post_input_stable:
 
 profileはplannerだけの設定にしません。profiled toolでは同じversionのprofileをMCP adapterのauthoritative sourceとし、`outbound_data_pointers`の全pointerを個別のartifact fragment / sinkへ変換します。plannerは、その全sinkに対してcurrent callのfinding coverageが閉じていることを確認してからtargetを作ります。pointerを解決できない、sinkを作れない、adapterとplannerのprofile versionが一致しない場合はpreviewをrejectします。
 
-現在のMCP adapterはmessage-likeなtop-level scalarを優先し、1件でも見つかると他fieldをroot fallbackへ含めません。そのままでは、公開可能な`message`とprotectedな`attachments`が同居したcallで後者を見落とし得ます。従って、exact profileから全outbound fieldをsink化する変更をpreview plannerより先に行います。未知toolは既存の保守的なblock判断へ残し、既知fieldだけを書き換えてcallを通しません。
+旧MCP adapterはmessage-likeなtop-level scalarを優先し、他fieldを見落とす問題がありました。現在はexact profileから全classified scalarをsink化し、profile不適格callも全scalar valueとJSON object keyへfallbackするため、既知fieldだけを書き換えてcallを通す前提にはなりません。plannerは`profile_status = matched`かつ全coverageが閉じたcallだけを候補にします。
 
 初期profileの適格条件は次です。
 
@@ -124,7 +126,7 @@ profileはplannerだけの設定にしません。profiled toolでは同じversi
 
 lineage scoreや5-gram類似だけをrewrite位置に使いません。shingle-only、whitespace / case normalizationだけの一致、encoded value、hash-only resource lineage、protected fileからstdinへ流れる値は位置不明としてblockします。将来部分redactへ進む場合も、current outgoing leaf上のraw case-sensitive span、全findingのspan、overlapのdeterministic merge、rewrite後の再検索を必須にします。
 
-現在のMCP adapterはmessage-like keyを優先し、該当keyがない場合にrootへfallbackします。runtime redactの前に、server/tool固有profileとfixtureを追加し、外部へ渡るdata fieldを全て列挙できる状態にする必要があります。未知fieldを見落としたまま、既知fieldだけをredactしてcallを通してはいけません。
+profileとfixture、全scalar value / JSON key fallbackは実装済みです。次のplannerはsink metadataのprofile / registry version、pointer、field classを直接使い、adapterと異なるfield推定を再実装しません。実service profileは実Hook payloadとtool schemaを確認した後に別commitで追加します。
 
 Codexは一部MCP toolで、PreToolUse後かつserver送信前にOpenAI file argumentsを内部変換し、その変換後objectをPostToolUseの`tool_input`へ載せます。この場合、正当な内部変換でもfull-input hashは不一致になります。初期profileはこのtool / fieldを対象外とし、`post_input_stable: true`を確認できるtoolだけでfull-input hashを使います。将来対応する場合は、Codexが変更しないcontrol / redactable pointerだけのprojected hashを別schemaで導入し、`post_transformed`とcompeting Hookによる`post_override`を区別してから対象へ加えます。
 
@@ -296,7 +298,7 @@ redact plannerを`try/except`の外へ投げて空stdoutにすると、blockす�
 
 redact plannerはlocal JSON、indexed DB row、hash、tool profileだけを使います。
 
-初期defaultでは、次をplanner entryで強制します。超過時はpreviewを`rejected`、将来enforceでは元のdenyとします。
+初期defaultでは、次をplanner entryで強制します。このうちinput / fields / depthは現在のPreToolUse早期preflightと同じ定義で、compact canonical JSONのUTF-8 bytes、root以外のdict memberとarray elementの合計、root objectを0とした深さです。超過時はpreviewを`rejected`、将来enforceでは元のdenyとします。
 
 | 対象 | 上限 |
 |---|---:|
@@ -324,7 +326,7 @@ benchmarkはeligible、rejected、複数targetの3caseを同じroundで測り、
 
 次の順序を推奨します。
 
-1. `Define MCP outbound field profiles`
+1. `Define MCP outbound field profiles`（実装済み）
    - exact server/tool profile
    - outbound / redactable / control pointer
    - 同じprofileから全outbound pointerをadapterのfragment / sinkへ変換
@@ -360,7 +362,7 @@ benchmarkはeligible、rejected、複数targetの3caseを同じroundで測り、
 - 複数source / 複数fieldを1 planで全て置換する
 - 1件でも非対応targetがあればplan全体をrejectする
 - unknown tool、unknown key、root fallback、array、non-string、control fieldをrejectする
-- profileの全outbound pointerをsink化し、public messageとprotected attachmentの同居を見落とさない
+- synthetic multi-field profileの全outbound pointerをsink化し、public messageとprotected attachmentの同居を見落とさない
 - adapter / plannerのprofile version不一致、未解決pointerをrejectする
 - Codex管理file inputがあるtool、`post_input_stable`でないtoolをrejectする
 - raw direct matchがなくtransitive lineageだけの場合はrejectする
@@ -396,13 +398,13 @@ benchmarkはeligible、rejected、複数targetの3caseを同じroundで測り、
 ローカルstdio MCP serverに、受信argumentsをhashと固定markerだけで記録する`publish_text`を用意します。実secretではなくダミーprotected valueを使います。
 
 1. eligible preview
-   - exact profileのmessage fieldにダミーprotected value
+   - exact profileの`content` fieldにダミーprotected value
    - planはeligible、pointerとhashを保存
    - runtimeはまだdenyし、server call 0、Post 0
 2. aggregate reject
    - redactable fieldとunknown fieldの両方にprotected value
    - plan全体をrejectし、server call 0
-   - public messageとprotected attachmentの同居でもattachment findingを作り、server call 0
+   - synthetic multi-field fixtureでpublic messageとprotected attachmentを同居させ、attachment findingを作ってserver call 0
 3. public call
    - planなし、既存のallow経路でserver call 1
 4. 将来enforce E2E

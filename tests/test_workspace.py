@@ -52,6 +52,11 @@ class WorkspaceIdentityTest(unittest.TestCase):
                 "fragment_id",
                 "shingle",
             ),
+            "fragment_exact_index": (
+                "workspace_id",
+                "session_id",
+                "fragment_id",
+            ),
             "runtime_lineage_state": (
                 "workspace_id",
                 "session_id",

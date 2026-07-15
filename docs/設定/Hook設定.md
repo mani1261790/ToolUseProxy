@@ -379,7 +379,7 @@ source manifestの基準directoryはeventのcanonical workspace rootです。`pr
   - `normalize_event()` が hook payload を event に変換します
   - `build_artifacts()` が phase ごとに `tool_input` / `tool_response` / `final_answer` を抽出します
 - `hook_monitor/runtime/fragments.py`
-  - artifact全体とJSON内の値を比較用fragmentへ分割します
+  - artifact全体とJSON内のscalar value、tool inputのJSON object keyをfragmentへ分割します
   - `query`、`path`、`content`、`stdout`などのsemantic roleを付けます
 - `hook_monitor/runtime/operations.py`
   - PreToolUseのapply_patchをfile operationへ、Bashを静的segment operationへ分解します
@@ -399,7 +399,7 @@ source manifestの基準directoryはeventのcanonical workspace rootです。`pr
   - `.env` や `private.py` を「守るべき source」として定義する入口です
 - `hook_monitor/runtime/runner.py`
   - 全体の実行順序をまとめる orchestrator です
-  - `read stdin -> parse -> operation/outcome/snapshot evidence -> store -> policy`を順番に実行します
+  - MCP policy有効時は`bounded prefix read -> top-level tool/workspace scope -> real MCP raw gate -> parse -> normalize -> bounded input preflight`を先に行います。ready workspaceのreal MCPだけをraw JSON 1 MiB / depth 64 / numeric token 128 charsで制限し、超過したwriteはdeny、read-only / unsinked / workspace未確定は空stdoutで早期bypassします。既知の非MCP toolは従来経路を維持し、Hook JSONはUTF-8・BOMなしだけを受理します
 - `hook_monitor/analysis/chunking.py`
   - 保護対象 source を chunk に分割します
   - `.py` は関数や class 単位、テキストは段落単位で分割します
@@ -559,7 +559,7 @@ python3 /Users/mani/Developer/ToolUseProxy/scripts/rebuild_lineage.py \
 - 類似度計算や source 追跡を変えたいなら `hook_monitor/analysis/`
 - 情報流エッジを強化したいなら `analysis` 側に拡張を足す
 
-現在の`hook_monitor/`は記録の骨格に加え、workspace・session差分graph、漏えい検知、Stop継続、Bash/MCP PreToolUse deny、operation単位lineage、PostToolUse snapshot、複数workspace分離、offline run snapshotまでを接続しています。PermissionRequestは実payloadとdeny / allowを評価しましたが、PreToolUseの代替にならず、payloadにstableなcall IDがなく、`allow`が通常承認を自動通過させるため、production Hookには設定しません。将来接続する場合もdeny-onlyの独立adapterとし、判断なしは空stdoutでCodex本来の承認へ委ねます。redactも現時点ではproduction Hookに設定せず、MCP profileとpreview auditを先に検証します。詳細は [Redact設計](../設計/Redact.md) を参照してください。
+現在の`hook_monitor/`は記録の骨格に加え、workspace・session差分graph、漏えい検知、Stop継続、Bash/MCP PreToolUse deny、operation単位lineage、PostToolUse snapshot、複数workspace分離、offline run snapshot、MCP exact profileと全scalar value / JSON key sink coverageまでを接続しています。PermissionRequestは実payloadとdeny / allowを評価しましたが、PreToolUseの代替にならず、payloadにstableなcall IDがなく、`allow`が通常承認を自動通過させるため、production Hookには設定しません。将来接続する場合もdeny-onlyの独立adapterとし、判断なしは空stdoutでCodex本来の承認へ委ねます。redactも現時点ではproduction Hookに設定せず、次にblockを維持するpreview plannerとauditを検証します。詳細は [Redact設計](../設計/Redact.md) を参照してください。
 
 ## この研究の位置づけ
 

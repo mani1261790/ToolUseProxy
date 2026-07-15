@@ -26,7 +26,16 @@ from hook_monitor.analysis.bash_file_parser import (
 )
 from hook_monitor.analysis.adapters.registry import run_adapters
 from hook_monitor.analysis.adapters.base import AdapterResult
-from hook_monitor.analysis.adapters.mcp import parse_mcp_tool_name
+from hook_monitor.analysis.adapters.mcp import (
+    McpAdapter,
+    classify_mcp_sink_type,
+    parse_mcp_tool_name,
+)
+from hook_monitor.analysis.adapters.mcp_profiles import (
+    McpFieldSpec,
+    McpProfileRegistry,
+    McpToolProfile,
+)
 from hook_monitor.analysis.leak_detection import detect_leaks
 from hook_monitor.analysis.lineage import propagate_lineage
 from hook_monitor.analysis.query import (
@@ -40,7 +49,16 @@ from hook_monitor.analysis.source_index import load_sources_and_chunks
 from hook_monitor.policy.codex_output import render_codex_hook_output, select_strongest_decision
 from hook_monitor.policy.engine import evaluate_policy
 from hook_monitor.policy.models import PolicyDecision
-from hook_monitor.runtime.parser import build_artifacts, build_fragments, normalize_event
+from hook_monitor.runtime.parser import (
+    HookPayloadError,
+    HookPayloadLimitError,
+    build_artifacts,
+    build_fragments,
+    extract_top_level_json_strings,
+    json_nesting_exceeds_limit,
+    normalize_event,
+    parse_hook_payload,
+)
 from hook_monitor.runtime.ids import make_source_chunk_id
 from hook_monitor.runtime.operations import extract_tool_operations
 from hook_monitor.runtime.incremental_analysis import (
@@ -78,6 +96,38 @@ from hook_monitor.runtime.storage import EventStore
 
 SECRET = "alpha secret design threshold 0.73"
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+SYNTHETIC_MULTI_FIELD_MCP_PROFILE = McpToolProfile(
+    profile_id="fixture/publish_record",
+    server="tooluseproxy_fixture",
+    tool="publish_record",
+    sink_type="external_api_call",
+    fields=(
+        McpFieldSpec(
+            pointer="/destination",
+            value_type="string",
+            field_class="control",
+            required=True,
+        ),
+        McpFieldSpec(
+            pointer="/message",
+            value_type="string",
+            field_class="data",
+            required=True,
+            redactable=True,
+        ),
+        McpFieldSpec(
+            pointer="/attachment_text",
+            value_type="string",
+            field_class="data",
+            redactable=True,
+        ),
+    ),
+    post_input_stable=True,
+)
+SYNTHETIC_MULTI_FIELD_MCP_REGISTRY = McpProfileRegistry(
+    (SYNTHETIC_MULTI_FIELD_MCP_PROFILE,)
+)
 
 
 @dataclass(frozen=True)
@@ -121,6 +171,37 @@ class InformationFlowTest(unittest.TestCase):
         self.assertIn("query", roles)
         self.assertIn("path", roles)
         self.assertIn("tool_input", roles)
+
+    def test_fragment_extraction_keeps_duplicate_values_per_json_pointer(self) -> None:
+        event = normalize_event(
+            "pre_tool_use",
+            {
+                "session_id": "session-1",
+                "turn_id": "turn-1",
+                "tool_use_id": "mcp-duplicate-fields",
+                "tool_name": "mcp__tooluseproxy_fixture__publish_record",
+                "tool_input": {
+                    "message": SECRET,
+                    "body": SECRET,
+                    "a/b~c": "pointer value",
+                },
+            },
+        )
+
+        fragments = build_fragments(build_artifacts(event))
+        pointers = {fragment.json_pointer for fragment in fragments}
+
+        self.assertIn("/message", pointers)
+        self.assertIn("/body", pointers)
+        self.assertIn("/a~1b~0c", pointers)
+        self.assertEqual(
+            2,
+            sum(
+                fragment.text == SECRET
+                and fragment.semantic_role == "content"
+                for fragment in fragments
+            ),
+        )
 
     def test_operation_metadata_and_derived_fragment_round_trip(self) -> None:
         event = normalize_event(
@@ -208,6 +289,7 @@ class InformationFlowTest(unittest.TestCase):
             "idx_tool_operations_event",
             "idx_resource_snapshots_post_event",
             "idx_resource_versions_workspace_session",
+            "idx_fragment_exact_lookup",
             "idx_fragment_shingles_lookup",
             "idx_edge_scopes_session_sequence",
             "idx_analysis_runs_workspace_session",
@@ -250,10 +332,28 @@ class InformationFlowTest(unittest.TestCase):
                     ("ws_v1_test", "session-1", 10),
                 ).fetchall()
             )
+            exact_plan = " ".join(
+                row[3]
+                for row in connection.execute(
+                    """
+                    EXPLAIN QUERY PLAN
+                    SELECT fragment_id
+                    FROM fragment_exact_index
+                    WHERE workspace_id = ?
+                      AND session_id = ?
+                      AND text_hash = ?
+                      AND sequence_no < ?
+                    ORDER BY sequence_no DESC, fragment_id DESC
+                    LIMIT 1
+                    """,
+                    ("ws_v1_test", "session-1", "hash", 10),
+                ).fetchall()
+            )
 
         self.assertTrue(expected.issubset(indexes))
         self.assertIn("idx_events_workspace_session_sequence", event_plan)
         self.assertIn("idx_resource_versions_workspace_session", resource_plan)
+        self.assertIn("idx_fragment_exact_lookup", exact_plan)
 
     def test_post_tool_outcome_classifies_success_failure_and_unknown(self) -> None:
         cases = (
@@ -2031,6 +2131,204 @@ class InformationFlowTest(unittest.TestCase):
             self.store.record(event, artifacts, build_fragments(artifacts))
 
         self.assertEqual([], build_artifact_flow_edges(self.store.list_artifact_contexts()))
+
+    def test_exact_mcp_repetition_builds_a_linear_chain_for_every_field(self) -> None:
+        call_count = 120
+        for index in range(call_count):
+            self._record(
+                "pre_tool_use",
+                f"mcp-repeat-{index}",
+                "mcp__custom__publish_record",
+                tool_input={"body": SECRET, "message": SECRET},
+                cwd=self.temporary_directory.name,
+            )
+
+        contexts = self.store.list_artifact_contexts_for_session("session-1")
+        edges = build_artifact_flow_edges(contexts)
+        secret_fragment_ids = {
+            context.fragment.fragment_id
+            for context in contexts
+            if context.fragment.fragment_kind == "payload"
+            and context.fragment.text == SECRET
+        }
+        secret_edges = [
+            edge
+            for edge in edges
+            if edge.src_node_id in secret_fragment_ids
+            and edge.dst_node_id in secret_fragment_ids
+        ]
+
+        self.assertEqual(call_count * 2, len(secret_fragment_ids))
+        self.assertEqual((call_count - 1) * 2, len(secret_edges))
+        self.assertLessEqual(len(edges), call_count * 5)
+
+        latest_sequence_no = max(context.sequence_no for context in contexts)
+        latest_secret_ids = {
+            context.fragment.fragment_id
+            for context in contexts
+            if context.sequence_no == latest_sequence_no
+            and context.fragment.fragment_kind == "payload"
+            and context.fragment.text == SECRET
+        }
+        self.assertEqual(
+            latest_secret_ids,
+            {edge.dst_node_id for edge in secret_edges} & latest_secret_ids,
+        )
+
+        source_edges = build_source_binding_edges(
+            [self._source_chunk()],
+            contexts,
+            edges,
+        )
+        assignments = propagate_lineage("repeat-run", source_edges + edges)
+        reached = {
+            assignment.node_id
+            for assignment in assignments
+            if assignment.node_kind == "artifact_fragment"
+        }
+        self.assertTrue(latest_secret_ids <= reached)
+
+    def test_exact_candidate_is_identical_in_full_and_incremental_paths(self) -> None:
+        for index in range(3):
+            self._record(
+                "pre_tool_use",
+                f"mcp-consistency-{index}",
+                "mcp__custom__publish_record",
+                tool_input={"body": SECRET, "message": SECRET},
+                cwd=self.temporary_directory.name,
+            )
+        contexts = self.store.list_artifact_contexts_for_session("session-1")
+        canonical = select_canonical_similarity_contexts(contexts)
+        workspace_id = next(
+            context.workspace_id
+            for context in canonical
+            if context.workspace_id is not None
+        )
+        self.store.upsert_fragment_shingles(
+            "session-1",
+            canonical,
+            {
+                context.fragment.fragment_id: make_shingles(
+                    context.fragment.normalized_text
+                )
+                for context in canonical
+            },
+            workspace_id=workspace_id,
+        )
+
+        latest_sequence_no = max(context.sequence_no for context in canonical)
+        prior_sequence_no = max(
+            context.sequence_no
+            for context in canonical
+            if context.sequence_no < latest_sequence_no
+        )
+        expected_previous_id = max(
+            context.fragment.fragment_id
+            for context in canonical
+            if context.sequence_no == prior_sequence_no
+            and context.fragment.fragment_kind == "payload"
+            and context.fragment.text == SECRET
+        )
+        current_fragments = [
+            context
+            for context in canonical
+            if context.sequence_no == latest_sequence_no
+            and context.fragment.fragment_kind == "payload"
+            and context.fragment.text == SECRET
+        ]
+        full_edges = build_artifact_flow_edges(contexts)
+
+        for current in current_fragments:
+            with self.subTest(fragment_id=current.fragment.fragment_id):
+                candidate_ids = self.store.find_similarity_candidate_fragment_ids(
+                    "session-1",
+                    current.fragment.text_hash,
+                    make_shingles(current.fragment.normalized_text),
+                    current.sequence_no,
+                    limit=50,
+                    workspace_id=workspace_id,
+                )
+                self.assertEqual([expected_previous_id], candidate_ids)
+                incoming = [
+                    edge
+                    for edge in full_edges
+                    if edge.dst_node_id == current.fragment.fragment_id
+                    and edge.src_node_kind == "artifact_fragment"
+                ]
+                self.assertEqual(
+                    [expected_previous_id],
+                    [edge.src_node_id for edge in incoming],
+                )
+
+    def test_lexical_candidate_ties_use_incremental_fragment_id_order(self) -> None:
+        contexts: list[ArtifactContext] = []
+        candidate_ids: list[str] = []
+        for index in range(52):
+            fragment_id = f"candidate-{51 - index:02d}"
+            candidate_ids.append(fragment_id)
+            text = f"abcdefgh{chr(0x4E00 + index)}"
+            contexts.append(
+                ArtifactContext(
+                    fragment=ArtifactFragment(
+                        fragment_id=fragment_id,
+                        artifact_id=f"artifact-{index}",
+                        json_pointer="/content",
+                        semantic_role="content",
+                        text=text,
+                        text_hash=hashlib.sha256(text.encode("utf-8")).hexdigest(),
+                        normalized_text=text,
+                        token_count=1,
+                    ),
+                    artifact_role="tool_input",
+                    event_id=f"event-{index}",
+                    phase="pre_tool_use",
+                    session_id="session-tie",
+                    turn_id="turn-tie",
+                    tool_use_id=f"tool-{index}",
+                    tool_name="mcp__fixture__publish",
+                    cwd="/workspace",
+                    sequence_no=index + 1,
+                    workspace_id="workspace-tie",
+                    workspace_status="ready",
+                )
+            )
+        current_text = "abcdefgh終"
+        current_id = "current-fragment"
+        contexts.append(
+            ArtifactContext(
+                fragment=ArtifactFragment(
+                    fragment_id=current_id,
+                    artifact_id="artifact-current",
+                    json_pointer="/content",
+                    semantic_role="content",
+                    text=current_text,
+                    text_hash=hashlib.sha256(
+                        current_text.encode("utf-8")
+                    ).hexdigest(),
+                    normalized_text=current_text,
+                    token_count=1,
+                ),
+                artifact_role="tool_input",
+                event_id="event-current",
+                phase="pre_tool_use",
+                session_id="session-tie",
+                turn_id="turn-tie",
+                tool_use_id="tool-current",
+                tool_name="mcp__fixture__publish",
+                cwd="/workspace",
+                sequence_no=53,
+                workspace_id="workspace-tie",
+                workspace_status="ready",
+            )
+        )
+
+        incoming_ids = {
+            edge.src_node_id
+            for edge in build_artifact_flow_edges(contexts)
+            if edge.dst_node_id == current_id
+        }
+
+        self.assertEqual(set(sorted(candidate_ids)[:50]), incoming_ids)
 
     def test_multihop_and_branching_lineage_reaches_both_searches(self) -> None:
         self._record(
@@ -3901,7 +4199,54 @@ class InformationFlowTest(unittest.TestCase):
             },
             sink_types,
         )
-        self.assertEqual(3, len(result.sinks))
+        self.assertEqual(6, len(result.sinks))
+        self.assertEqual(
+            {"payload", "json_key"},
+            {sink.metadata.get("argument_fragment_kind") for sink in result.sinks},
+        )
+
+    def test_mcp_classifier_uses_token_boundaries_for_read_only_names(self) -> None:
+        for tool_name in (
+            "mcp__custom__get_posts",
+            "mcp__github__list_comments",
+            "mcp__custom__search_updates",
+            "mcp__custom__get_post",
+            "mcp__github__get_comment",
+            "mcp__custom__getPosts",
+            "mcp__slack__get_message",
+            "mcp__slack__list_messages",
+        ):
+            with self.subTest(tool_name=tool_name):
+                self.assertIsNone(classify_mcp_sink_type(tool_name, {}))
+
+        self.assertEqual(
+            "external_api_call",
+            classify_mcp_sink_type(
+                "mcp__custom__get_or_create_record",
+                {},
+            ),
+        )
+        expected_write_types = {
+            "mcp__custom__get_or_post_message": "external_api_call",
+            "mcp__custom__get_and_comment": "external_api_call",
+            "mcp__github__get_or_release": "external_git_publish",
+            "mcp__github__createIssue": "external_git_publish",
+            "mcp__slack__sendMessage": "external_message",
+            "mcp__slack__message_user": "external_message",
+            "mcp__slack__get_or_message_user": "external_message",
+            "mcp__custom__publishRecord": "external_api_call",
+            "mcp__custom__updateCustomer": "external_api_call",
+            "mcp__custom__HTTPPost": "external_api_call",
+            "mcp__custom__URLUpload": "external_api_call",
+            "mcp__custom__APIShare": "external_api_call",
+            "mcp__custom__XMLPublish": "external_api_call",
+        }
+        for tool_name, sink_type in expected_write_types.items():
+            with self.subTest(tool_name=tool_name):
+                self.assertEqual(
+                    sink_type,
+                    classify_mcp_sink_type(tool_name, {}),
+                )
 
     def test_mcp_adapter_parses_real_codex_tool_names_and_raw_arguments(self) -> None:
         slack_event = self._record(
@@ -3945,6 +4290,364 @@ class InformationFlowTest(unittest.TestCase):
                 and sink.metadata.get("tool") == "send_message"
                 for sink in result.sinks
             )
+        )
+
+    def test_real_mcp_profile_sinks_observed_content_payload(self) -> None:
+        event = self._record(
+            "pre_tool_use",
+            "profile-publish-content",
+            "mcp__tooluseproxy_e2e__publish_text",
+            tool_input={"content": SECRET},
+        )
+
+        result = run_adapters(
+            self.store.list_artifact_contexts(),
+            Path(self.temporary_directory.name),
+        )
+        sinks = [
+            sink
+            for sink in result.sinks
+            if sink.metadata.get("event_id") == event.event_id
+        ]
+
+        self.assertEqual(1, len(sinks))
+        self.assertEqual("/content", sinks[0].metadata["argument_json_pointer"])
+        self.assertEqual("matched", sinks[0].metadata["profile_status"])
+        self.assertEqual("data", sinks[0].metadata["argument_field_class"])
+        self.assertTrue(sinks[0].metadata["argument_redactable"])
+        self.assertTrue(sinks[0].metadata["profile_preview_eligible"])
+
+    def test_synthetic_mcp_profile_sinks_every_data_and_control_pointer(
+        self,
+    ) -> None:
+        event = self._record(
+            "pre_tool_use",
+            "profile-publish",
+            "mcp__tooluseproxy_fixture__publish_record",
+            tool_input={
+                "destination": "audit",
+                "message": SECRET,
+                "attachment_text": SECRET,
+            },
+        )
+
+        result = run_adapters(
+            self.store.list_artifact_contexts(),
+            Path(self.temporary_directory.name),
+            adapters=(McpAdapter(SYNTHETIC_MULTI_FIELD_MCP_REGISTRY),),
+        )
+        sinks = [
+            sink
+            for sink in result.sinks
+            if sink.metadata.get("event_id") == event.event_id
+        ]
+        pointers = {
+            str(sink.metadata["argument_json_pointer"]): sink for sink in sinks
+        }
+
+        self.assertEqual(
+            {"/destination", "/message", "/attachment_text"},
+            set(pointers),
+        )
+        self.assertEqual(
+            {"matched"},
+            {sink.metadata.get("profile_status") for sink in sinks},
+        )
+        self.assertEqual(
+            "control",
+            pointers["/destination"].metadata["argument_field_class"],
+        )
+        self.assertFalse(
+            pointers["/destination"].metadata["argument_redactable"]
+        )
+        self.assertEqual(
+            "data",
+            pointers["/attachment_text"].metadata["argument_field_class"],
+        )
+        self.assertTrue(
+            pointers["/attachment_text"].metadata["argument_redactable"]
+        )
+        self.assertTrue(
+            all(sink.metadata.get("profile_preview_eligible") for sink in sinks)
+        )
+        edge_sources = {
+            edge.src_node_id
+            for edge in result.edges
+            if edge.dst_node_id in {sink.node_id for sink in sinks}
+        }
+        self.assertEqual(
+            {
+                str(sink.metadata["argument_fragment_id"])
+                for sink in sinks
+            },
+            edge_sources,
+        )
+
+    def test_mcp_profile_shape_reject_falls_back_to_every_scalar_leaf(self) -> None:
+        event = self._record(
+            "pre_tool_use",
+            "profile-rejected",
+            "mcp__tooluseproxy_e2e__publish_text",
+            tool_input={
+                "content": "Public message",
+                "unknown_payload": SECRET,
+            },
+        )
+
+        result = run_adapters(
+            self.store.list_artifact_contexts(),
+            Path(self.temporary_directory.name),
+        )
+        sinks = [
+            sink
+            for sink in result.sinks
+            if sink.metadata.get("event_id") == event.event_id
+        ]
+
+        self.assertEqual(
+            {"/content", "/unknown_payload"},
+            {sink.metadata.get("argument_json_pointer") for sink in sinks},
+        )
+        self.assertEqual(
+            {"payload", "json_key"},
+            {sink.metadata.get("argument_fragment_kind") for sink in sinks},
+        )
+        self.assertEqual(
+            {"shape_rejected"},
+            {sink.metadata.get("profile_status") for sink in sinks},
+        )
+        self.assertEqual(
+            {"unknown_field"},
+            {sink.metadata.get("profile_rejection_code") for sink in sinks},
+        )
+        self.assertFalse(
+            any(sink.metadata.get("profile_preview_eligible") for sink in sinks)
+        )
+
+    def test_unprofiled_mcp_write_sinks_unknown_scalar_fields(self) -> None:
+        event = self._record(
+            "pre_tool_use",
+            "unprofiled-publish",
+            "mcp__custom_crm__publish_record",
+            tool_input={
+                "summary": "Public summary",
+                "opaque_payload": SECRET,
+            },
+        )
+
+        result = run_adapters(
+            self.store.list_artifact_contexts(),
+            Path(self.temporary_directory.name),
+        )
+        sinks = [
+            sink
+            for sink in result.sinks
+            if sink.metadata.get("event_id") == event.event_id
+        ]
+
+        self.assertEqual(
+            {"/summary", "/opaque_payload"},
+            {sink.metadata.get("argument_json_pointer") for sink in sinks},
+        )
+        self.assertEqual(
+            {"payload", "json_key"},
+            {sink.metadata.get("argument_fragment_kind") for sink in sinks},
+        )
+        self.assertEqual(
+            {"unprofiled"},
+            {sink.metadata.get("profile_status") for sink in sinks},
+        )
+
+    def test_unprofiled_real_mcp_empty_key_is_not_confused_with_root(self) -> None:
+        workspace = self._write_runtime_source_config()
+        event = self._record(
+            "pre_tool_use",
+            "unprofiled-empty-key",
+            "mcp__custom_crm__publish_record",
+            tool_input={"": SECRET},
+            cwd=str(workspace),
+        )
+        contexts = self.store.list_artifact_contexts()
+        result = run_adapters(
+            contexts,
+            Path(self.temporary_directory.name),
+        )
+        sinks = [
+            sink
+            for sink in result.sinks
+            if sink.metadata.get("event_id") == event.event_id
+        ]
+        fragments_by_id = {
+            context.fragment.fragment_id: context.fragment for context in contexts
+        }
+
+        self.assertEqual(2, len(sinks))
+        self.assertEqual({"/"}, {sink.metadata["argument_json_pointer"] for sink in sinks})
+        self.assertEqual(
+            {"json_key", "payload"},
+            {sink.metadata["argument_fragment_kind"] for sink in sinks},
+        )
+        self.assertEqual(
+            {"", SECRET},
+            {
+                fragments_by_id[str(sink.metadata["argument_fragment_id"])].text
+                for sink in sinks
+            },
+        )
+        self.assertFalse(
+            any(
+                fragments_by_id[
+                    str(sink.metadata["argument_fragment_id"])
+                ].fragment_kind
+                == "artifact_root"
+                for sink in sinks
+            )
+        )
+
+        output = evaluate_pre_tool_hook_policy(
+            self.store,
+            workspace,
+            current_event=event,
+            enabled_adapters=frozenset({"mcp"}),
+        )
+        self.assertEqual(
+            "deny",
+            output["hookSpecificOutput"]["permissionDecision"],
+        )
+
+    def test_unprofiled_real_mcp_sinks_keys_and_server_tool_arguments(
+        self,
+    ) -> None:
+        cases = (
+            ("top-key", {SECRET: "public"}, f"/{SECRET}", "json_key"),
+            (
+                "nested-key",
+                {"metadata": {SECRET: "public"}},
+                f"/metadata/{SECRET}",
+                "json_key",
+            ),
+            ("server-value", {"server": SECRET}, "/server", "payload"),
+            ("tool-value", {"tool": SECRET}, "/tool", "payload"),
+        )
+        for identity, tool_input, pointer, fragment_kind in cases:
+            with self.subTest(identity=identity):
+                event = self._record(
+                    "pre_tool_use",
+                    f"unprofiled-{identity}",
+                    "mcp__custom_crm__publish_record",
+                    tool_input=tool_input,
+                )
+                contexts = self.store.list_artifact_contexts()
+                result = run_adapters(
+                    contexts,
+                    Path(self.temporary_directory.name),
+                )
+                matching = [
+                    sink
+                    for sink in result.sinks
+                    if sink.metadata.get("event_id") == event.event_id
+                    and sink.metadata.get("argument_json_pointer") == pointer
+                    and sink.metadata.get("argument_fragment_kind") == fragment_kind
+                ]
+
+                self.assertEqual(1, len(matching))
+                fragment_id = matching[0].metadata["argument_fragment_id"]
+                fragment = next(
+                    context.fragment
+                    for context in contexts
+                    if context.fragment.fragment_id == fragment_id
+                )
+                self.assertEqual(SECRET, fragment.text)
+                self.assertEqual("unprofiled", matching[0].metadata["profile_status"])
+
+    def test_wrapped_mcp_tracks_server_and_tool_named_arguments(self) -> None:
+        event = self._record(
+            "pre_tool_use",
+            "wrapped-server-tool-arguments",
+            "mcp",
+            tool_input={
+                "server": "slack",
+                "tool": "send_message",
+                "arguments": {"server": SECRET, "tool": SECRET},
+            },
+        )
+        contexts = self.store.list_artifact_contexts()
+        adapter_result = run_adapters(
+            contexts,
+            Path(self.temporary_directory.name),
+        )
+        current_sinks = [
+            sink
+            for sink in adapter_result.sinks
+            if sink.metadata.get("event_id") == event.event_id
+            and sink.metadata.get("argument_fragment_kind") == "payload"
+        ]
+        artifact_edges = build_artifact_flow_edges(contexts) + list(
+            adapter_result.edges
+        )
+        source_edges = build_source_binding_edges(
+            [self._source_chunk()],
+            contexts,
+            artifact_edges,
+        )
+
+        self.assertEqual(
+            {"/arguments/server", "/arguments/tool"},
+            {
+                sink.metadata.get("argument_json_pointer")
+                for sink in current_sinks
+            },
+        )
+        self.assertEqual(
+            {
+                sink.metadata["argument_fragment_id"]
+                for sink in current_sinks
+            },
+            {edge.dst_node_id for edge in source_edges},
+        )
+
+    def test_similarity_canonicalization_only_preserves_duplicate_mcp_arguments(
+        self,
+    ) -> None:
+        non_mcp = self._record(
+            "pre_tool_use",
+            "duplicate-non-mcp",
+            "Search",
+            tool_input={"message": SECRET, "body": SECRET},
+        )
+        mcp = self._record(
+            "pre_tool_use",
+            "duplicate-mcp",
+            "mcp__custom_crm__publish_record",
+            tool_input={"message": SECRET, "body": SECRET},
+        )
+        contexts = self.store.list_artifact_contexts()
+
+        stored_non_mcp = [
+            context
+            for context in contexts
+            if context.event_id == non_mcp.event_id
+            and context.fragment.fragment_kind == "payload"
+            and context.fragment.text == SECRET
+        ]
+        stored_mcp = [
+            context
+            for context in contexts
+            if context.event_id == mcp.event_id
+            and context.fragment.fragment_kind == "payload"
+            and context.fragment.text == SECRET
+        ]
+        canonical = select_canonical_similarity_contexts(contexts)
+
+        self.assertEqual(2, len(stored_non_mcp))
+        self.assertEqual(2, len(stored_mcp))
+        self.assertEqual(
+            1,
+            sum(context in canonical for context in stored_non_mcp),
+        )
+        self.assertEqual(
+            2,
+            sum(context in canonical for context in stored_mcp),
         )
 
     def test_external_adapter_sinks_receive_source_lineage(self) -> None:
@@ -4844,6 +5547,330 @@ class InformationFlowTest(unittest.TestCase):
         self.assertEqual(1, len(decisions))
         self.assertEqual("external_message", decisions[0].sink_type)
 
+    def test_pre_tool_policy_denies_profiled_content_and_allows_public_call(
+        self,
+    ) -> None:
+        workspace = self._write_runtime_source_config()
+        self.store.upsert_sources(
+            [self._protected_source("private.py")],
+            [self._source_chunk()],
+        )
+        dangerous = self._record(
+            "pre_tool_use",
+            "profile-dangerous",
+            "mcp__tooluseproxy_e2e__publish_text",
+            tool_input={"content": SECRET},
+            cwd=str(workspace),
+        )
+        public = self._record(
+            "pre_tool_use",
+            "profile-public",
+            "mcp__tooluseproxy_e2e__publish_text",
+            tool_input={"content": "Public message only"},
+            cwd=str(workspace),
+        )
+
+        denied = evaluate_pre_tool_hook_policy(
+            self.store,
+            Path(self.temporary_directory.name),
+            current_event=dangerous,
+            enabled_adapters=frozenset({"mcp"}),
+        )
+        allowed = evaluate_pre_tool_hook_policy(
+            self.store,
+            Path(self.temporary_directory.name),
+            current_event=public,
+            enabled_adapters=frozenset({"mcp"}),
+        )
+
+        self.assertEqual(
+            "deny",
+            denied["hookSpecificOutput"]["permissionDecision"],
+        )
+        self.assertNotIn("updatedInput", denied["hookSpecificOutput"])
+        self.assertNotIn(SECRET, json.dumps(denied))
+        self.assertEqual({}, allowed)
+        decision = self.store.list_policy_decisions()[0]
+        assert dangerous.workspace_id is not None
+        sink_by_id = {
+            sink.node_id: sink
+            for sink in self.store.list_sink_candidates_for_session(
+                "session-1",
+                workspace_id=dangerous.workspace_id,
+            )
+        }
+        self.assertEqual(
+            "/content",
+            sink_by_id[decision.sink_node_id].metadata["argument_json_pointer"],
+        )
+        self.assertEqual(
+            "matched",
+            sink_by_id[decision.sink_node_id].metadata["profile_status"],
+        )
+        self.assertEqual(
+            {"session-full", "session-incremental"},
+            {
+                json.loads(run.config_json)["runtime_reanalysis"]
+                for run in self.store.list_analysis_runs()
+            },
+        )
+
+    def test_pre_tool_policy_shape_reject_still_denies_unknown_profile_field(
+        self,
+    ) -> None:
+        workspace = self._write_runtime_source_config()
+        self.store.upsert_sources(
+            [self._protected_source("private.py")],
+            [self._source_chunk()],
+        )
+        event = self._record(
+            "pre_tool_use",
+            "profile-shape-reject",
+            "mcp__tooluseproxy_e2e__publish_text",
+            tool_input={
+                "content": "Public message",
+                "unknown_payload": SECRET,
+            },
+            cwd=str(workspace),
+        )
+
+        output = evaluate_pre_tool_hook_policy(
+            self.store,
+            Path(self.temporary_directory.name),
+            current_event=event,
+            enabled_adapters=frozenset({"mcp"}),
+        )
+
+        self.assertEqual(
+            "deny",
+            output["hookSpecificOutput"]["permissionDecision"],
+        )
+        self.assertNotIn(SECRET, json.dumps(output))
+        assert event.workspace_id is not None
+        rejected = [
+            sink
+            for sink in self.store.list_sink_candidates_for_session(
+                "session-1",
+                workspace_id=event.workspace_id,
+            )
+            if sink.metadata.get("event_id") == event.event_id
+        ]
+        self.assertTrue(rejected)
+        self.assertEqual(
+            {"shape_rejected"},
+            {sink.metadata.get("profile_status") for sink in rejected},
+        )
+
+    def test_pre_tool_policy_shape_reject_denies_nested_scalar_leaf(self) -> None:
+        workspace = self._write_runtime_source_config()
+        self.store.upsert_sources(
+            [self._protected_source("private.py")],
+            [self._source_chunk()],
+        )
+        event = self._record(
+            "pre_tool_use",
+            "profile-nested-reject",
+            "mcp__tooluseproxy_e2e__publish_text",
+            tool_input={"content": [SECRET]},
+            cwd=str(workspace),
+        )
+
+        output = evaluate_pre_tool_hook_policy(
+            self.store,
+            Path(self.temporary_directory.name),
+            current_event=event,
+            enabled_adapters=frozenset({"mcp"}),
+        )
+
+        self.assertEqual(
+            "deny",
+            output["hookSpecificOutput"]["permissionDecision"],
+        )
+        assert event.workspace_id is not None
+        rejected = [
+            sink
+            for sink in self.store.list_sink_candidates_for_session(
+                "session-1",
+                workspace_id=event.workspace_id,
+            )
+            if sink.metadata.get("event_id") == event.event_id
+        ]
+        self.assertIn(
+            "/content/0",
+            {sink.metadata.get("argument_json_pointer") for sink in rejected},
+        )
+        self.assertEqual(
+            {"unsupported_nesting"},
+            {sink.metadata.get("profile_rejection_code") for sink in rejected},
+        )
+
+    def test_pre_tool_policy_unprofiled_write_denies_unknown_scalar_field(
+        self,
+    ) -> None:
+        workspace = self._write_runtime_source_config()
+        self.store.upsert_sources(
+            [self._protected_source("private.py")],
+            [self._source_chunk()],
+        )
+        event = self._record(
+            "pre_tool_use",
+            "unprofiled-unknown-secret",
+            "mcp__custom_crm__publish_record",
+            tool_input={
+                "summary": "Public summary",
+                "opaque_payload": SECRET,
+            },
+            cwd=str(workspace),
+        )
+
+        output = evaluate_pre_tool_hook_policy(
+            self.store,
+            Path(self.temporary_directory.name),
+            current_event=event,
+            enabled_adapters=frozenset({"mcp"}),
+        )
+
+        self.assertEqual(
+            "deny",
+            output["hookSpecificOutput"]["permissionDecision"],
+        )
+        self.assertNotIn(SECRET, json.dumps(output))
+
+    def test_pre_tool_policy_denies_server_and_tool_named_real_arguments(self) -> None:
+        workspace = self._write_runtime_source_config()
+        self.store.upsert_sources(
+            [self._protected_source("private.py")],
+            [self._source_chunk()],
+        )
+        for field_name in ("server", "tool"):
+            with self.subTest(field_name=field_name):
+                event = self._record(
+                    "pre_tool_use",
+                    f"unprofiled-{field_name}-secret",
+                    "mcp__custom_crm__publish_record",
+                    tool_input={field_name: SECRET},
+                    cwd=str(workspace),
+                )
+                output = evaluate_pre_tool_hook_policy(
+                    self.store,
+                    Path(self.temporary_directory.name),
+                    current_event=event,
+                    enabled_adapters=frozenset({"mcp"}),
+                )
+
+                self.assertEqual(
+                    "deny",
+                    output["hookSpecificOutput"]["permissionDecision"],
+                )
+                self.assertNotIn(SECRET, json.dumps(output))
+                assert event.workspace_id is not None
+                current_sinks = [
+                    sink
+                    for sink in self.store.list_sink_candidates_for_session(
+                        "session-1",
+                        workspace_id=event.workspace_id,
+                    )
+                    if sink.metadata.get("event_id") == event.event_id
+                    and sink.metadata.get("argument_fragment_kind") == "payload"
+                ]
+                self.assertEqual(
+                    {f"/{field_name}"},
+                    {
+                        sink.metadata.get("argument_json_pointer")
+                        for sink in current_sinks
+                    },
+                )
+
+    def test_pre_tool_policy_denies_profile_rejected_and_unprofiled_key_names(
+        self,
+    ) -> None:
+        workspace = self._write_runtime_source_config()
+        self.store.upsert_sources(
+            [self._protected_source("private.py")],
+            [self._source_chunk()],
+        )
+        cases = (
+            (
+                "profile-key-secret",
+                "mcp__tooluseproxy_e2e__publish_text",
+                {"content": "public", SECRET: "public"},
+                "shape_rejected",
+            ),
+            (
+                "unprofiled-nested-key-secret",
+                "mcp__custom_crm__publish_record",
+                {"metadata": {SECRET: "public"}},
+                "unprofiled",
+            ),
+        )
+        for tool_use_id, tool_name, tool_input, profile_status in cases:
+            with self.subTest(tool_use_id=tool_use_id):
+                event = self._record(
+                    "pre_tool_use",
+                    tool_use_id,
+                    tool_name,
+                    tool_input=tool_input,
+                    cwd=str(workspace),
+                )
+                output = evaluate_pre_tool_hook_policy(
+                    self.store,
+                    Path(self.temporary_directory.name),
+                    current_event=event,
+                    enabled_adapters=frozenset({"mcp"}),
+                )
+
+                self.assertEqual(
+                    "deny",
+                    output["hookSpecificOutput"]["permissionDecision"],
+                )
+                self.assertNotIn(SECRET, json.dumps(output))
+                assert event.workspace_id is not None
+                key_sinks = [
+                    sink
+                    for sink in self.store.list_sink_candidates_for_session(
+                        "session-1",
+                        workspace_id=event.workspace_id,
+                    )
+                    if sink.metadata.get("event_id") == event.event_id
+                    and sink.metadata.get("argument_fragment_kind") == "json_key"
+                    and sink.metadata.get("profile_status") == profile_status
+                ]
+                self.assertTrue(key_sinks)
+
+    def test_pre_tool_policy_does_not_substring_taint_public_json_key(self) -> None:
+        workspace = self._write_runtime_source_config()
+        self.store.upsert_sources(
+            [self._protected_source("private.py")],
+            [self._source_chunk()],
+        )
+        event = self._record(
+            "pre_tool_use",
+            "public-key-substring",
+            "mcp__custom_crm__publish_record",
+            tool_input={"secret": "public"},
+            cwd=str(workspace),
+        )
+
+        output = evaluate_pre_tool_hook_policy(
+            self.store,
+            workspace,
+            current_event=event,
+            enabled_adapters=frozenset({"mcp"}),
+        )
+
+        self.assertEqual({}, output)
+        assert event.workspace_id is not None
+        self.assertTrue(
+            any(
+                sink.metadata.get("argument_fragment_kind") == "json_key"
+                for sink in self.store.list_sink_candidates_for_session(
+                    "session-1",
+                    workspace_id=event.workspace_id,
+                )
+            )
+        )
+        self.assertEqual([], self.store.list_policy_decisions())
+
     def test_pre_tool_policy_allows_read_only_mcp_call(self) -> None:
         self.store.upsert_sources(
             [self._protected_source("private.py")],
@@ -5073,6 +6100,601 @@ class InformationFlowTest(unittest.TestCase):
             json.loads(enabled.stdout)["hookSpecificOutput"]["permissionDecision"],
         )
         self.assertNotIn(SECRET, enabled.stdout)
+
+    def test_profiled_mcp_fixture_runs_through_real_hook_entrypoint(self) -> None:
+        workspace = self._write_runtime_source_config()
+        payload = json.loads(
+            (
+                REPO_ROOT
+                / "tests/fixtures/codex_hooks/mcp_profile_publish_text_pre_tool_use.json"
+            ).read_text(encoding="utf-8")
+        )
+        payload["cwd"] = str(workspace)
+        self.assertEqual({"content"}, set(payload["tool_input"]))
+        payload["tool_input"]["content"] = SECRET
+
+        result = subprocess.run(
+            [sys.executable, str(REPO_ROOT / "hooks" / "monitor_pre_tool.py")],
+            input=json.dumps(payload),
+            cwd=REPO_ROOT,
+            env={
+                **os.environ,
+                "TOOLUSEPROXY_DB_PATH": str(self.db_path),
+                "TOOLUSEPROXY_PRE_TOOL_POLICY": "1",
+                "TOOLUSEPROXY_PRE_TOOL_MCP_POLICY": "1",
+            },
+            check=True,
+            text=True,
+            capture_output=True,
+        )
+
+        output = json.loads(result.stdout)
+        self.assertEqual(
+            "deny",
+            output["hookSpecificOutput"]["permissionDecision"],
+        )
+        self.assertNotIn("updatedInput", output["hookSpecificOutput"])
+        self.assertNotIn(SECRET, result.stdout)
+        self.assertNotIn(SECRET, result.stderr)
+
+    def test_outbound_mcp_input_cap_denies_before_artifacts_or_database(self) -> None:
+        workspace = self._write_runtime_source_config()
+        capped_db_path = Path(self.temporary_directory.name) / "capped.db"
+        tool_input = {f"field_{index}": "public" for index in range(32)}
+        tool_input[SECRET] = "public"
+        payload = {
+            "session_id": "session-mcp-cap",
+            "turn_id": "turn-mcp-cap",
+            "tool_use_id": "mcp-cap-fields",
+            "tool_name": "mcp__custom_crm__publish_record",
+            "cwd": str(workspace),
+            "tool_input": tool_input,
+        }
+
+        stdin = io.TextIOWrapper(io.BytesIO(json.dumps(payload).encode("utf-8")))
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with (
+            patch("sys.stdin", stdin),
+            patch.dict(
+                os.environ,
+                {
+                    "TOOLUSEPROXY_DB_PATH": str(capped_db_path),
+                    "TOOLUSEPROXY_WORKSPACE_ROOT": str(workspace),
+                    "TOOLUSEPROXY_PRE_TOOL_POLICY": "1",
+                    "TOOLUSEPROXY_PRE_TOOL_MCP_POLICY": "1",
+                },
+            ),
+            patch(
+                "hook_monitor.runtime.runner.build_artifacts",
+                side_effect=AssertionError("artifacts must not be built"),
+            ),
+            patch.object(
+                EventStore,
+                "initialize",
+                side_effect=AssertionError("database must not be initialized"),
+            ),
+            redirect_stdout(stdout),
+            redirect_stderr(stderr),
+        ):
+            exit_code = run_hook("pre_tool_use")
+
+        self.assertEqual(0, exit_code)
+        output = json.loads(stdout.getvalue())
+        self.assertEqual(
+            "deny",
+            output["hookSpecificOutput"]["permissionDecision"],
+        )
+        self.assertIn(
+            "field_count_exceeded",
+            output["hookSpecificOutput"]["permissionDecisionReason"],
+        )
+        self.assertNotIn("updatedInput", output["hookSpecificOutput"])
+        self.assertNotIn(SECRET, stdout.getvalue())
+        self.assertEqual("", stderr.getvalue())
+        self.assertFalse(capped_db_path.exists())
+
+    def test_oversized_read_only_mcp_call_is_not_preflight_denied(self) -> None:
+        workspace = self._write_runtime_source_config()
+        with (
+            patch(
+                "hook_monitor.runtime.runner.build_artifacts",
+                side_effect=AssertionError("read-only bypass must precede artifacts"),
+            ),
+            patch.object(
+                EventStore,
+                "initialize",
+                side_effect=AssertionError("read-only bypass must precede DB init"),
+            ),
+        ):
+            for index, tool_name in enumerate(
+                (
+                    "mcp__github__get_issue",
+                    "mcp__custom__get_posts",
+                    "mcp__github__list_comments",
+                    "mcp__custom__search_updates",
+                )
+            ):
+                with self.subTest(tool_name=tool_name):
+                    exit_code, stdout, stderr = self._run_hook_in_process(
+                        "pre_tool_use",
+                        {
+                            "session_id": "session-mcp-read-cap",
+                            "turn_id": "turn-mcp-read-cap",
+                            "tool_use_id": f"mcp-read-cap-{index}",
+                            "tool_name": tool_name,
+                            "cwd": str(workspace),
+                            "tool_input": {
+                                f"field_{field_index}": "public"
+                                for field_index in range(33)
+                            },
+                        },
+                        {
+                            "TOOLUSEPROXY_DB_PATH": str(self.db_path),
+                            "TOOLUSEPROXY_WORKSPACE_ROOT": str(workspace),
+                            "TOOLUSEPROXY_PRE_TOOL_POLICY": "1",
+                            "TOOLUSEPROXY_PRE_TOOL_MCP_POLICY": "1",
+                        },
+                    )
+
+                    self.assertEqual(0, exit_code)
+                    self.assertEqual("", stdout)
+                    self.assertEqual("", stderr)
+        self.assertEqual([], self.store.list_artifact_contexts())
+
+    def test_raw_json_depth_gate_denies_before_standard_decoder(self) -> None:
+        workspace = self._write_runtime_source_config()
+        depth_db_path = Path(self.temporary_directory.name) / "depth-cap.db"
+        prefix = (
+            '{"session_id":"session-raw-depth",'
+            '"turn_id":"turn-raw-depth",'
+            '"tool_use_id":"raw-depth",'
+            '"tool_name":"mcp__custom__publish_record",'
+            f'"cwd":{json.dumps(str(workspace))},'
+            '"tool_input":{"payload":'
+        )
+        raw_payload = (
+            prefix
+            + ("[" * 1_100)
+            + json.dumps(SECRET)
+            + ("]" * 1_100)
+            + "}}"
+        )
+        stdin = io.TextIOWrapper(io.BytesIO(raw_payload.encode("utf-8")))
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with (
+            patch("sys.stdin", stdin),
+            patch.dict(
+                os.environ,
+                {
+                    "TOOLUSEPROXY_DB_PATH": str(depth_db_path),
+                    "TOOLUSEPROXY_WORKSPACE_ROOT": str(workspace),
+                    "TOOLUSEPROXY_PRE_TOOL_POLICY": "1",
+                    "TOOLUSEPROXY_PRE_TOOL_MCP_POLICY": "1",
+                },
+            ),
+            patch(
+                "hook_monitor.runtime.runner.parse_hook_payload",
+                side_effect=AssertionError("decoder must not run"),
+            ),
+            redirect_stdout(stdout),
+            redirect_stderr(stderr),
+        ):
+            exit_code = run_hook("pre_tool_use")
+
+        output = json.loads(stdout.getvalue())
+        self.assertEqual(0, exit_code)
+        self.assertEqual(
+            "deny",
+            output["hookSpecificOutput"]["permissionDecision"],
+        )
+        self.assertIn(
+            "json_envelope_nesting_exceeded",
+            output["hookSpecificOutput"]["permissionDecisionReason"],
+        )
+        self.assertNotIn(SECRET, stdout.getvalue())
+        self.assertEqual("", stderr.getvalue())
+        self.assertFalse(depth_db_path.exists())
+
+    def test_raw_json_byte_gate_denies_before_standard_decoder(self) -> None:
+        class RecordingBytesIO(io.BytesIO):
+            def __init__(self, initial_bytes: bytes) -> None:
+                super().__init__(initial_bytes)
+                self.read_sizes: list[int] = []
+
+            def read(self, size: int = -1) -> bytes:
+                self.read_sizes.append(size)
+                return super().read(size)
+
+        workspace = self._write_runtime_source_config()
+        byte_db_path = Path(self.temporary_directory.name) / "byte-cap.db"
+        raw_payload = (
+            b'{"tool_name":"mcp__custom__publish_record",'
+            + f'"cwd":{json.dumps(str(workspace))},'.encode("utf-8")
+            + b'"tool_input":{"content":"'
+            + (b"x" * (1024 * 1024))
+            + SECRET.encode("utf-8")
+            + b'"}}'
+        )
+        buffer = RecordingBytesIO(raw_payload)
+        stdin = io.TextIOWrapper(buffer)
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with (
+            patch("sys.stdin", stdin),
+            patch.dict(
+                os.environ,
+                {
+                    "TOOLUSEPROXY_DB_PATH": str(byte_db_path),
+                    "TOOLUSEPROXY_PRE_TOOL_POLICY": "1",
+                    "TOOLUSEPROXY_PRE_TOOL_MCP_POLICY": "1",
+                },
+            ),
+            patch(
+                "hook_monitor.runtime.runner.parse_hook_payload",
+                side_effect=AssertionError("decoder must not run"),
+            ),
+            redirect_stdout(stdout),
+            redirect_stderr(stderr),
+        ):
+            exit_code = run_hook("pre_tool_use")
+
+        output = json.loads(stdout.getvalue())
+        self.assertEqual(0, exit_code)
+        self.assertEqual(
+            "deny",
+            output["hookSpecificOutput"]["permissionDecision"],
+        )
+        self.assertIn(
+            "json_envelope_bytes_exceeded",
+            output["hookSpecificOutput"]["permissionDecisionReason"],
+        )
+        self.assertNotIn(SECRET, stdout.getvalue())
+        self.assertEqual("", stderr.getvalue())
+        self.assertFalse(byte_db_path.exists())
+        self.assertEqual([1024 * 1024 + 1], buffer.read_sizes)
+
+    def test_raw_gate_keeps_large_known_non_mcp_call_on_existing_path(self) -> None:
+        class RecordingBytesIO(io.BytesIO):
+            def __init__(self, initial_bytes: bytes) -> None:
+                super().__init__(initial_bytes)
+                self.read_sizes: list[int] = []
+
+            def read(self, size: int = -1) -> bytes:
+                self.read_sizes.append(size)
+                return super().read(size)
+
+        workspace = self._write_runtime_source_config()
+        raw_payload = (
+            b'{"tool_name":"apply_patch",'
+            + f'"cwd":{json.dumps(str(workspace))},'.encode("utf-8")
+            + b'"tool_input":{"patch":"'
+            + (b"x" * (1024 * 1024))
+            + b'"}}'
+        )
+        buffer = RecordingBytesIO(raw_payload)
+        stdin = io.TextIOWrapper(buffer)
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        decoded_payload = {
+            "session_id": "non-mcp-large",
+            "tool_name": "apply_patch",
+            "cwd": str(workspace),
+            "tool_input": {},
+        }
+        with (
+            patch("sys.stdin", stdin),
+            patch.dict(
+                os.environ,
+                {
+                    "TOOLUSEPROXY_DB_PATH": str(self.db_path),
+                    "TOOLUSEPROXY_PRE_TOOL_POLICY": "1",
+                    "TOOLUSEPROXY_PRE_TOOL_MCP_POLICY": "1",
+                },
+            ),
+            patch(
+                "hook_monitor.runtime.runner.parse_hook_payload",
+                return_value=decoded_payload,
+            ) as decoder,
+            redirect_stdout(stdout),
+            redirect_stderr(stderr),
+        ):
+            exit_code = run_hook("pre_tool_use")
+
+        self.assertEqual(0, exit_code)
+        self.assertEqual("", stdout.getvalue())
+        self.assertEqual("", stderr.getvalue())
+        self.assertEqual([1024 * 1024 + 1, -1], buffer.read_sizes)
+        decoded_bytes = decoder.call_args.args[0]
+        self.assertEqual(raw_payload, decoded_bytes)
+        self.assertIsNone(decoder.call_args.kwargs["max_number_chars"])
+
+    def test_raw_gate_bypasses_large_mcp_outside_configured_workspace(self) -> None:
+        workspace = self._write_runtime_source_config()
+        outside = Path(self.temporary_directory.name).parent
+        bypass_db_path = Path(self.temporary_directory.name) / "outside-cap.db"
+        raw_payload = (
+            b'{"tool_name":"mcp__custom__publish_record",'
+            + f'"cwd":{json.dumps(str(outside))},'.encode("utf-8")
+            + b'"tool_input":{"content":"'
+            + (b"x" * (1024 * 1024))
+            + b'"}}'
+        )
+        stdin = io.TextIOWrapper(io.BytesIO(raw_payload))
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with (
+            patch("sys.stdin", stdin),
+            patch.dict(
+                os.environ,
+                {
+                    "TOOLUSEPROXY_DB_PATH": str(bypass_db_path),
+                    "TOOLUSEPROXY_WORKSPACE_ROOT": str(workspace),
+                    "TOOLUSEPROXY_PRE_TOOL_POLICY": "1",
+                    "TOOLUSEPROXY_PRE_TOOL_MCP_POLICY": "1",
+                },
+            ),
+            patch(
+                "hook_monitor.runtime.runner.parse_hook_payload",
+                side_effect=AssertionError("decoder must not run"),
+            ),
+            redirect_stdout(stdout),
+            redirect_stderr(stderr),
+        ):
+            exit_code = run_hook("pre_tool_use")
+
+        self.assertEqual(0, exit_code)
+        self.assertEqual("", stdout.getvalue())
+        self.assertEqual("", stderr.getvalue())
+        self.assertFalse(bypass_db_path.exists())
+
+    def test_huge_mcp_numeric_token_is_rejected_before_materialization(self) -> None:
+        workspace = self._write_runtime_source_config()
+        numeric_db_path = Path(self.temporary_directory.name) / "numeric-cap.db"
+        raw_payload = (
+            '{"tool_name":"mcp__custom__publish_record",'
+            f'"cwd":{json.dumps(str(workspace))},'
+            '"tool_input":{"count":'
+            + ("9" * 100_000)
+            + "}}"
+        ).encode("utf-8")
+        stdin = io.TextIOWrapper(io.BytesIO(raw_payload))
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with (
+            patch("sys.stdin", stdin),
+            patch.dict(
+                os.environ,
+                {
+                    "TOOLUSEPROXY_DB_PATH": str(numeric_db_path),
+                    "TOOLUSEPROXY_PRE_TOOL_POLICY": "1",
+                    "TOOLUSEPROXY_PRE_TOOL_MCP_POLICY": "1",
+                },
+            ),
+            patch(
+                "hook_monitor.runtime.runner.build_artifacts",
+                side_effect=AssertionError("artifacts must not be built"),
+            ),
+            patch.object(
+                EventStore,
+                "initialize",
+                side_effect=AssertionError("database must not be initialized"),
+            ),
+            redirect_stdout(stdout),
+            redirect_stderr(stderr),
+        ):
+            exit_code = run_hook("pre_tool_use")
+
+        output = json.loads(stdout.getvalue())
+        self.assertEqual(0, exit_code)
+        self.assertEqual(
+            "deny",
+            output["hookSpecificOutput"]["permissionDecision"],
+        )
+        self.assertIn(
+            "numeric_token_exceeded",
+            output["hookSpecificOutput"]["permissionDecisionReason"],
+        )
+        self.assertEqual("", stderr.getvalue())
+        self.assertFalse(numeric_db_path.exists())
+
+    def test_huge_read_only_mcp_numeric_token_bypasses_without_storage(self) -> None:
+        workspace = self._write_runtime_source_config()
+        numeric_db_path = Path(self.temporary_directory.name) / "numeric-read-cap.db"
+        raw_payload = (
+            '{"tool_name":"mcp__custom__get_record",'
+            f'"cwd":{json.dumps(str(workspace))},'
+            '"tool_input":{"count":'
+            + ("9" * 100_000)
+            + "}}"
+        ).encode("utf-8")
+        stdin = io.TextIOWrapper(io.BytesIO(raw_payload))
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with (
+            patch("sys.stdin", stdin),
+            patch.dict(
+                os.environ,
+                {
+                    "TOOLUSEPROXY_DB_PATH": str(numeric_db_path),
+                    "TOOLUSEPROXY_PRE_TOOL_POLICY": "1",
+                    "TOOLUSEPROXY_PRE_TOOL_MCP_POLICY": "1",
+                },
+            ),
+            patch(
+                "hook_monitor.runtime.runner.build_artifacts",
+                side_effect=AssertionError("artifacts must not be built"),
+            ),
+            patch.object(
+                EventStore,
+                "initialize",
+                side_effect=AssertionError("database must not be initialized"),
+            ),
+            redirect_stdout(stdout),
+            redirect_stderr(stderr),
+        ):
+            exit_code = run_hook("pre_tool_use")
+
+        self.assertEqual(0, exit_code)
+        self.assertEqual("", stdout.getvalue())
+        self.assertEqual("", stderr.getvalue())
+        self.assertFalse(numeric_db_path.exists())
+
+    def test_invalid_unicode_mcp_value_or_key_is_denied_before_event_id(self) -> None:
+        workspace = self._write_runtime_source_config()
+        for identity, poison_member in (
+            ("value", b'"poison":"\\ud800"'),
+            ("key", b'"\\ud800":"public"'),
+        ):
+            with self.subTest(identity=identity):
+                unicode_db_path = (
+                    Path(self.temporary_directory.name)
+                    / f"invalid-unicode-{identity}.db"
+                )
+                raw_payload = (
+                    b'{"tool_name":"mcp__custom__publish_record",'
+                    + f'"cwd":{json.dumps(str(workspace))},'.encode("utf-8")
+                    + b'"tool_input":{"content":'
+                    + json.dumps(SECRET).encode("utf-8")
+                    + b","
+                    + poison_member
+                    + b"}}"
+                )
+                stdin = io.TextIOWrapper(io.BytesIO(raw_payload))
+                stdout = io.StringIO()
+                stderr = io.StringIO()
+                with (
+                    patch("sys.stdin", stdin),
+                    patch.dict(
+                        os.environ,
+                        {
+                            "TOOLUSEPROXY_DB_PATH": str(unicode_db_path),
+                            "TOOLUSEPROXY_PRE_TOOL_POLICY": "1",
+                            "TOOLUSEPROXY_PRE_TOOL_MCP_POLICY": "1",
+                        },
+                    ),
+                    patch(
+                        "hook_monitor.runtime.runner.build_artifacts",
+                        side_effect=AssertionError("artifacts must not be built"),
+                    ),
+                    patch.object(
+                        EventStore,
+                        "initialize",
+                        side_effect=AssertionError(
+                            "database must not be initialized"
+                        ),
+                    ),
+                    redirect_stdout(stdout),
+                    redirect_stderr(stderr),
+                ):
+                    exit_code = run_hook("pre_tool_use")
+
+                output = json.loads(stdout.getvalue())
+                self.assertEqual(0, exit_code)
+                self.assertEqual(
+                    "deny",
+                    output["hookSpecificOutput"]["permissionDecision"],
+                )
+                self.assertIn(
+                    "invalid_unicode_scalar",
+                    output["hookSpecificOutput"]["permissionDecisionReason"],
+                )
+                self.assertNotIn(SECRET, stdout.getvalue())
+                self.assertEqual("", stderr.getvalue())
+                self.assertFalse(unicode_db_path.exists())
+
+    def test_bounded_hook_decoder_rejects_nonfinite_and_non_utf8_json(self) -> None:
+        payload = parse_hook_payload(
+            b'{"count":-12.5e2}',
+            max_number_chars=16,
+        )
+        self.assertEqual(-1250.0, payload["count"])
+        self.assertEqual(
+            "😀",
+            parse_hook_payload(
+                b'{"emoji":"\\ud83d\\ude00"}',
+                max_number_chars=16,
+            )["emoji"],
+        )
+
+        for raw_payload, rejection_code in (
+            (b'{"count":123456789}', "numeric_token_exceeded"),
+            (b'{"count":1e9999}', "numeric_value_non_finite"),
+            (b'{"count":NaN}', "unsupported_numeric_constant"),
+        ):
+            with self.subTest(rejection_code=rejection_code):
+                with self.assertRaises(HookPayloadLimitError) as raised:
+                    parse_hook_payload(raw_payload, max_number_chars=8)
+                self.assertEqual(rejection_code, raised.exception.rejection_code)
+
+        utf16_payload = '{"tool_name":"mcp__custom__publish_record"}'.encode(
+            "utf-16"
+        )
+        with self.assertRaisesRegex(HookPayloadError, "UTF-8"):
+            parse_hook_payload(utf16_payload, max_number_chars=128)
+
+    def test_top_level_hook_envelope_scan_ignores_nested_spoofing(self) -> None:
+        raw_payload = (
+            b'{"tool_input":{"tool_name":"mcp__nested__publish"},'
+            b'"tool_name":"apply_patch","cwd":"/first",'
+            b'"tool_name":"mcp__real__publish","cwd":7}'
+        )
+
+        envelope = extract_top_level_json_strings(
+            raw_payload,
+            frozenset({"cwd", "tool_name"}),
+        )
+
+        self.assertEqual("mcp__real__publish", envelope["tool_name"])
+        self.assertNotIn("cwd", envelope)
+
+    def test_raw_json_depth_scanner_ignores_string_delimiters(self) -> None:
+        self.assertFalse(
+            json_nesting_exceeds_limit(
+                b'{"tool_input":{"content":"[[[{{{\\\""}}',
+                2,
+            )
+        )
+        self.assertTrue(json_nesting_exceeds_limit(b"[[[0]]]", 2))
+        with self.assertRaisesRegex(ValueError, "positive"):
+            json_nesting_exceeds_limit(b"{}", 0)
+
+    def test_direct_pre_tool_policy_call_applies_mcp_input_cap(self) -> None:
+        workspace = self._write_runtime_source_config()
+        event = normalize_event(
+            "pre_tool_use",
+            {
+                "session_id": "session-direct-mcp-cap",
+                "turn_id": "turn-direct-mcp-cap",
+                "tool_use_id": "direct-mcp-cap",
+                "tool_name": "mcp__custom_crm__publish_record",
+                "cwd": str(workspace),
+                "tool_input": {
+                    f"field_{index}": "public" for index in range(33)
+                },
+            },
+        )
+
+        with patch(
+            "hook_monitor.runtime.pre_tool_policy.update_runtime_analysis",
+            side_effect=AssertionError("analysis must not run"),
+        ):
+            output = evaluate_pre_tool_hook_policy(
+                self.store,
+                workspace,
+                current_event=event,
+                enabled_adapters=frozenset({"mcp"}),
+            )
+
+        self.assertEqual(
+            "deny",
+            output["hookSpecificOutput"]["permissionDecision"],
+        )
+        self.assertIn(
+            "field_count_exceeded",
+            output["hookSpecificOutput"]["permissionDecisionReason"],
+        )
 
     def test_pre_tool_hook_runtime_ignores_unconfirmed_tool_aliases(self) -> None:
         payload = {
@@ -5864,6 +7486,53 @@ class InformationFlowTest(unittest.TestCase):
             if assignment.node_id in second_sink_ids
         }
         self.assertEqual(incremental_scores, rebuilt_scores)
+
+    def test_runtime_incremental_source_bindings_match_full_exact_chain(self) -> None:
+        workspace = self._write_runtime_source_config()
+        results = []
+        for index in range(3):
+            event = self._record(
+                "pre_tool_use",
+                f"mcp-binding-{index}",
+                "mcp__custom__publish_record",
+                tool_input={"body": SECRET, "message": SECRET},
+                cwd=str(workspace),
+            )
+            results.append(
+                update_runtime_analysis(
+                    self.store,
+                    current_event_id=event.event_id,
+                    detector_version=RUNTIME_GRAPH_DETECTOR_VERSION,
+                    minimum_path_score=0.15,
+                )
+            )
+
+        self.assertEqual(
+            ["session-full", "session-incremental", "session-incremental"],
+            [result.mode for result in results],
+        )
+        workspace_id = results[-1].analysis_run.workspace_id
+        assert workspace_id is not None
+        contexts = self.store.list_artifact_contexts_for_scope(
+            workspace_id,
+            "session-1",
+        )
+        full_artifact_edges = build_artifact_flow_edges(contexts)
+        full_source_edges = build_source_binding_edges(
+            self.store.list_source_chunks_for_workspace(workspace_id),
+            contexts,
+            full_artifact_edges,
+        )
+        runtime_source_edges = self.store.list_runtime_source_binding_edges(
+            "session-1",
+            workspace_id=workspace_id,
+        )
+
+        self.assertEqual(2, len(full_source_edges))
+        self.assertEqual(
+            {edge.edge_id for edge in full_source_edges},
+            {edge.edge_id for edge in runtime_source_edges},
+        )
 
     def test_runtime_analysis_isolates_same_session_across_workspaces(self) -> None:
         base = Path(self.temporary_directory.name)
