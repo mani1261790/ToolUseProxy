@@ -29,7 +29,11 @@ def _decision_for_finding(finding: LeakFinding) -> PolicyDecision:
     action = _action_for_finding(finding)
     hook_event = _hook_event_for_sink_type(finding.sink_type)
     return PolicyDecision(
-        decision_id=_decision_id(finding, action, hook_event),
+        decision_id=make_policy_decision_id(
+            finding.finding_id,
+            action,
+            hook_event,
+        ),
         action=action,
         severity=finding.severity,
         finding_id=finding.finding_id,
@@ -76,12 +80,13 @@ def _reason_for_decision(action: str, finding: LeakFinding) -> str:
     )
 
 
-def _decision_id(
-    finding: LeakFinding,
+def make_policy_decision_id(
+    finding_id: str,
     action: str,
     hook_event: str | None,
 ) -> str:
-    identity = "\0".join((finding.finding_id, action, hook_event or "-"))
+    """Return the stable identity shared by policy and audit boundaries."""
+    identity = "\0".join((finding_id, action, hook_event or "-"))
     return hashlib.sha256(identity.encode("utf-8")).hexdigest()
 
 

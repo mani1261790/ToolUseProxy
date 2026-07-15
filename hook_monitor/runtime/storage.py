@@ -19,6 +19,10 @@ from hook_monitor.analysis.adapters.mcp_profiles import (
 )
 from hook_monitor.analysis.adapters.mcp import parse_mcp_tool_name
 from hook_monitor.analysis.leak_detection import detect_leaks
+from hook_monitor.policy.redaction_decision import (
+    REDACTION_DECISION_DERIVATION_VERSION,
+    derive_redact_decision,
+)
 
 from hook_monitor.runtime.ids import make_event_id, make_source_chunk_id
 from hook_monitor.runtime.redaction_integrity import (
@@ -56,6 +60,7 @@ from hook_monitor.runtime.models import (
     SourceChunk,
     SourceChunkEvidence,
     StoredPolicyDecision,
+    StoredRedactionDecisionLink,
     StoredRedactionPlan,
     StoredRedactionTarget,
     ToolOperation,
@@ -104,6 +109,26 @@ _EVENT_PAYLOAD_METADATA_COLUMNS = """
     post_input_sha256,
     post_structure_sha256
 """
+_QUALIFIED_PRE_EVENT_PAYLOAD_METADATA_COLUMNS = """
+    pre_scope.event_id,
+    pre_scope.metadata_version,
+    pre_scope.metadata_sha256,
+    pre_scope.payload_bytes,
+    pre_scope.payload_sha256,
+    pre_scope.sequence_no,
+    pre_scope.redaction_event_kind,
+    pre_scope.redaction_scope_sha256,
+    pre_scope.post_input_status,
+    pre_scope.post_input_observer_version,
+    pre_scope.post_input_diagnostic_code,
+    pre_scope.post_profile_id,
+    pre_scope.post_profile_version,
+    pre_scope.post_profile_registry_version,
+    pre_scope.post_input_bytes,
+    pre_scope.post_input_sha256,
+    pre_scope.post_structure_sha256
+"""
+REDACTION_CONFIRMATION_MAX_PLAN_CANDIDATES = 32
 _REDACTION_PLAN_VALUE_COLUMNS = """
     plan_id,
     analysis_run_id,
@@ -168,6 +193,27 @@ _REDACTION_TARGET_VALUE_COLUMNS = """
     json_pointer,
     original_value_sha256,
     replacement_profile
+"""
+_REDACTION_DECISION_LINK_VALUE_COLUMNS = """
+    enforce_plan_id,
+    target_ordinal,
+    preview_plan_id,
+    finding_id,
+    source_block_decision_id,
+    derived_redact_decision_id,
+    derivation_version,
+    metadata_sha256
+"""
+_REDACTION_DECISION_LINK_SELECT_COLUMNS = """
+    enforce_plan_id,
+    target_ordinal,
+    preview_plan_id,
+    finding_id,
+    source_block_decision_id,
+    derived_redact_decision_id,
+    derivation_version,
+    metadata_sha256,
+    created_at
 """
 
 
@@ -3525,6 +3571,365 @@ class EventStore:
                 plans.append(_stored_redaction_plan_from_rows(row, targets))
         return plans
 
+    def prepare_redaction_enforcement(
+        self,
+        preview_plan_id: str,
+        *,
+        workspace_id: str,
+    ) -> StoredRedactionPlan:
+        """Atomically prepare the audit half of a future MCP renderer.
+
+        No current runtime calls this method and it never produces Hook output.
+        A future renderer may proceed only after this exact, all-finding clone
+        and its derived-decision links have been committed.
+        """
+        if self._redaction_audit_available is not True:
+            raise RuntimeError("redaction preview audit schema is unavailable")
+        if (
+            not isinstance(preview_plan_id, str)
+            or _LOWER_SHA256_RE.fullmatch(preview_plan_id) is None
+            or not _bounded_audit_identifier(workspace_id)
+        ):
+            raise ValueError(
+                "redaction enforcement requires bounded plan and workspace ids"
+            )
+
+        with self._connect_redaction_audit() as conn:
+            # Core storage still has legacy INSERT OR REPLACE paths that are
+            # not ready for process-wide FK enforcement. Require it only for
+            # this new ownership graph before starting the atomic writer.
+            conn.execute("PRAGMA foreign_keys = ON")
+            if conn.execute("PRAGMA foreign_keys").fetchone()[0] != 1:
+                raise RuntimeError(
+                    "redaction enforcement foreign keys are unavailable"
+                )
+            # Replay under one WAL snapshot. Upgrade only after the bounded
+            # deterministic validation so a contended writer fails fast and a
+            # caller can keep its already-computed BLOCK output.
+            conn.execute("BEGIN")
+            preview_row = conn.execute(
+                f"""
+                SELECT {_REDACTION_PLAN_SELECT_COLUMNS}
+                FROM redaction_plans
+                WHERE plan_id = ?
+                  AND workspace_id = ?
+                  AND mode = 'preview'
+                  AND status = 'eligible'
+                """,
+                (preview_plan_id, workspace_id),
+            ).fetchone()
+            if preview_row is None:
+                raise ValueError(
+                    "redaction enforcement requires one eligible preview"
+                )
+            preview_target_rows = conn.execute(
+                f"""
+                SELECT {_REDACTION_TARGET_VALUE_COLUMNS}
+                FROM redaction_targets
+                WHERE plan_id = ?
+                ORDER BY ordinal
+                LIMIT ?
+                """,
+                (
+                    preview_plan_id,
+                    REDACTION_PREVIEW_MAX_CRITICAL_FINDINGS + 1,
+                ),
+            ).fetchall()
+            if (
+                not preview_target_rows
+                or len(preview_target_rows)
+                > REDACTION_PREVIEW_MAX_CRITICAL_FINDINGS
+            ):
+                raise ValueError("redaction enforcement target limit exceeded")
+            preview = _stored_redaction_plan_from_rows(
+                preview_row,
+                preview_target_rows,
+            )
+            _validate_stored_redaction_plan(preview)
+            event_sequence_no, event, analysis_run = (
+                self._validate_redaction_plan_owner(conn, preview)
+            )
+            self._validate_redaction_plan_replay(
+                conn,
+                preview,
+                event_sequence_no,
+                event,
+                analysis_run,
+            )
+
+            enforce_plan_id = _redaction_plan_id_for_mode(preview, "enforce")
+            enforce_targets = tuple(
+                replace(target, plan_id=enforce_plan_id)
+                for target in preview.targets
+            )
+            enforce = replace(
+                preview,
+                plan_id=enforce_plan_id,
+                mode="enforce",
+                status="eligible",
+                post_event_id=None,
+                targets=enforce_targets,
+                created_at=None,
+                rendered_at=None,
+                confirmed_at=None,
+            )
+            links = tuple(
+                _make_redaction_decision_link(
+                    enforce_plan_id=enforce.plan_id,
+                    preview_plan_id=preview.plan_id,
+                    target=target,
+                )
+                for target in enforce.targets
+            )
+            _validate_prepared_redaction_enforcement(
+                preview=preview,
+                enforce=enforce,
+                links=links,
+            )
+
+            existing_row = conn.execute(
+                f"""
+                SELECT {_REDACTION_PLAN_SELECT_COLUMNS}
+                FROM redaction_plans
+                WHERE plan_id = ?
+                """,
+                (enforce_plan_id,),
+            ).fetchone()
+            if existing_row is not None:
+                existing_target_rows = conn.execute(
+                    f"""
+                    SELECT {_REDACTION_TARGET_VALUE_COLUMNS}
+                    FROM redaction_targets
+                    WHERE plan_id = ?
+                    ORDER BY ordinal
+                    LIMIT ?
+                    """,
+                    (
+                        enforce_plan_id,
+                        REDACTION_PREVIEW_MAX_CRITICAL_FINDINGS + 1,
+                    ),
+                ).fetchall()
+                existing_link_rows = conn.execute(
+                    f"""
+                    SELECT {_REDACTION_DECISION_LINK_SELECT_COLUMNS}
+                    FROM redaction_decision_links
+                    WHERE enforce_plan_id = ?
+                    ORDER BY target_ordinal
+                    LIMIT ?
+                    """,
+                    (
+                        enforce_plan_id,
+                        REDACTION_PREVIEW_MAX_CRITICAL_FINDINGS + 1,
+                    ),
+                ).fetchall()
+                existing = _stored_redaction_plan_from_rows(
+                    existing_row,
+                    existing_target_rows,
+                )
+                stored_links = tuple(
+                    _stored_redaction_decision_link_from_row(row)
+                    for row in existing_link_rows
+                )
+                if not _prepared_redaction_enforcement_matches(
+                    expected=enforce,
+                    actual=existing,
+                    expected_links=links,
+                    actual_links=stored_links,
+                ):
+                    raise ValueError("redaction enforcement audit is immutable")
+                return existing
+
+            collision = conn.execute(
+                """
+                SELECT plan_id
+                FROM redaction_plans
+                WHERE workspace_id = ?
+                  AND pre_event_id = ?
+                  AND analysis_run_id = ?
+                  AND planner_version = ?
+                  AND profile_version = ?
+                  AND mode = 'enforce'
+                """,
+                (
+                    enforce.workspace_id,
+                    enforce.pre_event_id,
+                    enforce.analysis_run_id,
+                    enforce.planner_version,
+                    enforce.profile_version,
+                ),
+            ).fetchone()
+            linkage_collision = conn.execute(
+                """
+                SELECT 1
+                FROM redaction_decision_links
+                WHERE enforce_plan_id = ? OR preview_plan_id = ?
+                LIMIT 1
+                """,
+                (enforce.plan_id, preview.plan_id),
+            ).fetchone()
+            if collision is not None or linkage_collision is not None:
+                raise ValueError("redaction enforcement identity collision")
+
+            conn.execute(
+                """
+                INSERT INTO redaction_plans (
+                    plan_id,
+                    analysis_run_id,
+                    pre_event_id,
+                    workspace_id,
+                    session_id,
+                    tool_use_id,
+                    tool_name,
+                    adapter,
+                    profile_id,
+                    profile_version,
+                    profile_registry_version,
+                    mode,
+                    status,
+                    planner_version,
+                    original_input_sha256,
+                    rewritten_input_sha256,
+                    structure_sha256_before,
+                    structure_sha256_after,
+                    critical_finding_count,
+                    replacement_count,
+                    rejection_code,
+                    post_event_id,
+                    rendered_at,
+                    confirmed_at
+                ) VALUES (
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                )
+                """,
+                _redaction_plan_values(enforce),
+            )
+            conn.executemany(
+                """
+                INSERT INTO redaction_targets (
+                    plan_id,
+                    ordinal,
+                    finding_id,
+                    decision_id,
+                    source_node_kind,
+                    source_node_id,
+                    sink_node_id,
+                    json_pointer,
+                    original_value_sha256,
+                    replacement_profile
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                tuple(_redaction_target_values(target) for target in enforce.targets),
+            )
+            conn.executemany(
+                """
+                INSERT INTO redaction_decision_links (
+                    enforce_plan_id,
+                    target_ordinal,
+                    preview_plan_id,
+                    finding_id,
+                    source_block_decision_id,
+                    derived_redact_decision_id,
+                    derivation_version,
+                    metadata_sha256
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                tuple(_redaction_decision_link_values(link) for link in links),
+            )
+            stored_row = conn.execute(
+                f"""
+                SELECT {_REDACTION_PLAN_SELECT_COLUMNS}
+                FROM redaction_plans
+                WHERE plan_id = ?
+                """,
+                (enforce.plan_id,),
+            ).fetchone()
+            if stored_row is None:
+                raise RuntimeError("redaction enforcement insert is missing")
+            stored_target_rows = conn.execute(
+                f"""
+                SELECT {_REDACTION_TARGET_VALUE_COLUMNS}
+                FROM redaction_targets
+                WHERE plan_id = ?
+                ORDER BY ordinal
+                LIMIT ?
+                """,
+                (
+                    enforce.plan_id,
+                    REDACTION_PREVIEW_MAX_CRITICAL_FINDINGS + 1,
+                ),
+            ).fetchall()
+            stored_link_rows = conn.execute(
+                f"""
+                SELECT {_REDACTION_DECISION_LINK_SELECT_COLUMNS}
+                FROM redaction_decision_links
+                WHERE enforce_plan_id = ?
+                ORDER BY target_ordinal
+                LIMIT ?
+                """,
+                (
+                    enforce.plan_id,
+                    REDACTION_PREVIEW_MAX_CRITICAL_FINDINGS + 1,
+                ),
+            ).fetchall()
+            stored = _stored_redaction_plan_from_rows(
+                stored_row,
+                stored_target_rows,
+            )
+            stored_links = tuple(
+                _stored_redaction_decision_link_from_row(row)
+                for row in stored_link_rows
+            )
+            if not _prepared_redaction_enforcement_matches(
+                expected=enforce,
+                actual=stored,
+                expected_links=links,
+                actual_links=stored_links,
+            ):
+                raise RuntimeError("redaction enforcement insert is incomplete")
+            return stored
+
+    def list_redaction_decision_links(
+        self,
+        enforce_plan_id: str,
+        *,
+        workspace_id: str,
+    ) -> list[StoredRedactionDecisionLink]:
+        if self._redaction_audit_available is not True:
+            raise RuntimeError("redaction decision linkage schema is unavailable")
+        if (
+            not isinstance(enforce_plan_id, str)
+            or _LOWER_SHA256_RE.fullmatch(enforce_plan_id) is None
+            or not _bounded_audit_identifier(workspace_id)
+        ):
+            raise ValueError(
+                "redaction decision link lookup requires bounded ids"
+            )
+        with self._connect_redaction_audit() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT {_REDACTION_DECISION_LINK_SELECT_COLUMNS}
+                FROM redaction_decision_links AS link
+                WHERE link.enforce_plan_id = ?
+                  AND EXISTS (
+                      SELECT 1
+                      FROM redaction_plans AS plan
+                      WHERE plan.plan_id = link.enforce_plan_id
+                        AND plan.workspace_id = ?
+                  )
+                ORDER BY link.target_ordinal
+                LIMIT ?
+                """,
+                (
+                    enforce_plan_id,
+                    workspace_id,
+                    REDACTION_PREVIEW_MAX_CRITICAL_FINDINGS + 1,
+                ),
+            ).fetchall()
+        if len(rows) > REDACTION_PREVIEW_MAX_CRITICAL_FINDINGS:
+            raise ValueError("redaction decision link limit exceeded")
+        return [_stored_redaction_decision_link_from_row(row) for row in rows]
+
     def confirm_redaction_post_input(
         self,
         post_event: NormalizedEvent,
@@ -3580,6 +3985,10 @@ class EventStore:
                 FROM redaction_plans AS plan
                 LEFT JOIN analysis_runs AS analysis
                   ON analysis.analysis_run_id = plan.analysis_run_id
+                JOIN event_payload_metadata AS pre_scope
+                  ON pre_scope.event_id = plan.pre_event_id
+                 AND pre_scope.redaction_event_kind = 'pre'
+                 AND pre_scope.redaction_scope_sha256 = ?
                 WHERE plan.workspace_id = ?
                   AND plan.session_id = ?
                   AND plan.tool_use_id = ?
@@ -3594,6 +4003,7 @@ class EventStore:
                 LIMIT 2
                 """,
                 (
+                    expected_scope_sha256,
                     post_event.workspace_id,
                     post_event.session_id,
                     post_event.tool_use_id,
@@ -3601,6 +4011,67 @@ class EventStore:
                 ),
             ).fetchall()
             if not rows:
+                # A missing/corrupt Pre sidecar must not erase evidence that a
+                # rendered plan exists. Scan only the narrow metadata rows for
+                # this bounded coarse identity; valid rows for another turn are
+                # ignored, while unavailable ownership remains unobserved.
+                coarse_rows = conn.execute(
+                    f"""
+                    SELECT
+                        plan.plan_id,
+                        {_QUALIFIED_PRE_EVENT_PAYLOAD_METADATA_COLUMNS}
+                    FROM redaction_plans AS plan
+                    LEFT JOIN event_payload_metadata AS pre_scope
+                      ON pre_scope.event_id = plan.pre_event_id
+                    WHERE plan.workspace_id = ?
+                      AND plan.session_id = ?
+                      AND plan.tool_use_id = ?
+                      AND plan.tool_name = ?
+                      AND plan.mode = 'enforce'
+                      AND plan.status IN (
+                          'rendered',
+                          'post_confirmed',
+                          'post_mismatch'
+                      )
+                    ORDER BY plan.created_at DESC, plan.plan_id
+                    LIMIT ?
+                    """,
+                    (
+                        post_event.workspace_id,
+                        post_event.session_id,
+                        post_event.tool_use_id,
+                        post_event.tool_name,
+                        REDACTION_CONFIRMATION_MAX_PLAN_CANDIDATES + 1,
+                    ),
+                ).fetchall()
+                if not coarse_rows:
+                    return RedactionPostConfirmationResult("not_applicable")
+                if (
+                    len(coarse_rows)
+                    > REDACTION_CONFIRMATION_MAX_PLAN_CANDIDATES
+                ):
+                    return RedactionPostConfirmationResult(
+                        "conflict",
+                        diagnostic_code="redaction_candidate_limit_exceeded",
+                    )
+                unavailable_plan_ids: list[str] = []
+                for coarse_row in coarse_rows:
+                    pre_scope = _event_payload_metadata_from_row(coarse_row[1:])
+                    if (
+                        pre_scope is None
+                        or pre_scope.redaction_event_kind != "pre"
+                    ):
+                        unavailable_plan_ids.append(str(coarse_row[0]))
+                if unavailable_plan_ids:
+                    return RedactionPostConfirmationResult(
+                        "unobserved",
+                        plan_id=(
+                            unavailable_plan_ids[0]
+                            if len(unavailable_plan_ids) == 1
+                            else None
+                        ),
+                        diagnostic_code="pre_scope_metadata_unavailable",
+                    )
                 return RedactionPostConfirmationResult("not_applicable")
             if len(rows) != 1:
                 return RedactionPostConfirmationResult(
@@ -3864,13 +4335,25 @@ class EventStore:
                 """,
                 (preview_plan_id, target_limit),
             ).fetchall()
-            if (
-                not enforce_targets
-                or len(enforce_targets) > REDACTION_PREVIEW_MAX_CRITICAL_FINDINGS
-                or tuple(row[1:] for row in enforce_targets)
-                != tuple(row[1:] for row in preview_targets)
-            ):
-                raise ValueError("rendered redaction target integrity mismatch")
+            decision_link_rows = conn.execute(
+                f"""
+                SELECT {_REDACTION_DECISION_LINK_SELECT_COLUMNS}
+                FROM redaction_decision_links
+                WHERE enforce_plan_id = ?
+                ORDER BY target_ordinal
+                LIMIT ?
+                """,
+                (plan_id, target_limit),
+            ).fetchall()
+            _validate_redaction_confirmation_decision_links(
+                enforce_plan_id=plan_id,
+                preview_plan_id=preview_plan_id,
+                analysis_run_id=analysis_run_id,
+                critical_finding_count=critical_finding_count,
+                enforce_target_rows=enforce_targets,
+                preview_target_rows=preview_targets,
+                decision_link_rows=decision_link_rows,
+            )
 
             if status in {"post_confirmed", "post_mismatch"}:
                 if (
@@ -4039,7 +4522,30 @@ class EventStore:
                   ON candidate.plan_id = target.plan_id
                 """
             ).fetchone()[0]
+            decision_link_count = conn.execute(
+                """
+                SELECT COUNT(*)
+                FROM redaction_decision_links AS link
+                WHERE link.enforce_plan_id IN (
+                    SELECT plan_id FROM redaction_cleanup_candidates
+                )
+                   OR link.preview_plan_id IN (
+                    SELECT plan_id FROM redaction_cleanup_candidates
+                )
+                """
+            ).fetchone()[0]
             if execute:
+                deleted_decision_links = conn.execute(
+                    """
+                    DELETE FROM redaction_decision_links
+                    WHERE enforce_plan_id IN (
+                        SELECT plan_id FROM redaction_cleanup_candidates
+                    )
+                       OR preview_plan_id IN (
+                        SELECT plan_id FROM redaction_cleanup_candidates
+                    )
+                    """
+                ).rowcount
                 deleted_targets = conn.execute(
                     """
                     DELETE FROM redaction_targets
@@ -4056,7 +4562,11 @@ class EventStore:
                     )
                     """
                 ).rowcount
-                if deleted_targets != target_count or deleted_plans != plan_count:
+                if (
+                    deleted_decision_links != decision_link_count
+                    or deleted_targets != target_count
+                    or deleted_plans != plan_count
+                ):
                     raise RuntimeError("redaction cleanup delete count changed")
         return RedactionAuditCleanupResult(
             workspace_id=workspace_id,
@@ -4064,6 +4574,7 @@ class EventStore:
             session_id=session_id,
             plan_count=int(plan_count),
             target_count=int(target_count),
+            decision_link_count=int(decision_link_count),
             orphan_plan_count=int(orphan_plan_count),
             executed=execute,
         )
@@ -6898,6 +7409,7 @@ class EventStore:
         conn.execute(f"SAVEPOINT {savepoint}")
         try:
             self._migrate_redaction_preview_audit(conn)
+            self._migrate_redaction_decision_linkage(conn)
             self._migrate_event_payload_metadata(conn)
         except (RuntimeError, sqlite3.Error):
             conn.execute(f"ROLLBACK TO {savepoint}")
@@ -7070,6 +7582,154 @@ class EventStore:
             """
         )
         self._validate_redaction_preview_audit_schema(conn)
+        conn.execute(
+            """
+            INSERT INTO analysis_state (key, value)
+            VALUES (?, 'complete')
+            ON CONFLICT(key) DO UPDATE SET
+                value = excluded.value,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (migration_key,),
+        )
+
+    def _migrate_redaction_decision_linkage(
+        self,
+        conn: sqlite3.Connection,
+    ) -> None:
+        """Create narrow immutable links for future REDACT decisions."""
+        migration_key = "migration.redaction_decision_linkage.v1"
+        migration_complete = conn.execute(
+            """
+            SELECT 1
+            FROM analysis_state
+            WHERE key = ? AND value = 'complete'
+            """,
+            (migration_key,),
+        ).fetchone() is not None
+        table_exists = conn.execute(
+            """
+            SELECT 1
+            FROM sqlite_master
+            WHERE type = 'table' AND name = 'redaction_decision_links'
+            """
+        ).fetchone() is not None
+        if migration_complete:
+            self._validate_redaction_decision_linkage_schema(conn)
+            return
+        if not table_exists:
+            conn.execute(
+                f"""
+                CREATE TABLE redaction_decision_links (
+                    enforce_plan_id TEXT NOT NULL CHECK (
+                        typeof(enforce_plan_id) = 'text'
+                        AND length(enforce_plan_id) = 64
+                        AND enforce_plan_id NOT GLOB '*[^0-9a-f]*'
+                    ),
+                    target_ordinal INTEGER NOT NULL CHECK (
+                        typeof(target_ordinal) = 'integer'
+                        AND target_ordinal BETWEEN 0 AND
+                            {REDACTION_PREVIEW_MAX_CRITICAL_FINDINGS - 1}
+                    ),
+                    preview_plan_id TEXT NOT NULL CHECK (
+                        typeof(preview_plan_id) = 'text'
+                        AND length(preview_plan_id) = 64
+                        AND preview_plan_id NOT GLOB '*[^0-9a-f]*'
+                        AND preview_plan_id != enforce_plan_id
+                    ),
+                    finding_id TEXT NOT NULL CHECK (
+                        typeof(finding_id) = 'text'
+                        AND length(finding_id) = 64
+                        AND finding_id NOT GLOB '*[^0-9a-f]*'
+                    ),
+                    source_block_decision_id TEXT NOT NULL CHECK (
+                        typeof(source_block_decision_id) = 'text'
+                        AND length(source_block_decision_id) = 64
+                        AND source_block_decision_id
+                            NOT GLOB '*[^0-9a-f]*'
+                    ),
+                    derived_redact_decision_id TEXT NOT NULL CHECK (
+                        typeof(derived_redact_decision_id) = 'text'
+                        AND length(derived_redact_decision_id) = 64
+                        AND derived_redact_decision_id
+                            NOT GLOB '*[^0-9a-f]*'
+                    ),
+                    derivation_version TEXT NOT NULL CHECK (
+                        typeof(derivation_version) = 'text'
+                        AND derivation_version =
+                            '{REDACTION_DECISION_DERIVATION_VERSION}'
+                    ),
+                    metadata_sha256 TEXT NOT NULL CHECK (
+                        typeof(metadata_sha256) = 'text'
+                        AND length(metadata_sha256) = 64
+                        AND metadata_sha256 NOT GLOB '*[^0-9a-f]*'
+                    ),
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP CHECK (
+                        typeof(created_at) = 'text'
+                        AND length(created_at) BETWEEN 1 AND 64
+                    ),
+                    PRIMARY KEY (enforce_plan_id, target_ordinal),
+                    FOREIGN KEY (enforce_plan_id, target_ordinal)
+                        REFERENCES redaction_targets (plan_id, ordinal)
+                        ON DELETE CASCADE,
+                    FOREIGN KEY (preview_plan_id, target_ordinal)
+                        REFERENCES redaction_targets (plan_id, ordinal)
+                        ON DELETE CASCADE
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE UNIQUE INDEX
+                    idx_redaction_decision_links_preview_ordinal
+                ON redaction_decision_links (
+                    preview_plan_id, target_ordinal
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE UNIQUE INDEX idx_redaction_decision_links_finding
+                ON redaction_decision_links (enforce_plan_id, finding_id)
+                """
+            )
+            conn.execute(
+                """
+                CREATE UNIQUE INDEX idx_redaction_decision_links_source
+                ON redaction_decision_links (
+                    enforce_plan_id, source_block_decision_id
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE UNIQUE INDEX idx_redaction_decision_links_derived
+                ON redaction_decision_links (
+                    enforce_plan_id, derived_redact_decision_id
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX idx_redaction_decision_links_source_lookup
+                ON redaction_decision_links (
+                    source_block_decision_id,
+                    enforce_plan_id,
+                    target_ordinal
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX idx_redaction_decision_links_derived_lookup
+                ON redaction_decision_links (
+                    derived_redact_decision_id,
+                    enforce_plan_id,
+                    target_ordinal
+                )
+                """
+            )
+        self._validate_redaction_decision_linkage_schema(conn)
         conn.execute(
             """
             INSERT INTO analysis_state (key, value)
@@ -7401,6 +8061,183 @@ class EventStore:
         ):
             raise RuntimeError(
                 "redaction audit event metadata index mismatch"
+            )
+
+    def _validate_redaction_decision_linkage_schema(
+        self,
+        conn: sqlite3.Connection,
+    ) -> None:
+        rows = conn.execute(
+            "PRAGMA table_info(redaction_decision_links)"
+        ).fetchall()
+        actual = {
+            row[1]: (str(row[2]).upper(), bool(row[3]), int(row[5]))
+            for row in rows
+        }
+        expected = {
+            "enforce_plan_id": ("TEXT", True, 1),
+            "target_ordinal": ("INTEGER", True, 2),
+            "preview_plan_id": ("TEXT", True, 0),
+            "finding_id": ("TEXT", True, 0),
+            "source_block_decision_id": ("TEXT", True, 0),
+            "derived_redact_decision_id": ("TEXT", True, 0),
+            "derivation_version": ("TEXT", True, 0),
+            "metadata_sha256": ("TEXT", True, 0),
+            "created_at": ("TEXT", True, 0),
+        }
+        if actual != expected:
+            raise RuntimeError(
+                "redaction audit schema mismatch: redaction_decision_links"
+            )
+        created_at_row = next(
+            (row for row in rows if row[1] == "created_at"),
+            None,
+        )
+        if created_at_row is None or created_at_row[4] != "CURRENT_TIMESTAMP":
+            raise RuntimeError(
+                "redaction audit decision linkage default mismatch"
+            )
+
+        table_sql_row = conn.execute(
+            """
+            SELECT sql
+            FROM sqlite_master
+            WHERE type = 'table' AND name = 'redaction_decision_links'
+            """
+        ).fetchone()
+        table_sql = "" if table_sql_row is None else str(table_sql_row[0])
+        normalized_table_sql = "".join(table_sql.casefold().split())
+        required_sql_fragments = {
+            "typeof(enforce_plan_id)='text'",
+            "length(enforce_plan_id)=64",
+            "enforce_plan_idnotglob'*[^0-9a-f]*'",
+            "typeof(target_ordinal)='integer'",
+            (
+                "target_ordinalbetween0and"
+                f"{REDACTION_PREVIEW_MAX_CRITICAL_FINDINGS - 1}"
+            ),
+            "typeof(preview_plan_id)='text'",
+            "length(preview_plan_id)=64",
+            "preview_plan_idnotglob'*[^0-9a-f]*'",
+            "preview_plan_id!=enforce_plan_id",
+            "typeof(finding_id)='text'",
+            "length(finding_id)=64",
+            "finding_idnotglob'*[^0-9a-f]*'",
+            "typeof(source_block_decision_id)='text'",
+            "length(source_block_decision_id)=64",
+            "source_block_decision_idnotglob'*[^0-9a-f]*'",
+            "typeof(derived_redact_decision_id)='text'",
+            "length(derived_redact_decision_id)=64",
+            "derived_redact_decision_idnotglob'*[^0-9a-f]*'",
+            "typeof(derivation_version)='text'",
+            (
+                "derivation_version="
+                f"'{REDACTION_DECISION_DERIVATION_VERSION}'"
+            ),
+            "typeof(metadata_sha256)='text'",
+            "length(metadata_sha256)=64",
+            "metadata_sha256notglob'*[^0-9a-f]*'",
+            "typeof(created_at)='text'",
+            "length(created_at)between1and64",
+        }
+        if any(
+            fragment.casefold() not in normalized_table_sql
+            for fragment in required_sql_fragments
+        ):
+            raise RuntimeError(
+                "redaction audit decision linkage constraint mismatch"
+            )
+
+        expected_indexes = {
+            "idx_redaction_decision_links_preview_ordinal": (
+                True,
+                ("preview_plan_id", "target_ordinal"),
+            ),
+            "idx_redaction_decision_links_finding": (
+                True,
+                ("enforce_plan_id", "finding_id"),
+            ),
+            "idx_redaction_decision_links_source": (
+                True,
+                ("enforce_plan_id", "source_block_decision_id"),
+            ),
+            "idx_redaction_decision_links_derived": (
+                True,
+                ("enforce_plan_id", "derived_redact_decision_id"),
+            ),
+            "idx_redaction_decision_links_source_lookup": (
+                False,
+                (
+                    "source_block_decision_id",
+                    "enforce_plan_id",
+                    "target_ordinal",
+                ),
+            ),
+            "idx_redaction_decision_links_derived_lookup": (
+                False,
+                (
+                    "derived_redact_decision_id",
+                    "enforce_plan_id",
+                    "target_ordinal",
+                ),
+            ),
+        }
+        indexes = {
+            row[1]: bool(row[2])
+            for row in conn.execute(
+                "PRAGMA index_list(redaction_decision_links)"
+            ).fetchall()
+        }
+        for index_name, (unique, columns) in expected_indexes.items():
+            if indexes.get(index_name) != unique:
+                raise RuntimeError(
+                    "redaction audit decision linkage index mismatch"
+                )
+            actual_columns = tuple(
+                row[2]
+                for row in conn.execute(
+                    f"PRAGMA index_info({index_name})"
+                ).fetchall()
+            )
+            if actual_columns != columns:
+                raise RuntimeError(
+                    "redaction audit decision linkage index mismatch"
+                )
+
+        foreign_key_rows = conn.execute(
+            "PRAGMA foreign_key_list(redaction_decision_links)"
+        ).fetchall()
+        grouped_foreign_keys: dict[int, list[tuple[int, str, str, str, str]]] = {}
+        for row in foreign_key_rows:
+            grouped_foreign_keys.setdefault(int(row[0]), []).append(
+                (int(row[1]), str(row[2]), str(row[3]), str(row[4]), str(row[6]))
+            )
+        foreign_keys = {
+            (
+                tuple(item[2] for item in sorted(group)),
+                tuple(item[3] for item in sorted(group)),
+                tuple(item[1] for item in sorted(group)),
+                tuple(item[4] for item in sorted(group)),
+            )
+            for group in grouped_foreign_keys.values()
+        }
+        expected_foreign_keys = {
+            (
+                ("enforce_plan_id", "target_ordinal"),
+                ("plan_id", "ordinal"),
+                ("redaction_targets", "redaction_targets"),
+                ("CASCADE", "CASCADE"),
+            ),
+            (
+                ("preview_plan_id", "target_ordinal"),
+                ("plan_id", "ordinal"),
+                ("redaction_targets", "redaction_targets"),
+                ("CASCADE", "CASCADE"),
+            ),
+        }
+        if foreign_keys != expected_foreign_keys:
+            raise RuntimeError(
+                "redaction audit decision linkage owner mismatch"
             )
 
     def _validate_redaction_preview_audit_schema(
@@ -8849,6 +9686,361 @@ def _redaction_target_values(
         target.original_value_sha256,
         target.replacement_profile,
     )
+
+
+def _redaction_plan_id_for_mode(
+    plan: StoredRedactionPlan,
+    mode: str,
+) -> str:
+    return hashlib.sha256(
+        "\0".join(
+            (
+                plan.workspace_id,
+                plan.pre_event_id,
+                plan.analysis_run_id,
+                plan.planner_version,
+                plan.profile_version,
+                mode,
+            )
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def _make_redaction_decision_link(
+    *,
+    enforce_plan_id: str,
+    preview_plan_id: str,
+    target: StoredRedactionTarget,
+) -> StoredRedactionDecisionLink:
+    derived = derive_redact_decision(
+        finding_id=target.finding_id,
+        source_block_decision_id=target.decision_id,
+    )
+    metadata_sha256 = _redaction_decision_link_metadata_sha256(
+        enforce_plan_id=enforce_plan_id,
+        target_ordinal=target.ordinal,
+        preview_plan_id=preview_plan_id,
+        finding_id=target.finding_id,
+        source_block_decision_id=target.decision_id,
+        derived_redact_decision_id=derived.derived_redact_decision_id,
+        derivation_version=derived.derivation_version,
+    )
+    return StoredRedactionDecisionLink(
+        enforce_plan_id=enforce_plan_id,
+        target_ordinal=target.ordinal,
+        preview_plan_id=preview_plan_id,
+        finding_id=target.finding_id,
+        source_block_decision_id=target.decision_id,
+        derived_redact_decision_id=derived.derived_redact_decision_id,
+        derivation_version=derived.derivation_version,
+        metadata_sha256=metadata_sha256,
+    )
+
+
+def _redaction_decision_link_metadata_sha256(
+    *,
+    enforce_plan_id: str,
+    target_ordinal: int,
+    preview_plan_id: str,
+    finding_id: str,
+    source_block_decision_id: str,
+    derived_redact_decision_id: str,
+    derivation_version: str,
+) -> str:
+    encoded = json.dumps(
+        [
+            "tooluseproxy:redaction-decision-link-integrity:v1",
+            enforce_plan_id,
+            target_ordinal,
+            preview_plan_id,
+            finding_id,
+            source_block_decision_id,
+            derived_redact_decision_id,
+            derivation_version,
+        ],
+        ensure_ascii=False,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _redaction_decision_link_values(
+    link: StoredRedactionDecisionLink,
+) -> tuple[object, ...]:
+    return (
+        link.enforce_plan_id,
+        link.target_ordinal,
+        link.preview_plan_id,
+        link.finding_id,
+        link.source_block_decision_id,
+        link.derived_redact_decision_id,
+        link.derivation_version,
+        link.metadata_sha256,
+    )
+
+
+def _stored_redaction_decision_link_from_row(
+    row: tuple[object, ...],
+) -> StoredRedactionDecisionLink:
+    if len(row) != 9:
+        raise ValueError("redaction decision link row is invalid")
+    link = StoredRedactionDecisionLink(
+        enforce_plan_id=row[0],
+        target_ordinal=row[1],
+        preview_plan_id=row[2],
+        finding_id=row[3],
+        source_block_decision_id=row[4],
+        derived_redact_decision_id=row[5],
+        derivation_version=row[6],
+        metadata_sha256=row[7],
+        created_at=row[8],
+    )
+    _validate_stored_redaction_decision_link(link)
+    return link
+
+
+def _validate_stored_redaction_decision_link(
+    link: StoredRedactionDecisionLink,
+) -> None:
+    hashes = (
+        link.enforce_plan_id,
+        link.preview_plan_id,
+        link.finding_id,
+        link.source_block_decision_id,
+        link.derived_redact_decision_id,
+        link.metadata_sha256,
+    )
+    if any(
+        not isinstance(value, str)
+        or _LOWER_SHA256_RE.fullmatch(value) is None
+        for value in hashes
+    ):
+        raise ValueError("redaction decision link hashes are invalid")
+    if (
+        link.enforce_plan_id == link.preview_plan_id
+        or type(link.target_ordinal) is not int
+        or not 0
+        <= link.target_ordinal
+        < REDACTION_PREVIEW_MAX_CRITICAL_FINDINGS
+        or link.derivation_version
+        != REDACTION_DECISION_DERIVATION_VERSION
+        or (
+            link.created_at is not None
+            and (
+                not isinstance(link.created_at, str)
+                or not link.created_at
+            )
+        )
+    ):
+        raise ValueError("redaction decision link fields are invalid")
+    derived = derive_redact_decision(
+        finding_id=link.finding_id,
+        source_block_decision_id=link.source_block_decision_id,
+    )
+    if link.derived_redact_decision_id != derived.derived_redact_decision_id:
+        raise ValueError("redaction decision derivation is invalid")
+    expected_metadata_sha256 = _redaction_decision_link_metadata_sha256(
+        enforce_plan_id=link.enforce_plan_id,
+        target_ordinal=link.target_ordinal,
+        preview_plan_id=link.preview_plan_id,
+        finding_id=link.finding_id,
+        source_block_decision_id=link.source_block_decision_id,
+        derived_redact_decision_id=link.derived_redact_decision_id,
+        derivation_version=link.derivation_version,
+    )
+    if link.metadata_sha256 != expected_metadata_sha256:
+        raise ValueError("redaction decision link integrity mismatch")
+
+
+def _validate_prepared_redaction_enforcement(
+    *,
+    preview: StoredRedactionPlan,
+    enforce: StoredRedactionPlan,
+    links: tuple[StoredRedactionDecisionLink, ...],
+) -> None:
+    if (
+        preview.mode != "preview"
+        or preview.status != "eligible"
+        or enforce.mode != "enforce"
+        or enforce.status != "eligible"
+        or enforce.plan_id != _redaction_plan_id_for_mode(preview, "enforce")
+        or enforce.analysis_run_id != preview.analysis_run_id
+        or enforce.pre_event_id != preview.pre_event_id
+        or enforce.workspace_id != preview.workspace_id
+        or enforce.session_id != preview.session_id
+        or enforce.tool_use_id != preview.tool_use_id
+        or enforce.tool_name != preview.tool_name
+        or enforce.adapter != preview.adapter
+        or enforce.profile_id != preview.profile_id
+        or enforce.profile_version != preview.profile_version
+        or enforce.profile_registry_version != preview.profile_registry_version
+        or enforce.planner_version != preview.planner_version
+        or enforce.original_input_sha256 != preview.original_input_sha256
+        or enforce.rewritten_input_sha256 != preview.rewritten_input_sha256
+        or enforce.structure_sha256_before != preview.structure_sha256_before
+        or enforce.structure_sha256_after != preview.structure_sha256_after
+        or enforce.critical_finding_count != preview.critical_finding_count
+        or enforce.replacement_count != preview.replacement_count
+        or enforce.rejection_code is not None
+        or enforce.post_event_id is not None
+        or enforce.rendered_at is not None
+        or enforce.confirmed_at is not None
+        or len(enforce.targets) != enforce.critical_finding_count
+        or len(links) != enforce.critical_finding_count
+    ):
+        raise ValueError("redaction enforcement plan does not clone its preview")
+
+    expected_ordinals = tuple(range(enforce.critical_finding_count))
+    if (
+        tuple(target.ordinal for target in enforce.targets) != expected_ordinals
+        or tuple(link.target_ordinal for link in links) != expected_ordinals
+    ):
+        raise ValueError("redaction enforcement ordinals are incomplete")
+    if (
+        len({link.finding_id for link in links}) != len(links)
+        or len({link.source_block_decision_id for link in links}) != len(links)
+        or len({link.derived_redact_decision_id for link in links}) != len(links)
+    ):
+        raise ValueError("redaction enforcement decisions are incomplete")
+
+    for preview_target, enforce_target, link in zip(
+        preview.targets,
+        enforce.targets,
+        links,
+    ):
+        if (
+            enforce_target.plan_id != enforce.plan_id
+            or preview_target.plan_id != preview.plan_id
+            or _redaction_target_values(enforce_target)[1:]
+            != _redaction_target_values(preview_target)[1:]
+            or link.enforce_plan_id != enforce.plan_id
+            or link.preview_plan_id != preview.plan_id
+            or link.target_ordinal != enforce_target.ordinal
+            or link.finding_id != enforce_target.finding_id
+            or link.source_block_decision_id != enforce_target.decision_id
+        ):
+            raise ValueError("redaction enforcement decision linkage mismatch")
+        _validate_stored_redaction_decision_link(link)
+
+
+def _prepared_redaction_enforcement_matches(
+    *,
+    expected: StoredRedactionPlan,
+    actual: StoredRedactionPlan,
+    expected_links: tuple[StoredRedactionDecisionLink, ...],
+    actual_links: tuple[StoredRedactionDecisionLink, ...],
+) -> bool:
+    return (
+        actual.created_at is not None
+        and _redaction_plan_values(actual) == _redaction_plan_values(expected)
+        and tuple(
+            _redaction_target_values(target) for target in actual.targets
+        )
+        == tuple(_redaction_target_values(target) for target in expected.targets)
+        and tuple(
+            _redaction_decision_link_values(link) for link in actual_links
+        )
+        == tuple(
+            _redaction_decision_link_values(link) for link in expected_links
+        )
+    )
+
+
+def _stored_redaction_target_from_row(
+    row: tuple[object, ...],
+) -> StoredRedactionTarget:
+    if len(row) != 10:
+        raise ValueError("redaction target row is invalid")
+    return StoredRedactionTarget(
+        plan_id=row[0],
+        ordinal=row[1],
+        finding_id=row[2],
+        decision_id=row[3],
+        source_node_kind=row[4],
+        source_node_id=row[5],
+        sink_node_id=row[6],
+        json_pointer=row[7],
+        original_value_sha256=row[8],
+        replacement_profile=row[9],
+    )
+
+
+def _validate_redaction_confirmation_decision_links(
+    *,
+    enforce_plan_id: str,
+    preview_plan_id: str,
+    analysis_run_id: str,
+    critical_finding_count: int,
+    enforce_target_rows: list[tuple] | tuple[tuple, ...],
+    preview_target_rows: list[tuple] | tuple[tuple, ...],
+    decision_link_rows: list[tuple] | tuple[tuple, ...],
+) -> None:
+    if (
+        type(critical_finding_count) is not int
+        or not 0
+        < critical_finding_count
+        <= REDACTION_PREVIEW_MAX_CRITICAL_FINDINGS
+        or len(enforce_target_rows) != critical_finding_count
+        or len(preview_target_rows) != critical_finding_count
+        or len(decision_link_rows) != critical_finding_count
+    ):
+        raise ValueError("rendered redaction decision linkage is incomplete")
+
+    enforce_targets = tuple(
+        _stored_redaction_target_from_row(row) for row in enforce_target_rows
+    )
+    preview_targets = tuple(
+        _stored_redaction_target_from_row(row) for row in preview_target_rows
+    )
+    links = tuple(
+        _stored_redaction_decision_link_from_row(row)
+        for row in decision_link_rows
+    )
+    expected_ordinals = tuple(range(critical_finding_count))
+    if (
+        tuple(target.ordinal for target in enforce_targets) != expected_ordinals
+        or tuple(target.ordinal for target in preview_targets)
+        != expected_ordinals
+        or tuple(link.target_ordinal for link in links) != expected_ordinals
+        or len({link.finding_id for link in links}) != len(links)
+        or len({link.source_block_decision_id for link in links}) != len(links)
+        or len({link.derived_redact_decision_id for link in links})
+        != len(links)
+    ):
+        raise ValueError("rendered redaction decision linkage is ambiguous")
+
+    for enforce_target, preview_target, link in zip(
+        enforce_targets,
+        preview_targets,
+        links,
+    ):
+        expected_finding_id = hashlib.sha256(
+            "\0".join(
+                (
+                    analysis_run_id,
+                    enforce_target.source_node_kind,
+                    enforce_target.source_node_id,
+                    enforce_target.sink_node_id,
+                )
+            ).encode("utf-8")
+        ).hexdigest()
+        expected_link = _make_redaction_decision_link(
+            enforce_plan_id=enforce_plan_id,
+            preview_plan_id=preview_plan_id,
+            target=enforce_target,
+        )
+        if (
+            enforce_target.plan_id != enforce_plan_id
+            or preview_target.plan_id != preview_plan_id
+            or _redaction_target_values(enforce_target)[1:]
+            != _redaction_target_values(preview_target)[1:]
+            or enforce_target.source_node_kind != "source_chunk"
+            or enforce_target.finding_id != expected_finding_id
+            or _redaction_decision_link_values(link)
+            != _redaction_decision_link_values(expected_link)
+        ):
+            raise ValueError("rendered redaction decision linkage is invalid")
 
 
 def _redaction_preview_matches_stored(

@@ -457,7 +457,7 @@ PreToolUse
 
 bounded envelope内のeligible / rejected planとfinding単位の全targetは、original / rewritten本文を複製せず、canonical input hash、structure hash、profile version、pointer、original value hashだけをimmutableな1 transactionで保存する。新規insertは完了runのcurrent-call critical lineage、bounded source evidence、pure planner再実行結果へ完全一致させる。sink replayも識別子4 KiB、metadata 64 KiB / row、512 KiB / callで制限する。source取得、planner、監査保存のいずれかが失敗しても、先にrenderした`permissionDecision: deny`を維持する。Hook stdoutに`updatedInput`は追加せず、MCP serverへのruntime rewriteもまだ行わない。
 
-`scripts/cleanup_redaction_audits.py`は所有するPreToolUse eventのworkspace、任意session、recorded-at cutoffでauditを選び、既定はdry-runとする。SQLiteのforeign key enforcementはリポジトリ全体でoffのままなので、execute時は`ON DELETE CASCADE`に依存せず、同じtransactionでtargetを先に明示削除してからplanを削除する。
+`scripts/cleanup_redaction_audits.py`は所有するPreToolUse eventのworkspace、任意session、recorded-at cutoffでauditを選び、既定はdry-runとする。SQLiteのforeign key enforcementはdormant prepare専用transaction以外ではoffのままなので、execute時は`ON DELETE CASCADE`に依存せず、同じtransactionでdecision link、target、planの順に明示削除する。
 
 ## Dormant Post confirmation実Codex E2E
 
@@ -515,13 +515,24 @@ sidecar実装前の10 MiB rendered oversizeはp95 8.01 msだった。新しいco
 
 一つ前のsize-only sidecarでは、同じhash-only stdio MCPを実Codexで再実行した。publicはPre / Post各1件に対してmetadata 2件、server call 1件、plan / decision 0件だった。protectedはPre 1件にmetadata 1件、Post / server call 0件、`block / critical / external_api_call` 1件、`preview / eligible` 1件だった。protected expected hashはserver監査になく、Codex JSONL / final answerにもダミー本文はなかった。
 
-最終hash-only schemaでの再実行は、既定の`gpt-5.6-sol`がCodex CLIと非互換でturn開始前に失敗し、その後の明示的な`gpt-5.5`と`gpt-5.4-mini`はusage limitでturn開始前に停止した。いずれもHook eventやserver callを生成していないため有効試行へ数えていない。最終schemaはactual Hook entrypoint fixtureを含むlocal 270 testsで検証済みだが、実Codex再検証はusageが利用可能になった後の残件である。runtime rewriteは引き続き有効化していない。
+最終hash-only schemaでの再実行は、既定の`gpt-5.6-sol`がCodex CLIと非互換でturn開始前に失敗し、その後の明示的な`gpt-5.5`と`gpt-5.4-mini`はusage limitでturn開始前に停止した。いずれもHook eventやserver callを生成していないため有効試行へ数えていない。最終schemaはactual Hook entrypoint fixtureを含むlocal testで検証済みだが、実Codex再検証はusageが利用可能になった後の残件である。runtime rewriteは引き続き有効化していない。
+
+## Dormant derived redact decision linkage
+
+同日の次作業単位で、future rendererが一部findingだけを扱うことを防ぐ監査境界を追加した。eligible previewから`enforce / eligible` plan、preview targetのexact clone、全critical finding分のdecision linkを1 transactionで準備する。各linkは元の`block / PreToolUse` decision ID、versionedなderived REDACT decision ID、derivation version、metadata SHA-256だけを持ち、protected本文を保存しない。genericな`policy_decisions`へ派生rowは追加しない。
+
+`prepare_redaction_enforcement()`はcallerからtargetやdecision IDを受け取らず、workspace-owned preview、完了analysis run、current-call critical lineage、pure planner replayから内部導出する。新規transactionだけでSQLite foreign key enforcementを有効化し、plan / target / linkをinsert後に同じsnapshotで再読込する。link insert前後の失敗や部分削除を検出した場合はenforce側3集合をrollbackする。同一入力のexact replayだけを許し、欠損linkを修復しない。
+
+Post confirmationはtarget cloneと全decision linkをterminal replay / compare-and-setより前に毎回再証明する。link数、ordinal、finding ID、source BLOCK formula、derived REDACT formula、version、metadata digestのいずれかが欠けるか変われば状態を更新しない。Pre call-scope sidecarが欠けたrendered planもsilentな`not_applicable`にせず、同じcoarse identityのnarrow sidecarを最大32件確認して`pre_scope_metadata_unavailable`として残す。確認中の`events` table readは0のままである。
+
+これはstorage / local integrationだけの作業単位で、Hook設定、runner、stdout、MCP副作用経路を変更していない。現行productionはprepare APIを呼ばず、rendererも`updatedInput`も生成しない。従ってprotected callは従来どおりPreToolUse deny、server call 0、Post 0であり、WU7単体の実Codex E2Eは新しいruntime動作を持たないため実施していない。
+
+Python 3.9.6 / SQLite 3.54.0のlocal component benchmarkでは、fixture構築とevent保存を除外した。single-finding新規prepare 80 sampleはp95 5.121 ms、exact replay 500 sampleはp95 1.299 ms、32-finding exact replay 300 sampleはp95 3.507 msだった。32-finding新規insertは1回の境界観測で7.570 msであり、p95とは扱わない。prepare write-lock failure 50 sampleはp95 1.187 ms、別writer lock中のexact replay 300 sampleはp95 1.155 msだった。link再証明後のconfirmationはno-plan 1,000 sample p95 0.724 ms、terminal replay 500 sample p95 0.940 ms、新規transition 60 sample p95 3.173 ms、missing Pre scope fallback 500 sample p95 0.555 msで、全p95が10 ms budget内だった。
 
 ## 次の検証順序
 
-1. derived redact decision linkageのschema、atomic writer、confirmation再証明をdormantな独立作業単位で実装する
-2. exclusive rewriteまたは完全管理singleton配備境界が成立しない限りruntime rendererを実装しない
-3. offline staging/promoteとruntime履歴snapshotの必要性を評価する
-4. embedding候補検索の評価
+1. offline staging/promoteとruntime履歴snapshotの必要性を評価する
+2. exclusive rewriteまたは完全管理singleton配備境界が成立した場合だけruntime rendererを再評価する
+3. embedding候補検索の評価
 
-PermissionRequestは評価を完了し、汎用runtime接続を見送った。redactも書換契約を設計したが、複数PreToolUse Hookでは最後に完了したrewriteだけが採用され、rewrite後のPreToolUse再検査もない。production Stop境界へは接続せず、MCPのexplicit profile、call内全findingのaggregate plan、hash-only audit、future rendered planだけを対象にしたdormant Post confirmationまで接続した。現行previewは一致しても状態遷移せず、実Codex E2Eでもruntime rewriteを有効化しない。未サポートの`permissionDecision: ask`には依存しない。
+PermissionRequestは評価を完了し、汎用runtime接続を見送った。redactも書換契約を設計したが、複数PreToolUse Hookでは最後に完了したrewriteだけが採用され、rewrite後のPreToolUse再検査もない。production Stop境界へは接続せず、MCPのexplicit profile、call内全findingのaggregate plan、hash-only audit、dormant decision linkage、future rendered planだけを対象にしたPost confirmationまで接続した。現行preview / prepared planは一致しても状態遷移せず、実Codex E2Eでもruntime rewriteを有効化しない。未サポートの`permissionDecision: ask`には依存しない。

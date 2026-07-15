@@ -338,11 +338,13 @@ MCP Hookのmatcherは、たとえば`^mcp__.*$`、または対象を絞った`^m
 
 MCPでcritical blockが確定した場合は、`detect_leaks()`が現在callへ返した全critical findingをそのままredaction preview plannerへ渡します。source本文はfindingが参照するworkspace-owned source chunk IDだけを32件以下で取得し、workspace全体をplanner用に再読込しません。bounded envelope内のeligible / rejected planと全targetは本文なしのhash-only監査として1 transactionでimmutableに保存します。新規insertでは完了runのcurrent-call sink / critical lineage / source evidenceからpure planner結果を再構成し、metadataと全targetが完全一致した場合だけ保存します。source取得、planner、保存が失敗しても、すでに生成したdenyをそのまま返します。previewはHook stdoutへ`updatedInput`を追加せず、runtime rewriteを行いません。
 
+`prepare_redaction_enforcement()`はfuture renderer用のstorage APIです。eligible previewを再証明し、`enforce / eligible` plan、target exact clone、全findingのBLOCK-to-REDACT decision linkを同じtransactionで保存します。prepare専用connectionだけでSQLite foreign key enforcementを有効化し、commit前にplan / target / linkを再読込します。現行runnerとHook設定はこのAPIを呼びません。`enforce / eligible`は監査準備済みを表すだけで、stdout生成済みの`rendered`や実行許可ではありません。新しい環境変数やoperator設定もありません。
+
 redaction audit schemaのdriftは初期化時に検出し、推測修復せずauditだけを無効化します。audit用のsource read / plan writeはSQLiteの`busy_timeout` 10 msでfail-fastし、lockやschema driftによる失敗もpreviewの例外境界内に留めます。replay対象は最大64 sink、識別子4 KiB、sink metadata 64 KiB / row、512 KiB / callでbyte制限し、重いread検証中はwriter lockを保持しません。そのためcore policyが確定したdenyは弱まりません。
 
 event保存時は、実際に`events.payload_json`へ入れるJSONを1回だけserialize / UTF-8 encodeし、byte数とpayload SHA-256を物理的に分離した`event_payload_metadata`へ同じtransactionで保存します。redaction対象になり得るPre / Postには、4 KiB以下のidentityから作るcall-scope SHA-256と`sequence_no`も保存します。1 MiB以下のPostだけはobserver version、bounded status、profile / registry version、canonical input byte数・SHA-256、structure SHA-256を追加し、本文は複製しません。row全体のmetadata SHA-256でfield driftを検出し、同一event replayは最初のrecord-time observationをimmutableに維持します。既存eventはHook初期化中に本文を全走査しないためbackfillしません。sidecar insert / observerだけが失敗した場合はauditを無効化し、core event / artifact保存と既存denyを維持します。schema driftは推測修復しません。
 
-Post event本体を保存した後、runnerはdormantなredaction confirmationを独立したfail-soft境界で呼びます。対象は将来rendererが保存する`mode = enforce AND status = rendered`の単一planだけで、現行previewのeligible / rejected planは候補hashと一致しても遷移しません。enforce planの全immutable列とbounded target集合がstorageで再証明済みeligible previewのexact cloneであること、完了analysis run、current profile / registry versionが一致することを要求します。planを先に検索し、候補が1件だけある場合に限ってcurrent Post、所有Pre、同scopeの最小sequence Postをsidecarから検証します。confirmation SQLは`events` tableを一切読みません。metadata欠落は`post_payload_bytes_unavailable`、integrity不一致は`post_payload_metadata_invalid`、1 MiB超過は`post_payload_bytes_exceeded`として未確認にします。`post_input_stable`かつfile inputなしのprofileについて、record時に32 KiB / 32 fields / depth 8以内で得たcanonical full-input hashを比較します。一致は`post_confirmed`、boundedなhash不一致は`post_mismatch`、oversize・profile drift・曖昧候補は未確認のままです。10 msの短いaudit read transactionを使い、実際に終端状態へ進める1 rowだけwriterへupgradeします。失敗しても記録済みPost eventをrollbackせず、stdoutやinput本文を出しません。現行runtimeは`rendered` planも`updatedInput`も生成しないためproductionではno-opです。
+Post event本体を保存した後、runnerはdormantなredaction confirmationを独立したfail-soft境界で呼びます。対象は将来rendererが保存する`mode = enforce AND status = rendered`の単一planだけで、現行preview / prepared eligible planは候補hashと一致しても遷移しません。enforce planの全immutable列とbounded target集合がstorageで再証明済みeligible previewのexact cloneであること、全decision link、完了analysis run、current profile / registry versionが一致することを要求します。exact Pre call scopeを先に検索し、candidateがなければ同じcoarse identityのnarrow Pre sidecarを最大32件だけ確認して、欠損・破損をsilentに無視せず未確認にします。候補が1件だけある場合にcurrent Post、所有Pre、同scopeの最小sequence Postをsidecarから検証します。confirmation SQLは`events` tableを一切読みません。Post metadata欠落は`post_payload_bytes_unavailable`、Pre scope metadata欠落は`pre_scope_metadata_unavailable`、integrity不一致は`post_payload_metadata_invalid`、1 MiB超過は`post_payload_bytes_exceeded`として未確認にします。`post_input_stable`かつfile inputなしのprofileについて、record時に32 KiB / 32 fields / depth 8以内で得たcanonical full-input hashを比較します。一致は`post_confirmed`、boundedなhash不一致は`post_mismatch`、oversize・profile drift・曖昧候補は未確認のままです。terminal replayとcompare-and-setの前にも全linkを再証明します。10 msの短いaudit read transactionを使い、実際に終端状態へ進める1 rowだけwriterへupgradeします。失敗しても記録済みPost eventをrollbackせず、stdoutやinput本文を出しません。現行runtimeは`rendered` planも`updatedInput`も生成しないためproductionではno-opです。
 
 - critical: `permissionDecision: deny`
 - high: `additionalContext`を返して実行継続
@@ -360,7 +362,7 @@ python3 scripts/cleanup_redaction_audits.py \
   --before 2026-08-01T00:00:00Z
 ```
 
-SQLiteのforeign key enforcementはリポジトリ全体で現在offです。cleanupは`ON DELETE CASCADE`に依存せず、同じtransaction内で`redaction_targets`を先に明示削除してから`redaction_plans`を削除します。
+SQLiteのforeign key enforcementはprepare専用transaction以外のリポジトリ全体で現在offです。cleanupは`ON DELETE CASCADE`に依存せず、同じtransaction内で`redaction_decision_links`、`redaction_targets`、`redaction_plans`の順に明示削除します。dry-run / executeのJSONは3種類の件数を返します。
 
 native Web SearchはCodex CLI `0.142.5`で`matcher: "*"`を使ってもPreToolUse / PostToolUseに現れなかったため、実行前遮断へは接続していません。Search adapterはsynthetic / imported eventのoffline解析用に残します。
 
@@ -412,6 +414,9 @@ source manifestの基準directoryはeventのcanonical workspace rootです。`pr
 - `hook_monitor/runtime/redaction_audit.py`
   - preview planをplaintext本文なしのstored modelへ変換します
   - eligible / rejected planとfinding単位の全targetを保存します
+- `hook_monitor/policy/redaction_decision.py`
+  - findingのBLOCK decisionを検証し、versionedなderived REDACT decision identityを決定論的に作ります
+  - Hook outputは生成せず、dormant decision linkのidentityだけを担当します
 - `hook_monitor/runtime/redaction_confirmation.py`
   - stable profileのbounded Post inputをcanonical hashで照合します
   - file input、profile drift、unbounded inputを未確認のままにします
@@ -483,6 +488,8 @@ source manifestの基準directoryはeventのcanonical workspace rootです。`pr
   - completed offline runが参照したnode metadataをcontent-addressedに保存し、runへ固定します
 - `redaction_plans` / `redaction_targets`
   - current MCP callのeligible / rejected previewと全finding targetをhash-onlyで保存します
+- `redaction_decision_links`
+  - preview BLOCK decisionと将来REDACT identityのfinding単位linkを本文なしで保存します
 
 イメージとしては、
 
@@ -586,7 +593,7 @@ python3 /Users/mani/Developer/ToolUseProxy/scripts/rebuild_lineage.py \
 - 類似度計算や source 追跡を変えたいなら `hook_monitor/analysis/`
 - 情報流エッジを強化したいなら `analysis` 側に拡張を足す
 
-現在の`hook_monitor/`は記録の骨格に加え、workspace・session差分graph、漏えい検知、Stop継続、Bash/MCP PreToolUse deny、operation単位lineage、PostToolUse snapshot、複数workspace分離、offline run snapshot、MCP exact profileと全scalar value / JSON key sink coverageまでを接続しています。PermissionRequestは実payloadとdeny / allowを評価しましたが、PreToolUseの代替にならず、payloadにstableなcall IDがなく、`allow`が通常承認を自動通過させるため、production Hookには設定しません。将来接続する場合もdeny-onlyの独立adapterとし、判断なしは空stdoutでCodex本来の承認へ委ねます。redactはblockを維持するpure preview planner、immutableなhash-only audit、future rendered planだけを対象にしたdormant Post confirmationまでrunner / DBへ接続しました。Hook stdoutは従来のdenyのままで、`updatedInput`はrenderしません。複数rewrite競合のgateが解消するまでproduction Hookへruntime rewriteを追加しません。詳細は [Redact設計](../設計/Redact.md) を参照してください。
+現在の`hook_monitor/`は記録の骨格に加え、workspace・session差分graph、漏えい検知、Stop継続、Bash/MCP PreToolUse deny、operation単位lineage、PostToolUse snapshot、複数workspace分離、offline run snapshot、MCP exact profileと全scalar value / JSON key sink coverageまでを接続しています。PermissionRequestは実payloadとdeny / allowを評価しましたが、PreToolUseの代替にならず、payloadにstableなcall IDがなく、`allow`が通常承認を自動通過させるため、production Hookには設定しません。将来接続する場合もdeny-onlyの独立adapterとし、判断なしは空stdoutでCodex本来の承認へ委ねます。redactはblockを維持するpure preview planner、immutableなhash-only audit、future renderer向けのdormant decision linkage、rendered planだけを対象にしたPost confirmationまでDBへ追加しました。runnerはprepare APIやrendererを呼ばず、Hook stdoutは従来のdenyのままで`updatedInput`をrenderしません。複数rewrite競合のgateが解消するまでproduction Hookへruntime rewriteを追加しません。詳細は [Redact設計](../設計/Redact.md) を参照してください。
 
 ## この研究の位置づけ
 

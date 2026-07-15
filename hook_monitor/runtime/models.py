@@ -301,11 +301,25 @@ class StoredRedactionPlan:
 
 
 @dataclass(frozen=True)
+class StoredRedactionDecisionLink:
+    enforce_plan_id: str
+    target_ordinal: int
+    preview_plan_id: str
+    finding_id: str
+    source_block_decision_id: str
+    derived_redact_decision_id: str
+    derivation_version: str
+    metadata_sha256: str
+    created_at: str | None = None
+
+
+@dataclass(frozen=True)
 class RedactionAuditCleanupResult:
     workspace_id: str
     before: str
     session_id: str | None
     plan_count: int
     target_count: int
+    decision_link_count: int
     orphan_plan_count: int
     executed: bool

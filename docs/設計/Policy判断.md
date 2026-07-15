@@ -118,7 +118,7 @@ medium / low
   -> allow
 ```
 
-`redact` は現在も判断modelだけに置き、runtimeへは接続していません。安全なredactはtool inputの構造ごとに異なり、複数PreToolUse Hookのrewrite競合もあるためです。tool別の適格条件、audit、fallback、実装gateは [Redact設計](Redact.md) に分けています。
+`redact` は現在もruntime actionへは接続していません。preview targetは現在のcritical BLOCK decision IDを保持し、dormant enforcement準備だけがfindingごとにそのBLOCK decisionを検証して、version付きderived REDACT decision IDとのimmutable linkを保存します。これは通常の`policy_decisions` rowやHook actionへの昇格ではなく、将来rendererが全findingを捨てずに扱うための監査根拠です。安全なredactはtool inputの構造ごとに異なり、複数PreToolUse Hookのrewrite競合もあるためです。tool別の適格条件、audit、fallback、実装gateは [Redact設計](Redact.md) に分けています。
 
 ## Codex Hookとの対応
 
@@ -142,6 +142,8 @@ Stop
   continue_review -> decision: block
   warn -> systemMessage
 ```
+
+`redact -> permissionDecision: allow + updatedInput`は将来のCodex出力契約です。現行runtimeはこの出力を返さず、critical external sinkは従来のdenyを維持します。
 
 Codex の `PreToolUse` では `permissionDecision: "ask"` は現在の安定した返却形として使いません。ユーザー確認に委ねたい場合は、まず `warn` として追加contextを出し、Codex本来の承認フローへ委ねます。
 
@@ -293,7 +295,7 @@ JSON output:
 2. 実CodexのMCP tool名とraw argumentsをadapterへ接続
 3. 二段階opt-inでMCP external sinkを`PreToolUse` denyへ接続
 
-operation単位fragment、snapshot capture、複数workspaceのsource/cursor/resource分離、MCP exact profileと全scalar value / JSON key sink coverage、redaction preview planner、hash-only audit、future rendered planだけを対象にしたdormant Post confirmation、O(1) hash-only event sidecarは実装済みです。`PermissionRequest`は公式source、実payload、deny / allow E2Eを検証し、汎用runtime接続を追加しないと判断しました。PreToolUseはcurrent callの全critical findingを確定した後にpreview plannerを呼び、findingが参照するworkspace-owned source chunk IDだけを32件以下で取得します。1件でも非対応なら候補全体をrejectし、bounded envelope内のeligible / rejected planと全targetをimmutableな1 transactionで保存します。新規保存は完了runのcritical lineageとpure planner再実行結果へ完全一致させます。Post confirmationはplan、current Post sidecar、所有Pre sidecar、同scopeの最小sequence Post、verified preview clone、stable profileの順で再証明し、`events` tableを読みません。現行preview planは遷移させません。source取得、planner、保存、confirmationの失敗時も先にrenderしたdenyまたはPost eventを維持します。Codex 0.142.5の複数rewriterではHook内から最終採用inputを証明できないため、`updatedInput`は返しません。
+operation単位fragment、snapshot capture、複数workspaceのsource/cursor/resource分離、MCP exact profileと全scalar value / JSON key sink coverage、redaction preview planner、hash-only audit、future renderer向けのdormant decision linkageとPost confirmation、O(1) hash-only event sidecarは実装済みです。`PermissionRequest`は公式source、実payload、deny / allow E2Eを検証し、汎用runtime接続を追加しないと判断しました。PreToolUseはcurrent callの全critical findingを確定した後にpreview plannerを呼び、findingが参照するworkspace-owned source chunk IDだけを32件以下で取得します。1件でも非対応なら候補全体をrejectし、bounded envelope内のeligible / rejected planと全targetをimmutableな1 transactionで保存します。新規保存は完了runのcritical lineageとpure planner再実行結果へ完全一致させます。dormant prepareはverified previewから`enforce / eligible` plan、target exact clone、全findingのBLOCK-to-REDACT linkを原子的に保存します。Post confirmationはplan、current Post sidecar、所有Pre sidecar、同scopeの最小sequence Post、verified preview clone、全decision link、stable profileの順で再証明し、`events` tableを読みません。現行preview / prepared planは遷移させません。source取得、planner、保存、prepare、confirmationの失敗時も先にrenderしたdenyまたはPost eventを維持します。Codex 0.142.5の複数rewriterではHook内から最終採用inputを証明できないため、`updatedInput`は返しません。
 
 Stop hook内の解析はsession差分更新へ移行済みです。初回または解析条件変更時は`session-full`、通常時は`session-incremental`としてanalysis runへ記録します。Hook内ではlocal DB、static adapter、indexed lexical候補、差分lineageだけを扱い、embeddingやnetwork accessは行いません。
 
@@ -318,6 +320,6 @@ Stop hook内の解析はsession差分更新へ移行済みです。初回また�
 - policy rule の設定ファイル化
 - finding DB table への保存
 - 実行時hook内での外部APIやembeddingを使う重い再解析
-- MCP redaction previewのruntime enforcement gate、Bashの限定allowlist redaction
+- MCP runtime rendererとexclusive rewrite gate、Bashの限定allowlist redaction
 - apply_patchのhidden automatic redact
 - ユーザー確認UIの再実装

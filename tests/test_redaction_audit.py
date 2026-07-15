@@ -18,6 +18,11 @@ from hook_monitor.analysis.adapters.mcp_profiles import (
     McpProfileRegistry,
     McpToolProfile,
 )
+from hook_monitor.policy.engine import make_policy_decision_id
+from hook_monitor.policy.redaction_decision import (
+    REDACTION_DECISION_DERIVATION_VERSION,
+    derive_redact_decision,
+)
 from hook_monitor.runtime.operations import extract_tool_operations
 from hook_monitor.runtime.parser import (
     build_artifacts,
@@ -106,6 +111,47 @@ class RedactionAuditTest(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.temporary_directory.cleanup()
+
+    def test_derived_redact_decision_is_versioned_and_block_bound(self) -> None:
+        finding_id = hashlib.sha256(b"finding-a").hexdigest()
+        source_block_decision_id = make_policy_decision_id(
+            finding_id,
+            "block",
+            "PreToolUse",
+        )
+
+        first = derive_redact_decision(
+            finding_id=finding_id,
+            source_block_decision_id=source_block_decision_id,
+        )
+        second = derive_redact_decision(
+            finding_id=finding_id,
+            source_block_decision_id=source_block_decision_id,
+        )
+
+        self.assertEqual(first, second)
+        self.assertEqual(finding_id, first.finding_id)
+        self.assertEqual(source_block_decision_id, first.source_block_decision_id)
+        self.assertEqual(
+            REDACTION_DECISION_DERIVATION_VERSION,
+            first.derivation_version,
+        )
+        self.assertRegex(first.derived_redact_decision_id, r"\A[0-9a-f]{64}\Z")
+        self.assertNotEqual(
+            make_policy_decision_id(finding_id, "redact", "PreToolUse"),
+            first.derived_redact_decision_id,
+        )
+
+        with self.assertRaisesRegex(ValueError, "source is not"):
+            derive_redact_decision(
+                finding_id=finding_id,
+                source_block_decision_id="0" * 64,
+            )
+        with self.assertRaisesRegex(ValueError, "lowercase SHA-256"):
+            derive_redact_decision(
+                finding_id="not-a-finding",
+                source_block_decision_id=source_block_decision_id,
+            )
 
     def test_post_input_observer_is_bounded_hash_only_and_versioned(
         self,
@@ -283,14 +329,21 @@ class RedactionAuditTest(unittest.TestCase):
             target_rows = connection.execute(
                 "SELECT * FROM redaction_targets"
             ).fetchall()
+            decision_link_rows = connection.execute(
+                "SELECT * FROM redaction_decision_links"
+            ).fetchall()
         self.assertNotIn("original_input", plan_columns)
         self.assertNotIn("rewritten_input", plan_columns)
         self.assertNotIn("body_text", plan_columns)
         self.assertNotIn("body_text", target_columns)
         self.assertNotIn(
             SECRET,
-            json.dumps((plan_rows, target_rows), ensure_ascii=False),
+            json.dumps(
+                (plan_rows, target_rows, decision_link_rows),
+                ensure_ascii=False,
+            ),
         )
+        self.assertEqual([], decision_link_rows)
 
     def test_preview_eligible_plan_is_never_post_confirmed(self) -> None:
         pre_event = self._record(
@@ -583,7 +636,10 @@ class RedactionAuditTest(unittest.TestCase):
             tool_input={"content": REDACTION_REPLACEMENT_TEXT},
         )
 
-        with self.assertRaisesRegex(ValueError, "target integrity mismatch"):
+        with self.assertRaisesRegex(
+            ValueError,
+            "redaction decision linkage is incomplete",
+        ):
             self.store.confirm_redaction_post_input(post_event)
 
         assert pre_event.workspace_id is not None
@@ -594,6 +650,86 @@ class RedactionAuditTest(unittest.TestCase):
         assert plan is not None
         self.assertEqual("rendered", plan.status)
         self.assertIsNone(plan.post_event_id)
+
+    def test_missing_decision_link_blocks_confirmation_before_cas(self) -> None:
+        self._add_protected_source(
+            self.workspace_a,
+            source_id="missing-second-link-source",
+            filename="private-missing-link.py",
+            secret=SECRET,
+        )
+        pre_event = self._record(
+            self.workspace_a,
+            tool_use_id="post-confirmation-missing-link",
+            tool_name=PROFILED_TOOL,
+            tool_input={"content": SECRET},
+        )
+        self._assert_deny_without_rewrite(self._evaluate_mcp(pre_event))
+        enforce_plan_id = self._simulate_future_rendered_plan(pre_event)
+        with sqlite3.connect(self.db_path) as connection:
+            deleted = connection.execute(
+                """
+                DELETE FROM redaction_decision_links
+                WHERE enforce_plan_id = ? AND target_ordinal = 1
+                """,
+                (enforce_plan_id,),
+            ).rowcount
+        self.assertEqual(1, deleted)
+        post_event = self._record_post(
+            pre_event,
+            tool_input={"content": REDACTION_REPLACEMENT_TEXT},
+        )
+
+        with self.assertRaisesRegex(ValueError, "linkage is incomplete"):
+            self._confirm_without_event_reads(post_event)
+
+        assert pre_event.workspace_id is not None
+        plan = self.store.get_redaction_plan(
+            enforce_plan_id,
+            workspace_id=pre_event.workspace_id,
+        )
+        assert plan is not None
+        self.assertEqual("rendered", plan.status)
+        self.assertIsNone(plan.post_event_id)
+        self.assertIsNone(plan.confirmed_at)
+
+    def test_terminal_replay_revalidates_decision_link_integrity(self) -> None:
+        pre_event = self._record(
+            self.workspace_a,
+            tool_use_id="post-confirmation-terminal-link-tamper",
+            tool_name=PROFILED_TOOL,
+            tool_input={"content": SECRET},
+        )
+        self._assert_deny_without_rewrite(self._evaluate_mcp(pre_event))
+        enforce_plan_id = self._simulate_future_rendered_plan(pre_event)
+        post_event = self._record_post(
+            pre_event,
+            tool_input={"content": REDACTION_REPLACEMENT_TEXT},
+        )
+        first = self._confirm_without_event_reads(post_event)
+        self.assertEqual("confirmed", first.disposition)
+        with sqlite3.connect(self.db_path) as connection:
+            connection.execute(
+                """
+                UPDATE redaction_decision_links
+                SET metadata_sha256 = ?
+                WHERE enforce_plan_id = ?
+                """,
+                ("0" * 64, enforce_plan_id),
+            )
+
+        with self.assertRaisesRegex(ValueError, "link integrity mismatch"):
+            self._confirm_without_event_reads(post_event)
+
+        assert pre_event.workspace_id is not None
+        plan = self.store.get_redaction_plan(
+            enforce_plan_id,
+            workspace_id=pre_event.workspace_id,
+        )
+        assert plan is not None
+        self.assertEqual("post_confirmed", plan.status)
+        self.assertEqual(post_event.event_id, plan.post_event_id)
+        self.assertIsNotNone(plan.confirmed_at)
 
     def test_oversized_stored_post_payload_remains_unobserved(self) -> None:
         pre_event = self._record(
@@ -669,6 +805,42 @@ class RedactionAuditTest(unittest.TestCase):
             "post_payload_bytes_unavailable",
             result.diagnostic_code,
         )
+        assert pre_event.workspace_id is not None
+        plan = self.store.get_redaction_plan(
+            enforce_plan_id,
+            workspace_id=pre_event.workspace_id,
+        )
+        assert plan is not None
+        self.assertEqual("rendered", plan.status)
+        self.assertIsNone(plan.post_event_id)
+
+    def test_missing_pre_scope_metadata_remains_unobserved(self) -> None:
+        pre_event = self._record(
+            self.workspace_a,
+            tool_use_id="post-confirmation-missing-pre-scope",
+            tool_name=PROFILED_TOOL,
+            tool_input={"content": SECRET},
+        )
+        self._assert_deny_without_rewrite(self._evaluate_mcp(pre_event))
+        enforce_plan_id = self._simulate_future_rendered_plan(pre_event)
+        with sqlite3.connect(self.db_path) as connection:
+            connection.execute(
+                "DELETE FROM event_payload_metadata WHERE event_id = ?",
+                (pre_event.event_id,),
+            )
+        post_event = self._record_post(
+            pre_event,
+            tool_input={"content": REDACTION_REPLACEMENT_TEXT},
+        )
+
+        result = self._confirm_without_event_reads(post_event)
+
+        self.assertEqual("unobserved", result.disposition)
+        self.assertEqual(
+            "pre_scope_metadata_unavailable",
+            result.diagnostic_code,
+        )
+        self.assertEqual(enforce_plan_id, result.plan_id)
         assert pre_event.workspace_id is not None
         plan = self.store.get_redaction_plan(
             enforce_plan_id,
@@ -822,8 +994,8 @@ class RedactionAuditTest(unittest.TestCase):
             turn_id="another-turn",
             tool_response={"ok": "wrong-turn"},
         )
-        with self.assertRaisesRegex(ValueError, "owner mismatch"):
-            self._confirm_without_event_reads(wrong_turn_post)
+        wrong_turn_result = self._confirm_without_event_reads(wrong_turn_post)
+        self.assertEqual("not_applicable", wrong_turn_result.disposition)
         unchanged = self.store.get_redaction_plan(
             enforce_plan_id,
             workspace_id=pre_event.workspace_id,
@@ -866,7 +1038,7 @@ class RedactionAuditTest(unittest.TestCase):
 
         self.assertEqual("not_applicable", result.disposition)
         self.assertLess(elapsed, 0.2)
-        self.assertFalse(
+        self.assertTrue(
             any("event_payload_metadata" in statement for statement in statements)
         )
         self.assertFalse(
@@ -1308,6 +1480,384 @@ class RedactionAuditTest(unittest.TestCase):
             )
         )
 
+    def test_prepare_enforcement_links_every_finding_without_policy_rows(
+        self,
+    ) -> None:
+        self._add_protected_source(
+            self.workspace_a,
+            source_id="duplicate-link-source",
+            filename="private-link-duplicate.py",
+            secret=SECRET,
+        )
+        event = self._record(
+            self.workspace_a,
+            tool_use_id="prepare-complete-linkage",
+            tool_name=PROFILED_TOOL,
+            tool_input={"content": SECRET},
+        )
+        output = self._evaluate_mcp(event)
+        self._assert_deny_without_rewrite(output)
+        assert event.workspace_id is not None
+        preview = self.store.list_redaction_plans(
+            workspace_id=event.workspace_id,
+            tool_use_id=event.tool_use_id,
+        )[0]
+
+        prepare_statements: list[str] = []
+        traced_connection = self.store._connect_redaction_audit()
+        traced_connection.set_trace_callback(prepare_statements.append)
+        with patch.object(
+            self.store,
+            "_connect_redaction_audit",
+            return_value=traced_connection,
+        ):
+            prepared = self.store.prepare_redaction_enforcement(
+                preview.plan_id,
+                workspace_id=event.workspace_id,
+            )
+        links = self.store.list_redaction_decision_links(
+            prepared.plan_id,
+            workspace_id=event.workspace_id,
+        )
+
+        self.assertEqual("preview", preview.mode)
+        self.assertTrue(
+            any(
+                statement.strip().casefold() == "pragma foreign_keys = on"
+                for statement in prepare_statements
+            )
+        )
+        self.assertEqual("enforce", prepared.mode)
+        self.assertEqual("eligible", prepared.status)
+        self.assertIsNone(prepared.rendered_at)
+        self.assertIsNone(prepared.post_event_id)
+        self.assertEqual(2, prepared.critical_finding_count)
+        self.assertEqual(1, prepared.replacement_count)
+        self.assertEqual(
+            tuple(
+                replace(target, plan_id=prepared.plan_id)
+                for target in preview.targets
+            ),
+            prepared.targets,
+        )
+        self.assertEqual(2, len(links))
+        self.assertEqual((0, 1), tuple(link.target_ordinal for link in links))
+        self.assertEqual(
+            {target.finding_id for target in prepared.targets},
+            {link.finding_id for link in links},
+        )
+        self.assertEqual(
+            {target.decision_id for target in prepared.targets},
+            {link.source_block_decision_id for link in links},
+        )
+        self.assertEqual(
+            2,
+            len({link.derived_redact_decision_id for link in links}),
+        )
+        for target, link in zip(prepared.targets, links):
+            derived = derive_redact_decision(
+                finding_id=target.finding_id,
+                source_block_decision_id=target.decision_id,
+            )
+            self.assertEqual(preview.plan_id, link.preview_plan_id)
+            self.assertEqual(prepared.plan_id, link.enforce_plan_id)
+            self.assertEqual(
+                derived.derived_redact_decision_id,
+                link.derived_redact_decision_id,
+            )
+            self.assertEqual(
+                REDACTION_DECISION_DERIVATION_VERSION,
+                link.derivation_version,
+            )
+            self.assertIsNotNone(link.created_at)
+
+        with sqlite3.connect(self.db_path) as connection:
+            policy_count = connection.execute(
+                """
+                SELECT COUNT(*) FROM policy_decisions
+                WHERE analysis_run_id = ?
+                """,
+                (preview.analysis_run_id,),
+            ).fetchone()[0]
+            raw_links = connection.execute(
+                "SELECT * FROM redaction_decision_links"
+            ).fetchall()
+            foreign_key_violations = connection.execute(
+                "PRAGMA foreign_key_check(redaction_decision_links)"
+            ).fetchall()
+        self.assertEqual(1, policy_count)
+        self.assertEqual([], foreign_key_violations)
+        self.assertNotIn(SECRET, json.dumps(raw_links, ensure_ascii=False))
+        self.assertNotIn(SECRET, repr(links))
+
+    def test_prepare_enforcement_exact_replay_is_immutable_and_scoped(
+        self,
+    ) -> None:
+        event = self._record(
+            self.workspace_a,
+            tool_use_id="prepare-exact-replay",
+            tool_name=PROFILED_TOOL,
+            tool_input={"content": SECRET},
+        )
+        self._assert_deny_without_rewrite(self._evaluate_mcp(event))
+        assert event.workspace_id is not None
+        preview = self.store.list_redaction_plans(
+            workspace_id=event.workspace_id,
+            tool_use_id=event.tool_use_id,
+        )[0]
+
+        first = self.store.prepare_redaction_enforcement(
+            preview.plan_id,
+            workspace_id=event.workspace_id,
+        )
+        first_links = self.store.list_redaction_decision_links(
+            first.plan_id,
+            workspace_id=event.workspace_id,
+        )
+        second = self.store.prepare_redaction_enforcement(
+            preview.plan_id,
+            workspace_id=event.workspace_id,
+        )
+        second_links = self.store.list_redaction_decision_links(
+            second.plan_id,
+            workspace_id=event.workspace_id,
+        )
+
+        self.assertEqual(first, second)
+        self.assertEqual(first_links, second_links)
+        self.assertEqual(
+            [],
+            self.store.list_redaction_decision_links(
+                first.plan_id,
+                workspace_id="another-workspace",
+            ),
+        )
+        with self.assertRaisesRegex(ValueError, "eligible preview"):
+            self.store.prepare_redaction_enforcement(
+                preview.plan_id,
+                workspace_id="another-workspace",
+            )
+
+        post_event = self._record_post(
+            event,
+            tool_input={"content": REDACTION_REPLACEMENT_TEXT},
+        )
+        result = self._confirm_without_event_reads(post_event)
+        self.assertEqual("not_applicable", result.disposition)
+        unchanged = self.store.get_redaction_plan(
+            first.plan_id,
+            workspace_id=event.workspace_id,
+        )
+        self.assertEqual(first, unchanged)
+
+    def test_prepare_replay_rejects_missing_link_without_repair(self) -> None:
+        event = self._record(
+            self.workspace_a,
+            tool_use_id="prepare-link-missing-replay",
+            tool_name=PROFILED_TOOL,
+            tool_input={"content": SECRET},
+        )
+        self._assert_deny_without_rewrite(self._evaluate_mcp(event))
+        assert event.workspace_id is not None
+        preview = self.store.list_redaction_plans(
+            workspace_id=event.workspace_id,
+            tool_use_id=event.tool_use_id,
+        )[0]
+        prepared = self.store.prepare_redaction_enforcement(
+            preview.plan_id,
+            workspace_id=event.workspace_id,
+        )
+        with sqlite3.connect(self.db_path) as connection:
+            connection.execute(
+                "DELETE FROM redaction_decision_links WHERE enforce_plan_id = ?",
+                (prepared.plan_id,),
+            )
+
+        with self.assertRaisesRegex(ValueError, "immutable"):
+            self.store.prepare_redaction_enforcement(
+                preview.plan_id,
+                workspace_id=event.workspace_id,
+            )
+
+        with sqlite3.connect(self.db_path) as connection:
+            link_count = connection.execute(
+                """
+                SELECT COUNT(*) FROM redaction_decision_links
+                WHERE enforce_plan_id = ?
+                """,
+                (prepared.plan_id,),
+            ).fetchone()[0]
+        self.assertEqual(0, link_count)
+
+    def test_prepare_enforcement_rolls_back_on_link_insert_failure(self) -> None:
+        self._add_protected_source(
+            self.workspace_a,
+            source_id="rollback-second-link-source",
+            filename="private-rollback-duplicate.py",
+            secret=SECRET,
+        )
+        event = self._record(
+            self.workspace_a,
+            tool_use_id="prepare-link-rollback",
+            tool_name=PROFILED_TOOL,
+            tool_input={"content": SECRET},
+        )
+        self._assert_deny_without_rewrite(self._evaluate_mcp(event))
+        assert event.workspace_id is not None
+        preview = self.store.list_redaction_plans(
+            workspace_id=event.workspace_id,
+            tool_use_id=event.tool_use_id,
+        )[0]
+        with sqlite3.connect(self.db_path) as connection:
+            connection.execute(
+                """
+                CREATE TRIGGER abort_redaction_decision_link_insert
+                BEFORE INSERT ON redaction_decision_links
+                WHEN NEW.target_ordinal = 1
+                BEGIN
+                    SELECT RAISE(ABORT, 'injected decision link failure');
+                END
+                """
+            )
+
+        with self.assertRaisesRegex(sqlite3.IntegrityError, "link failure"):
+            self.store.prepare_redaction_enforcement(
+                preview.plan_id,
+                workspace_id=event.workspace_id,
+            )
+
+        with sqlite3.connect(self.db_path) as connection:
+            enforce_plan_count = connection.execute(
+                "SELECT COUNT(*) FROM redaction_plans WHERE mode = 'enforce'"
+            ).fetchone()[0]
+            enforce_target_count = connection.execute(
+                """
+                SELECT COUNT(*)
+                FROM redaction_targets AS target
+                JOIN redaction_plans AS plan ON plan.plan_id = target.plan_id
+                WHERE plan.mode = 'enforce'
+                """
+            ).fetchone()[0]
+            link_count = connection.execute(
+                "SELECT COUNT(*) FROM redaction_decision_links"
+            ).fetchone()[0]
+            preview_count = connection.execute(
+                """
+                SELECT COUNT(*) FROM redaction_plans
+                WHERE plan_id = ? AND mode = 'preview'
+                """,
+                (preview.plan_id,),
+            ).fetchone()[0]
+        self.assertEqual((0, 0, 0, 1), (
+            enforce_plan_count,
+            enforce_target_count,
+            link_count,
+            preview_count,
+        ))
+
+    def test_prepare_enforcement_verifies_links_before_commit(self) -> None:
+        event = self._record(
+            self.workspace_a,
+            tool_use_id="prepare-link-after-trigger",
+            tool_name=PROFILED_TOOL,
+            tool_input={"content": SECRET},
+        )
+        self._assert_deny_without_rewrite(self._evaluate_mcp(event))
+        assert event.workspace_id is not None
+        preview = self.store.list_redaction_plans(
+            workspace_id=event.workspace_id,
+            tool_use_id=event.tool_use_id,
+        )[0]
+        with sqlite3.connect(self.db_path) as connection:
+            connection.execute(
+                """
+                CREATE TRIGGER erase_redaction_decision_link_after_insert
+                AFTER INSERT ON redaction_decision_links
+                BEGIN
+                    DELETE FROM redaction_decision_links
+                    WHERE enforce_plan_id = NEW.enforce_plan_id
+                      AND target_ordinal = NEW.target_ordinal;
+                END
+                """
+            )
+
+        with self.assertRaisesRegex(RuntimeError, "insert is incomplete"):
+            self.store.prepare_redaction_enforcement(
+                preview.plan_id,
+                workspace_id=event.workspace_id,
+            )
+
+        with sqlite3.connect(self.db_path) as connection:
+            counts = (
+                connection.execute(
+                    "SELECT COUNT(*) FROM redaction_plans WHERE mode = 'enforce'"
+                ).fetchone()[0],
+                connection.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM redaction_targets AS target
+                    JOIN redaction_plans AS plan ON plan.plan_id = target.plan_id
+                    WHERE plan.mode = 'enforce'
+                    """
+                ).fetchone()[0],
+                connection.execute(
+                    "SELECT COUNT(*) FROM redaction_decision_links"
+                ).fetchone()[0],
+            )
+        self.assertEqual((0, 0, 0), counts)
+
+    def test_prepare_enforcement_write_lock_fails_fast(self) -> None:
+        event = self._record(
+            self.workspace_a,
+            tool_use_id="prepare-link-write-lock",
+            tool_name=PROFILED_TOOL,
+            tool_input={"content": SECRET},
+        )
+        self._assert_deny_without_rewrite(self._evaluate_mcp(event))
+        assert event.workspace_id is not None
+        preview = self.store.list_redaction_plans(
+            workspace_id=event.workspace_id,
+            tool_use_id=event.tool_use_id,
+        )[0]
+
+        with sqlite3.connect(self.db_path, timeout=0) as blocker:
+            blocker.execute("BEGIN IMMEDIATE")
+            started = time.monotonic()
+            with self.assertRaisesRegex(sqlite3.OperationalError, "locked"):
+                self.store.prepare_redaction_enforcement(
+                    preview.plan_id,
+                    workspace_id=event.workspace_id,
+                )
+            elapsed = time.monotonic() - started
+            blocker.rollback()
+
+        self.assertLess(elapsed, 0.2)
+        with sqlite3.connect(self.db_path) as connection:
+            enforce_count = connection.execute(
+                "SELECT COUNT(*) FROM redaction_plans WHERE mode = 'enforce'"
+            ).fetchone()[0]
+            link_count = connection.execute(
+                "SELECT COUNT(*) FROM redaction_decision_links"
+            ).fetchone()[0]
+        self.assertEqual((0, 0), (enforce_count, link_count))
+
+        prepared = self.store.prepare_redaction_enforcement(
+            preview.plan_id,
+            workspace_id=event.workspace_id,
+        )
+        with sqlite3.connect(self.db_path, timeout=0) as blocker:
+            blocker.execute("BEGIN IMMEDIATE")
+            started = time.monotonic()
+            replayed = self.store.prepare_redaction_enforcement(
+                preview.plan_id,
+                workspace_id=event.workspace_id,
+            )
+            elapsed = time.monotonic() - started
+            blocker.rollback()
+
+        self.assertEqual(prepared, replayed)
+        self.assertLess(elapsed, 0.2)
+
     def test_plan_and_source_lookups_are_workspace_scoped_and_bounded(self) -> None:
         event_a = self._record(
             self.workspace_a,
@@ -1492,6 +2042,29 @@ class RedactionAuditTest(unittest.TestCase):
         )
         self._assert_deny_without_rewrite(self._evaluate_mcp(event_a))
         assert event_a.workspace_id is not None
+        preview_a = self.store.list_redaction_plans(
+            workspace_id=event_a.workspace_id,
+            tool_use_id=event_a.tool_use_id,
+        )[0]
+        enforce_a = self.store.prepare_redaction_enforcement(
+            preview_a.plan_id,
+            workspace_id=event_a.workspace_id,
+        )
+        with sqlite3.connect(self.db_path) as connection:
+            connection.execute(
+                """
+                CREATE TRIGGER require_link_first_cleanup
+                BEFORE DELETE ON redaction_targets
+                WHEN EXISTS (
+                    SELECT 1 FROM redaction_decision_links AS link
+                    WHERE link.enforce_plan_id = OLD.plan_id
+                       OR link.preview_plan_id = OLD.plan_id
+                )
+                BEGIN
+                    SELECT RAISE(ABORT, 'decision link must be deleted first');
+                END
+                """
+            )
 
         workspace_b = self._write_source_config(self.root / "cleanup-workspace-b")
         event_b = self._record(
@@ -1509,11 +2082,12 @@ class RedactionAuditTest(unittest.TestCase):
             before="2999-01-01 00:00:00",
         )
         self.assertFalse(dry_run.executed)
-        self.assertEqual(1, dry_run.plan_count)
-        self.assertEqual(1, dry_run.target_count)
+        self.assertEqual(2, dry_run.plan_count)
+        self.assertEqual(2, dry_run.target_count)
+        self.assertEqual(1, dry_run.decision_link_count)
         self.assertEqual(0, dry_run.orphan_plan_count)
         self.assertEqual(
-            1,
+            2,
             len(
                 self.store.list_redaction_plans(
                     workspace_id=event_a.workspace_id,
@@ -1527,11 +2101,19 @@ class RedactionAuditTest(unittest.TestCase):
             execute=True,
         )
         self.assertTrue(executed.executed)
-        self.assertEqual(1, executed.plan_count)
-        self.assertEqual(1, executed.target_count)
+        self.assertEqual(2, executed.plan_count)
+        self.assertEqual(2, executed.target_count)
+        self.assertEqual(1, executed.decision_link_count)
         self.assertEqual(
             [],
             self.store.list_redaction_plans(
+                workspace_id=event_a.workspace_id,
+            ),
+        )
+        self.assertEqual(
+            [],
+            self.store.list_redaction_decision_links(
+                enforce_a.plan_id,
                 workspace_id=event_a.workspace_id,
             ),
         )
@@ -1626,6 +2208,14 @@ class RedactionAuditTest(unittest.TestCase):
         )
         self._assert_deny_without_rewrite(self._evaluate_mcp(event))
         assert event.workspace_id is not None
+        preview = self.store.list_redaction_plans(
+            workspace_id=event.workspace_id,
+            tool_use_id=event.tool_use_id,
+        )[0]
+        self.store.prepare_redaction_enforcement(
+            preview.plan_id,
+            workspace_id=event.workspace_id,
+        )
         command = [
             sys.executable,
             str(REPO_ROOT / "scripts" / "cleanup_redaction_audits.py"),
@@ -1646,11 +2236,12 @@ class RedactionAuditTest(unittest.TestCase):
         )
         payload = json.loads(dry_run.stdout)
         self.assertEqual("dry-run", payload["mode"])
-        self.assertEqual(1, payload["plans"])
-        self.assertEqual(1, payload["targets"])
+        self.assertEqual(2, payload["plans"])
+        self.assertEqual(2, payload["targets"])
+        self.assertEqual(1, payload["decision_links"])
         self.assertNotIn(SECRET, dry_run.stdout + dry_run.stderr)
         self.assertEqual(
-            1,
+            2,
             len(self.store.list_redaction_plans(workspace_id=event.workspace_id)),
         )
 
@@ -2031,6 +2622,14 @@ class RedactionAuditTest(unittest.TestCase):
                   AND value = 'complete'
                 """
             ).fetchone()[0]
+            linkage_marker_count = connection.execute(
+                """
+                SELECT COUNT(*)
+                FROM analysis_state
+                WHERE key = 'migration.redaction_decision_linkage.v1'
+                  AND value = 'complete'
+                """
+            ).fetchone()[0]
             indexes = {
                 row[0]
                 for row in connection.execute(
@@ -2061,16 +2660,39 @@ class RedactionAuditTest(unittest.TestCase):
                 """,
                 ("0" * 64,),
             ).fetchall()
+            link_query_plan = connection.execute(
+                """
+                EXPLAIN QUERY PLAN
+                SELECT enforce_plan_id, target_ordinal
+                FROM redaction_decision_links
+                WHERE source_block_decision_id = ?
+                ORDER BY enforce_plan_id, target_ordinal
+                LIMIT 1
+                """,
+                ("0" * 64,),
+            ).fetchall()
         self.assertIn("redaction_plans", tables)
         self.assertIn("redaction_targets", tables)
+        self.assertIn("redaction_decision_links", tables)
         self.assertIn("event_payload_metadata", tables)
         self.assertEqual(1, marker_count)
         self.assertEqual(1, payload_marker_count)
+        self.assertEqual(1, linkage_marker_count)
         self.assertIn("idx_redaction_plans_event_version", indexes)
         self.assertIn("idx_redaction_targets_finding", indexes)
         self.assertIn(
             "idx_event_payload_metadata_redaction_scope_sequence",
             indexes,
+        )
+        self.assertTrue(
+            {
+                "idx_redaction_decision_links_preview_ordinal",
+                "idx_redaction_decision_links_finding",
+                "idx_redaction_decision_links_source",
+                "idx_redaction_decision_links_derived",
+                "idx_redaction_decision_links_source_lookup",
+                "idx_redaction_decision_links_derived_lookup",
+            }.issubset(indexes)
         )
         self.assertTrue(
             any(
@@ -2086,6 +2708,56 @@ class RedactionAuditTest(unittest.TestCase):
                 for row in scope_query_plan
             )
         )
+        self.assertTrue(
+            any(
+                "idx_redaction_decision_links_source_lookup" in str(row[3])
+                for row in link_query_plan
+            )
+        )
+
+    def test_decision_link_schema_rejects_impossible_rows(self) -> None:
+        event = self._record(
+            self.workspace_a,
+            tool_use_id="decision-link-schema-invariants",
+            tool_name=PROFILED_TOOL,
+            tool_input={"content": SECRET},
+        )
+        self._assert_deny_without_rewrite(self._evaluate_mcp(event))
+        assert event.workspace_id is not None
+        preview = self.store.list_redaction_plans(
+            workspace_id=event.workspace_id,
+            tool_use_id=event.tool_use_id,
+        )[0]
+        prepared = self.store.prepare_redaction_enforcement(
+            preview.plan_id,
+            workspace_id=event.workspace_id,
+        )
+
+        invalid_updates = (
+            ("source_block_decision_id", sqlite3.Binary(b"block")),
+            ("derivation_version", "unknown-redact-version"),
+            ("metadata_sha256", None),
+            ("created_at", sqlite3.Binary(b"timestamp")),
+        )
+        with sqlite3.connect(self.db_path) as connection:
+            for column, value in invalid_updates:
+                with self.subTest(column=column):
+                    with self.assertRaises(sqlite3.IntegrityError):
+                        connection.execute(
+                            f"""
+                            UPDATE redaction_decision_links
+                            SET {column} = ?
+                            WHERE enforce_plan_id = ?
+                            """,
+                            (value, prepared.plan_id),
+                        )
+                    connection.rollback()
+
+        links = self.store.list_redaction_decision_links(
+            prepared.plan_id,
+            workspace_id=event.workspace_id,
+        )
+        self.assertEqual(1, len(links))
 
     def test_event_metadata_schema_rejects_impossible_observation_rows(
         self,
@@ -2188,6 +2860,104 @@ class RedactionAuditTest(unittest.TestCase):
                 ).fetchall()
             }
         self.assertIn("raw_body", columns)
+
+    def test_completed_linkage_migration_does_not_repair_missing_table(
+        self,
+    ) -> None:
+        original_event = self._record(
+            self.workspace_a,
+            tool_use_id="missing-linkage-table-owner",
+            tool_name=PROFILED_TOOL,
+            tool_input={"content": SECRET},
+        )
+        self._assert_deny_without_rewrite(self._evaluate_mcp(original_event))
+        assert original_event.workspace_id is not None
+        preview = self.store.list_redaction_plans(
+            workspace_id=original_event.workspace_id,
+            tool_use_id=original_event.tool_use_id,
+        )[0]
+        with sqlite3.connect(self.db_path) as connection:
+            connection.execute("DROP TABLE redaction_decision_links")
+
+        self.store.initialize()
+        followup = self._record(
+            self.workspace_a,
+            tool_use_id="missing-linkage-table-followup",
+            tool_name=PROFILED_TOOL,
+            tool_input={"content": SECRET},
+        )
+        output = self._evaluate_mcp(followup)
+
+        self._assert_deny_without_rewrite(output)
+        self.assertFalse(self.store._redaction_audit_available)
+        with sqlite3.connect(self.db_path) as connection:
+            table_exists = connection.execute(
+                """
+                SELECT 1 FROM sqlite_master
+                WHERE type = 'table' AND name = 'redaction_decision_links'
+                """
+            ).fetchone()
+        self.assertIsNone(table_exists)
+        self.assertEqual(
+            [],
+            self.store.list_redaction_plans(
+                workspace_id=original_event.workspace_id,
+                tool_use_id=followup.tool_use_id,
+            ),
+        )
+        with self.assertRaisesRegex(RuntimeError, "schema is unavailable"):
+            self.store.prepare_redaction_enforcement(
+                preview.plan_id,
+                workspace_id=original_event.workspace_id,
+            )
+        with self.assertRaisesRegex(RuntimeError, "schema is unavailable"):
+            self.store.list_redaction_decision_links(
+                "0" * 64,
+                workspace_id=original_event.workspace_id,
+            )
+
+    def test_completed_linkage_migration_rejects_default_drift(self) -> None:
+        with sqlite3.connect(self.db_path) as connection:
+            table_sql = connection.execute(
+                """
+                SELECT sql FROM sqlite_master
+                WHERE type = 'table' AND name = 'redaction_decision_links'
+                """
+            ).fetchone()[0]
+            index_sql = tuple(
+                row[0]
+                for row in connection.execute(
+                    """
+                    SELECT sql FROM sqlite_master
+                    WHERE type = 'index'
+                      AND tbl_name = 'redaction_decision_links'
+                      AND sql IS NOT NULL
+                    ORDER BY name
+                    """
+                ).fetchall()
+            )
+            connection.execute("DROP TABLE redaction_decision_links")
+            connection.execute(
+                table_sql.replace(
+                    "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP CHECK (",
+                    "created_at TEXT NOT NULL CHECK (",
+                )
+            )
+            for statement in index_sql:
+                connection.execute(statement)
+
+        self.store.initialize()
+
+        self.assertFalse(self.store._redaction_audit_available)
+        with sqlite3.connect(self.db_path) as connection:
+            created_at = next(
+                row
+                for row in connection.execute(
+                    "PRAGMA table_info(redaction_decision_links)"
+                ).fetchall()
+                if row[1] == "created_at"
+            )
+        self.assertIsNone(created_at[4])
 
     def test_completed_migration_does_not_recreate_missing_target_table(self) -> None:
         event = self._record(
@@ -2361,110 +3131,27 @@ class RedactionAuditTest(unittest.TestCase):
         )
         if preview is None:
             raise AssertionError("preview plan fixture is missing")
-        enforce_plan_id = hashlib.sha256(
-            "\0".join(
-                (
-                    preview.workspace_id,
-                    preview.pre_event_id,
-                    preview.analysis_run_id,
-                    preview.planner_version,
-                    preview.profile_version,
-                    "enforce",
-                )
-            ).encode("utf-8")
-        ).hexdigest()
+        prepared = self.store.prepare_redaction_enforcement(
+            preview.plan_id,
+            workspace_id=pre_event.workspace_id,
+        )
         with sqlite3.connect(self.db_path) as connection:
-            connection.execute(
+            updated = connection.execute(
                 """
-                INSERT INTO redaction_plans (
-                    plan_id,
-                    analysis_run_id,
-                    pre_event_id,
-                    workspace_id,
-                    session_id,
-                    tool_use_id,
-                    tool_name,
-                    adapter,
-                    profile_id,
-                    profile_version,
-                    profile_registry_version,
-                    mode,
-                    status,
-                    planner_version,
-                    original_input_sha256,
-                    rewritten_input_sha256,
-                    structure_sha256_before,
-                    structure_sha256_after,
-                    critical_finding_count,
-                    replacement_count,
-                    rejection_code,
-                    post_event_id,
-                    created_at,
-                    rendered_at,
-                    confirmed_at
-                )
-                SELECT
-                    ?,
-                    analysis_run_id,
-                    pre_event_id,
-                    workspace_id,
-                    session_id,
-                    tool_use_id,
-                    tool_name,
-                    adapter,
-                    profile_id,
-                    profile_version,
-                    profile_registry_version,
-                    'enforce',
-                    'rendered',
-                    planner_version,
-                    original_input_sha256,
-                    rewritten_input_sha256,
-                    structure_sha256_before,
-                    structure_sha256_after,
-                    critical_finding_count,
-                    replacement_count,
-                    NULL,
-                    NULL,
-                    CURRENT_TIMESTAMP,
-                    CURRENT_TIMESTAMP,
-                    NULL
-                FROM redaction_plans
+                UPDATE redaction_plans
+                SET status = 'rendered', rendered_at = CURRENT_TIMESTAMP
                 WHERE plan_id = ?
+                  AND mode = 'enforce'
+                  AND status = 'eligible'
+                  AND rendered_at IS NULL
+                  AND post_event_id IS NULL
+                  AND confirmed_at IS NULL
                 """,
-                (enforce_plan_id, preview.plan_id),
-            )
-            connection.execute(
-                """
-                INSERT INTO redaction_targets (
-                    plan_id,
-                    ordinal,
-                    finding_id,
-                    decision_id,
-                    source_node_kind,
-                    source_node_id,
-                    sink_node_id,
-                    json_pointer,
-                    original_value_sha256,
-                    replacement_profile
-                )
-                SELECT
-                    ?,
-                    ordinal,
-                    finding_id,
-                    decision_id,
-                    source_node_kind,
-                    source_node_id,
-                    sink_node_id,
-                    json_pointer,
-                    original_value_sha256,
-                    replacement_profile
-                FROM redaction_targets
-                WHERE plan_id = ?
-                """,
-                (enforce_plan_id, preview.plan_id),
-            )
-        return enforce_plan_id
+                (prepared.plan_id,),
+            ).rowcount
+        if updated != 1:
+            raise AssertionError("future renderer fixture transition failed")
+        return prepared.plan_id
 
     def _evaluate_mcp(self, event):
         return evaluate_pre_tool_hook_policy(

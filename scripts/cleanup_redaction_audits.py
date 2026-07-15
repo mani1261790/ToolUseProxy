@@ -64,6 +64,7 @@ def main() -> int:
                 "session": result.session_id,
                 "plans": result.plan_count,
                 "targets": result.target_count,
+                "decision_links": result.decision_link_count,
                 "orphans": result.orphan_plan_count,
             },
             ensure_ascii=False,
