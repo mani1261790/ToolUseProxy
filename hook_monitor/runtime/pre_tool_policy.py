@@ -9,19 +9,27 @@ from hook_monitor.analysis.adapters.mcp import (
     classify_mcp_sink_type,
     parse_mcp_tool_name,
 )
-from hook_monitor.analysis.adapters.mcp_profiles import inspect_mcp_input
-from hook_monitor.analysis.leak_detection import detect_leaks
+from hook_monitor.analysis.adapters.mcp_profiles import (
+    MCP_TOOL_NAME_MAX_BYTES,
+    inspect_mcp_input,
+)
+from hook_monitor.analysis.leak_detection import LeakFinding, detect_leaks
 from hook_monitor.policy.codex_output import (
     render_codex_hook_output,
     select_strongest_decision,
 )
 from hook_monitor.policy.engine import evaluate_policy
+from hook_monitor.policy.redaction_preview import (
+    DEFAULT_REDACTION_PREVIEW_LIMITS,
+    plan_mcp_redaction_preview,
+)
 from hook_monitor.runtime.incremental_analysis import (
     RUNTIME_GRAPH_DETECTOR_VERSION,
     update_runtime_analysis,
 )
-from hook_monitor.runtime.models import NormalizedEvent, SinkCandidate
+from hook_monitor.runtime.models import AnalysisRun, NormalizedEvent, SinkCandidate
 from hook_monitor.runtime.policy_audit import store_policy_decision
+from hook_monitor.runtime.redaction_audit import store_redaction_preview_plan
 from hook_monitor.runtime.storage import EventStore
 
 
@@ -42,6 +50,7 @@ MCP_INPUT_REJECTION_CODES = frozenset(
         "nesting_depth_exceeded",
         "numeric_token_exceeded",
         "numeric_value_non_finite",
+        "tool_name_bytes_exceeded",
         "unsupported_input_type",
         "unsupported_numeric_constant",
     }
@@ -95,6 +104,15 @@ def evaluate_pre_tool_input_bounds(
         or pre_tool_adapter(current_event.tool_name) != "mcp"
     ):
         return PreToolInputGuardResult("continue", {})
+    try:
+        tool_name_bytes = len((current_event.tool_name or "").encode("utf-8"))
+    except UnicodeEncodeError:
+        tool_name_bytes = MCP_TOOL_NAME_MAX_BYTES + 1
+    if tool_name_bytes > MCP_TOOL_NAME_MAX_BYTES:
+        return PreToolInputGuardResult(
+            "deny",
+            render_mcp_input_limit_deny("tool_name_bytes_exceeded"),
+        )
     arguments = current_event.raw_payload.get("tool_input")
     inspection = inspect_mcp_input(arguments)
     if inspection.accepted:
@@ -141,10 +159,11 @@ def evaluate_pre_tool_hook_policy(
         detector_version=RUNTIME_GRAPH_DETECTOR_VERSION,
         minimum_path_score=minimum_path_score,
     )
+    current_sequence_no = store.get_event_sequence_no(current_event.event_id)
     current_sinks = _current_external_sinks(
         list(runtime_result.sinks),
         current_event,
-        store.get_event_sequence_no(current_event.event_id),
+        current_sequence_no,
         current_adapter,
     )
     findings = detect_leaks(
@@ -154,19 +173,91 @@ def evaluate_pre_tool_hook_policy(
         min_score=leak_min_score,
         sink_types={sink.sink_type for sink in current_sinks},
     )
-    selected = select_strongest_decision(evaluate_policy(findings), "PreToolUse")
+    decisions = evaluate_policy(findings)
+    selected = select_strongest_decision(decisions, "PreToolUse")
     if selected is not None and selected.action != "allow":
         store_policy_decision(
             store,
             selected,
             runtime_result.analysis_run.analysis_run_id,
         )
-    return render_codex_hook_output(
+    hook_output = render_codex_hook_output(
         selected,
         "PreToolUse",
         db_path=store.db_path,
         analysis_run_id=runtime_result.analysis_run.analysis_run_id,
     )
+    critical_findings = tuple(
+        finding for finding in findings if finding.severity == "critical"
+    )
+    if (
+        current_adapter == "mcp"
+        and selected is not None
+        and selected.action == "block"
+        and critical_findings
+    ):
+        try:
+            _store_mcp_redaction_preview(
+                store,
+                current_event=current_event,
+                current_sequence_no=current_sequence_no,
+                analysis_run=runtime_result.analysis_run,
+                current_sinks=tuple(current_sinks),
+                current_critical_findings=critical_findings,
+            )
+        except Exception:
+            # A preview-only failure must never weaken the already-rendered block.
+            pass
+    return hook_output
+
+
+def _store_mcp_redaction_preview(
+    store: EventStore,
+    *,
+    current_event: NormalizedEvent,
+    current_sequence_no: int,
+    analysis_run: AnalysisRun,
+    current_sinks: tuple[SinkCandidate, ...],
+    current_critical_findings: tuple[LeakFinding, ...],
+) -> None:
+    source_chunks = {}
+    if (
+        len(current_critical_findings)
+        <= DEFAULT_REDACTION_PREVIEW_LIMITS.max_critical_findings
+    ):
+        source_ids = tuple(
+            sorted(
+                {
+                    finding.source_node_id
+                    for finding in current_critical_findings
+                    if finding.source_node_kind == "source_chunk"
+                }
+            )
+        )
+        chunks = store.list_source_chunks_for_workspace_ids(
+            current_event.workspace_id or "",
+            source_ids,
+            max_ids=DEFAULT_REDACTION_PREVIEW_LIMITS.max_critical_findings,
+            max_bytes_per_chunk=(
+                DEFAULT_REDACTION_PREVIEW_LIMITS.max_source_bytes_per_finding
+            ),
+            max_bytes_total=(
+                DEFAULT_REDACTION_PREVIEW_LIMITS.max_source_bytes_total
+            ),
+        )
+        source_chunks = {
+            (chunk.workspace_id or "", chunk.chunk_id): chunk for chunk in chunks
+        }
+    result = plan_mcp_redaction_preview(
+        current_event=current_event,
+        current_sequence_no=current_sequence_no,
+        analysis_run=analysis_run,
+        current_sinks=current_sinks,
+        current_critical_findings=current_critical_findings,
+        source_chunks=source_chunks,
+    )
+    if result.plan is not None:
+        store_redaction_preview_plan(store, result.plan)
 
 
 def _current_external_sinks(

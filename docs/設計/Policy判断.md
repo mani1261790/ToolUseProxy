@@ -293,7 +293,7 @@ JSON output:
 2. 実CodexのMCP tool名とraw argumentsをadapterへ接続
 3. 二段階opt-inでMCP external sinkを`PreToolUse` denyへ接続
 
-operation単位fragment、snapshot capture、複数workspaceのsource/cursor/resource分離、MCP exact profileと全scalar value / JSON key sink coverage、pure redaction preview plannerは実装済みです。`PermissionRequest`は公式source、実payload、deny / allow E2Eを検証し、汎用runtime接続を追加しないと判断しました。preview plannerはcurrent callの全critical findingを集約し、1件でも非対応なら候補全体をrejectします。現行Codexでは複数matching Hookの最後に完了したrewriteだけが採用されるため、runtime denyは維持し、次にhash-only auditを追加します。
+operation単位fragment、snapshot capture、複数workspaceのsource/cursor/resource分離、MCP exact profileと全scalar value / JSON key sink coverage、redaction preview plannerとhash-only auditは実装済みです。`PermissionRequest`は公式source、実payload、deny / allow E2Eを検証し、汎用runtime接続を追加しないと判断しました。PreToolUseはcurrent callの全critical findingを確定した後にpreview plannerを呼び、findingが参照するworkspace-owned source chunk IDだけを32件以下で取得します。1件でも非対応なら候補全体をrejectし、bounded envelope内のeligible / rejected planと全targetをimmutableな1 transactionで保存します。新規保存は完了runのcritical lineageとpure planner再実行結果へ完全一致させます。source取得、planner、保存の失敗時も先にrenderしたdenyを維持し、`updatedInput`は返しません。次はstable profileのPostToolUse input hashをdormantに照合します。
 
 Stop hook内の解析はsession差分更新へ移行済みです。初回または解析条件変更時は`session-full`、通常時は`session-incremental`としてanalysis runへ記録します。Hook内ではlocal DB、static adapter、indexed lexical候補、差分lineageだけを扱い、embeddingやnetwork accessは行いません。
 

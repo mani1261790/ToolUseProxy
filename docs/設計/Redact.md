@@ -4,7 +4,7 @@ Redactは、protected source由来の情報を含むtool inputから、送信し
 
 ## 現在の結論
 
-現行Codex CLI `0.142.5`では、redactをblockの安全な代替としてruntimeへ接続しません。まずMCPのtool固有profileと、実行しないpreview planner、監査schemaを作る順序を推奨します。
+現行Codex CLI `0.142.5`では、redactをblockの安全な代替としてruntimeへ接続しません。MCPのtool固有profile、実行しないpreview planner、hash-only監査保存までを先に実装し、次にPostToolUse input hashのdormantな照合を追加します。
 
 主な理由は次の通りです。
 
@@ -16,7 +16,7 @@ Redactは、protected source由来の情報を含むtool inputから、送信し
 
 従って、最初の到達点は`redact-preview`です。previewは「このcallなら、どのfieldをどう置き換えられるか」を監査可能なplanとして出しますが、Hook stdoutへ`updatedInput`を返さず、現在のcritical findingは引き続きblockします。
 
-2026-07-15時点で、versioned exact profile registry、MCP sink coverage、pure preview plannerまで実装済みです。valid profileはdata / controlの全present scalar pointerを個別sink化し、shape不一致とunprofiled write-like toolはarguments内の全scalar valueとJSON object keyへ保守的fallbackします。plannerはcurrent event / workspace / session / tool use / sequence、profile / registry version、全present sink coverageを閉じ、全critical findingをsource chunkとtarget pointerの直接参照で集約します。1件でも非対応ならpartial targetと候補本文を破棄し、全件でraw case-sensitive matchを確認できた場合だけdeep copy上のwhole-field候補、canonical input hash、structure hash、finding単位targetを返します。初期exact profileは実Codexで観測したlocal E2E `publish_text(content)`だけで、実schema未確認の外部serviceはpreview適格にしません。real MCP inputは32 KiB / 32 fields / depth 8のbounded preflightをartifact生成より前に受け、超過したexternal writeはdeny、read-only / unsinked callは保存せず空stdoutでbypassします。preview plannerはまだHook runnerやDBへ接続しておらず、runtime outputは従来のdeny / 空stdoutのままです。`updatedInput`も返しません。
+2026-07-15時点で、versioned exact profile registry、MCP sink coverage、pure preview planner、hash-only監査保存まで実装済みです。valid profileはdata / controlの全present scalar pointerを個別sink化し、shape不一致とunprofiled write-like toolはarguments内の全scalar valueとJSON object keyへ保守的fallbackします。plannerはcurrent event / workspace / session / tool use / sequence、profile / registry version、全present sink coverageを閉じ、全critical findingをsource chunkとtarget pointerの直接参照で集約します。1件でも非対応ならpartial targetと候補本文を破棄し、全件でraw case-sensitive matchを確認できた場合だけdeep copy上のwhole-field候補、canonical input hash、structure hash、finding単位targetを返します。初期exact profileは実Codexで観測したlocal E2E `publish_text(content)`だけで、実schema未確認の外部serviceはpreview適格にしません。real MCP inputは32 KiB / 32 fields / depth 8のbounded preflightをartifact生成より前に受け、超過したexternal writeはdeny、read-only / unsinked callは保存せず空stdoutでbypassします。PreToolUseはcurrent callの全critical findingを検出した後だけplannerを呼び、findingが参照するworkspace-owned source chunk IDを32件以下で取得します。eligible / rejected planと全targetはimmutableな1 transactionで保存し、source取得、planner、保存の失敗時も先に生成したdenyを返します。runtime outputは従来のdeny / 空stdoutのままで、`updatedInput`は返しません。
 
 ## Codexの実契約
 
@@ -168,9 +168,9 @@ Bashは初期runtime対象にしません。`updatedInput`はcommand文字列全
 
 代替案として、`.md` / `.txt`などの明示plaintextだけを対象に、added lineのraw exact spanを書き換えるpreviewは設計できます。その場合も、再parse後にoperation数、順序、kind、source / target / move path、context、removed lineが全て同一であることが必要です。これはpublic artifact sinkを定義した後の研究候補であり、現在のexternal sink対策より先には置きません。
 
-## 推奨data model
+## data model
 
-planはpolicy decisionとは別のcall単位auditとして保存します。1つのcallに複数source / sink findingがあるため、1 decisionへ押し込めません。
+planはpolicy decisionとは別のcall単位auditとして保存します。1つのcallに複数source / sink findingがあるため、1 decisionへ押し込めません。以下のschemaはpreview監査として実装済みです。
 
 ```sql
 CREATE TABLE redaction_plans (
@@ -216,14 +216,17 @@ CREATE TABLE redaction_targets (
     FOREIGN KEY (plan_id) REFERENCES redaction_plans(plan_id) ON DELETE CASCADE
 );
 
-CREATE UNIQUE INDEX redaction_plans_event_version
+CREATE UNIQUE INDEX idx_redaction_plans_event_version
     ON redaction_plans(
         workspace_id, pre_event_id, analysis_run_id,
         planner_version, profile_version, mode
     );
 
-CREATE INDEX redaction_plans_tool_use
-    ON redaction_plans(workspace_id, session_id, tool_use_id);
+CREATE INDEX idx_redaction_plans_tool_use
+    ON redaction_plans(
+        workspace_id, session_id, tool_use_id,
+        created_at DESC, plan_id
+    );
 ```
 
 exact profileがないreject planでは、`profile_id`に`unprofiled:<server>/<tool>`、`profile_version`にregistry versionを入れ、nullable keyによる重複を避けます。これは適格profileが存在することを意味せず、`rejection_code = 'unknown_profile'`と対で扱います。
@@ -238,6 +241,8 @@ hash対象はtool inputのcanonical JSONです。Bash / apply_patchも`{"command
 
 - raw original inputは既存event / artifactに既に保存されるため、plan tableへ複製しない
 - rewritten input本文も既定では保存せず、hash、pointer、replacement profileだけを保存する
+- 保存transaction内で所有event、完了済みanalysis run、current-call sink、critical lineage、bounded source evidenceを再構成し、deadline判定を除いたpure planner出力と完全一致しないplanを拒否する
+- targetは同じcallのexternal sink metadataにある`data`かつ`redactable`なpointer、exact profile version、固定replacement profileと一致する場合だけ保存する
 - Hook stdoutを返す将来段階では、全derived `redact` decisionとplan / targetを同一transactionで保存してからrenderする
 - `post_input_stable: true`のprofileで、PostToolUseのactual input hashが一致した場合だけ`post_confirmed`にする
 - hash不一致は`post_mismatch`とし、別Hookのoverrideなどを疑う
@@ -247,7 +252,7 @@ previewではtargetの`decision_id`に元のblock decisionを保存します。�
 
 statusの`rendered`はHookがstdout用JSONを作ったことだけを表し、Codexが採用したことを意味しません。採用を示せるのは、観測したPost inputが一致した`post_confirmed`だけです。
 
-retentionはeventと同じscopeへ連動させます。planだけを長く残すとsource / sink関係を不要に保持するため、eventをpruneする際にplan / targetも削除します。現行event DBには自動pruneがないため、plan実装時には明示cleanup commandとdry-runを同じ作業単位で用意します。現行DBは暗号化されず、raw Hook payloadやartifactにplaintextが残り得ます。redactは外部送信を減らす機能であり、monitor DBのplaintext保存問題を解決する機能ではありません。
+retentionはeventと同じscopeへ連動させます。planだけを長く残すとsource / sink関係を不要に保持するため、`scripts/cleanup_redaction_audits.py`は所有するPreToolUse eventのworkspace、任意session、recorded-at cutoffでplan / targetを選びます。既定はdry-runで、`--execute`を明示した場合だけ削除します。SQLiteのforeign key enforcementはリポジトリ全体で現在offのため、`ON DELETE CASCADE`に依存せず、同じtransactionでtargetを先に明示削除してからplanを削除します。現行DBは暗号化されず、raw Hook payloadやartifactにplaintextが残り得ます。redactは外部送信を減らす機能であり、monitor DBのplaintext保存問題を解決する機能ではありません。
 
 ## plannerの処理順序
 
@@ -265,22 +270,24 @@ current PreToolUse event
   -> 将来enforce段階だけupdatedInputをrender
 ```
 
-plannerは既存の`session-incremental`結果を入力にし、全DBやworkspace全体を再解析しません。入力findingは`select_strongest_decision()`後の1件ではなく、`detect_leaks()`がcurrent callへ返した全critical findingのbounded tupleをそのまま渡します。source chunk、current event fragment、sink metadataはworkspace / session / sequenceで絞ったqueryだけを使います。
+plannerは既存の`session-incremental`結果を入力にし、全DBやworkspace全体を再解析しません。入力findingは`select_strongest_decision()`後の1件ではなく、`detect_leaks()`がcurrent callへ返した全critical findingのbounded tupleをそのまま渡します。source chunkはそのfindingが直接参照するIDだけを、workspace ownershipを確認して32件以下で取得します。size preflightと本文取得は同じread transaction snapshotで行い、plannerへ返すrowも`chunk_id / workspace_id / text / text_hash`だけに限定します。current eventとsink metadataはworkspace / session / sequence / tool useで絞ります。
+
+新規audit insertでは、同じtransaction内で完了済みrunのcurrent-call critical assignmentを`idx_lineage_assignments_run_sink_score`から最大33 rowだけ確認します。33件目があればaudit保存を中止し、既存denyを維持します。32件以下ならsource evidenceを同じ32 KiB / finding、128 KiB / callで取得してpure plannerを決定論的に再実行し、plan metadataと全targetを完全比較します。このため、無関係sourceへの差し替え、case-insensitive lineageだけをraw matchと偽る変更、全critical findingの一部だけを保存する変更、有限集合外の`rejection_code`は受理しません。plannerの50 ms deadlineでrejectしたcaseと32件を超えるcaseは決定論的なhash-only auditとして再証明できないため保存せず、block outputだけを返します。
 
 ## failure fallback
 
 redactはcritical external sinkに対するblockを置き換える候補です。そのため、redact固有の失敗をHook全体の一般的なfail-openへ伝播させてはいけません。
 
-推奨する境界は次です。
+実装した境界は次です。
 
 ```text
 runtime analysis自体が失敗
   -> 現行どおりHook boundaryのfail-open
 
-analysis後、critical blockを得た後にredaction plannerが失敗
+analysis後、critical blockを得た後にsource取得またはredaction plannerが失敗
   -> 元のblock outputを返す
 
-planは作れたが保存、validation、renderに失敗
+planは作れたが保存またはvalidationに失敗
   -> 元のblock outputを返す
 
 Post確認がない、またはhash mismatch
@@ -289,6 +296,8 @@ Post確認がない、またはhash mismatch
 ```
 
 redact plannerを`try/except`の外へ投げて空stdoutにすると、blockすべきcallを通すため危険です。block outputを先に保持し、redactが完全に成功した場合だけ差し替える構造にします。
+
+実装ではredaction audit schemaのdriftを初期化時に検出し、schemaを推測修復せずauditだけを無効化します。bounded source lookupとplan writeはaudit専用connectionの`busy_timeout` 10 msでfail-fastします。schema unavailable、SQLite lock、source read、plan validation / writeの例外はすべてpreview境界内で破棄し、すでにrender済みのdenyを返します。
 
 ## 複数Hook問題とenforcement gate
 
@@ -310,12 +319,15 @@ redact plannerはlocal JSON、indexed DB row、hash、tool profileだけを使�
 | 対象 | 上限 |
 |---|---:|
 | canonical input | 32 KiB |
+| MCP tool name / audit identifier | 4 KiB |
 | fields | 32 |
 | nesting depth | 8 |
 | critical findings | 32 |
 | distinct targets | 16 |
 | source bytes / finding | 32 KiB |
 | total source bytes / call | 128 KiB |
+| sink metadata / row | 64 KiB |
+| sink replay bytes / call | 512 KiB |
 
 現行source chunkingにはbyte上限がないため、inputだけでなくfindingから参照するsourceにもcapが必要です。plannerは`source_node -> target pointer`を直接参照し、全sourceと全fieldの直積比較を行いません。hard deadlineはcooperative checkであり、入力capの代用にはしません。上限値は初期benchmark envelopeに合わせた暫定値で、境界caseを実測して安全側に調整します。
 
@@ -328,6 +340,8 @@ redact plannerはlocal JSON、indexed DB row、hash、tool profileだけを使�
 - network call、embedding、workspace scan、全DB graph loadは0回
 
 2026-07-15のpure planner実測では、fixture構築を除外し、200 warmup後に各2,000回をinterleaveした結果、単一targetはp95 0.0729 ms、32 fields / 32 KiB / 16 targetの最大eligible caseはp95 2.9471 ms、同じ最大caseの16件目でraw mismatchになるrejectはp95 2.6957 msでした。unit testでも3 caseをinterleaveして各p95 10 ms以下とする回帰gate、defaultの32 finding / 16 target境界、50 ms exact deadlineとlate crossing、oversize inputがcanonical hashより前にrejectされることを固定しています。
+
+同日の最終local SQLite監査計測では、fixture構築とcleanupを除外した2,000 / 1,000 / 300 sampleのrunで、bounded source lookup p95 0.673 ms、同一planのexact replay p95 0.866 ms、完了runからcritical findingとsource evidenceを再構成する新規plan / target insert p95 3.767 msでした。write lockの10 ms fail-fastは単発計測で15.177 msであり、lock caseもpreview境界内でdenyへ戻るため、audit待ちでcore blockを解除しません。
 
 benchmarkはeligible、rejected、複数targetの3caseを同じroundで測り、no-redactのPreToolUseとの差をpaired sampleで計算します。Post confirmationは別HookなのでPre budgetへ混ぜません。
 
@@ -346,10 +360,12 @@ benchmarkはeligible、rejected、複数targetの3caseを同じroundで測り、
    - whole-field replacement plan
    - structural validation
    - runtime outputは引き続きblock
-3. `Persist redaction preview audits`
+3. `Persist redaction preview audits`（実装済み）
    - plan / target schema
    - hash-only保存
    - workspace / session scope
+   - current-call全critical findingの後にpreviewを接続し、eligible / rejectedを原子的に保存
+   - event-scopeの既定dry-run cleanup
 4. `Confirm rewritten inputs from PostToolUse`
    - future enforce用のdormantなhash照合とstate transition
    - preview中はsynthetic fixtureだけで検証し、実Post確認はenforcement gate後
@@ -366,7 +382,7 @@ benchmarkはeligible、rejected、複数targetの3caseを同じroundで測り、
 
 ### planner unit test
 
-pure plannerは32 testsで、以下のhappy path、all-or-nothing、実MCP adapter metadata、profile coverage、scope、source evidence、cap、determinism、latencyを検証済みです。DB保存とHook runtime testは次の作業単位へ分離しています。
+pure plannerは32 testsで、以下のhappy path、all-or-nothing、実MCP adapter metadata、profile coverage、scope、source evidence、cap、determinism、latencyを検証済みです。DB保存とHook runtimeの監査接続は別の作業単位で実装し、runtime rewriteと混ぜていません。
 
 - exact profileの単一string fieldをwhole-field replacementできる
 - 元inputをmutateせず、予定pointer以外のdiffがない
@@ -384,16 +400,21 @@ pure plannerは32 testsで、以下のhappy path、all-or-nothing、実MCP adapt
 - input、field、depth、finding、target、source byteの各cap境界と超過を検証する
 - sourceとfieldの直積比較を行わず、cap境界でもlatency budgetを満たす
 
-### storage / integration test
+### storage / integration test（実装済み）
 
 - planと全targetをtransactionで保存する
 - plaintext inputをplan tableへ複製しない
 - canonical input hashが安定する
 - 同じanalysis runの再保存でplan IDとtargetが冪等になり、新しいanalysis runでは別plan IDになる
+- findingが参照するworkspace-owned source chunkだけを32 ID以下で取得する
+- source取得、planner、保存の失敗で元のdenyを維持する
+- cleanupはevent scopeの既定dry-runで、execute時はtargetから先に明示削除する
+
+### 次のPost confirmation test
+
 - stable profileのPost input一致を`post_confirmed`、不一致を`post_mismatch`にする
 - Codex管理file inputをfull-input hashでoverride判定しない
 - Postなしをapplied扱いしない
-- planner例外、保存例外、validation失敗では元のdenyを維持する
 
 ### 将来runtime test
 

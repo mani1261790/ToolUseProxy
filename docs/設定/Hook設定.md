@@ -332,9 +332,13 @@ TOOLUSEPROXY_PRE_TOOL_POLICY=1 python3 /Users/mani/Developer/ToolUseProxy/hooks/
 TOOLUSEPROXY_PRE_TOOL_POLICY=1 TOOLUSEPROXY_PRE_TOOL_MCP_POLICY=1 python3 /Users/mani/Developer/ToolUseProxy/hooks/monitor_pre_tool.py
 ```
 
-MCP Hookのmatcherは、たとえば`^mcp__.*$`、または対象を絞った`^mcp__github__.*$`を使用します。実CodexのMCP payloadは`tool_name: mcp__<server>__<tool>`で、`tool_input`にはMCP toolへ渡すraw argumentsが入ります。adapterが外部送信と分類するwrite-like toolだけがsinkとなり、read-only toolは記録して通過させます。
+MCP Hookのmatcherは、たとえば`^mcp__.*$`、または対象を絞った`^mcp__github__.*$`を使用します。実CodexのMCP payloadは`tool_name: mcp__<server>__<tool>`で、`tool_input`にはMCP toolへ渡すraw argumentsが入ります。adapterが外部送信と分類するwrite-like toolだけがsinkとなり、read-only toolは記録して通過させます。MCP tool名はUTF-8で4 KiBを上限とし、超過時はartifact / sinkをmaterializeする前に`tool_name_bytes_exceeded`でdenyします。tool名自体が1 MiBのraw read上限を跨いで後続`cwd`を読めない場合も、明示`TOOLUSEPROXY_WORKSPACE_ROOT`が有効ならそのrootだけを早期deny scopeとして検証します。
 
 現在eventの`event_id`、`sequence_no`、`tool_use_id`、adapter種別が一致するexternal sinkだけを評価します。過去eventの未解消findingを理由に現在の呼出しを止めません。
+
+MCPでcritical blockが確定した場合は、`detect_leaks()`が現在callへ返した全critical findingをそのままredaction preview plannerへ渡します。source本文はfindingが参照するworkspace-owned source chunk IDだけを32件以下で取得し、workspace全体をplanner用に再読込しません。bounded envelope内のeligible / rejected planと全targetは本文なしのhash-only監査として1 transactionでimmutableに保存します。新規insertでは完了runのcurrent-call sink / critical lineage / source evidenceからpure planner結果を再構成し、metadataと全targetが完全一致した場合だけ保存します。source取得、planner、保存が失敗しても、すでに生成したdenyをそのまま返します。previewはHook stdoutへ`updatedInput`を追加せず、runtime rewriteを行いません。
+
+redaction audit schemaのdriftは初期化時に検出し、推測修復せずauditだけを無効化します。audit用のsource read / plan writeはSQLiteの`busy_timeout` 10 msでfail-fastし、lockやschema driftによる失敗もpreviewの例外境界内に留めます。replay対象は最大64 sink、識別子4 KiB、sink metadata 64 KiB / row、512 KiB / callでbyte制限し、重いread検証中はwriter lockを保持しません。そのためcore policyが確定したdenyは弱まりません。
 
 - critical: `permissionDecision: deny`
 - high: `additionalContext`を返して実行継続
@@ -342,6 +346,17 @@ MCP Hookのmatcherは、たとえば`^mcp__.*$`、または対象を絞った`^m
 - session ID欠落、policy無効、解析例外: fail-open
 
 未サポートの`permissionDecision: ask`と`continue: false`には依存しません。Hook内ではSQLite、静的adapter、indexed lexical candidate、差分lineageだけを使い、network、embedding、全DB再解析は行いません。
+
+preview auditのretentionは所有するPreToolUse eventのscopeに合わせます。次のcommandはdry-runで件数だけを返し、`--execute`を追加した場合だけ削除します。
+
+```bash
+python3 scripts/cleanup_redaction_audits.py \
+  --db .tooluseproxy/events.db \
+  --workspace-root /absolute/path/to/workspace \
+  --before 2026-08-01T00:00:00Z
+```
+
+SQLiteのforeign key enforcementはリポジトリ全体で現在offです。cleanupは`ON DELETE CASCADE`に依存せず、同じtransaction内で`redaction_targets`を先に明示削除してから`redaction_plans`を削除します。
 
 native Web SearchはCodex CLI `0.142.5`で`matcher: "*"`を使ってもPreToolUse / PostToolUseに現れなかったため、実行前遮断へは接続していません。Search adapterはsynthetic / imported eventのoffline解析用に残します。
 
@@ -390,9 +405,12 @@ source manifestの基準directoryはeventのcanonical workspace rootです。`pr
 - `hook_monitor/runtime/snapshot_capture.py`
   - 成功Postに対応する静的pathだけを、workspace・byte・path数・時間上限内で取得します
   - symlinkや非regular fileを拒否し、hash-onlyを既定にします
+- `hook_monitor/runtime/redaction_audit.py`
+  - preview planをplaintext本文なしのstored modelへ変換します
+  - eligible / rejected planとfinding単位の全targetを保存します
 - `hook_monitor/runtime/storage.py`
   - SQLite への保存を担当します
-  - event、artifact、operation、outcome、snapshotと解析結果tableを初期化し、記録します
+  - event、artifact、operation、outcome、snapshot、redaction auditと解析結果tableを初期化し、記録します
   - Post event、operation outcome、resource snapshotを同じtransactionで保存します
 - `hook_monitor/runtime/source_config.py`
   - 保護対象 source の設定ファイルを読みます
@@ -456,6 +474,8 @@ source manifestの基準directoryはeventのcanonical workspace rootです。`pr
   - `(workspace_id, session_id)`ごとのruntime差分位置とdetector/source digestを保存します
 - `analysis_node_snapshots` / `analysis_run_nodes`
   - completed offline runが参照したnode metadataをcontent-addressedに保存し、runへ固定します
+- `redaction_plans` / `redaction_targets`
+  - current MCP callのeligible / rejected previewと全finding targetをhash-onlyで保存します
 
 イメージとしては、
 
@@ -559,7 +579,7 @@ python3 /Users/mani/Developer/ToolUseProxy/scripts/rebuild_lineage.py \
 - 類似度計算や source 追跡を変えたいなら `hook_monitor/analysis/`
 - 情報流エッジを強化したいなら `analysis` 側に拡張を足す
 
-現在の`hook_monitor/`は記録の骨格に加え、workspace・session差分graph、漏えい検知、Stop継続、Bash/MCP PreToolUse deny、operation単位lineage、PostToolUse snapshot、複数workspace分離、offline run snapshot、MCP exact profileと全scalar value / JSON key sink coverageまでを接続しています。PermissionRequestは実payloadとdeny / allowを評価しましたが、PreToolUseの代替にならず、payloadにstableなcall IDがなく、`allow`が通常承認を自動通過させるため、production Hookには設定しません。将来接続する場合もdeny-onlyの独立adapterとし、判断なしは空stdoutでCodex本来の承認へ委ねます。redactはblockを維持するpure preview plannerまで実装しましたが、runner、DB、Hook stdoutには接続していません。次にhash-only auditを検証し、複数rewrite競合のgateが解消するまでproduction Hookへ`updatedInput`を追加しません。詳細は [Redact設計](../設計/Redact.md) を参照してください。
+現在の`hook_monitor/`は記録の骨格に加え、workspace・session差分graph、漏えい検知、Stop継続、Bash/MCP PreToolUse deny、operation単位lineage、PostToolUse snapshot、複数workspace分離、offline run snapshot、MCP exact profileと全scalar value / JSON key sink coverageまでを接続しています。PermissionRequestは実payloadとdeny / allowを評価しましたが、PreToolUseの代替にならず、payloadにstableなcall IDがなく、`allow`が通常承認を自動通過させるため、production Hookには設定しません。将来接続する場合もdeny-onlyの独立adapterとし、判断なしは空stdoutでCodex本来の承認へ委ねます。redactはblockを維持するpure preview plannerとimmutableなhash-only auditまでrunner / DBへ接続しました。Hook stdoutは従来のdenyのままで、`updatedInput`はrenderしません。次はstable profileのPostToolUse input hashをdormantに照合し、複数rewrite競合のgateが解消するまでproduction Hookへruntime rewriteを追加しません。詳細は [Redact設計](../設計/Redact.md) を参照してください。
 
 ## この研究の位置づけ
 

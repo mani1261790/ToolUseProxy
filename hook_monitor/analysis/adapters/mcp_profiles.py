@@ -10,6 +10,7 @@ from typing import Any
 _FIELD_CLASSES = frozenset({"data", "control", "file"})
 _SCALAR_TYPES = frozenset({"string", "number", "boolean"})
 _INVALID_POINTER_ESCAPE = re.compile(r"~(?![01])")
+MCP_TOOL_NAME_MAX_BYTES = 4 * 1024
 
 
 @dataclass(frozen=True)

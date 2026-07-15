@@ -40,12 +40,37 @@ def extract_top_level_json_strings(
     Codex emits before ``tool_input``. Nested lookalike keys are ignored and the
     last complete string occurrence wins, matching normal JSON object decoding.
     """
+    values, _ = inspect_top_level_json_strings(
+        raw_bytes,
+        keys,
+        max_value_bytes=max_value_bytes,
+    )
+    return values
+
+
+def inspect_top_level_json_strings(
+    raw_bytes: bytes,
+    keys: frozenset[str],
+    *,
+    max_value_bytes: int = 4096,
+    oversized_prefix_chars: int = 128,
+) -> tuple[dict[str, str], dict[str, str]]:
+    """Return bounded values plus prefixes of complete oversized values.
+
+    Oversized values are decoded only from the already-bounded raw Hook prefix,
+    truncated immediately, and kept separate from accepted envelope values. This
+    lets the runner prove an oversized ``mcp__`` tool name without treating it as
+    a missing member or materializing artifacts from the full payload.
+    """
     if max_value_bytes < 1:
         raise ValueError("top-level JSON string limit must be positive")
+    if oversized_prefix_chars < 1:
+        raise ValueError("top-level JSON prefix limit must be positive")
     if not keys:
-        return {}
+        return {}, {}
 
     values: dict[str, str] = {}
+    oversized_prefixes: dict[str, str] = {}
     depth = 0
     index = 0
     length = len(raw_bytes)
@@ -70,18 +95,43 @@ def extract_top_level_json_strings(
                         # A later non-string duplicate must not leave an earlier
                         # string value active when the full decoder would replace it.
                         values.pop(member_name, None)
+                        oversized_prefixes.pop(member_name, None)
                         if (
                             value_start < length
                             and raw_bytes[value_start] == ord('"')
                         ):
                             value_end = _find_json_string_end(raw_bytes, value_start)
-                            if value_end is not None:
+                            if value_end is None:
+                                if (
+                                    length - value_start
+                                    > max_value_bytes + 2
+                                ):
+                                    oversized = _decode_json_string_prefix(
+                                        raw_bytes[value_start:],
+                                        max_chars=oversized_prefix_chars,
+                                    )
+                                    if oversized is not None:
+                                        oversized_prefixes[member_name] = oversized
+                                # The remainder is inside this unterminated value;
+                                # it cannot contain another top-level member in the
+                                # bounded raw prefix.
+                                return values, oversized_prefixes
+                            else:
                                 value = _decode_json_string(
                                     raw_bytes[value_start : value_end + 1],
                                     max_value_bytes=max_value_bytes,
                                 )
                                 if value is not None:
                                     values[member_name] = value
+                                elif len(
+                                    raw_bytes[value_start : value_end + 1]
+                                ) > max_value_bytes + 2:
+                                    oversized = _decode_json_string_prefix(
+                                        raw_bytes[value_start : value_end + 1],
+                                        max_chars=oversized_prefix_chars,
+                                    )
+                                    if oversized is not None:
+                                        oversized_prefixes[member_name] = oversized
             index = string_end + 1
             continue
         if byte in {ord("{"), ord("[")}:
@@ -89,7 +139,7 @@ def extract_top_level_json_strings(
         elif byte in {ord("}"), ord("]")}:
             depth = max(0, depth - 1)
         index += 1
-    return values
+    return values, oversized_prefixes
 
 
 def json_nesting_exceeds_limit(raw_bytes: bytes, max_depth: int) -> bool:
@@ -194,6 +244,28 @@ def _decode_json_string(
     except (UnicodeDecodeError, json.JSONDecodeError):
         return None
     return value if isinstance(value, str) else None
+
+
+def _decode_json_string_prefix(
+    encoded: bytes,
+    *,
+    max_chars: int,
+) -> str | None:
+    """Decode a bounded prefix from a complete or truncated JSON string."""
+    if not encoded or encoded[0] != ord('"') or max_chars < 1:
+        return None
+    # One JSON character can use a surrogate pair (12 encoded bytes). The raw
+    # Hook read is bounded separately; do not decode the remainder of a large
+    # envelope string merely to classify its prefix.
+    bounded = encoded[: 1 + (max_chars * 12)]
+    for end in range(len(bounded), 1, -1):
+        try:
+            value = json.loads((bounded[:end] + b'"').decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            continue
+        if isinstance(value, str):
+            return value[:max_chars]
+    return None
 
 
 def _parse_bounded_int(token: str, max_number_chars: int) -> int:

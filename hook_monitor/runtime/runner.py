@@ -10,12 +10,13 @@ from hook_monitor.analysis.adapters.mcp import (
     classify_mcp_sink_type,
     parse_mcp_tool_name,
 )
+from hook_monitor.analysis.adapters.mcp_profiles import MCP_TOOL_NAME_MAX_BYTES
 from hook_monitor.runtime.parser import (
     HookPayloadError,
     HookPayloadLimitError,
     build_artifacts,
     build_fragments,
-    extract_top_level_json_strings,
+    inspect_top_level_json_strings,
     json_nesting_exceeds_limit,
     normalize_event,
     parse_hook_payload,
@@ -42,7 +43,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 PRE_TOOL_RAW_JSON_MAX_BYTES = 1024 * 1024
 PRE_TOOL_RAW_JSON_MAX_DEPTH = 64
 PRE_TOOL_RAW_JSON_MAX_NUMBER_CHARS = 128
-PRE_TOOL_ENVELOPE_STRING_MAX_BYTES = 4096
+PRE_TOOL_ENVELOPE_STRING_MAX_BYTES = MCP_TOOL_NAME_MAX_BYTES
 PRE_TOOL_ENVELOPE_KEYS = frozenset({"cwd", "tool_name"})
 
 
@@ -60,7 +61,7 @@ def run_hook(phase: str) -> int:
     raw_mcp_tool_name: str | None = None
     raw_mcp_workspace: WorkspaceContext | None = None
     if bounded_pre_tool_input:
-        envelope = extract_top_level_json_strings(
+        envelope, oversized_envelope = inspect_top_level_json_strings(
             raw_payload,
             PRE_TOOL_ENVELOPE_KEYS,
             max_value_bytes=PRE_TOOL_ENVELOPE_STRING_MAX_BYTES,
@@ -72,6 +73,28 @@ def run_hook(phase: str) -> int:
                 envelope.get("cwd"),
                 os.environ.get(WORKSPACE_ROOT_ENV),
             )
+        elif oversized_envelope.get("tool_name", "").lower().startswith(
+            "mcp__"
+        ):
+            configured_root = os.environ.get(WORKSPACE_ROOT_ENV)
+            raw_mcp_workspace = resolve_workspace(
+                envelope.get("cwd"),
+                configured_root,
+            )
+            if envelope.get("cwd") is None and configured_root is not None:
+                # Real Codex orders tool_name before cwd. If an anomalous name
+                # itself crosses the bounded read, validate the explicitly
+                # configured root as the narrow rejection scope rather than
+                # treating the unread later cwd as an unscoped allow.
+                raw_mcp_workspace = resolve_workspace(
+                    configured_root,
+                    configured_root,
+                )
+            _render_scoped_raw_mcp_rejection(
+                raw_mcp_workspace,
+                "tool_name_bytes_exceeded",
+            )
+            return 0
 
         if len(raw_payload) > PRE_TOOL_RAW_JSON_MAX_BYTES:
             if raw_mcp_tool_name is not None:
@@ -262,6 +285,15 @@ def _render_raw_mcp_rejection(
     if workspace is None or not workspace.ready:
         return
     if classify_mcp_sink_type(tool_name, {}) is None:
+        return
+    _render_scoped_raw_mcp_rejection(workspace, rejection_code)
+
+
+def _render_scoped_raw_mcp_rejection(
+    workspace: WorkspaceContext | None,
+    rejection_code: str,
+) -> None:
+    if workspace is None or not workspace.ready:
         return
     print(
         json.dumps(

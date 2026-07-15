@@ -6242,6 +6242,176 @@ class InformationFlowTest(unittest.TestCase):
                     self.assertEqual("", stderr)
         self.assertEqual([], self.store.list_artifact_contexts())
 
+    def test_oversized_mcp_tool_name_denies_before_artifact_materialization(
+        self,
+    ) -> None:
+        workspace = self._write_runtime_source_config()
+        name_db_path = Path(self.temporary_directory.name) / "tool-name-cap.db"
+        tool_name = "mcp__custom__publish_" + ("x" * (4 * 1024))
+        raw_payload = json.dumps(
+            {
+                "session_id": "session-tool-name-cap",
+                "turn_id": "turn-tool-name-cap",
+                "tool_use_id": "tool-name-cap",
+                "tool_name": tool_name,
+                "cwd": str(workspace),
+                "tool_input": {"content": SECRET},
+            }
+        )
+        stdin = io.TextIOWrapper(io.BytesIO(raw_payload.encode("utf-8")))
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with (
+            patch("sys.stdin", stdin),
+            patch.dict(
+                os.environ,
+                {
+                    "TOOLUSEPROXY_DB_PATH": str(name_db_path),
+                    "TOOLUSEPROXY_WORKSPACE_ROOT": str(workspace),
+                    "TOOLUSEPROXY_PRE_TOOL_POLICY": "1",
+                    "TOOLUSEPROXY_PRE_TOOL_MCP_POLICY": "1",
+                },
+            ),
+            redirect_stdout(stdout),
+            redirect_stderr(stderr),
+        ):
+            exit_code = run_hook("pre_tool_use")
+
+        output = json.loads(stdout.getvalue())
+        self.assertEqual(0, exit_code)
+        self.assertEqual(
+            "deny",
+            output["hookSpecificOutput"]["permissionDecision"],
+        )
+        self.assertIn(
+            "tool_name_bytes_exceeded",
+            output["hookSpecificOutput"]["permissionDecisionReason"],
+        )
+        self.assertNotIn(SECRET, stdout.getvalue())
+        self.assertEqual("", stderr.getvalue())
+        self.assertFalse(name_db_path.exists())
+
+    def test_oversized_mcp_tool_name_and_raw_payload_deny_before_decoder(
+        self,
+    ) -> None:
+        class RecordingBytesIO(io.BytesIO):
+            def __init__(self, initial_bytes: bytes) -> None:
+                super().__init__(initial_bytes)
+                self.read_sizes: list[int] = []
+
+            def read(self, size: int = -1) -> bytes:
+                self.read_sizes.append(size)
+                return super().read(size)
+
+        workspace = self._write_runtime_source_config()
+        name_db_path = Path(self.temporary_directory.name) / "raw-tool-name-cap.db"
+        tool_name = b"mcp__custom__publish_" + (b"x" * (5 * 1024))
+        raw_payload = (
+            b'{"tool_name":"'
+            + tool_name
+            + b'",'
+            + f'"cwd":{json.dumps(str(workspace))},'.encode("utf-8")
+            + b'"tool_input":{"content":"'
+            + (b"x" * (1024 * 1024))
+            + b'"}}'
+        )
+        buffer = RecordingBytesIO(raw_payload)
+        stdin = io.TextIOWrapper(buffer)
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with (
+            patch("sys.stdin", stdin),
+            patch.dict(
+                os.environ,
+                {
+                    "TOOLUSEPROXY_DB_PATH": str(name_db_path),
+                    "TOOLUSEPROXY_WORKSPACE_ROOT": str(workspace),
+                    "TOOLUSEPROXY_PRE_TOOL_POLICY": "1",
+                    "TOOLUSEPROXY_PRE_TOOL_MCP_POLICY": "1",
+                },
+            ),
+            patch(
+                "hook_monitor.runtime.runner.parse_hook_payload",
+                side_effect=AssertionError("decoder must not run"),
+            ),
+            redirect_stdout(stdout),
+            redirect_stderr(stderr),
+        ):
+            exit_code = run_hook("pre_tool_use")
+
+        output = json.loads(stdout.getvalue())
+        self.assertEqual(0, exit_code)
+        self.assertEqual(
+            "deny",
+            output["hookSpecificOutput"]["permissionDecision"],
+        )
+        self.assertIn(
+            "tool_name_bytes_exceeded",
+            output["hookSpecificOutput"]["permissionDecisionReason"],
+        )
+        self.assertEqual("", stderr.getvalue())
+        self.assertFalse(name_db_path.exists())
+        self.assertEqual([1024 * 1024 + 1], buffer.read_sizes)
+
+    def test_incomplete_oversized_mcp_tool_name_prefix_denies_raw_payload(
+        self,
+    ) -> None:
+        class RecordingBytesIO(io.BytesIO):
+            def __init__(self, initial_bytes: bytes) -> None:
+                super().__init__(initial_bytes)
+                self.read_sizes: list[int] = []
+
+            def read(self, size: int = -1) -> bytes:
+                self.read_sizes.append(size)
+                return super().read(size)
+
+        workspace = self._write_runtime_source_config()
+        name_db_path = Path(self.temporary_directory.name) / "incomplete-name-cap.db"
+        raw_payload = (
+            b'{"tool_name":"mcp__custom__publish_'
+            + (b"x" * (1024 * 1024))
+            + b'",'
+            + f'"cwd":{json.dumps(str(workspace))},'.encode("utf-8")
+            + b'"tool_input":{"content":"public"}}'
+        )
+        buffer = RecordingBytesIO(raw_payload)
+        stdin = io.TextIOWrapper(buffer)
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with (
+            patch("sys.stdin", stdin),
+            patch.dict(
+                os.environ,
+                {
+                    "TOOLUSEPROXY_DB_PATH": str(name_db_path),
+                    "TOOLUSEPROXY_WORKSPACE_ROOT": str(workspace),
+                    "TOOLUSEPROXY_PRE_TOOL_POLICY": "1",
+                    "TOOLUSEPROXY_PRE_TOOL_MCP_POLICY": "1",
+                },
+            ),
+            patch(
+                "hook_monitor.runtime.runner.parse_hook_payload",
+                side_effect=AssertionError("decoder must not run"),
+            ),
+            redirect_stdout(stdout),
+            redirect_stderr(stderr),
+        ):
+            exit_code = run_hook("pre_tool_use")
+
+        output = json.loads(stdout.getvalue())
+        self.assertEqual(0, exit_code)
+        self.assertEqual(
+            "deny",
+            output["hookSpecificOutput"]["permissionDecision"],
+        )
+        self.assertIn(
+            "tool_name_bytes_exceeded",
+            output["hookSpecificOutput"]["permissionDecisionReason"],
+        )
+        self.assertEqual("", stderr.getvalue())
+        self.assertFalse(name_db_path.exists())
+        self.assertEqual([1024 * 1024 + 1], buffer.read_sizes)
+
     def test_raw_json_depth_gate_denies_before_standard_decoder(self) -> None:
         workspace = self._write_runtime_source_config()
         depth_db_path = Path(self.temporary_directory.name) / "depth-cap.db"

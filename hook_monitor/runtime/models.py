@@ -142,6 +142,14 @@ class SourceChunk:
 
 
 @dataclass(frozen=True)
+class SourceChunkEvidence:
+    chunk_id: str
+    text: str
+    text_hash: str
+    workspace_id: str
+
+
+@dataclass(frozen=True)
 class ResourceVersion:
     node_id: str
     path: str
@@ -246,3 +254,58 @@ class StoredPolicyDecision:
     trace_command: str
     path_summary: tuple[str, ...]
     created_at: str | None = None
+
+
+@dataclass(frozen=True)
+class StoredRedactionTarget:
+    plan_id: str
+    ordinal: int
+    finding_id: str
+    decision_id: str
+    source_node_kind: str
+    source_node_id: str
+    sink_node_id: str
+    json_pointer: str
+    original_value_sha256: str
+    replacement_profile: str
+
+
+@dataclass(frozen=True)
+class StoredRedactionPlan:
+    plan_id: str
+    analysis_run_id: str
+    pre_event_id: str
+    workspace_id: str
+    session_id: str
+    tool_use_id: str
+    tool_name: str
+    adapter: str
+    profile_id: str
+    profile_version: str
+    profile_registry_version: str
+    mode: str
+    status: str
+    planner_version: str
+    original_input_sha256: str | None
+    rewritten_input_sha256: str | None
+    structure_sha256_before: str | None
+    structure_sha256_after: str | None
+    critical_finding_count: int
+    replacement_count: int
+    rejection_code: str | None
+    post_event_id: str | None
+    targets: tuple[StoredRedactionTarget, ...]
+    created_at: str | None = None
+    rendered_at: str | None = None
+    confirmed_at: str | None = None
+
+
+@dataclass(frozen=True)
+class RedactionAuditCleanupResult:
+    workspace_id: str
+    before: str
+    session_id: str | None
+    plan_count: int
+    target_count: int
+    orphan_plan_count: int
+    executed: bool

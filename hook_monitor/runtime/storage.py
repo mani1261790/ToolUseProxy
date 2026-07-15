@@ -9,8 +9,23 @@ import time
 import uuid
 from dataclasses import replace
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+from hook_monitor.analysis.adapters.mcp_profiles import (
+    DEFAULT_MCP_INPUT_LIMITS,
+    MCP_TOOL_NAME_MAX_BYTES,
+)
+from hook_monitor.analysis.leak_detection import detect_leaks
 
 from hook_monitor.runtime.ids import make_event_id, make_source_chunk_id
+from hook_monitor.runtime.redaction_integrity import (
+    REDACTION_PREVIEW_MAX_CRITICAL_FINDINGS,
+    REDACTION_PREVIEW_MAX_SOURCE_BYTES_PER_FINDING,
+    REDACTION_PREVIEW_MAX_SOURCE_BYTES_TOTAL,
+    REDACTION_PREVIEW_PLANNER_VERSION,
+    REDACTION_PREVIEW_REJECTION_CODES,
+    REDACTION_REPLACEMENT_PROFILE,
+)
 
 from hook_monitor.runtime.models import (
     AnalysisCursor,
@@ -22,12 +37,16 @@ from hook_monitor.runtime.models import (
     LineageAssignment,
     NormalizedEvent,
     ProtectedSource,
+    RedactionAuditCleanupResult,
     ResourceVersion,
     ResourceSnapshot,
     RuntimeAnalysisScope,
     SinkCandidate,
     SourceChunk,
+    SourceChunkEvidence,
     StoredPolicyDecision,
+    StoredRedactionPlan,
+    StoredRedactionTarget,
     ToolOperation,
 )
 from hook_monitor.runtime.workspace import (
@@ -41,14 +60,90 @@ from hook_monitor.runtime.source_config import (
     resolve_protected_source_path,
 )
 
+if TYPE_CHECKING:
+    from hook_monitor.policy.redaction_preview import RedactionPreviewPlan
+
 
 DEFAULT_DB_PATH = Path(".tooluseproxy/events.db")
 LEGACY_DERIVED_WORKSPACE_ID = "legacy_unscoped"
+REDACTION_AUDIT_BUSY_TIMEOUT_MS = 10
+REDACTION_AUDIT_EVENT_PAYLOAD_MAX_BYTES = 1024 * 1024
+REDACTION_AUDIT_MAX_CURRENT_SINKS = 2 * DEFAULT_MCP_INPUT_LIMITS.max_fields
+REDACTION_AUDIT_MAX_IDENTIFIER_BYTES = MCP_TOOL_NAME_MAX_BYTES
+REDACTION_AUDIT_MAX_SINK_METADATA_BYTES = 64 * 1024
+REDACTION_AUDIT_MAX_SINK_BYTES_TOTAL = 512 * 1024
+_LOWER_SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
+_REDACTION_PLAN_VALUE_COLUMNS = """
+    plan_id,
+    analysis_run_id,
+    pre_event_id,
+    workspace_id,
+    session_id,
+    tool_use_id,
+    tool_name,
+    adapter,
+    profile_id,
+    profile_version,
+    profile_registry_version,
+    mode,
+    status,
+    planner_version,
+    original_input_sha256,
+    rewritten_input_sha256,
+    structure_sha256_before,
+    structure_sha256_after,
+    critical_finding_count,
+    replacement_count,
+    rejection_code,
+    post_event_id,
+    rendered_at,
+    confirmed_at
+"""
+_REDACTION_PLAN_SELECT_COLUMNS = """
+    plan_id,
+    analysis_run_id,
+    pre_event_id,
+    workspace_id,
+    session_id,
+    tool_use_id,
+    tool_name,
+    adapter,
+    profile_id,
+    profile_version,
+    profile_registry_version,
+    mode,
+    status,
+    planner_version,
+    original_input_sha256,
+    rewritten_input_sha256,
+    structure_sha256_before,
+    structure_sha256_after,
+    critical_finding_count,
+    replacement_count,
+    rejection_code,
+    post_event_id,
+    created_at,
+    rendered_at,
+    confirmed_at
+"""
+_REDACTION_TARGET_VALUE_COLUMNS = """
+    plan_id,
+    ordinal,
+    finding_id,
+    decision_id,
+    source_node_kind,
+    source_node_id,
+    sink_node_id,
+    json_pointer,
+    original_value_sha256,
+    replacement_profile
+"""
 
 
 class EventStore:
     def __init__(self, db_path: Path) -> None:
         self.db_path = db_path
+        self._redaction_audit_available: bool | None = None
 
     def initialize(self) -> None:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -555,6 +650,7 @@ class EventStore:
                 )
                 """
             )
+            self._initialize_redaction_preview_audit(conn)
             self._migrate_information_flow_edges(conn)
             conn.execute(
                 """
@@ -824,6 +920,19 @@ class EventStore:
                     session_id,
                     started_at,
                     analysis_run_id
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_lineage_assignments_run_sink_score
+                ON lineage_assignments (
+                    analysis_run_id,
+                    node_kind,
+                    node_id,
+                    best_path_score,
+                    source_node_kind,
+                    source_node_id
                 )
                 """
             )
@@ -3128,6 +3237,629 @@ class EventStore:
             ).fetchone()
         return None if row is None else _stored_policy_decision_from_row(row)
 
+    def upsert_redaction_plan(self, plan: StoredRedactionPlan) -> None:
+        """Insert one immutable plan and all targets, or verify an exact replay."""
+        if self._redaction_audit_available is not True:
+            raise RuntimeError("redaction preview audit schema is unavailable")
+        _validate_stored_redaction_plan(plan)
+        plan_values = _redaction_plan_values(plan)
+        target_values = tuple(_redaction_target_values(target) for target in plan.targets)
+        with self._connect_redaction_audit() as conn:
+            # Hold one WAL snapshot while replaying, then upgrade only for the
+            # small atomic plan/target insert. A concurrent writer may make the
+            # upgrade fail fast; the caller keeps the already-rendered deny.
+            conn.execute("BEGIN")
+            event_sequence_no, event, analysis_run = (
+                self._validate_redaction_plan_owner(conn, plan)
+            )
+            existing = conn.execute(
+                f"""
+                SELECT {_REDACTION_PLAN_VALUE_COLUMNS}
+                FROM redaction_plans
+                WHERE plan_id = ?
+                """,
+                (plan.plan_id,),
+            ).fetchone()
+            if existing is not None:
+                if tuple(existing) != plan_values:
+                    raise ValueError("redaction plan is immutable")
+                existing_targets = tuple(
+                    conn.execute(
+                        f"""
+                        SELECT {_REDACTION_TARGET_VALUE_COLUMNS}
+                        FROM redaction_targets
+                        WHERE plan_id = ?
+                        ORDER BY ordinal
+                        """,
+                        (plan.plan_id,),
+                    ).fetchall()
+                )
+                if existing_targets != target_values:
+                    raise ValueError("redaction plan targets are immutable")
+                return
+
+            collision = conn.execute(
+                """
+                SELECT plan_id
+                FROM redaction_plans
+                WHERE workspace_id = ?
+                  AND pre_event_id = ?
+                  AND analysis_run_id = ?
+                  AND planner_version = ?
+                  AND profile_version = ?
+                  AND mode = ?
+                """,
+                (
+                    plan.workspace_id,
+                    plan.pre_event_id,
+                    plan.analysis_run_id,
+                    plan.planner_version,
+                    plan.profile_version,
+                    plan.mode,
+                ),
+            ).fetchone()
+            if collision is not None:
+                raise ValueError("redaction plan identity maps to a different plan id")
+            self._validate_redaction_plan_replay(
+                conn,
+                plan,
+                event_sequence_no,
+                event,
+                analysis_run,
+            )
+            conn.execute(
+                """
+                INSERT INTO redaction_plans (
+                    plan_id,
+                    analysis_run_id,
+                    pre_event_id,
+                    workspace_id,
+                    session_id,
+                    tool_use_id,
+                    tool_name,
+                    adapter,
+                    profile_id,
+                    profile_version,
+                    profile_registry_version,
+                    mode,
+                    status,
+                    planner_version,
+                    original_input_sha256,
+                    rewritten_input_sha256,
+                    structure_sha256_before,
+                    structure_sha256_after,
+                    critical_finding_count,
+                    replacement_count,
+                    rejection_code,
+                    post_event_id,
+                    rendered_at,
+                    confirmed_at
+                ) VALUES (
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                )
+                """,
+                plan_values,
+            )
+            conn.executemany(
+                """
+                INSERT INTO redaction_targets (
+                    plan_id,
+                    ordinal,
+                    finding_id,
+                    decision_id,
+                    source_node_kind,
+                    source_node_id,
+                    sink_node_id,
+                    json_pointer,
+                    original_value_sha256,
+                    replacement_profile
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                target_values,
+            )
+
+    def get_redaction_plan(
+        self,
+        plan_id: str,
+        *,
+        workspace_id: str,
+    ) -> StoredRedactionPlan | None:
+        if not plan_id or not workspace_id:
+            raise ValueError("redaction plan lookup requires plan and workspace ids")
+        with self._connect() as conn:
+            row = conn.execute(
+                f"""
+                SELECT {_REDACTION_PLAN_SELECT_COLUMNS}
+                FROM redaction_plans
+                WHERE plan_id = ? AND workspace_id = ?
+                """,
+                (plan_id, workspace_id),
+            ).fetchone()
+            if row is None:
+                return None
+            targets = conn.execute(
+                f"""
+                SELECT {_REDACTION_TARGET_VALUE_COLUMNS}
+                FROM redaction_targets
+                WHERE plan_id = ?
+                ORDER BY ordinal
+                """,
+                (plan_id,),
+            ).fetchall()
+        return _stored_redaction_plan_from_rows(row, targets)
+
+    def list_redaction_plans(
+        self,
+        *,
+        workspace_id: str,
+        session_id: str | None = None,
+        tool_use_id: str | None = None,
+        limit: int = 20,
+    ) -> list[StoredRedactionPlan]:
+        if not workspace_id:
+            raise ValueError("redaction plan lookup requires a workspace id")
+        if session_id is not None and not session_id:
+            raise ValueError("redaction plan session filter must not be empty")
+        if tool_use_id is not None and not tool_use_id:
+            raise ValueError("redaction plan tool-use filter must not be empty")
+        if type(limit) is not int or not 1 <= limit <= 1000:
+            raise ValueError("redaction plan limit must be between 1 and 1000")
+        clauses = ["workspace_id = ?"]
+        params: list[object] = [workspace_id]
+        if session_id is not None:
+            clauses.append("session_id = ?")
+            params.append(session_id)
+        if tool_use_id is not None:
+            clauses.append("tool_use_id = ?")
+            params.append(tool_use_id)
+        params.append(limit)
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT {_REDACTION_PLAN_SELECT_COLUMNS}
+                FROM redaction_plans
+                WHERE {' AND '.join(clauses)}
+                ORDER BY created_at DESC, plan_id
+                LIMIT ?
+                """,
+                params,
+            ).fetchall()
+            plans: list[StoredRedactionPlan] = []
+            for row in rows:
+                targets = conn.execute(
+                    f"""
+                    SELECT {_REDACTION_TARGET_VALUE_COLUMNS}
+                    FROM redaction_targets
+                    WHERE plan_id = ?
+                    ORDER BY ordinal
+                    """,
+                    (row[0],),
+                ).fetchall()
+                plans.append(_stored_redaction_plan_from_rows(row, targets))
+        return plans
+
+    def cleanup_redaction_audits(
+        self,
+        *,
+        workspace_id: str,
+        before: str,
+        session_id: str | None = None,
+        execute: bool = False,
+    ) -> RedactionAuditCleanupResult:
+        """Count or delete preview audits using their owning event retention scope."""
+        if not workspace_id:
+            raise ValueError("redaction cleanup requires a workspace id")
+        if session_id is not None and not session_id:
+            raise ValueError("redaction cleanup session must not be empty")
+        if type(execute) is not bool:
+            raise ValueError("redaction cleanup execute flag must be boolean")
+        _validate_sqlite_utc_timestamp(before)
+        with self._connect() as conn:
+            conn.execute(
+                """
+                CREATE TEMP TABLE redaction_cleanup_candidates (
+                    plan_id TEXT PRIMARY KEY,
+                    is_orphan INTEGER NOT NULL
+                )
+                """
+            )
+            conn.execute("BEGIN IMMEDIATE" if execute else "BEGIN")
+            self._validate_registered_workspace(conn, workspace_id)
+            filters = ["plan.workspace_id = ?"]
+            params: list[object] = [workspace_id]
+            if session_id is not None:
+                filters.append("plan.session_id = ?")
+                params.append(session_id)
+
+            corrupt = conn.execute(
+                f"""
+                SELECT 1
+                FROM redaction_plans AS plan
+                JOIN events AS event ON event.event_id = plan.pre_event_id
+                WHERE {' AND '.join(filters)}
+                  AND (
+                      event.phase != 'pre_tool_use'
+                      OR event.workspace_status != 'ready'
+                      OR event.workspace_id IS NOT plan.workspace_id
+                      OR event.session_id IS NOT plan.session_id
+                      OR event.tool_use_id IS NOT plan.tool_use_id
+                      OR event.tool_name IS NOT plan.tool_name
+                  )
+                LIMIT 1
+                """,
+                params,
+            ).fetchone()
+            if corrupt is not None:
+                raise ValueError("redaction cleanup found an invalid event owner")
+
+            conn.execute(
+                f"""
+                INSERT INTO redaction_cleanup_candidates (plan_id, is_orphan)
+                SELECT
+                    plan.plan_id,
+                    CASE WHEN event.event_id IS NULL THEN 1 ELSE 0 END
+                FROM redaction_plans AS plan
+                LEFT JOIN events AS event ON event.event_id = plan.pre_event_id
+                WHERE {' AND '.join(filters)}
+                  AND (
+                      event.event_id IS NULL
+                      OR event.recorded_at < ?
+                  )
+                """,
+                (*params, before),
+            )
+            plan_count, orphan_plan_count = conn.execute(
+                """
+                SELECT COUNT(*), COALESCE(SUM(is_orphan), 0)
+                FROM redaction_cleanup_candidates
+                """
+            ).fetchone()
+            target_count = conn.execute(
+                """
+                SELECT COUNT(*)
+                FROM redaction_targets AS target
+                JOIN redaction_cleanup_candidates AS candidate
+                  ON candidate.plan_id = target.plan_id
+                """
+            ).fetchone()[0]
+            if execute:
+                deleted_targets = conn.execute(
+                    """
+                    DELETE FROM redaction_targets
+                    WHERE plan_id IN (
+                        SELECT plan_id FROM redaction_cleanup_candidates
+                    )
+                    """
+                ).rowcount
+                deleted_plans = conn.execute(
+                    """
+                    DELETE FROM redaction_plans
+                    WHERE plan_id IN (
+                        SELECT plan_id FROM redaction_cleanup_candidates
+                    )
+                    """
+                ).rowcount
+                if deleted_targets != target_count or deleted_plans != plan_count:
+                    raise RuntimeError("redaction cleanup delete count changed")
+        return RedactionAuditCleanupResult(
+            workspace_id=workspace_id,
+            before=before,
+            session_id=session_id,
+            plan_count=int(plan_count),
+            target_count=int(target_count),
+            orphan_plan_count=int(orphan_plan_count),
+            executed=execute,
+        )
+
+    def _validate_redaction_plan_owner(
+        self,
+        conn: sqlite3.Connection,
+        plan: StoredRedactionPlan,
+    ) -> tuple[int, NormalizedEvent, AnalysisRun]:
+        self._validate_registered_workspace(conn, plan.workspace_id)
+        event = conn.execute(
+            """
+            SELECT
+                phase,
+                session_id,
+                turn_id,
+                tool_use_id,
+                tool_name,
+                cwd,
+                model,
+                permission_mode,
+                transcript_path,
+                stop_hook_active,
+                workspace_id,
+                workspace_root,
+                workspace_lexical_root,
+                workspace_execution_cwd,
+                workspace_status,
+                workspace_source,
+                workspace_namespace_id,
+                sequence_no,
+                payload_json,
+                length(CAST(payload_json AS BLOB))
+            FROM events
+            WHERE event_id = ?
+            """,
+            (plan.pre_event_id,),
+        ).fetchone()
+        if (
+            event is None
+            or (
+                event[0],
+                event[14],
+                event[10],
+                event[1],
+                event[3],
+                event[4],
+            )
+            != (
+                "pre_tool_use",
+                "ready",
+                plan.workspace_id,
+                plan.session_id,
+                plan.tool_use_id,
+                plan.tool_name,
+            )
+            or event[17] is None
+        ):
+            raise ValueError("redaction plan does not match its PreToolUse event")
+        if (
+            event[19] is None
+            or int(event[19]) > REDACTION_AUDIT_EVENT_PAYLOAD_MAX_BYTES
+        ):
+            raise ValueError("redaction plan event payload limit exceeded")
+        try:
+            payload = json.loads(event[18])
+        except (TypeError, ValueError) as exc:
+            raise ValueError("redaction plan event payload is invalid") from exc
+        if not isinstance(payload, dict):
+            raise ValueError("redaction plan event payload is invalid")
+        analysis_row = conn.execute(
+            """
+            SELECT
+                analysis_run_id,
+                detector_version,
+                config_json,
+                started_at,
+                completed_at,
+                workspace_id,
+                session_id
+            FROM analysis_runs
+            WHERE analysis_run_id = ?
+            """,
+            (plan.analysis_run_id,),
+        ).fetchone()
+        if (
+            analysis_row is None
+            or analysis_row[4] is None
+            or analysis_row[5:] != (plan.workspace_id, plan.session_id)
+        ):
+            raise ValueError(
+                "redaction plan requires a completed runtime analysis run"
+            )
+        normalized_event = NormalizedEvent(
+            event_id=plan.pre_event_id,
+            phase=event[0],
+            session_id=event[1],
+            turn_id=event[2],
+            tool_use_id=event[3],
+            tool_name=event[4],
+            cwd=event[5],
+            model=event[6],
+            permission_mode=event[7],
+            transcript_path=event[8],
+            stop_hook_active=(None if event[9] is None else bool(event[9])),
+            workspace_id=event[10],
+            workspace_root=event[11],
+            workspace_lexical_root=event[12],
+            workspace_execution_cwd=event[13],
+            workspace_status=event[14],
+            workspace_source=event[15] or "unknown",
+            workspace_namespace_id=event[16],
+            raw_payload=payload,
+        )
+        analysis_run = AnalysisRun(*analysis_row)
+        return int(event[17]), normalized_event, analysis_run
+
+    def _validate_redaction_plan_replay(
+        self,
+        conn: sqlite3.Connection,
+        plan: StoredRedactionPlan,
+        event_sequence_no: int,
+        event: NormalizedEvent,
+        analysis_run: AnalysisRun,
+    ) -> None:
+        sink_size_rows = conn.execute(
+            """
+            SELECT
+                length(CAST(node_id AS BLOB)),
+                length(CAST(sink_type AS BLOB)),
+                length(CAST(label AS BLOB)),
+                length(CAST(tool_name AS BLOB)),
+                length(CAST(metadata_json AS BLOB))
+            FROM sink_candidates
+            WHERE workspace_id = ?
+              AND session_id = ?
+              AND tool_use_id = ?
+              AND tool_name = ?
+              AND sequence_no = ?
+              AND sink_type LIKE 'external_%'
+            ORDER BY node_id
+            LIMIT ?
+            """,
+            (
+                plan.workspace_id,
+                plan.session_id,
+                plan.tool_use_id,
+                plan.tool_name,
+                event_sequence_no,
+                REDACTION_AUDIT_MAX_CURRENT_SINKS + 1,
+            ),
+        ).fetchall()
+        if len(sink_size_rows) > REDACTION_AUDIT_MAX_CURRENT_SINKS:
+            raise ValueError("redaction audit current sink limit exceeded")
+        if any(
+            any(size is None for size in row)
+            or any(
+                int(size) > REDACTION_AUDIT_MAX_IDENTIFIER_BYTES
+                for size in row[:4]
+            )
+            or int(row[4]) > REDACTION_AUDIT_MAX_SINK_METADATA_BYTES
+            for row in sink_size_rows
+        ):
+            raise ValueError("redaction audit sink row byte limit exceeded")
+        if (
+            sum(int(size) for row in sink_size_rows for size in row)
+            > REDACTION_AUDIT_MAX_SINK_BYTES_TOTAL
+        ):
+            raise ValueError("redaction audit sink total byte limit exceeded")
+
+        sink_rows = conn.execute(
+            """
+            SELECT
+                node_id,
+                sink_type,
+                label,
+                tool_name,
+                tool_use_id,
+                session_id,
+                sequence_no,
+                metadata_json,
+                workspace_id
+            FROM sink_candidates
+            WHERE workspace_id = ?
+              AND session_id = ?
+              AND tool_use_id = ?
+              AND tool_name = ?
+              AND sequence_no = ?
+              AND sink_type LIKE 'external_%'
+            ORDER BY node_id
+            LIMIT ?
+            """,
+            (
+                plan.workspace_id,
+                plan.session_id,
+                plan.tool_use_id,
+                plan.tool_name,
+                event_sequence_no,
+                REDACTION_AUDIT_MAX_CURRENT_SINKS + 1,
+            ),
+        ).fetchall()
+        current_sinks: list[SinkCandidate] = []
+        for row in sink_rows:
+            try:
+                metadata = json.loads(row[7])
+            except (TypeError, ValueError) as exc:
+                raise ValueError("redaction audit sink metadata is invalid") from exc
+            if (
+                not isinstance(metadata, dict)
+                or metadata.get("event_id") != plan.pre_event_id
+                or metadata.get("adapter") != plan.adapter
+            ):
+                continue
+            current_sinks.append(
+                SinkCandidate(
+                    node_id=row[0],
+                    sink_type=row[1],
+                    label=row[2],
+                    tool_name=row[3],
+                    tool_use_id=row[4],
+                    session_id=row[5],
+                    sequence_no=row[6],
+                    metadata=metadata,
+                    workspace_id=row[8],
+                )
+            )
+        if not current_sinks:
+            raise ValueError("redaction audit has no current external sinks")
+
+        sink_ids = tuple(sorted(sink.node_id for sink in current_sinks))
+        sink_placeholders = ",".join("?" for _ in sink_ids)
+        assignment_rows = conn.execute(
+            f"""
+            SELECT
+                analysis_run_id,
+                source_node_kind,
+                source_node_id,
+                node_kind,
+                node_id,
+                best_path_score,
+                predecessor_edge_id,
+                hop_count
+            FROM lineage_assignments
+            WHERE analysis_run_id = ?
+              AND node_kind = 'sink_candidate'
+              AND node_id IN ({sink_placeholders})
+              AND best_path_score >= 0.9
+            ORDER BY source_node_kind, source_node_id, node_id
+            LIMIT ?
+            """,
+            (
+                plan.analysis_run_id,
+                *sink_ids,
+                REDACTION_PREVIEW_MAX_CRITICAL_FINDINGS + 1,
+            ),
+        ).fetchall()
+        if len(assignment_rows) > REDACTION_PREVIEW_MAX_CRITICAL_FINDINGS:
+            raise ValueError("redaction audit critical finding limit exceeded")
+        assignments = [LineageAssignment(*row) for row in assignment_rows]
+        findings = detect_leaks(
+            analysis_run=analysis_run,
+            assignments=assignments,
+            sink_candidates=current_sinks,
+            min_score=0.9,
+            sink_types={sink.sink_type for sink in current_sinks},
+        )
+        if len(findings) != plan.critical_finding_count:
+            raise ValueError("redaction plan critical findings are incomplete")
+
+        source_ids = tuple(
+            sorted(
+                {
+                    finding.source_node_id
+                    for finding in findings
+                    if finding.source_node_kind == "source_chunk"
+                }
+            )
+        )
+        sources = _load_bounded_source_chunk_evidence(
+            conn,
+            plan.workspace_id,
+            source_ids,
+            max_ids=REDACTION_PREVIEW_MAX_CRITICAL_FINDINGS,
+            max_bytes_per_chunk=(
+                REDACTION_PREVIEW_MAX_SOURCE_BYTES_PER_FINDING
+            ),
+            max_bytes_total=REDACTION_PREVIEW_MAX_SOURCE_BYTES_TOTAL,
+        )
+        source_map = {
+            (source.workspace_id, source.chunk_id): source for source in sources
+        }
+
+        # Import lazily so the storage module does not own policy initialization.
+        from hook_monitor.policy.redaction_preview import (
+            plan_mcp_redaction_preview,
+        )
+
+        replay = plan_mcp_redaction_preview(
+            current_event=event,
+            current_sequence_no=event_sequence_no,
+            analysis_run=analysis_run,
+            current_sinks=tuple(current_sinks),
+            current_critical_findings=tuple(findings),
+            source_chunks=source_map,
+            monotonic_ns=lambda: 0,
+        )
+        if replay.plan is None or not _redaction_preview_matches_stored(
+            replay.plan,
+            plan,
+        ):
+            raise ValueError("redaction plan does not match deterministic replay")
+
     def replace_information_flow_edges(
         self,
         edges: list[FlowEdge],
@@ -4331,6 +5063,47 @@ class EventStore:
             ).fetchall()
         return [_source_chunk_from_row(row) for row in rows]
 
+    def list_source_chunks_for_workspace_ids(
+        self,
+        workspace_id: str,
+        chunk_ids: tuple[str, ...],
+        *,
+        max_ids: int = 32,
+        max_bytes_per_chunk: int = 32 * 1024,
+        max_bytes_total: int = 128 * 1024,
+    ) -> list[SourceChunkEvidence]:
+        """Load only explicitly referenced source chunks for one workspace."""
+        limits = (max_ids, max_bytes_per_chunk, max_bytes_total)
+        if any(type(limit) is not int or limit <= 0 for limit in limits):
+            raise ValueError("source chunk lookup limits must be positive integers")
+        if not isinstance(workspace_id, str) or not workspace_id:
+            raise ValueError("source chunk lookup requires a workspace id")
+        if not isinstance(chunk_ids, tuple) or any(
+            not isinstance(chunk_id, str)
+            or not chunk_id
+            or len(chunk_id.encode("utf-8", errors="surrogatepass")) > 1024
+            for chunk_id in chunk_ids
+        ):
+            raise ValueError("source chunk ids must be bounded non-empty strings")
+        distinct_ids = tuple(sorted(set(chunk_ids)))
+        if len(distinct_ids) != len(chunk_ids):
+            raise ValueError("source chunk ids must be unique")
+        if len(distinct_ids) > max_ids:
+            raise ValueError("source chunk lookup limit exceeded")
+        if not distinct_ids:
+            return []
+
+        with self._connect_redaction_audit() as conn:
+            conn.execute("BEGIN")
+            return _load_bounded_source_chunk_evidence(
+                conn,
+                workspace_id,
+                distinct_ids,
+                max_ids=max_ids,
+                max_bytes_per_chunk=max_bytes_per_chunk,
+                max_bytes_total=max_bytes_total,
+            )
+
     def list_resource_versions(self) -> list[ResourceVersion]:
         with self._connect() as conn:
             rows = conn.execute(
@@ -5478,6 +6251,314 @@ class EventStore:
         if column not in columns:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
+    def _initialize_redaction_preview_audit(
+        self,
+        conn: sqlite3.Connection,
+    ) -> None:
+        """Keep optional preview audit drift outside the core Hook boundary."""
+        savepoint = "redaction_preview_audit_schema"
+        conn.execute(f"SAVEPOINT {savepoint}")
+        try:
+            self._migrate_redaction_preview_audit(conn)
+        except (RuntimeError, sqlite3.Error):
+            conn.execute(f"ROLLBACK TO {savepoint}")
+            conn.execute(f"RELEASE {savepoint}")
+            self._redaction_audit_available = False
+        else:
+            conn.execute(f"RELEASE {savepoint}")
+            self._redaction_audit_available = True
+
+    def _migrate_redaction_preview_audit(
+        self,
+        conn: sqlite3.Connection,
+    ) -> None:
+        """Create the immutable, hash-only redaction preview audit schema."""
+        migration_key = "migration.redaction_preview_audit.v1"
+        migration_complete = conn.execute(
+            """
+            SELECT 1
+            FROM analysis_state
+            WHERE key = ? AND value = 'complete'
+            """,
+            (migration_key,),
+        ).fetchone() is not None
+        existing_tables = {
+            row[0]
+            for row in conn.execute(
+                """
+                SELECT name
+                FROM sqlite_master
+                WHERE type = 'table'
+                  AND name IN ('redaction_plans', 'redaction_targets')
+                """
+            ).fetchall()
+        }
+        if migration_complete:
+            self._validate_redaction_preview_audit_schema(conn)
+            return
+        if existing_tables:
+            self._validate_redaction_preview_audit_schema(conn)
+            conn.execute(
+                """
+                INSERT INTO analysis_state (key, value)
+                VALUES (?, 'complete')
+                ON CONFLICT(key) DO UPDATE SET
+                    value = excluded.value,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (migration_key,),
+            )
+            return
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS redaction_plans (
+                plan_id TEXT PRIMARY KEY,
+                analysis_run_id TEXT NOT NULL,
+                pre_event_id TEXT NOT NULL,
+                workspace_id TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                tool_use_id TEXT NOT NULL,
+                tool_name TEXT NOT NULL,
+                adapter TEXT NOT NULL,
+                profile_id TEXT NOT NULL,
+                profile_version TEXT NOT NULL,
+                profile_registry_version TEXT NOT NULL,
+                mode TEXT NOT NULL CHECK (mode IN ('preview', 'enforce')),
+                status TEXT NOT NULL CHECK (
+                    status IN (
+                        'eligible',
+                        'rejected',
+                        'rendered',
+                        'post_confirmed',
+                        'post_mismatch'
+                    )
+                ),
+                planner_version TEXT NOT NULL,
+                original_input_sha256 TEXT,
+                rewritten_input_sha256 TEXT,
+                structure_sha256_before TEXT,
+                structure_sha256_after TEXT,
+                critical_finding_count INTEGER NOT NULL CHECK (
+                    critical_finding_count >= 0
+                ),
+                replacement_count INTEGER NOT NULL CHECK (
+                    replacement_count >= 0
+                    AND replacement_count <= critical_finding_count
+                ),
+                rejection_code TEXT,
+                post_event_id TEXT,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                rendered_at TEXT,
+                confirmed_at TEXT,
+                FOREIGN KEY (analysis_run_id)
+                    REFERENCES analysis_runs (analysis_run_id),
+                FOREIGN KEY (pre_event_id) REFERENCES events (event_id),
+                FOREIGN KEY (workspace_id) REFERENCES workspaces (workspace_id),
+                FOREIGN KEY (post_event_id) REFERENCES events (event_id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS redaction_targets (
+                plan_id TEXT NOT NULL,
+                ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
+                finding_id TEXT NOT NULL,
+                decision_id TEXT NOT NULL,
+                source_node_kind TEXT NOT NULL,
+                source_node_id TEXT NOT NULL,
+                sink_node_id TEXT NOT NULL,
+                json_pointer TEXT NOT NULL,
+                original_value_sha256 TEXT NOT NULL,
+                replacement_profile TEXT NOT NULL,
+                PRIMARY KEY (plan_id, ordinal),
+                FOREIGN KEY (plan_id)
+                    REFERENCES redaction_plans (plan_id) ON DELETE CASCADE
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_redaction_plans_event_version
+            ON redaction_plans (
+                workspace_id,
+                pre_event_id,
+                analysis_run_id,
+                planner_version,
+                profile_version,
+                mode
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_redaction_plans_tool_use
+            ON redaction_plans (
+                workspace_id,
+                session_id,
+                tool_use_id,
+                created_at DESC,
+                plan_id
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_redaction_plans_analysis_run
+            ON redaction_plans (
+                analysis_run_id,
+                created_at DESC,
+                plan_id
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_redaction_plans_created
+            ON redaction_plans (created_at, plan_id)
+            """
+        )
+        conn.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_redaction_targets_finding
+            ON redaction_targets (plan_id, finding_id)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_redaction_targets_decision
+            ON redaction_targets (decision_id, plan_id, ordinal)
+            """
+        )
+        self._validate_redaction_preview_audit_schema(conn)
+        conn.execute(
+            """
+            INSERT INTO analysis_state (key, value)
+            VALUES (?, 'complete')
+            ON CONFLICT(key) DO UPDATE SET
+                value = excluded.value,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (migration_key,),
+        )
+
+    def _validate_redaction_preview_audit_schema(
+        self,
+        conn: sqlite3.Connection,
+    ) -> None:
+        expected_columns = {
+            "redaction_plans": {
+                "plan_id",
+                "analysis_run_id",
+                "pre_event_id",
+                "workspace_id",
+                "session_id",
+                "tool_use_id",
+                "tool_name",
+                "adapter",
+                "profile_id",
+                "profile_version",
+                "profile_registry_version",
+                "mode",
+                "status",
+                "planner_version",
+                "original_input_sha256",
+                "rewritten_input_sha256",
+                "structure_sha256_before",
+                "structure_sha256_after",
+                "critical_finding_count",
+                "replacement_count",
+                "rejection_code",
+                "post_event_id",
+                "created_at",
+                "rendered_at",
+                "confirmed_at",
+            },
+            "redaction_targets": {
+                "plan_id",
+                "ordinal",
+                "finding_id",
+                "decision_id",
+                "source_node_kind",
+                "source_node_id",
+                "sink_node_id",
+                "json_pointer",
+                "original_value_sha256",
+                "replacement_profile",
+            },
+        }
+        expected_primary_keys = {
+            "redaction_plans": ("plan_id",),
+            "redaction_targets": ("plan_id", "ordinal"),
+        }
+        for table, expected in expected_columns.items():
+            rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+            if {row[1] for row in rows} != expected:
+                raise RuntimeError(f"redaction audit schema mismatch: {table}")
+            actual_key = tuple(
+                row[1]
+                for row in sorted(
+                    (row for row in rows if row[5]),
+                    key=lambda row: row[5],
+                )
+            )
+            if actual_key != expected_primary_keys[table]:
+                raise RuntimeError(f"redaction audit primary key mismatch: {table}")
+
+        expected_indexes = {
+            "idx_redaction_plans_event_version": (
+                True,
+                (
+                    "workspace_id",
+                    "pre_event_id",
+                    "analysis_run_id",
+                    "planner_version",
+                    "profile_version",
+                    "mode",
+                ),
+            ),
+            "idx_redaction_plans_tool_use": (
+                False,
+                (
+                    "workspace_id",
+                    "session_id",
+                    "tool_use_id",
+                    "created_at",
+                    "plan_id",
+                ),
+            ),
+            "idx_redaction_plans_analysis_run": (
+                False,
+                ("analysis_run_id", "created_at", "plan_id"),
+            ),
+            "idx_redaction_plans_created": (
+                False,
+                ("created_at", "plan_id"),
+            ),
+            "idx_redaction_targets_finding": (
+                True,
+                ("plan_id", "finding_id"),
+            ),
+            "idx_redaction_targets_decision": (
+                False,
+                ("decision_id", "plan_id", "ordinal"),
+            ),
+        }
+        table_indexes = {
+            row[1]: bool(row[2])
+            for table in expected_columns
+            for row in conn.execute(f"PRAGMA index_list({table})").fetchall()
+        }
+        for index, (unique, columns) in expected_indexes.items():
+            if table_indexes.get(index) != unique:
+                raise RuntimeError(f"redaction audit index mismatch: {index}")
+            actual_columns = tuple(
+                row[2]
+                for row in conn.execute(f"PRAGMA index_info({index})").fetchall()
+            )
+            if actual_columns != columns:
+                raise RuntimeError(f"redaction audit index mismatch: {index}")
+
     def _migrate_information_flow_edges(self, conn: sqlite3.Connection) -> None:
         columns = {
             row[1]
@@ -6061,6 +7142,14 @@ class EventStore:
         conn.execute("PRAGMA busy_timeout = 5000")
         return conn
 
+    def _connect_redaction_audit(self) -> sqlite3.Connection:
+        timeout_seconds = REDACTION_AUDIT_BUSY_TIMEOUT_MS / 1000
+        conn = sqlite3.connect(self.db_path, timeout=timeout_seconds)
+        conn.execute(
+            f"PRAGMA busy_timeout = {REDACTION_AUDIT_BUSY_TIMEOUT_MS}"
+        )
+        return conn
+
 
 def _validate_event_workspace(event: NormalizedEvent) -> None:
     expected_event_id = make_event_id(
@@ -6399,6 +7488,404 @@ def _sink_values(sink: SinkCandidate) -> tuple[object, ...]:
         sink.sequence_no,
         json.dumps(sink.metadata, ensure_ascii=False, sort_keys=True),
     )
+
+
+def _load_bounded_source_chunk_evidence(
+    conn: sqlite3.Connection,
+    workspace_id: str,
+    chunk_ids: tuple[str, ...],
+    *,
+    max_ids: int,
+    max_bytes_per_chunk: int,
+    max_bytes_total: int,
+) -> list[SourceChunkEvidence]:
+    if len(chunk_ids) > max_ids:
+        raise ValueError("source chunk lookup limit exceeded")
+    if not chunk_ids:
+        return []
+    placeholders = ",".join("?" for _ in chunk_ids)
+    sized_rows = conn.execute(
+        f"""
+        SELECT
+            chunk.chunk_id,
+            length(CAST(chunk.text AS BLOB)),
+            length(chunk.text_hash)
+        FROM source_chunks AS chunk
+        JOIN protected_sources AS source
+          ON source.source_id = chunk.source_id
+         AND source.workspace_id = chunk.workspace_id
+        WHERE chunk.workspace_id = ?
+          AND source.workspace_id = ?
+          AND chunk.chunk_id IN ({placeholders})
+        ORDER BY chunk.chunk_id
+        """,
+        (workspace_id, workspace_id, *chunk_ids),
+    ).fetchall()
+    byte_sizes = tuple(int(row[1]) for row in sized_rows)
+    if any(row[2] != 64 for row in sized_rows):
+        raise ValueError("source chunk hash metadata is invalid")
+    if any(size > max_bytes_per_chunk for size in byte_sizes):
+        raise ValueError("source chunk byte limit exceeded")
+    if sum(byte_sizes) > max_bytes_total:
+        raise ValueError("source chunk total byte limit exceeded")
+    rows = conn.execute(
+        f"""
+        SELECT
+            chunk.chunk_id,
+            chunk.text,
+            chunk.text_hash,
+            chunk.workspace_id
+        FROM source_chunks AS chunk
+        JOIN protected_sources AS source
+          ON source.source_id = chunk.source_id
+         AND source.workspace_id = chunk.workspace_id
+        WHERE chunk.workspace_id = ?
+          AND source.workspace_id = ?
+          AND chunk.chunk_id IN ({placeholders})
+        ORDER BY chunk.chunk_id
+        """,
+        (workspace_id, workspace_id, *chunk_ids),
+    ).fetchall()
+    return [SourceChunkEvidence(*row) for row in rows]
+
+
+def _redaction_plan_values(plan: StoredRedactionPlan) -> tuple[object, ...]:
+    return (
+        plan.plan_id,
+        plan.analysis_run_id,
+        plan.pre_event_id,
+        plan.workspace_id,
+        plan.session_id,
+        plan.tool_use_id,
+        plan.tool_name,
+        plan.adapter,
+        plan.profile_id,
+        plan.profile_version,
+        plan.profile_registry_version,
+        plan.mode,
+        plan.status,
+        plan.planner_version,
+        plan.original_input_sha256,
+        plan.rewritten_input_sha256,
+        plan.structure_sha256_before,
+        plan.structure_sha256_after,
+        plan.critical_finding_count,
+        plan.replacement_count,
+        plan.rejection_code,
+        plan.post_event_id,
+        plan.rendered_at,
+        plan.confirmed_at,
+    )
+
+
+def _redaction_target_values(
+    target: StoredRedactionTarget,
+) -> tuple[object, ...]:
+    return (
+        target.plan_id,
+        target.ordinal,
+        target.finding_id,
+        target.decision_id,
+        target.source_node_kind,
+        target.source_node_id,
+        target.sink_node_id,
+        target.json_pointer,
+        target.original_value_sha256,
+        target.replacement_profile,
+    )
+
+
+def _redaction_preview_matches_stored(
+    preview: RedactionPreviewPlan,
+    stored: StoredRedactionPlan,
+) -> bool:
+    expected_plan_values = (
+        preview.plan_id,
+        preview.analysis_run_id,
+        preview.pre_event_id,
+        preview.workspace_id,
+        preview.session_id,
+        preview.tool_use_id,
+        preview.tool_name,
+        preview.adapter,
+        preview.profile_id,
+        preview.profile_version,
+        preview.profile_registry_version,
+        preview.mode,
+        preview.status,
+        preview.planner_version,
+        preview.original_input_sha256,
+        preview.rewritten_input_sha256,
+        preview.structure_sha256_before,
+        preview.structure_sha256_after,
+        preview.critical_finding_count,
+        preview.replacement_count,
+        preview.rejection_code,
+        None,
+        None,
+        None,
+    )
+    expected_target_values = tuple(
+        (
+            preview.plan_id,
+            target.ordinal,
+            target.finding_id,
+            target.decision_id,
+            target.source_node_kind,
+            target.source_node_id,
+            target.sink_node_id,
+            target.json_pointer,
+            target.original_value_sha256,
+            target.replacement_profile,
+        )
+        for target in preview.targets
+    )
+    return (
+        _redaction_plan_values(stored) == expected_plan_values
+        and tuple(_redaction_target_values(target) for target in stored.targets)
+        == expected_target_values
+    )
+
+
+def _stored_redaction_plan_from_rows(
+    row: tuple,
+    target_rows: list[tuple] | tuple[tuple, ...],
+) -> StoredRedactionPlan:
+    targets = tuple(
+        StoredRedactionTarget(
+            plan_id=target[0],
+            ordinal=target[1],
+            finding_id=target[2],
+            decision_id=target[3],
+            source_node_kind=target[4],
+            source_node_id=target[5],
+            sink_node_id=target[6],
+            json_pointer=target[7],
+            original_value_sha256=target[8],
+            replacement_profile=target[9],
+        )
+        for target in target_rows
+    )
+    return StoredRedactionPlan(
+        plan_id=row[0],
+        analysis_run_id=row[1],
+        pre_event_id=row[2],
+        workspace_id=row[3],
+        session_id=row[4],
+        tool_use_id=row[5],
+        tool_name=row[6],
+        adapter=row[7],
+        profile_id=row[8],
+        profile_version=row[9],
+        profile_registry_version=row[10],
+        mode=row[11],
+        status=row[12],
+        planner_version=row[13],
+        original_input_sha256=row[14],
+        rewritten_input_sha256=row[15],
+        structure_sha256_before=row[16],
+        structure_sha256_after=row[17],
+        critical_finding_count=row[18],
+        replacement_count=row[19],
+        rejection_code=row[20],
+        post_event_id=row[21],
+        targets=targets,
+        created_at=row[22],
+        rendered_at=row[23],
+        confirmed_at=row[24],
+    )
+
+
+def _validate_stored_redaction_plan(plan: StoredRedactionPlan) -> None:
+    required_strings = (
+        plan.plan_id,
+        plan.analysis_run_id,
+        plan.pre_event_id,
+        plan.workspace_id,
+        plan.session_id,
+        plan.tool_use_id,
+        plan.tool_name,
+        plan.adapter,
+        plan.profile_id,
+        plan.profile_version,
+        plan.profile_registry_version,
+        plan.mode,
+        plan.status,
+        plan.planner_version,
+    )
+    if any(not isinstance(value, str) or not value for value in required_strings):
+        raise ValueError("redaction plan identifiers must be non-empty strings")
+    try:
+        identifiers_are_bounded = all(
+            len(value.encode("utf-8")) <= REDACTION_AUDIT_MAX_IDENTIFIER_BYTES
+            for value in required_strings
+        )
+    except UnicodeEncodeError as exc:
+        raise ValueError("redaction plan identifiers must be valid UTF-8") from exc
+    if not identifiers_are_bounded:
+        raise ValueError("redaction plan identifier byte limit exceeded")
+    if not _LOWER_SHA256_RE.fullmatch(plan.plan_id):
+        raise ValueError("redaction plan id must be a lowercase SHA-256")
+    expected_plan_id = hashlib.sha256(
+        "\0".join(
+            (
+                plan.workspace_id,
+                plan.pre_event_id,
+                plan.analysis_run_id,
+                plan.planner_version,
+                plan.profile_version,
+                plan.mode,
+            )
+        ).encode("utf-8")
+    ).hexdigest()
+    if plan.plan_id != expected_plan_id:
+        raise ValueError("redaction plan id does not match its scope")
+    if plan.adapter != "mcp" or plan.mode != "preview":
+        raise ValueError("redaction audit only accepts MCP preview plans")
+    if plan.planner_version != REDACTION_PREVIEW_PLANNER_VERSION:
+        raise ValueError("redaction preview planner version is invalid")
+    if plan.status not in {"eligible", "rejected"}:
+        raise ValueError("redaction preview status is invalid")
+    if (
+        type(plan.critical_finding_count) is not int
+        or plan.critical_finding_count <= 0
+        or plan.critical_finding_count
+        > REDACTION_PREVIEW_MAX_CRITICAL_FINDINGS
+        or type(plan.replacement_count) is not int
+        or plan.replacement_count < 0
+    ):
+        raise ValueError("redaction preview counts are invalid")
+    if not isinstance(plan.targets, tuple):
+        raise ValueError("redaction preview targets must be a tuple")
+    if len(plan.targets) > 32:
+        raise ValueError("redaction preview target limit exceeded")
+    if plan.post_event_id is not None:
+        raise ValueError("preview plan must not claim a PostToolUse event")
+    if plan.rendered_at is not None or plan.confirmed_at is not None:
+        raise ValueError("preview plan must not claim rendered or confirmed state")
+    if plan.created_at is not None and (
+        not isinstance(plan.created_at, str) or not plan.created_at
+    ):
+        raise ValueError("redaction preview creation time is invalid")
+
+    hashes = (
+        plan.original_input_sha256,
+        plan.rewritten_input_sha256,
+        plan.structure_sha256_before,
+        plan.structure_sha256_after,
+    )
+    if any(
+        value is not None
+        and (not isinstance(value, str) or not _LOWER_SHA256_RE.fullmatch(value))
+        for value in hashes
+    ):
+        raise ValueError("redaction preview hashes must be lowercase SHA-256")
+    if (plan.original_input_sha256 is None) != (
+        plan.structure_sha256_before is None
+    ):
+        raise ValueError("redaction preview input and structure hashes must align")
+
+    expected_ordinals = tuple(range(len(plan.targets)))
+    if tuple(target.ordinal for target in plan.targets) != expected_ordinals:
+        raise ValueError("redaction target ordinals must be contiguous")
+    if len({target.finding_id for target in plan.targets}) != len(plan.targets):
+        raise ValueError("redaction target finding ids must be unique")
+    for target in plan.targets:
+        if target.plan_id != plan.plan_id:
+            raise ValueError("redaction target belongs to another plan")
+        if target.source_node_kind != "source_chunk":
+            raise ValueError("redaction target source kind is unsupported")
+        target_strings = (
+            target.finding_id,
+            target.decision_id,
+            target.source_node_id,
+            target.sink_node_id,
+            target.json_pointer,
+            target.original_value_sha256,
+            target.replacement_profile,
+        )
+        if any(
+            not isinstance(value, str) or not value for value in target_strings
+        ):
+            raise ValueError("redaction target fields must be non-empty strings")
+        try:
+            target_fields_are_bounded = all(
+                len(value.encode("utf-8"))
+                <= REDACTION_AUDIT_MAX_IDENTIFIER_BYTES
+                for value in target_strings
+            )
+        except UnicodeEncodeError as exc:
+            raise ValueError("redaction target fields must be valid UTF-8") from exc
+        if not target_fields_are_bounded:
+            raise ValueError("redaction target field byte limit exceeded")
+        if not target.json_pointer.startswith("/"):
+            raise ValueError("redaction target must use an absolute JSON pointer")
+        if target.replacement_profile != REDACTION_REPLACEMENT_PROFILE:
+            raise ValueError("redaction target replacement profile is invalid")
+        for value in (
+            target.finding_id,
+            target.decision_id,
+            target.original_value_sha256,
+        ):
+            if not _LOWER_SHA256_RE.fullmatch(value):
+                raise ValueError("redaction target hashes must be lowercase SHA-256")
+        expected_finding_id = hashlib.sha256(
+            "\0".join(
+                (
+                    plan.analysis_run_id,
+                    target.source_node_kind,
+                    target.source_node_id,
+                    target.sink_node_id,
+                )
+            ).encode("utf-8")
+        ).hexdigest()
+        expected_decision_id = hashlib.sha256(
+            "\0".join((expected_finding_id, "block", "PreToolUse")).encode(
+                "utf-8"
+            )
+        ).hexdigest()
+        if (
+            target.finding_id != expected_finding_id
+            or target.decision_id != expected_decision_id
+        ):
+            raise ValueError("redaction target ids do not match plan lineage")
+
+    if plan.status == "eligible":
+        if (
+            any(value is None for value in hashes)
+            or plan.structure_sha256_before != plan.structure_sha256_after
+            or plan.original_input_sha256 == plan.rewritten_input_sha256
+            or plan.rejection_code is not None
+            or len(plan.targets) != plan.critical_finding_count
+            or plan.replacement_count
+            != len({target.json_pointer for target in plan.targets})
+            or plan.replacement_count <= 0
+        ):
+            raise ValueError("eligible redaction preview invariants are invalid")
+        return
+
+    if (
+        plan.targets
+        or plan.replacement_count != 0
+        or plan.rewritten_input_sha256 is not None
+        or plan.structure_sha256_after is not None
+        or not isinstance(plan.rejection_code, str)
+        or plan.rejection_code not in REDACTION_PREVIEW_REJECTION_CODES
+    ):
+        raise ValueError("rejected redaction preview invariants are invalid")
+
+
+def _validate_sqlite_utc_timestamp(value: str) -> None:
+    if not isinstance(value, str):
+        raise ValueError("redaction cleanup cutoff must be a UTC timestamp")
+    try:
+        parsed = time.strptime(value, "%Y-%m-%d %H:%M:%S")
+    except ValueError as exc:
+        raise ValueError(
+            "redaction cleanup cutoff must use YYYY-MM-DD HH:MM:SS UTC"
+        ) from exc
+    if time.strftime("%Y-%m-%d %H:%M:%S", parsed) != value:
+        raise ValueError("redaction cleanup cutoff is not canonical")
 
 
 def _stored_policy_decision_from_row(row: tuple) -> StoredPolicyDecision:

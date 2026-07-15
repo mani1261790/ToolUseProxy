@@ -451,11 +451,18 @@ PreToolUse
 
 結論として、汎用的なPermissionRequest runtime接続は追加しない。現在のBash/MCP external sinkは、より早く、全matching callに発火し、`tool_use_id`を持つPreToolUseで既に評価できるためである。将来、PreToolUseで観測できない実漏えい経路が確認され、Codex payloadにstableなcall ID、structuredなpermission kind、network target、segment/process対応が追加された場合に、deny-onlyの独立adapterとして再評価する。
 
+## Redaction preview audit接続
+
+2026-07-15に、pure redaction preview plannerをMCP PreToolUseのcurrent-call policy経路へ接続した。`detect_leaks()`が現在callへ返した全critical findingを確定した後にだけplannerを呼び、findingが参照するworkspace-owned source chunk IDを32件以下で取得する。workspace全体のsource chunkをpreview用に再取得しない。
+
+bounded envelope内のeligible / rejected planとfinding単位の全targetは、original / rewritten本文を複製せず、canonical input hash、structure hash、profile version、pointer、original value hashだけをimmutableな1 transactionで保存する。新規insertは完了runのcurrent-call critical lineage、bounded source evidence、pure planner再実行結果へ完全一致させる。sink replayも識別子4 KiB、metadata 64 KiB / row、512 KiB / callで制限する。source取得、planner、監査保存のいずれかが失敗しても、先にrenderした`permissionDecision: deny`を維持する。Hook stdoutに`updatedInput`は追加せず、MCP serverへのruntime rewriteもまだ行わない。
+
+`scripts/cleanup_redaction_audits.py`は所有するPreToolUse eventのworkspace、任意session、recorded-at cutoffでauditを選び、既定はdry-runとする。SQLiteのforeign key enforcementはリポジトリ全体でoffのままなので、execute時は`ON DELETE CASCADE`に依存せず、同じtransactionでtargetを先に明示削除してからplanを削除する。
+
 ## 次の検証順序
 
-1. 実装済みredaction preview plan / targetをworkspace / session scopeでhash-only保存する
-2. stable profileのPostToolUse input hashをdormantに照合する
-3. offline staging/promoteとruntime履歴snapshotの必要性を評価する
-4. embedding候補検索の評価
+1. stable profileのPostToolUse input hashをdormantに照合する
+2. offline staging/promoteとruntime履歴snapshotの必要性を評価する
+3. embedding候補検索の評価
 
-PermissionRequestは評価を完了し、汎用runtime接続を見送った。redactも書換契約を設計したが、複数PreToolUse Hookでは最後に完了したrewriteだけが採用され、rewrite後のPreToolUse再検査もない。production Stop境界へは接続せず、MCPのexplicit profile、call内全findingのaggregate plan、hash-only auditをpreviewで検証する。未サポートの`permissionDecision: ask`には依存しない。
+PermissionRequestは評価を完了し、汎用runtime接続を見送った。redactも書換契約を設計したが、複数PreToolUse Hookでは最後に完了したrewriteだけが採用され、rewrite後のPreToolUse再検査もない。production Stop境界へは接続せず、MCPのexplicit profile、call内全findingのaggregate plan、hash-only auditまでをpreviewで接続した。次はPostToolUse input hashをdormantに照合する。未サポートの`permissionDecision: ask`には依存しない。
