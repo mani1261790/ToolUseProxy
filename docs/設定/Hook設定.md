@@ -340,6 +340,8 @@ MCPでcritical blockが確定した場合は、`detect_leaks()`が現在callへ�
 
 redaction audit schemaのdriftは初期化時に検出し、推測修復せずauditだけを無効化します。audit用のsource read / plan writeはSQLiteの`busy_timeout` 10 msでfail-fastし、lockやschema driftによる失敗もpreviewの例外境界内に留めます。replay対象は最大64 sink、識別子4 KiB、sink metadata 64 KiB / row、512 KiB / callでbyte制限し、重いread検証中はwriter lockを保持しません。そのためcore policyが確定したdenyは弱まりません。
 
+Post event本体を保存した後、runnerはdormantなredaction confirmationを独立したfail-soft境界で呼びます。対象は将来rendererが保存する`mode = enforce AND status = rendered`の単一planだけで、現行previewのeligible / rejected planは候補hashと一致しても遷移しません。enforce planの全immutable列とbounded target集合がstorageで再証明済みeligible previewのexact cloneであること、workspace / session / turn / tool use / tool名、所有Pre event、完了analysis run、profile / registry versionが一致することを要求します。exact scopeでPreより後に保存された最小sequenceのPostだけを、1 MiB以下の保存済みpayloadを正としてevent IDまで再検証します。`post_input_stable`かつfile inputなしのprofileについて、32 KiB / 32 fields / depth 8以内のcanonical full-input hashだけを比較します。一致は`post_confirmed`、boundedな不一致は`post_mismatch`、oversize・profile drift・曖昧候補は未確認のままです。10 msの短いaudit read transactionを使い、実際に終端状態へ進める1 rowだけwriterへupgradeします。失敗しても記録済みPost eventをrollbackせず、stdoutやinput本文を出しません。現行runtimeは`rendered` planも`updatedInput`も生成しないためproductionではno-opです。actual enforce前にはPost payload byte数をrecord時metadataとして持たせ、candidate size preflightをO(1)にするlatency gateが残ります。
+
 - critical: `permissionDecision: deny`
 - high: `additionalContext`を返して実行継続
 - medium以下またはfindingなし: stdoutなしで実行継続
@@ -408,6 +410,9 @@ source manifestの基準directoryはeventのcanonical workspace rootです。`pr
 - `hook_monitor/runtime/redaction_audit.py`
   - preview planをplaintext本文なしのstored modelへ変換します
   - eligible / rejected planとfinding単位の全targetを保存します
+- `hook_monitor/runtime/redaction_confirmation.py`
+  - stable profileのbounded Post inputをcanonical hashで照合します
+  - file input、profile drift、unbounded inputを未確認のままにします
 - `hook_monitor/runtime/storage.py`
   - SQLite への保存を担当します
   - event、artifact、operation、outcome、snapshot、redaction auditと解析結果tableを初期化し、記録します
@@ -579,7 +584,7 @@ python3 /Users/mani/Developer/ToolUseProxy/scripts/rebuild_lineage.py \
 - 類似度計算や source 追跡を変えたいなら `hook_monitor/analysis/`
 - 情報流エッジを強化したいなら `analysis` 側に拡張を足す
 
-現在の`hook_monitor/`は記録の骨格に加え、workspace・session差分graph、漏えい検知、Stop継続、Bash/MCP PreToolUse deny、operation単位lineage、PostToolUse snapshot、複数workspace分離、offline run snapshot、MCP exact profileと全scalar value / JSON key sink coverageまでを接続しています。PermissionRequestは実payloadとdeny / allowを評価しましたが、PreToolUseの代替にならず、payloadにstableなcall IDがなく、`allow`が通常承認を自動通過させるため、production Hookには設定しません。将来接続する場合もdeny-onlyの独立adapterとし、判断なしは空stdoutでCodex本来の承認へ委ねます。redactはblockを維持するpure preview plannerとimmutableなhash-only auditまでrunner / DBへ接続しました。Hook stdoutは従来のdenyのままで、`updatedInput`はrenderしません。次はstable profileのPostToolUse input hashをdormantに照合し、複数rewrite競合のgateが解消するまでproduction Hookへruntime rewriteを追加しません。詳細は [Redact設計](../設計/Redact.md) を参照してください。
+現在の`hook_monitor/`は記録の骨格に加え、workspace・session差分graph、漏えい検知、Stop継続、Bash/MCP PreToolUse deny、operation単位lineage、PostToolUse snapshot、複数workspace分離、offline run snapshot、MCP exact profileと全scalar value / JSON key sink coverageまでを接続しています。PermissionRequestは実payloadとdeny / allowを評価しましたが、PreToolUseの代替にならず、payloadにstableなcall IDがなく、`allow`が通常承認を自動通過させるため、production Hookには設定しません。将来接続する場合もdeny-onlyの独立adapterとし、判断なしは空stdoutでCodex本来の承認へ委ねます。redactはblockを維持するpure preview planner、immutableなhash-only audit、future rendered planだけを対象にしたdormant Post confirmationまでrunner / DBへ接続しました。Hook stdoutは従来のdenyのままで、`updatedInput`はrenderしません。複数rewrite競合のgateが解消するまでproduction Hookへruntime rewriteを追加しません。詳細は [Redact設計](../設計/Redact.md) を参照してください。
 
 ## この研究の位置づけ
 

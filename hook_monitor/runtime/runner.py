@@ -194,6 +194,11 @@ def run_hook(phase: str) -> int:
         post_operation_ids=post_operation_ids,
         resource_snapshots=post_snapshots,
     )
+    if phase == "post_tool_use":
+        try:
+            store.confirm_redaction_post_input(event)
+        except Exception as exc:  # pragma: no cover - defensive hook boundary
+            _report_policy_failure("post-redaction confirmation", exc)
     if phase == "pre_tool_use" and pre_tool_adapter(
         event.tool_name
     ) in enabled_pre_tool_adapters:

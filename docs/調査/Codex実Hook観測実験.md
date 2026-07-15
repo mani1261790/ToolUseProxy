@@ -461,8 +461,9 @@ bounded envelope内のeligible / rejected planとfinding単位の全targetは、
 
 ## 次の検証順序
 
-1. stable profileのPostToolUse input hashをdormantに照合する
-2. offline staging/promoteとruntime履歴snapshotの必要性を評価する
-3. embedding候補検索の評価
+1. dormant Post confirmationを実Codexのpublic allow / protected denyで再検証する
+2. 複数rewriterとderived redact decision linkageのenforcement gateを評価する
+3. offline staging/promoteとruntime履歴snapshotの必要性を評価する
+4. embedding候補検索の評価
 
-PermissionRequestは評価を完了し、汎用runtime接続を見送った。redactも書換契約を設計したが、複数PreToolUse Hookでは最後に完了したrewriteだけが採用され、rewrite後のPreToolUse再検査もない。production Stop境界へは接続せず、MCPのexplicit profile、call内全findingのaggregate plan、hash-only auditまでをpreviewで接続した。次はPostToolUse input hashをdormantに照合する。未サポートの`permissionDecision: ask`には依存しない。
+PermissionRequestは評価を完了し、汎用runtime接続を見送った。redactも書換契約を設計したが、複数PreToolUse Hookでは最後に完了したrewriteだけが採用され、rewrite後のPreToolUse再検査もない。production Stop境界へは接続せず、MCPのexplicit profile、call内全findingのaggregate plan、hash-only audit、future rendered planだけを対象にしたdormant Post confirmationまで接続した。現行previewは一致しても状態遷移せず、実Codex E2Eでもruntime rewriteを有効化しない。未サポートの`permissionDecision: ask`には依存しない。

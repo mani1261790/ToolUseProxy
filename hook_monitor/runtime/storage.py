@@ -13,8 +13,11 @@ from typing import TYPE_CHECKING
 
 from hook_monitor.analysis.adapters.mcp_profiles import (
     DEFAULT_MCP_INPUT_LIMITS,
+    DEFAULT_MCP_PROFILE_REGISTRY,
     MCP_TOOL_NAME_MAX_BYTES,
+    McpProfileRegistry,
 )
+from hook_monitor.analysis.adapters.mcp import parse_mcp_tool_name
 from hook_monitor.analysis.leak_detection import detect_leaks
 
 from hook_monitor.runtime.ids import make_event_id, make_source_chunk_id
@@ -25,6 +28,10 @@ from hook_monitor.runtime.redaction_integrity import (
     REDACTION_PREVIEW_PLANNER_VERSION,
     REDACTION_PREVIEW_REJECTION_CODES,
     REDACTION_REPLACEMENT_PROFILE,
+)
+from hook_monitor.runtime.redaction_confirmation import (
+    RedactionPostConfirmationResult,
+    compare_mcp_post_input,
 )
 
 from hook_monitor.runtime.models import (
@@ -3438,6 +3445,492 @@ class EventStore:
                 ).fetchall()
                 plans.append(_stored_redaction_plan_from_rows(row, targets))
         return plans
+
+    def confirm_redaction_post_input(
+        self,
+        post_event: NormalizedEvent,
+        *,
+        profile_registry: McpProfileRegistry = DEFAULT_MCP_PROFILE_REGISTRY,
+    ) -> RedactionPostConfirmationResult:
+        """Confirm one future rendered MCP input without enabling rewriting.
+
+        ``record`` must have stored the same PostToolUse event immediately before
+        this call. Preview plans are intentionally excluded: only a future
+        enforce renderer may create the ``rendered`` state observed here.
+        """
+        if self._redaction_audit_available is not True:
+            return RedactionPostConfirmationResult(
+                "not_applicable",
+                diagnostic_code="audit_unavailable",
+            )
+        if (
+            post_event.phase != "post_tool_use"
+            or post_event.workspace_status != "ready"
+            or post_event.workspace_id is None
+            or post_event.workspace_root is None
+            or post_event.workspace_execution_cwd is None
+            or post_event.session_id is None
+            or post_event.tool_use_id is None
+            or post_event.tool_name is None
+            or parse_mcp_tool_name(post_event.tool_name) is None
+        ):
+            return RedactionPostConfirmationResult(
+                "not_applicable",
+                diagnostic_code="unsupported_post_scope",
+            )
+
+        with self._connect_redaction_audit() as conn:
+            # Current production has no rendered plans. Keep that dormant path
+            # read-only and upgrade the same snapshot only for one terminal CAS.
+            conn.execute("BEGIN")
+            rows = conn.execute(
+                """
+                SELECT
+                    plan.plan_id,
+                    plan.analysis_run_id,
+                    plan.pre_event_id,
+                    plan.adapter,
+                    plan.profile_id,
+                    plan.profile_version,
+                    plan.profile_registry_version,
+                    plan.mode,
+                    plan.status,
+                    plan.planner_version,
+                    plan.rewritten_input_sha256,
+                    plan.structure_sha256_after,
+                    plan.critical_finding_count,
+                    plan.replacement_count,
+                    plan.rejection_code,
+                    plan.post_event_id,
+                    plan.rendered_at,
+                    plan.confirmed_at,
+                    pre.phase,
+                    pre.session_id,
+                    pre.turn_id,
+                    pre.tool_use_id,
+                    pre.tool_name,
+                    pre.workspace_id,
+                    pre.workspace_root,
+                    pre.workspace_execution_cwd,
+                    pre.workspace_status,
+                    pre.sequence_no,
+                    analysis.workspace_id,
+                    analysis.session_id,
+                    analysis.completed_at
+                FROM redaction_plans AS plan
+                LEFT JOIN events AS pre ON pre.event_id = plan.pre_event_id
+                LEFT JOIN analysis_runs AS analysis
+                  ON analysis.analysis_run_id = plan.analysis_run_id
+                WHERE plan.workspace_id = ?
+                  AND plan.session_id = ?
+                  AND plan.tool_use_id = ?
+                  AND plan.tool_name = ?
+                  AND plan.mode = 'enforce'
+                  AND plan.status IN (
+                      'rendered',
+                      'post_confirmed',
+                      'post_mismatch'
+                  )
+                ORDER BY plan.created_at DESC, plan.plan_id
+                LIMIT 2
+                """,
+                (
+                    post_event.workspace_id,
+                    post_event.session_id,
+                    post_event.tool_use_id,
+                    post_event.tool_name,
+                ),
+            ).fetchall()
+            if not rows:
+                return RedactionPostConfirmationResult("not_applicable")
+            if len(rows) != 1:
+                return RedactionPostConfirmationResult(
+                    "conflict",
+                    diagnostic_code="ambiguous_rendered_plan",
+                )
+
+            # Only future rendered plans pay the cost of touching their Post
+            # event row. In SQLite a large payload can live in the same record
+            # even when it is not selected, so query plans first for the normal
+            # production no-op path.
+            stored_post = conn.execute(
+                """
+                SELECT
+                    phase,
+                    session_id,
+                    turn_id,
+                    tool_use_id,
+                    tool_name,
+                    workspace_id,
+                    workspace_root,
+                    workspace_execution_cwd,
+                    workspace_status,
+                    sequence_no
+                FROM events
+                WHERE event_id = ?
+                """,
+                (post_event.event_id,),
+            ).fetchone()
+            expected_post = (
+                post_event.phase,
+                post_event.session_id,
+                post_event.turn_id,
+                post_event.tool_use_id,
+                post_event.tool_name,
+                post_event.workspace_id,
+                post_event.workspace_root,
+                post_event.workspace_execution_cwd,
+                post_event.workspace_status,
+            )
+            if (
+                stored_post is None
+                or stored_post[:9] != expected_post
+                or stored_post[9] is None
+            ):
+                raise ValueError(
+                    "redaction confirmation PostToolUse event is not recorded"
+                )
+            post_sequence_no = int(stored_post[9])
+
+            (
+                plan_id,
+                analysis_run_id,
+                pre_event_id,
+                adapter,
+                profile_id,
+                profile_version,
+                profile_registry_version,
+                mode,
+                status,
+                planner_version,
+                rewritten_input_sha256,
+                structure_sha256_after,
+                critical_finding_count,
+                replacement_count,
+                rejection_code,
+                linked_post_event_id,
+                rendered_at,
+                confirmed_at,
+                pre_phase,
+                pre_session_id,
+                pre_turn_id,
+                pre_tool_use_id,
+                pre_tool_name,
+                pre_workspace_id,
+                pre_workspace_root,
+                pre_execution_cwd,
+                pre_workspace_status,
+                pre_sequence_no,
+                analysis_workspace_id,
+                analysis_session_id,
+                analysis_completed_at,
+            ) = rows[0]
+
+            expected_plan_id = hashlib.sha256(
+                "\0".join(
+                    (
+                        post_event.workspace_id,
+                        pre_event_id,
+                        analysis_run_id,
+                        planner_version,
+                        profile_version,
+                        "enforce",
+                    )
+                ).encode("utf-8")
+            ).hexdigest()
+            if (
+                plan_id != expected_plan_id
+                or adapter != "mcp"
+                or mode != "enforce"
+                or planner_version != REDACTION_PREVIEW_PLANNER_VERSION
+                or not isinstance(rewritten_input_sha256, str)
+                or not _LOWER_SHA256_RE.fullmatch(rewritten_input_sha256)
+                or not isinstance(structure_sha256_after, str)
+                or not _LOWER_SHA256_RE.fullmatch(structure_sha256_after)
+                or type(critical_finding_count) is not int
+                or critical_finding_count <= 0
+                or critical_finding_count
+                > REDACTION_PREVIEW_MAX_CRITICAL_FINDINGS
+                or type(replacement_count) is not int
+                or not 0 < replacement_count <= critical_finding_count
+                or rejection_code is not None
+                or not isinstance(rendered_at, str)
+                or not rendered_at
+            ):
+                raise ValueError("rendered redaction plan integrity mismatch")
+            if (
+                pre_phase,
+                pre_session_id,
+                pre_turn_id,
+                pre_tool_use_id,
+                pre_tool_name,
+                pre_workspace_id,
+                pre_workspace_root,
+                pre_execution_cwd,
+                pre_workspace_status,
+                analysis_workspace_id,
+                analysis_session_id,
+            ) != (
+                "pre_tool_use",
+                post_event.session_id,
+                post_event.turn_id,
+                post_event.tool_use_id,
+                post_event.tool_name,
+                post_event.workspace_id,
+                post_event.workspace_root,
+                post_event.workspace_execution_cwd,
+                "ready",
+                post_event.workspace_id,
+                post_event.session_id,
+            ) or (
+                pre_sequence_no is None
+                or int(pre_sequence_no) >= post_sequence_no
+                or analysis_completed_at is None
+            ):
+                raise ValueError("redaction confirmation owner mismatch")
+
+            earliest_post = conn.execute(
+                """
+                SELECT event_id
+                FROM events
+                WHERE phase = 'post_tool_use'
+                  AND workspace_status = 'ready'
+                  AND workspace_id = ?
+                  AND workspace_root = ?
+                  AND workspace_execution_cwd = ?
+                  AND session_id = ?
+                  AND turn_id IS ?
+                  AND tool_use_id = ?
+                  AND tool_name = ?
+                  AND sequence_no > ?
+                ORDER BY sequence_no, event_id
+                LIMIT 1
+                """,
+                (
+                    post_event.workspace_id,
+                    post_event.workspace_root,
+                    post_event.workspace_execution_cwd,
+                    post_event.session_id,
+                    post_event.turn_id,
+                    post_event.tool_use_id,
+                    post_event.tool_name,
+                    int(pre_sequence_no),
+                ),
+            ).fetchone()
+            if earliest_post is None:
+                raise ValueError("redaction confirmation PostToolUse event is missing")
+            if earliest_post[0] != post_event.event_id:
+                return RedactionPostConfirmationResult(
+                    "conflict",
+                    plan_id=plan_id,
+                    diagnostic_code="earlier_post_event_exists",
+                )
+
+            stored_payload_bytes = conn.execute(
+                """
+                SELECT length(CAST(payload_json AS BLOB))
+                FROM events
+                WHERE event_id = ?
+                """,
+                (post_event.event_id,),
+            ).fetchone()[0]
+            if (
+                stored_payload_bytes is None
+                or int(stored_payload_bytes)
+                > REDACTION_AUDIT_EVENT_PAYLOAD_MAX_BYTES
+            ):
+                return RedactionPostConfirmationResult(
+                    "unobserved",
+                    plan_id=plan_id,
+                    diagnostic_code="post_payload_bytes_exceeded",
+                )
+            stored_payload_json = conn.execute(
+                "SELECT payload_json FROM events WHERE event_id = ?",
+                (post_event.event_id,),
+            ).fetchone()[0]
+            try:
+                stored_payload = json.loads(stored_payload_json)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    "redaction confirmation stored payload is invalid"
+                ) from exc
+            if (
+                not isinstance(stored_payload, dict)
+                or make_event_id(
+                    post_event.phase,
+                    stored_payload,
+                    workspace_namespace_id=post_event.workspace_namespace_id,
+                )
+                != post_event.event_id
+            ):
+                raise ValueError(
+                    "redaction confirmation stored payload identity mismatch"
+                )
+
+            enforce_values = conn.execute(
+                f"""
+                SELECT {_REDACTION_PLAN_VALUE_COLUMNS}
+                FROM redaction_plans
+                WHERE plan_id = ?
+                """,
+                (plan_id,),
+            ).fetchone()
+            preview_values = conn.execute(
+                f"""
+                SELECT {_REDACTION_PLAN_VALUE_COLUMNS}
+                FROM redaction_plans
+                WHERE workspace_id = ?
+                  AND pre_event_id = ?
+                  AND analysis_run_id = ?
+                  AND planner_version = ?
+                  AND profile_version = ?
+                  AND mode = 'preview'
+                """,
+                (
+                    post_event.workspace_id,
+                    pre_event_id,
+                    analysis_run_id,
+                    planner_version,
+                    profile_version,
+                ),
+            ).fetchone()
+            preview_plan_id = hashlib.sha256(
+                "\0".join(
+                    (
+                        post_event.workspace_id,
+                        pre_event_id,
+                        analysis_run_id,
+                        planner_version,
+                        profile_version,
+                        "preview",
+                    )
+                ).encode("utf-8")
+            ).hexdigest()
+            if enforce_values is None:
+                raise ValueError("rendered redaction plan is missing")
+            expected_preview_values = list(enforce_values)
+            expected_preview_values[0] = preview_plan_id
+            expected_preview_values[11] = "preview"
+            expected_preview_values[12] = "eligible"
+            expected_preview_values[21] = None
+            expected_preview_values[22] = None
+            expected_preview_values[23] = None
+            if preview_values != tuple(expected_preview_values):
+                raise ValueError(
+                    "rendered redaction plan lacks a verified preview owner"
+                )
+
+            target_limit = REDACTION_PREVIEW_MAX_CRITICAL_FINDINGS + 1
+            enforce_targets = conn.execute(
+                f"""
+                SELECT {_REDACTION_TARGET_VALUE_COLUMNS}
+                FROM redaction_targets
+                WHERE plan_id = ?
+                ORDER BY ordinal
+                LIMIT ?
+                """,
+                (plan_id, target_limit),
+            ).fetchall()
+            preview_targets = conn.execute(
+                f"""
+                SELECT {_REDACTION_TARGET_VALUE_COLUMNS}
+                FROM redaction_targets
+                WHERE plan_id = ?
+                ORDER BY ordinal
+                LIMIT ?
+                """,
+                (preview_plan_id, target_limit),
+            ).fetchall()
+            if (
+                not enforce_targets
+                or len(enforce_targets) > REDACTION_PREVIEW_MAX_CRITICAL_FINDINGS
+                or tuple(row[1:] for row in enforce_targets)
+                != tuple(row[1:] for row in preview_targets)
+            ):
+                raise ValueError("rendered redaction target integrity mismatch")
+
+            if status in {"post_confirmed", "post_mismatch"}:
+                if (
+                    linked_post_event_id is None
+                    or (status == "post_confirmed") != (confirmed_at is not None)
+                ):
+                    raise ValueError(
+                        "redaction confirmation terminal state is invalid"
+                    )
+                if linked_post_event_id == post_event.event_id:
+                    return RedactionPostConfirmationResult(
+                        (
+                            "confirmed"
+                            if status == "post_confirmed"
+                            else "mismatch"
+                        ),
+                        plan_id=plan_id,
+                        replayed=True,
+                    )
+                return RedactionPostConfirmationResult(
+                    "conflict",
+                    plan_id=plan_id,
+                    diagnostic_code="post_observation_already_recorded",
+                )
+            if (
+                status != "rendered"
+                or linked_post_event_id is not None
+                or confirmed_at is not None
+            ):
+                raise ValueError("rendered redaction plan state is invalid")
+
+            comparison = compare_mcp_post_input(
+                tool_name=post_event.tool_name,
+                tool_input=stored_payload.get("tool_input"),
+                profile_id=profile_id,
+                profile_version=profile_version,
+                profile_registry_version=profile_registry_version,
+                rewritten_input_sha256=rewritten_input_sha256,
+                structure_sha256_after=structure_sha256_after,
+                profile_registry=profile_registry,
+            )
+            if comparison.disposition == "unobserved":
+                return RedactionPostConfirmationResult(
+                    "unobserved",
+                    plan_id=plan_id,
+                    diagnostic_code=comparison.diagnostic_code,
+                )
+
+            next_status = (
+                "post_confirmed"
+                if comparison.disposition == "confirmed"
+                else "post_mismatch"
+            )
+            updated = conn.execute(
+                """
+                UPDATE redaction_plans
+                SET
+                    status = ?,
+                    post_event_id = ?,
+                    confirmed_at = CASE
+                        WHEN ? = 'post_confirmed' THEN CURRENT_TIMESTAMP
+                        ELSE NULL
+                    END
+                WHERE plan_id = ?
+                  AND mode = 'enforce'
+                  AND status = 'rendered'
+                  AND rendered_at IS NOT NULL
+                  AND post_event_id IS NULL
+                  AND confirmed_at IS NULL
+                """,
+                (
+                    next_status,
+                    post_event.event_id,
+                    next_status,
+                    plan_id,
+                ),
+            ).rowcount
+            if updated != 1:
+                raise RuntimeError("redaction confirmation state changed")
+            return RedactionPostConfirmationResult(
+                comparison.disposition,
+                plan_id=plan_id,
+            )
 
     def cleanup_redaction_audits(
         self,

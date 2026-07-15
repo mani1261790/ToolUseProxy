@@ -12,6 +12,12 @@ from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
+from hook_monitor.analysis.adapters.mcp_profiles import (
+    DEFAULT_MCP_PROFILE_REGISTRY,
+    McpFieldSpec,
+    McpProfileRegistry,
+    McpToolProfile,
+)
 from hook_monitor.runtime.operations import extract_tool_operations
 from hook_monitor.runtime.parser import (
     build_artifacts,
@@ -168,6 +174,441 @@ class RedactionAuditTest(unittest.TestCase):
             SECRET,
             json.dumps((plan_rows, target_rows), ensure_ascii=False),
         )
+
+    def test_preview_eligible_plan_is_never_post_confirmed(self) -> None:
+        pre_event = self._record(
+            self.workspace_a,
+            tool_use_id="preview-remains-dormant",
+            tool_name=PROFILED_TOOL,
+            tool_input={"content": SECRET},
+        )
+        self._assert_deny_without_rewrite(self._evaluate_mcp(pre_event))
+        post_event = self._record_post(
+            pre_event,
+            tool_input={"content": REDACTION_REPLACEMENT_TEXT},
+        )
+
+        result = self.store.confirm_redaction_post_input(post_event)
+
+        self.assertEqual("not_applicable", result.disposition)
+        assert pre_event.workspace_id is not None
+        plan = self.store.list_redaction_plans(
+            workspace_id=pre_event.workspace_id,
+            tool_use_id="preview-remains-dormant",
+        )[0]
+        self.assertEqual("preview", plan.mode)
+        self.assertEqual("eligible", plan.status)
+        self.assertIsNone(plan.post_event_id)
+        self.assertIsNone(plan.rendered_at)
+        self.assertIsNone(plan.confirmed_at)
+
+    def test_future_rendered_plan_confirms_matching_bounded_post_input(self) -> None:
+        pre_event = self._record(
+            self.workspace_a,
+            tool_use_id="future-rendered-match",
+            tool_name=PROFILED_TOOL,
+            tool_input={"content": SECRET},
+        )
+        self._assert_deny_without_rewrite(self._evaluate_mcp(pre_event))
+        enforce_plan_id = self._simulate_future_rendered_plan(pre_event)
+        post_event = self._record_post(
+            pre_event,
+            tool_input={"content": REDACTION_REPLACEMENT_TEXT},
+        )
+
+        result = self.store.confirm_redaction_post_input(post_event)
+
+        self.assertEqual("confirmed", result.disposition)
+        self.assertEqual(enforce_plan_id, result.plan_id)
+        self.assertFalse(result.replayed)
+        assert pre_event.workspace_id is not None
+        plan = self.store.get_redaction_plan(
+            enforce_plan_id,
+            workspace_id=pre_event.workspace_id,
+        )
+        assert plan is not None
+        self.assertEqual("enforce", plan.mode)
+        self.assertEqual("post_confirmed", plan.status)
+        self.assertEqual(post_event.event_id, plan.post_event_id)
+        self.assertIsNotNone(plan.rendered_at)
+        self.assertIsNotNone(plan.confirmed_at)
+
+        replay = self.store.confirm_redaction_post_input(post_event)
+        self.assertEqual("confirmed", replay.disposition)
+        self.assertTrue(replay.replayed)
+        self.assertEqual(enforce_plan_id, replay.plan_id)
+
+        cleanup = self.store.cleanup_redaction_audits(
+            workspace_id=pre_event.workspace_id,
+            before="2999-01-01 00:00:00",
+            execute=True,
+        )
+        self.assertEqual(2, cleanup.plan_count)
+        self.assertEqual(2, cleanup.target_count)
+        self.assertEqual(
+            [],
+            self.store.list_redaction_plans(
+                workspace_id=pre_event.workspace_id,
+                tool_use_id=pre_event.tool_use_id,
+            ),
+        )
+
+    def test_future_rendered_plan_records_post_input_mismatch_first_wins(self) -> None:
+        pre_event = self._record(
+            self.workspace_a,
+            tool_use_id="future-rendered-mismatch",
+            tool_name=PROFILED_TOOL,
+            tool_input={"content": SECRET},
+        )
+        self._assert_deny_without_rewrite(self._evaluate_mcp(pre_event))
+        enforce_plan_id = self._simulate_future_rendered_plan(pre_event)
+        first_post = self._record_post(
+            pre_event,
+            tool_input={"content": PUBLIC_TEXT},
+        )
+
+        result = self.store.confirm_redaction_post_input(first_post)
+
+        self.assertEqual("mismatch", result.disposition)
+        assert pre_event.workspace_id is not None
+        plan = self.store.get_redaction_plan(
+            enforce_plan_id,
+            workspace_id=pre_event.workspace_id,
+        )
+        assert plan is not None
+        self.assertEqual("post_mismatch", plan.status)
+        self.assertEqual(first_post.event_id, plan.post_event_id)
+        self.assertIsNone(plan.confirmed_at)
+
+        second_post = self._record_post(
+            pre_event,
+            tool_input={"content": REDACTION_REPLACEMENT_TEXT},
+            tool_response={"ok": "second-observation"},
+        )
+        conflict = self.store.confirm_redaction_post_input(second_post)
+        self.assertEqual("conflict", conflict.disposition)
+        self.assertEqual(
+            "earlier_post_event_exists",
+            conflict.diagnostic_code,
+        )
+        unchanged = self.store.get_redaction_plan(
+            enforce_plan_id,
+            workspace_id=pre_event.workspace_id,
+        )
+        assert unchanged is not None
+        self.assertEqual("post_mismatch", unchanged.status)
+        self.assertEqual(first_post.event_id, unchanged.post_event_id)
+
+    def test_unbounded_or_wrong_turn_post_does_not_confirm_rendered_plan(self) -> None:
+        pre_event = self._record(
+            self.workspace_a,
+            tool_use_id="future-rendered-unobserved",
+            tool_name=PROFILED_TOOL,
+            tool_input={"content": SECRET},
+        )
+        self._assert_deny_without_rewrite(self._evaluate_mcp(pre_event))
+        enforce_plan_id = self._simulate_future_rendered_plan(pre_event)
+        oversized_post = self._record_post(
+            pre_event,
+            tool_input={"content": "x" * (33 * 1024)},
+        )
+
+        unobserved = self.store.confirm_redaction_post_input(oversized_post)
+
+        self.assertEqual("unobserved", unobserved.disposition)
+        self.assertEqual("input_bytes_exceeded", unobserved.diagnostic_code)
+        assert pre_event.workspace_id is not None
+        plan = self.store.get_redaction_plan(
+            enforce_plan_id,
+            workspace_id=pre_event.workspace_id,
+        )
+        assert plan is not None
+        self.assertEqual("rendered", plan.status)
+        self.assertIsNone(plan.post_event_id)
+
+    def test_earliest_recorded_post_wins_even_when_confirmed_out_of_order(self) -> None:
+        pre_event = self._record(
+            self.workspace_a,
+            tool_use_id="post-confirmation-sequence-order",
+            tool_name=PROFILED_TOOL,
+            tool_input={"content": SECRET},
+        )
+        self._assert_deny_without_rewrite(self._evaluate_mcp(pre_event))
+        enforce_plan_id = self._simulate_future_rendered_plan(pre_event)
+        first_post = self._record_post(
+            pre_event,
+            tool_input={"content": PUBLIC_TEXT},
+            tool_response={"ok": "first"},
+        )
+        later_post = self._record_post(
+            pre_event,
+            tool_input={"content": REDACTION_REPLACEMENT_TEXT},
+            tool_response={"ok": "later"},
+        )
+
+        later_result = self.store.confirm_redaction_post_input(later_post)
+
+        self.assertEqual("conflict", later_result.disposition)
+        self.assertEqual("earlier_post_event_exists", later_result.diagnostic_code)
+        first_result = self.store.confirm_redaction_post_input(first_post)
+        self.assertEqual("mismatch", first_result.disposition)
+        assert pre_event.workspace_id is not None
+        plan = self.store.get_redaction_plan(
+            enforce_plan_id,
+            workspace_id=pre_event.workspace_id,
+        )
+        assert plan is not None
+        self.assertEqual("post_mismatch", plan.status)
+        self.assertEqual(first_post.event_id, plan.post_event_id)
+
+    def test_stored_post_payload_is_authoritative_over_mutated_event_object(self) -> None:
+        pre_event = self._record(
+            self.workspace_a,
+            tool_use_id="post-confirmation-payload-binding",
+            tool_name=PROFILED_TOOL,
+            tool_input={"content": SECRET},
+        )
+        self._assert_deny_without_rewrite(self._evaluate_mcp(pre_event))
+        enforce_plan_id = self._simulate_future_rendered_plan(pre_event)
+        post_event = self._record_post(
+            pre_event,
+            tool_input={"content": PUBLIC_TEXT},
+        )
+        post_event.raw_payload["tool_input"] = {
+            "content": REDACTION_REPLACEMENT_TEXT
+        }
+
+        result = self.store.confirm_redaction_post_input(post_event)
+
+        self.assertEqual("mismatch", result.disposition)
+        assert pre_event.workspace_id is not None
+        plan = self.store.get_redaction_plan(
+            enforce_plan_id,
+            workspace_id=pre_event.workspace_id,
+        )
+        assert plan is not None
+        self.assertEqual("post_mismatch", plan.status)
+        self.assertEqual(post_event.event_id, plan.post_event_id)
+
+    def test_targetless_rendered_plan_cannot_be_post_confirmed(self) -> None:
+        pre_event = self._record(
+            self.workspace_a,
+            tool_use_id="post-confirmation-target-integrity",
+            tool_name=PROFILED_TOOL,
+            tool_input={"content": SECRET},
+        )
+        self._assert_deny_without_rewrite(self._evaluate_mcp(pre_event))
+        enforce_plan_id = self._simulate_future_rendered_plan(pre_event)
+        with sqlite3.connect(self.db_path) as connection:
+            connection.execute(
+                "DELETE FROM redaction_targets WHERE plan_id = ?",
+                (enforce_plan_id,),
+            )
+        post_event = self._record_post(
+            pre_event,
+            tool_input={"content": REDACTION_REPLACEMENT_TEXT},
+        )
+
+        with self.assertRaisesRegex(ValueError, "target integrity mismatch"):
+            self.store.confirm_redaction_post_input(post_event)
+
+        assert pre_event.workspace_id is not None
+        plan = self.store.get_redaction_plan(
+            enforce_plan_id,
+            workspace_id=pre_event.workspace_id,
+        )
+        assert plan is not None
+        self.assertEqual("rendered", plan.status)
+        self.assertIsNone(plan.post_event_id)
+
+    def test_oversized_stored_post_payload_remains_unobserved(self) -> None:
+        pre_event = self._record(
+            self.workspace_a,
+            tool_use_id="post-confirmation-payload-limit",
+            tool_name=PROFILED_TOOL,
+            tool_input={"content": SECRET},
+        )
+        self._assert_deny_without_rewrite(self._evaluate_mcp(pre_event))
+        enforce_plan_id = self._simulate_future_rendered_plan(pre_event)
+        post_event = self._record_post(
+            pre_event,
+            tool_input={"content": REDACTION_REPLACEMENT_TEXT},
+            tool_response={"body": "x" * (1024 * 1024)},
+        )
+
+        result = self.store.confirm_redaction_post_input(post_event)
+
+        self.assertEqual("unobserved", result.disposition)
+        self.assertEqual("post_payload_bytes_exceeded", result.diagnostic_code)
+        assert pre_event.workspace_id is not None
+        plan = self.store.get_redaction_plan(
+            enforce_plan_id,
+            workspace_id=pre_event.workspace_id,
+        )
+        assert plan is not None
+        self.assertEqual("rendered", plan.status)
+        self.assertIsNone(plan.post_event_id)
+
+    def test_ambiguous_rendered_plans_do_not_transition(self) -> None:
+        pre_event = self._record(
+            self.workspace_a,
+            tool_use_id="post-confirmation-ambiguous-plan",
+            tool_name=PROFILED_TOOL,
+            tool_input={"content": SECRET},
+        )
+        self._assert_deny_without_rewrite(self._evaluate_mcp(pre_event))
+        self._assert_deny_without_rewrite(self._evaluate_mcp(pre_event))
+        assert pre_event.workspace_id is not None
+        previews = self.store.list_redaction_plans(
+            workspace_id=pre_event.workspace_id,
+            tool_use_id=pre_event.tool_use_id,
+        )
+        self.assertEqual(2, len(previews))
+        enforce_ids = tuple(
+            self._simulate_future_rendered_plan(
+                pre_event,
+                preview_plan_id=preview.plan_id,
+            )
+            for preview in previews
+        )
+        post_event = self._record_post(
+            pre_event,
+            tool_input={"content": REDACTION_REPLACEMENT_TEXT},
+        )
+
+        result = self.store.confirm_redaction_post_input(post_event)
+
+        self.assertEqual("conflict", result.disposition)
+        self.assertEqual("ambiguous_rendered_plan", result.diagnostic_code)
+        for plan_id in enforce_ids:
+            plan = self.store.get_redaction_plan(
+                plan_id,
+                workspace_id=pre_event.workspace_id,
+            )
+            assert plan is not None
+            self.assertEqual("rendered", plan.status)
+            self.assertIsNone(plan.post_event_id)
+
+    def test_registry_drift_leaves_rendered_plan_unobserved(self) -> None:
+        pre_event = self._record(
+            self.workspace_a,
+            tool_use_id="post-confirmation-registry-drift",
+            tool_name=PROFILED_TOOL,
+            tool_input={"content": SECRET},
+        )
+        self._assert_deny_without_rewrite(self._evaluate_mcp(pre_event))
+        enforce_plan_id = self._simulate_future_rendered_plan(pre_event)
+        post_event = self._record_post(
+            pre_event,
+            tool_input={"content": REDACTION_REPLACEMENT_TEXT},
+        )
+        unrelated_profile = McpToolProfile(
+            profile_id="example/publish",
+            server="example",
+            tool="publish",
+            sink_type="external_api_call",
+            fields=(
+                McpFieldSpec(
+                    pointer="/content",
+                    value_type="string",
+                    field_class="data",
+                    required=True,
+                    redactable=True,
+                ),
+            ),
+            post_input_stable=True,
+        )
+        drifted_registry = McpProfileRegistry(
+            (*DEFAULT_MCP_PROFILE_REGISTRY.profiles, unrelated_profile)
+        )
+
+        result = self.store.confirm_redaction_post_input(
+            post_event,
+            profile_registry=drifted_registry,
+        )
+
+        self.assertEqual("unobserved", result.disposition)
+        self.assertEqual("profile_version_mismatch", result.diagnostic_code)
+        assert pre_event.workspace_id is not None
+        plan = self.store.get_redaction_plan(
+            enforce_plan_id,
+            workspace_id=pre_event.workspace_id,
+        )
+        assert plan is not None
+        self.assertEqual("rendered", plan.status)
+        self.assertIsNone(plan.post_event_id)
+
+        wrong_turn_post = self._record_post(
+            pre_event,
+            tool_input={"content": REDACTION_REPLACEMENT_TEXT},
+            turn_id="another-turn",
+            tool_response={"ok": "wrong-turn"},
+        )
+        with self.assertRaisesRegex(ValueError, "owner mismatch"):
+            self.store.confirm_redaction_post_input(wrong_turn_post)
+        unchanged = self.store.get_redaction_plan(
+            enforce_plan_id,
+            workspace_id=pre_event.workspace_id,
+        )
+        assert unchanged is not None
+        self.assertEqual("rendered", unchanged.status)
+        self.assertIsNone(unchanged.post_event_id)
+
+    def test_dormant_post_confirmation_stays_read_only_under_writer_lock(self) -> None:
+        pre_event = self._record(
+            self.workspace_a,
+            tool_use_id="post-confirmation-no-plan-lock",
+            tool_name=PROFILED_TOOL,
+            tool_input={"content": PUBLIC_TEXT},
+        )
+        self.assertEqual({}, self._evaluate_mcp(pre_event))
+        post_event = self._record_post(
+            pre_event,
+            tool_input={"content": PUBLIC_TEXT},
+            tool_response={"body": "x" * (2 * 1024 * 1024)},
+        )
+
+        with sqlite3.connect(self.db_path, timeout=0) as blocker:
+            blocker.execute("BEGIN IMMEDIATE")
+            started = time.monotonic()
+            result = self.store.confirm_redaction_post_input(post_event)
+            elapsed = time.monotonic() - started
+            blocker.rollback()
+
+        self.assertEqual("not_applicable", result.disposition)
+        self.assertLess(elapsed, 0.2)
+
+    def test_rendered_post_confirmation_write_lock_fails_fast(self) -> None:
+        pre_event = self._record(
+            self.workspace_a,
+            tool_use_id="post-confirmation-write-lock",
+            tool_name=PROFILED_TOOL,
+            tool_input={"content": SECRET},
+        )
+        self._assert_deny_without_rewrite(self._evaluate_mcp(pre_event))
+        enforce_plan_id = self._simulate_future_rendered_plan(pre_event)
+        post_event = self._record_post(
+            pre_event,
+            tool_input={"content": REDACTION_REPLACEMENT_TEXT},
+        )
+
+        with sqlite3.connect(self.db_path, timeout=0) as blocker:
+            blocker.execute("BEGIN IMMEDIATE")
+            started = time.monotonic()
+            with self.assertRaisesRegex(sqlite3.OperationalError, "locked"):
+                self.store.confirm_redaction_post_input(post_event)
+            elapsed = time.monotonic() - started
+            blocker.rollback()
+
+        self.assertLess(elapsed, 0.2)
+        assert pre_event.workspace_id is not None
+        plan = self.store.get_redaction_plan(
+            enforce_plan_id,
+            workspace_id=pre_event.workspace_id,
+        )
+        assert plan is not None
+        self.assertEqual("rendered", plan.status)
+        self.assertIsNone(plan.post_event_id)
 
     def test_unknown_and_shape_rejected_calls_store_zero_targets(self) -> None:
         cases = (
@@ -1113,6 +1554,163 @@ class RedactionAuditTest(unittest.TestCase):
             list(extraction.operations),
         )
         return event
+
+    def _record_post(
+        self,
+        pre_event,
+        *,
+        tool_input: dict[str, object],
+        turn_id: str | None = None,
+        tool_response: object | None = None,
+    ):
+        payload = {
+            "session_id": pre_event.session_id,
+            "turn_id": turn_id or pre_event.turn_id,
+            "tool_use_id": pre_event.tool_use_id,
+            "tool_name": pre_event.tool_name,
+            "cwd": pre_event.cwd,
+            "tool_input": tool_input,
+            "tool_response": tool_response or {"ok": True},
+        }
+        event = normalize_event("post_tool_use", payload)
+        artifacts = build_artifacts(event)
+        fragments = build_fragments(artifacts)
+        extraction = extract_tool_operations(event, artifacts, fragments)
+        fragments.extend(extraction.fragments)
+        self.store.record(
+            event,
+            artifacts,
+            fragments,
+            list(extraction.operations),
+        )
+        return event
+
+    def _simulate_future_rendered_plan(
+        self,
+        pre_event,
+        *,
+        preview_plan_id: str | None = None,
+    ) -> str:
+        """Seed only the not-yet-built renderer boundary for dormant tests."""
+        assert pre_event.workspace_id is not None
+        previews = self.store.list_redaction_plans(
+            workspace_id=pre_event.workspace_id,
+            tool_use_id=pre_event.tool_use_id,
+        )
+        preview = next(
+            (
+                plan
+                for plan in previews
+                if preview_plan_id is None or plan.plan_id == preview_plan_id
+            ),
+            None,
+        )
+        if preview is None:
+            raise AssertionError("preview plan fixture is missing")
+        enforce_plan_id = hashlib.sha256(
+            "\0".join(
+                (
+                    preview.workspace_id,
+                    preview.pre_event_id,
+                    preview.analysis_run_id,
+                    preview.planner_version,
+                    preview.profile_version,
+                    "enforce",
+                )
+            ).encode("utf-8")
+        ).hexdigest()
+        with sqlite3.connect(self.db_path) as connection:
+            connection.execute(
+                """
+                INSERT INTO redaction_plans (
+                    plan_id,
+                    analysis_run_id,
+                    pre_event_id,
+                    workspace_id,
+                    session_id,
+                    tool_use_id,
+                    tool_name,
+                    adapter,
+                    profile_id,
+                    profile_version,
+                    profile_registry_version,
+                    mode,
+                    status,
+                    planner_version,
+                    original_input_sha256,
+                    rewritten_input_sha256,
+                    structure_sha256_before,
+                    structure_sha256_after,
+                    critical_finding_count,
+                    replacement_count,
+                    rejection_code,
+                    post_event_id,
+                    created_at,
+                    rendered_at,
+                    confirmed_at
+                )
+                SELECT
+                    ?,
+                    analysis_run_id,
+                    pre_event_id,
+                    workspace_id,
+                    session_id,
+                    tool_use_id,
+                    tool_name,
+                    adapter,
+                    profile_id,
+                    profile_version,
+                    profile_registry_version,
+                    'enforce',
+                    'rendered',
+                    planner_version,
+                    original_input_sha256,
+                    rewritten_input_sha256,
+                    structure_sha256_before,
+                    structure_sha256_after,
+                    critical_finding_count,
+                    replacement_count,
+                    NULL,
+                    NULL,
+                    CURRENT_TIMESTAMP,
+                    CURRENT_TIMESTAMP,
+                    NULL
+                FROM redaction_plans
+                WHERE plan_id = ?
+                """,
+                (enforce_plan_id, preview.plan_id),
+            )
+            connection.execute(
+                """
+                INSERT INTO redaction_targets (
+                    plan_id,
+                    ordinal,
+                    finding_id,
+                    decision_id,
+                    source_node_kind,
+                    source_node_id,
+                    sink_node_id,
+                    json_pointer,
+                    original_value_sha256,
+                    replacement_profile
+                )
+                SELECT
+                    ?,
+                    ordinal,
+                    finding_id,
+                    decision_id,
+                    source_node_kind,
+                    source_node_id,
+                    sink_node_id,
+                    json_pointer,
+                    original_value_sha256,
+                    replacement_profile
+                FROM redaction_targets
+                WHERE plan_id = ?
+                """,
+                (enforce_plan_id, preview.plan_id),
+            )
+        return enforce_plan_id
 
     def _evaluate_mcp(self, event):
         return evaluate_pre_tool_hook_policy(

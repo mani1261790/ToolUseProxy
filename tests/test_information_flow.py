@@ -6931,6 +6931,54 @@ class InformationFlowTest(unittest.TestCase):
         self.assertIn("RuntimeError", stderr.getvalue())
         self.assertNotIn(SECRET, stderr.getvalue())
 
+    def test_post_redaction_confirmation_runs_after_event_and_fails_soft(self) -> None:
+        payload = {
+            "session_id": "session-post-redaction-failure",
+            "turn_id": "turn-post-redaction-failure",
+            "tool_use_id": "tool-post-redaction-failure",
+            "tool_name": "mcp__tooluseproxy_e2e__publish_text",
+            "cwd": str(REPO_ROOT),
+            "tool_input": {"content": "public content"},
+            "tool_response": {"ok": True},
+        }
+        stdin = io.TextIOWrapper(io.BytesIO(json.dumps(payload).encode("utf-8")))
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+
+        with (
+            patch("sys.stdin", stdin),
+            patch.dict(
+                os.environ,
+                {"TOOLUSEPROXY_DB_PATH": str(self.db_path)},
+            ),
+            patch.object(
+                EventStore,
+                "confirm_redaction_post_input",
+                side_effect=RuntimeError(SECRET),
+            ),
+            redirect_stdout(stdout),
+            redirect_stderr(stderr),
+        ):
+            exit_code = run_hook("post_tool_use")
+
+        self.assertEqual(0, exit_code)
+        self.assertEqual("", stdout.getvalue())
+        self.assertIn("post-redaction confirmation", stderr.getvalue())
+        self.assertIn("RuntimeError", stderr.getvalue())
+        self.assertNotIn(SECRET, stderr.getvalue())
+        with sqlite3.connect(self.db_path) as connection:
+            stored = connection.execute(
+                """
+                SELECT COUNT(*)
+                FROM events
+                WHERE phase = 'post_tool_use'
+                  AND session_id = ?
+                  AND tool_use_id = ?
+                """,
+                (payload["session_id"], payload["tool_use_id"]),
+            ).fetchone()[0]
+        self.assertEqual(1, stored)
+
     def test_stop_hook_policy_failure_is_sanitized_and_fail_open(self) -> None:
         payload = {
             "session_id": "session-stop-failure",
