@@ -9,6 +9,7 @@ from dataclasses import asdict, replace
 from pathlib import Path
 from unittest.mock import patch
 
+import hook_monitor.policy.redaction_preview as redaction_preview
 from hook_monitor.analysis.adapters.mcp import McpAdapter
 from hook_monitor.analysis.adapters.mcp_profiles import (
     DEFAULT_MCP_PROFILE_REGISTRY,
@@ -1683,6 +1684,73 @@ class RedactionPreviewLimitsTest(unittest.TestCase):
             with self.subTest(options=options):
                 with self.assertRaisesRegex(ValueError, "redaction preview"):
                     RedactionPreviewLimits(**options)
+
+    def test_max_envelope_hashes_original_and_rewritten_structure_once(self) -> None:
+        event, run, sinks, sources, findings, registry = _max_envelope_fixture()
+        with patch(
+            "hook_monitor.policy.redaction_preview._structure_sha256",
+            wraps=redaction_preview._structure_sha256,
+        ) as structure_sha256:
+            result = plan_mcp_redaction_preview(
+                current_event=event,
+                current_sequence_no=SEQUENCE_NO,
+                analysis_run=run,
+                current_sinks=sinks,
+                current_critical_findings=findings,
+                source_chunks=_source_map(event, *sources),
+                profile_registry=registry,
+            )
+
+        self.assertEqual("eligible", result.disposition)
+        self.assertEqual(2, structure_sha256.call_count)
+
+    def test_rewrite_structure_change_keeps_fail_closed_rejection(self) -> None:
+        profile = McpToolProfile(
+            profile_id="fixture/optional-redaction",
+            server="fixture",
+            tool="optional_redaction",
+            sink_type="external_api_call",
+            fields=(
+                McpFieldSpec(
+                    "/content",
+                    "string",
+                    "data",
+                    redactable=True,
+                ),
+            ),
+            post_input_stable=True,
+        )
+        registry = McpProfileRegistry((profile,))
+        event = _event(
+            {"content": SECRET},
+            tool_name="mcp__fixture__optional_redaction",
+        )
+        run = _analysis_run(event)
+        sinks = _sinks(event, profile, registry)
+        source = _source(SECRET)
+        finding = _finding(run, sinks[0], source)
+
+        def remove_target(arguments, _pointer, _replacement):
+            del arguments["content"]
+
+        with patch(
+            "hook_monitor.policy.redaction_preview._replace_top_level_pointer",
+            side_effect=remove_target,
+        ):
+            result = plan_mcp_redaction_preview(
+                current_event=event,
+                current_sequence_no=SEQUENCE_NO,
+                analysis_run=run,
+                current_sinks=sinks,
+                current_critical_findings=(finding,),
+                source_chunks=_source_map(event, source),
+                profile_registry=registry,
+            )
+
+        assert result.plan is not None
+        self.assertEqual("rejected", result.disposition)
+        self.assertEqual("structure_changed", result.plan.rejection_code)
+        self.assertIsNone(result.rewritten_input_json)
 
     def test_max_envelope_three_case_p95_is_below_ten_milliseconds(self) -> None:
         event, run, sinks, sources, findings, registry = _max_envelope_fixture()

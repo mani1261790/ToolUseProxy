@@ -539,6 +539,14 @@ Python 3.9.6 / SQLite 3.54.0のlocal component benchmarkでは、fixture構築�
 
 この変更はoffline CLIとstorage APIだけであり、Hook設定、runner、stdout、policy判断、外部副作用経路を変更していない。そのためWU8単体の実Codex E2Eは追加せず、atomic failure、concurrent Hook writer、workspace CAS、graph reuse、source config raceをlocal integration testで検証した。既存の実Codex deny / allow / Stop契約に新しいruntime分岐はない。
 
+## Pure redaction plannerのsemantic version hot path
+
+WU8後のfull suiteで、既存pure plannerの10 ms p95 guardだけが一時的にmax eligible 20.681 ms、max reject 18.958 msとなった。planner追加時の2.947 / 2.696 msから大きく離れたため、閾値は変更せずcurrent HEAD、planner追加commit、隔離checkoutを比較した。同一codeが数分後に3.9 ms未満へ戻り、wall timeとthread CPU timeの差も小さかったため、直接の発火要因は待ち時間ではなく一時的なeffective CPU speed / host contentionと判断した。
+
+一方、cProfileでは`_validate_sink_coverage()`が32 sinkごとに`profile_version`と`registry_version`を読み、その都度32-field semantic payloadをJSON化してSHA-256する処理がplanner時間の約3/4を占めた。profile / registryはfrozen dataclassとimmutable tupleだけで構成されるため、versionをobjectごとにcacheし、planner内でもcall単位にhoistした。original / rewritten structure hashも、profile revalidationとrejection順序を維持したまま4回から2回へ減らした。可変なfield mapはcacheせず、pickle / deepcopy互換を回帰testで固定した。
+
+fixture構築を除外し、200 warmup後にsingle、max eligible、max rejectを各2,000回interleaveした結果はp95 0.0735 / 0.8107 / 0.5497 msだった。単発maxは1.122 / 17.604 / 9.928 msであり、p95とmaxを混同しない。10 ms p95 guard、50 ms cooperative hard deadline、全finding aggregate、sink metadata / profile version照合、fail-closed rejection codeは変更していない。cache前提を保証するためprofileの全fieldとregistryの全profileをfrozenな正規型に限定し、mutable duck typeはconstructorで拒否する。全300 testsは16.806秒で通過した。この変更はplanner計算の重複除去であり、rendererや`updatedInput`を有効化しないため、実Codex E2Eの副作用契約は変わらない。
+
 ## 次の検証順序
 
 1. 過去runtime判断を再現する具体的な監査要件が生じた場合だけ、bounded evidence capsuleまたはsession checkpointを設計する

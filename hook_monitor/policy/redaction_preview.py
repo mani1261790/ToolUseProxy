@@ -258,6 +258,8 @@ def plan_mcp_redaction_preview(
         return reject("post_input_unstable")
     if len(current_sinks) > limits.input_limits.max_fields:
         return reject("sink_coverage_incomplete")
+    profile_version = profile.profile_version
+    profile_registry_version = profile_registry.registry_version
 
     sink_by_id, sink_errors = _validate_sink_coverage(
         current_event=current_event,
@@ -265,7 +267,8 @@ def plan_mcp_redaction_preview(
         current_sinks=current_sinks,
         tool_input=tool_input,
         profile=profile,
-        profile_registry=profile_registry,
+        profile_version=profile_version,
+        profile_registry_version=profile_registry_version,
     )
     if sink_errors:
         return reject(_primary_rejection(sink_errors))
@@ -394,11 +397,14 @@ def plan_mcp_redaction_preview(
     for pointer in distinct_pointers:
         _replace_top_level_pointer(rewritten_input, pointer, REPLACEMENT_TEXT)
 
+    structure_sha256_after = _structure_sha256(rewritten_input)
     rewrite_error = _validate_rewrite(
         original=tool_input,
         rewritten=rewritten_input,
         target_pointers=frozenset(distinct_pointers),
         profile=profile,
+        structure_sha256_before=structure_sha256_before,
+        structure_sha256_after=structure_sha256_after,
     )
     if rewrite_error is not None:
         return reject(rewrite_error)
@@ -406,9 +412,6 @@ def plan_mcp_redaction_preview(
     if rewritten_input_json is None:
         return reject("profile_revalidation_failed")
     rewritten_input_sha256 = _sha256_bytes(rewritten_input_json)
-    structure_sha256_after = _structure_sha256(rewritten_input)
-    if structure_sha256_after != structure_sha256_before:
-        return reject("structure_changed")
     if _deadline_exceeded(started_ns, limits, monotonic_ns):
         return reject("planner_deadline_exceeded")
 
@@ -430,8 +433,8 @@ def plan_mcp_redaction_preview(
         current_event=current_event,
         analysis_run=analysis_run,
         profile_id=profile.profile_id,
-        profile_version=profile.profile_version,
-        profile_registry_version=profile_registry.registry_version,
+        profile_version=profile_version,
+        profile_registry_version=profile_registry_version,
         status="eligible",
         original_input_sha256=original_input_sha256,
         rewritten_input_sha256=rewritten_input_sha256,
@@ -476,7 +479,8 @@ def _validate_sink_coverage(
     current_sinks: tuple[SinkCandidate, ...],
     tool_input: dict[str, Any],
     profile: McpToolProfile,
-    profile_registry: McpProfileRegistry,
+    profile_version: str,
+    profile_registry_version: str,
 ) -> tuple[dict[str, SinkCandidate], list[str]]:
     errors: list[str] = []
     sink_by_id: dict[str, SinkCandidate] = {}
@@ -512,9 +516,9 @@ def _validate_sink_coverage(
             errors.append("sink_field_metadata_mismatch")
         if (
             metadata.get("profile_id") != profile.profile_id
-            or metadata.get("profile_version") != profile.profile_version
+            or metadata.get("profile_version") != profile_version
             or metadata.get("profile_registry_version")
-            != profile_registry.registry_version
+            != profile_registry_version
         ):
             errors.append("profile_version_mismatch")
         if metadata.get("argument_fragment_kind") != "payload":
@@ -577,10 +581,12 @@ def _validate_rewrite(
     rewritten: dict[str, Any],
     target_pointers: frozenset[str],
     profile: McpToolProfile,
+    structure_sha256_before: str | None,
+    structure_sha256_after: str | None,
 ) -> str | None:
     if not profile.validate(rewritten).accepted:
         return "profile_revalidation_failed"
-    if _structure_sha256(original) != _structure_sha256(rewritten):
+    if structure_sha256_before != structure_sha256_after:
         return "structure_changed"
 
     for field_spec in profile.fields:

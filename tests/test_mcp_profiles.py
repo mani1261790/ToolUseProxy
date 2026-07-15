@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import copy
+import pickle
 import unittest
 from dataclasses import replace
+from unittest.mock import patch
 
+import hook_monitor.analysis.adapters.mcp_profiles as mcp_profiles
 from hook_monitor.analysis.adapters.mcp_profiles import (
     DEFAULT_MCP_INPUT_LIMITS,
     DEFAULT_MCP_PROFILE_REGISTRY,
@@ -115,6 +119,38 @@ class McpProfileTest(unittest.TestCase):
             McpProfileRegistry((changed,)).registry_version,
         )
 
+    def test_immutable_profile_and_registry_versions_are_computed_once(self) -> None:
+        profile = McpToolProfile(
+            profile_id="fixture/cached-version",
+            server="fixture",
+            tool="cached_version",
+            sink_type="external_api_call",
+            fields=(McpFieldSpec("/content", "string", "data"),),
+            post_input_stable=True,
+        )
+        registry = McpProfileRegistry((profile,))
+        original_semantic_version = mcp_profiles._semantic_version
+
+        with patch.object(
+            mcp_profiles,
+            "_semantic_version",
+            wraps=original_semantic_version,
+        ) as semantic_version:
+            first_profile_version = profile.profile_version
+            first_registry_version = registry.registry_version
+            self.assertEqual(first_profile_version, profile.profile_version)
+            self.assertEqual(first_registry_version, registry.registry_version)
+
+        self.assertEqual(2, semantic_version.call_count)
+        self.assertEqual(
+            ["mcp-profile-v1", "mcp-registry-v1"],
+            [call.args[0] for call in semantic_version.call_args_list],
+        )
+        self.assertEqual(profile, copy.deepcopy(profile))
+        self.assertEqual(registry, copy.deepcopy(registry))
+        self.assertEqual(profile, pickle.loads(pickle.dumps(profile)))
+        self.assertEqual(registry, pickle.loads(pickle.dumps(registry)))
+
     def test_registry_rejects_duplicate_identity(self) -> None:
         profile = TOOLUSEPROXY_E2E_PUBLISH_TEXT_PROFILE
         with self.assertRaisesRegex(ValueError, "immutable tuple"):
@@ -128,6 +164,30 @@ class McpProfileTest(unittest.TestCase):
                     replace(profile, server="other", tool="other"),
                 )
             )
+
+    def test_semantic_version_inputs_require_deeply_immutable_types(self) -> None:
+        class MutableField:
+            pointer = "/content"
+            value_type = "string"
+            field_class = "data"
+            required = True
+            redactable = True
+
+        class MutableProfile:
+            profile_id = "fixture/mutable-profile"
+            exact_key = ("fixture", "mutable_profile")
+
+        with self.assertRaisesRegex(ValueError, "immutable field specs"):
+            McpToolProfile(
+                profile_id="fixture/mutable-field",
+                server="fixture",
+                tool="mutable_field",
+                sink_type="external_api_call",
+                fields=(MutableField(),),  # type: ignore[arg-type]
+                post_input_stable=True,
+            )
+        with self.assertRaisesRegex(ValueError, "immutable profiles"):
+            McpProfileRegistry((MutableProfile(),))  # type: ignore[arg-type]
 
     def test_pointer_and_file_invariants_are_enforced(self) -> None:
         self.assertEqual("a~1b~0c", escape_json_pointer_segment("a/b~c"))

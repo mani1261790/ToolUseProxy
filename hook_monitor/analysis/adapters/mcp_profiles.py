@@ -4,6 +4,7 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass
+from functools import cached_property
 from typing import Any
 
 
@@ -76,6 +77,8 @@ class McpToolProfile:
     def __post_init__(self) -> None:
         if not isinstance(self.fields, tuple):
             raise ValueError("MCP profile fields must be an immutable tuple")
+        if any(not isinstance(field, McpFieldSpec) for field in self.fields):
+            raise ValueError("MCP profile fields must be immutable field specs")
         if not self.profile_id or not self.server or not self.tool:
             raise ValueError("MCP profile identity fields must be non-empty")
         if not self.sink_type.startswith("external_"):
@@ -94,7 +97,7 @@ class McpToolProfile:
     def exact_key(self) -> tuple[str, str]:
         return self.server, self.tool
 
-    @property
+    @cached_property
     def profile_version(self) -> str:
         return _semantic_version("mcp-profile-v1", self._semantic_payload())
 
@@ -181,6 +184,10 @@ class McpProfileRegistry:
     def __post_init__(self) -> None:
         if not isinstance(self.profiles, tuple):
             raise ValueError("MCP profile registry must be an immutable tuple")
+        if any(
+            not isinstance(profile, McpToolProfile) for profile in self.profiles
+        ):
+            raise ValueError("MCP profile registry must contain immutable profiles")
         exact_keys = [profile.exact_key for profile in self.profiles]
         profile_ids = [profile.profile_id for profile in self.profiles]
         if len(exact_keys) != len(set(exact_keys)):
@@ -188,7 +195,7 @@ class McpProfileRegistry:
         if len(profile_ids) != len(set(profile_ids)):
             raise ValueError("MCP profile IDs must be unique")
 
-    @property
+    @cached_property
     def registry_version(self) -> str:
         payload = [
             {
