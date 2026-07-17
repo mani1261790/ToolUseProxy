@@ -1,0 +1,45 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "^(Bash|apply_patch|mcp__.*)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${PLUGIN_ROOT}/hooks/run_hook.sh\" pre-tool-use",
+            "commandWindows": "\"%PLUGIN_ROOT%\\hooks\\run_hook.cmd\" pre-tool-use",
+            "timeout": 10,
+            "statusMessage": "Checking local information flow"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "^(Bash|apply_patch|mcp__.*)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${PLUGIN_ROOT}/hooks/run_hook.sh\" post-tool-use",
+            "commandWindows": "\"%PLUGIN_ROOT%\\hooks\\run_hook.cmd\" post-tool-use",
+            "timeout": 10,
+            "statusMessage": "Recording local information flow"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${PLUGIN_ROOT}/hooks/run_hook.sh\" stop",
+            "commandWindows": "\"%PLUGIN_ROOT%\\hooks\\run_hook.cmd\" stop",
+            "timeout": 10,
+            "statusMessage": "Reviewing the final response"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "name": "tooluseproxy",
+  "version": "0.1.0-alpha.1",
+  "description": "Local information-flow tracing and guardrails for Codex tool use.",
+  "author": {
+    "name": "ToolUseProxy contributors",
+    "url": "https://github.com/mani1261790"
+  },
+  "homepage": "https://github.com/mani1261790/ToolUseProxy",
+  "repository": "https://github.com/mani1261790/ToolUseProxy",
+  "keywords": [
+    "codex",
+    "hooks",
+    "information-flow",
+    "security"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "ToolUseProxy",
+    "shortDescription": "Local information-flow guardrails for Codex",
+    "longDescription": "Trace local information flow through Codex tool calls and inspect or stop risky outputs without sending protected source data to a remote service.",
+    "developerName": "ToolUseProxy contributors",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Read",
+      "Write"
+    ],
+    "websiteURL": "https://github.com/mani1261790/ToolUseProxy",
+    "defaultPrompt": [
+      "Set up ToolUseProxy for this workspace.",
+      "Run ToolUseProxy doctor and explain any problem.",
+      "Show the latest ToolUseProxy trace."
+    ],
+    "brandColor": "#2563EB"
+  }
+}

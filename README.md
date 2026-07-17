@@ -67,6 +67,7 @@ API キーや認証情報のように文字列パターンで判別しやすい�
 offline rebuildは、解析結果を先にメモリ上で完成させ、live source/resource/sink/graph、immutable run snapshot、lineage、completionをselected workspace単位の1 transactionでpublishします。入力revision、直前run、graph stateをCASし、失敗時は旧live derived rows/stateを維持します。重いrevision読込はHook writerを塞がず、writer競合はbounded retryします。これはatomicですがshadow generationとpointerの短時間swapではないため、writer phase中はSQLite single-writer境界でHook writeが待つ可能性があります。runtime runはHook latencyと保存量を優先して現在sessionのmutable viewのままであり、全runの履歴copyは行いません。
 
 Hook の構成と接続方法は [docs/設定/Hook設定.md](docs/設定/Hook設定.md) にまとめています。
+package / Codex Plugin の導入手順は [docs/設定/Plugin導入.md](docs/設定/Plugin導入.md) にまとめています。
 ドキュメント全体の索引は [docs/索引.md](docs/索引.md) にまとめています。
 情報流グラフと lineage の設計は [docs/設計/情報流追跡.md](docs/設計/情報流追跡.md) にまとめています。
 tool固有のI/Oを共通グラフへ変換するadapterは [docs/設計/アダプター.md](docs/設計/アダプター.md) にまとめています。

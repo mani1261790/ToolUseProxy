@@ -294,6 +294,7 @@ class WorkspaceIdentityTest(unittest.TestCase):
             nested = root / "packages" / "app"
             nested.mkdir(parents=True)
             db_path = Path(temporary_directory) / "events.db"
+            EventStore(db_path).initialize()
             payload = {
                 "session_id": "session-runner-workspace",
                 "turn_id": "turn-runner-workspace",
@@ -350,6 +351,7 @@ class WorkspaceIdentityTest(unittest.TestCase):
             cwd.mkdir()
             missing_root = Path(temporary_directory) / "missing-root"
             db_path = Path(temporary_directory) / "events.db"
+            EventStore(db_path).initialize()
             command = """*** Begin Patch
 *** Add File: target.txt
 +content

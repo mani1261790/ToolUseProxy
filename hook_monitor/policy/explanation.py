@@ -72,7 +72,7 @@ def _trace_command(
     db_path: Path | None,
     analysis_run_id: str | None,
 ) -> str:
-    parts = ["python3", "scripts/trace_lineage.py"]
+    parts = ["tooluseproxy", "trace"]
     if db_path is not None:
         parts.extend(("--db", str(db_path)))
     if analysis_run_id is not None:

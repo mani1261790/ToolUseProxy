@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import sys
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
-
-from hook_monitor.runtime.runner import run_hook
-
 
 def main() -> int:
-    return run_hook("post_tool_use")
+    entrypoint = Path(__file__).resolve().parents[1] / "tooluseproxy_plugin.py"
+    os.execv(
+        sys.executable,
+        (sys.executable, str(entrypoint), "hook", "post-tool-use"),
+    )
+    return 1
 
 
 if __name__ == "__main__":

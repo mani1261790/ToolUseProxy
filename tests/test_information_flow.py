@@ -5977,7 +5977,7 @@ class InformationFlowTest(unittest.TestCase):
         )
         self.assertIn("findings=1", text_result.stdout)
         self.assertIn("[HIGH] external_http_request", text_result.stdout)
-        self.assertIn("trace: python3 scripts/trace_lineage.py", text_result.stdout)
+        self.assertIn("trace: tooluseproxy trace", text_result.stdout)
         self.assertIn(f"--analysis-run {run_id}", text_result.stdout)
 
         json_result = subprocess.run(
@@ -6318,7 +6318,7 @@ class InformationFlowTest(unittest.TestCase):
         self.assertEqual("block", stop_output["decision"])
         self.assertIn("reason", stop_output)
         self.assertIn("Protected source content appears in the final answer", stop_output["reason"])
-        self.assertIn("Trace: python3 scripts/trace_lineage.py", stop_output["reason"])
+        self.assertIn("Trace: tooluseproxy trace", stop_output["reason"])
         self.assertIn("Source: source_chunk:private-source:0", stop_output["reason"])
         self.assertIn("Sink: final_answer", stop_output["reason"])
 
@@ -6417,7 +6417,7 @@ class InformationFlowTest(unittest.TestCase):
         self.assertEqual("block", payload["decision"])
         self.assertIn("reason", payload)
         self.assertIn("Protected source content appears in the final answer", payload["reason"])
-        self.assertIn(f"Trace: python3 scripts/trace_lineage.py --db {self.db_path}", payload["reason"])
+        self.assertIn(f"Trace: tooluseproxy trace --db {self.db_path}", payload["reason"])
         self.assertIn(f"--analysis-run {run_id}", payload["reason"])
         self.assertNotIn(SECRET, payload["reason"])
 
@@ -6464,7 +6464,7 @@ class InformationFlowTest(unittest.TestCase):
 
         self.assertEqual("block", payload["decision"])
         self.assertIn("Protected source content appears in the final answer", payload["reason"])
-        self.assertIn(f"Trace: python3 scripts/trace_lineage.py --db {self.db_path}", payload["reason"])
+        self.assertIn(f"Trace: tooluseproxy trace --db {self.db_path}", payload["reason"])
         self.assertNotIn(SECRET, payload["reason"])
         with sqlite3.connect(self.db_path) as conn:
             stored_stop = conn.execute(
@@ -6486,7 +6486,7 @@ class InformationFlowTest(unittest.TestCase):
         self.assertEqual(1, len(stored_decisions))
         self.assertEqual("continue_review", stored_decisions[0].action)
         self.assertEqual("final_answer", stored_decisions[0].sink_type)
-        self.assertIn("trace_lineage.py", stored_decisions[0].trace_command)
+        self.assertIn("tooluseproxy trace", stored_decisions[0].trace_command)
         self.assertIn(
             f"--analysis-run {stored_decisions[0].analysis_run_id}",
             stored_decisions[0].trace_command,

@@ -237,8 +237,8 @@ def _finding_to_dict(finding: LeakFinding, db_path: Path) -> dict[str, object]:
 def _trace_command(db_path: Path, finding: LeakFinding) -> str:
     return shlex.join(
         (
-            "python3",
-            "scripts/trace_lineage.py",
+            "tooluseproxy",
+            "trace",
             "--db",
             str(db_path),
             "--analysis-run",

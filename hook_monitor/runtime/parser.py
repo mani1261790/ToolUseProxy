@@ -310,11 +310,16 @@ def normalize_event(
     payload: dict[str, Any],
     *,
     workspace_root: str | None = None,
+    workspace_discovered_by: str | None = None,
 ) -> NormalizedEvent:
     cwd = _optional_str(payload, "cwd")
-    workspace = resolve_workspace(cwd, workspace_root)
+    workspace = resolve_workspace(
+        cwd,
+        workspace_root,
+        discovered_by=workspace_discovered_by,
+    )
     workspace_namespace_id: str | None = None
-    if workspace.discovered_by == "configured_root":
+    if workspace_root is not None:
         assert workspace_root is not None
         workspace_namespace_id = (
             workspace.workspace_id

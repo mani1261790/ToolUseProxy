@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import sys
 from pathlib import Path
 
@@ -29,7 +30,7 @@ from hook_monitor.runtime.pre_tool_policy import (
     pre_tool_adapter,
     render_mcp_input_limit_deny,
 )
-from hook_monitor.runtime.storage import DEFAULT_DB_PATH, EventStore
+from hook_monitor.runtime.storage import EventStore, SchemaCompatibilityError
 from hook_monitor.runtime.snapshot_capture import (
     capture_operation_snapshots,
     limits_from_environment,
@@ -38,8 +39,8 @@ from hook_monitor.runtime.snapshot_capture import (
 from hook_monitor.runtime.stop_policy import evaluate_stop_hook_policy
 from hook_monitor.runtime.tool_outcome import ToolOutcome, classify_post_tool_outcome
 from hook_monitor.runtime.workspace import WORKSPACE_ROOT_ENV, WorkspaceContext, resolve_workspace
+from tooluseproxy.paths import resolve_runtime_paths
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
 PRE_TOOL_RAW_JSON_MAX_BYTES = 1024 * 1024
 PRE_TOOL_RAW_JSON_MAX_DEPTH = 64
 PRE_TOOL_RAW_JSON_MAX_NUMBER_CHARS = 128
@@ -47,7 +48,23 @@ PRE_TOOL_ENVELOPE_STRING_MAX_BYTES = MCP_TOOL_NAME_MAX_BYTES
 PRE_TOOL_ENVELOPE_KEYS = frozenset({"cwd", "tool_name"})
 
 
-def run_hook(phase: str) -> int:
+def run_hook(
+    phase: str,
+    *,
+    db_path: Path | None = None,
+    allow_schema_migration: bool = True,
+) -> int:
+    resolved_db_path = db_path if db_path is not None else _resolve_db_path()
+    store = EventStore(resolved_db_path)
+    if not allow_schema_migration:
+        try:
+            store.require_runtime_schema()
+        except SchemaCompatibilityError as exc:
+            print(
+                _schema_inactive_message(exc),
+                file=sys.stderr,
+            )
+            return 0
     bounded_pre_tool_input = (
         phase == "pre_tool_use"
         and _pre_tool_policy_enabled()
@@ -69,14 +86,27 @@ def run_hook(phase: str) -> int:
         candidate_tool_name = envelope.get("tool_name")
         if parse_mcp_tool_name(candidate_tool_name) is not None:
             raw_mcp_tool_name = candidate_tool_name
+            configured_root = _configured_workspace_root(
+                envelope.get("cwd"),
+                resolved_db_path,
+            )
             raw_mcp_workspace = resolve_workspace(
                 envelope.get("cwd"),
-                os.environ.get(WORKSPACE_ROOT_ENV),
+                configured_root,
+                discovered_by=(
+                    "registered_root"
+                    if configured_root is not None
+                    and os.environ.get(WORKSPACE_ROOT_ENV) is None
+                    else None
+                ),
             )
         elif oversized_envelope.get("tool_name", "").lower().startswith(
             "mcp__"
         ):
-            configured_root = os.environ.get(WORKSPACE_ROOT_ENV)
+            configured_root = _configured_workspace_root(
+                envelope.get("cwd"),
+                resolved_db_path,
+            )
             raw_mcp_workspace = resolve_workspace(
                 envelope.get("cwd"),
                 configured_root,
@@ -141,10 +171,21 @@ def run_hook(phase: str) -> int:
         print(str(exc), file=sys.stderr)
         return 1
 
+    payload_cwd = payload.get("cwd")
+    configured_root = _configured_workspace_root(
+        payload_cwd if isinstance(payload_cwd, str) else None,
+        resolved_db_path,
+    )
     event = normalize_event(
         phase,
         payload,
-        workspace_root=os.environ.get(WORKSPACE_ROOT_ENV),
+        workspace_root=configured_root,
+        workspace_discovered_by=(
+            "registered_root"
+            if configured_root is not None
+            and os.environ.get(WORKSPACE_ROOT_ENV) is None
+            else None
+        ),
     )
     enabled_pre_tool_adapters = _enabled_pre_tool_adapters()
     if (
@@ -167,8 +208,8 @@ def run_hook(phase: str) -> int:
     extraction = extract_tool_operations(event, artifacts, fragments)
     fragments.extend(extraction.fragments)
 
-    store = EventStore(_resolve_db_path())
-    store.initialize()
+    if allow_schema_migration:
+        store.initialize()
     post_outcome: ToolOutcome | None = None
     post_snapshots: list[ResourceSnapshot] = []
     post_operation_ids: tuple[str, ...] = ()
@@ -235,11 +276,22 @@ def run_hook(phase: str) -> int:
 
 
 def _resolve_db_path() -> Path:
-    configured = os.environ.get("TOOLUSEPROXY_DB_PATH")
-    if configured:
-        return Path(configured).expanduser()
-    # Hook の実行 cwd に依存すると DB の保存先がぶれるので、repo 基準で固定する。
-    return REPO_ROOT / DEFAULT_DB_PATH
+    return resolve_runtime_paths().db_path
+
+
+def _configured_workspace_root(cwd: str | None, db_path: Path) -> str | None:
+    explicit_root = os.environ.get(WORKSPACE_ROOT_ENV)
+    if explicit_root is not None:
+        return explicit_root
+    registered_root = EventStore(db_path).find_registered_workspace_root(cwd)
+    if registered_root is None:
+        return None
+    direct_workspace = resolve_workspace(cwd)
+    if direct_workspace.canonical_root == registered_root:
+        # Keep the historical event identity when Codex already reports the
+        # registered root as cwd. Registration is only needed for nested cwd.
+        return None
+    return registered_root
 
 
 def _stop_policy_enabled() -> bool:
@@ -271,6 +323,34 @@ def _report_policy_failure(policy_name: str, exc: Exception) -> None:
         f"{policy_name} policy evaluation failed: {type(exc).__name__}",
         file=sys.stderr,
     )
+
+
+def _schema_inactive_message(exc: SchemaCompatibilityError) -> str:
+    message = f"ToolUseProxy inactive ({exc.code}): {exc}"
+    if exc.code not in {"database_missing", "schema_upgrade_required"}:
+        return message
+    plugin_root = os.environ.get("PLUGIN_ROOT")
+    plugin_data = os.environ.get("PLUGIN_DATA")
+    if not plugin_root or not plugin_data:
+        return message
+    if os.name == "nt":
+        launcher = Path(plugin_root) / "hooks" / "run_cli.cmd"
+        command = (
+            f'"{launcher}" init --codex --data-dir "{plugin_data}"'
+        )
+    else:
+        launcher = Path(plugin_root) / "hooks" / "run_cli.sh"
+        command = " ".join(
+            (
+                "sh",
+                shlex.quote(str(launcher)),
+                "init",
+                "--codex",
+                "--data-dir",
+                shlex.quote(plugin_data),
+            )
+        )
+    return f"{message}\nRun from the workspace root: {command}"
 
 
 def _runtime_policy_workspace_enabled(event: NormalizedEvent) -> bool:

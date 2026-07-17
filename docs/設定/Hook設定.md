@@ -2,6 +2,10 @@
 
 このリポジトリには、Codex の `PreToolUse` / `PostToolUse` / `Stop` に接続するための最小スクリプトを置いています。
 
+新規導入では、ユーザー固有の絶対pathをHook定義へ書かないCodex Plugin方式を推奨します。Pluginはrepository rootの`.codex-plugin/plugin.json`から読み込まれ、既定の`hooks/hooks.json`を使います。Hook commandは`PLUGIN_ROOT`、SQLiteは`PLUGIN_DATA`を参照します。install、trust、初期化の手順は[Plugin導入](Plugin導入.md)を参照してください。
+
+以下の`.codex/hooks.json`方式は、Pluginを使わない既存の研究・開発環境向けのmanual設定です。
+
 ## 参考
 
 - 公式仕様: [Codex Hooks](https://learn.chatgpt.com/docs/hooks.md)
@@ -217,7 +221,7 @@ Codex
   -> PostToolUse: hook_monitor/runtime/tool_outcome.py
                   hook_monitor/runtime/snapshot_capture.py
   -> hook_monitor/runtime/storage.py
-  -> .tooluseproxy/events.db
+  -> PLUGIN_DATA/events.db or configured user data/events.db
   -> PreToolUse: hook_monitor/runtime/pre_tool_policy.py
   -> Stop: hook_monitor/runtime/stop_policy.py
 ```
@@ -453,7 +457,11 @@ source manifestの基準directoryはeventのcanonical workspace rootです。`pr
 
 保存先はローカルの SQLite ファイルです。
 
-- `.tooluseproxy/events.db`
+- Plugin: `PLUGIN_DATA/events.db`
+- 明示指定: `TOOLUSEPROXY_DB_PATH`または`TOOLUSEPROXY_DATA_DIR/events.db`
+- package既定: OSごとのuser data directory配下の`events.db`
+
+repository内の旧`.tooluseproxy/events.db`は自動探索しません。移行する場合は、元DBを残したまま`tooluseproxy init --import-db .tooluseproxy/events.db`を明示的に実行します。
 
 中には主に次のテーブルがあります。
 

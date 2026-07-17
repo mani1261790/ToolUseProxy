@@ -82,6 +82,69 @@ if TYPE_CHECKING:
 
 
 DEFAULT_DB_PATH = Path(".tooluseproxy/events.db")
+CURRENT_SCHEMA_VERSION = 1
+RUNTIME_REQUIRED_TABLES = frozenset(
+    {
+        "analysis_cursors",
+        "analysis_node_snapshots",
+        "analysis_run_flow_edges",
+        "analysis_run_graphs",
+        "analysis_run_nodes",
+        "analysis_runs",
+        "analysis_state",
+        "artifact_fragments",
+        "artifacts",
+        "event_payload_metadata",
+        "events",
+        "flow_edges",
+        "fragment_exact_index",
+        "fragment_shingles",
+        "information_flow_edge_scopes",
+        "information_flow_edges",
+        "lineage_assignments",
+        "policy_decisions",
+        "protected_sources",
+        "redaction_decision_links",
+        "redaction_plans",
+        "redaction_targets",
+        "resource_snapshots",
+        "resource_versions",
+        "runtime_lineage_state",
+        "runtime_source_binding_edges",
+        "sink_candidates",
+        "source_binding_edges",
+        "source_chunks",
+        "tool_operation_outcomes",
+        "tool_operations",
+        "workspace_analysis_state",
+        "workspaces",
+    }
+)
+RUNTIME_REQUIRED_COLUMNS = {
+    "workspaces": frozenset(
+        {"workspace_id", "canonical_root", "lexical_root", "discovered_by"}
+    ),
+    "events": frozenset(
+        {
+            "event_id",
+            "phase",
+            "session_id",
+            "turn_id",
+            "tool_use_id",
+            "tool_name",
+            "cwd",
+            "payload_json",
+            "sequence_no",
+            "workspace_id",
+            "workspace_root",
+            "workspace_lexical_root",
+            "workspace_execution_cwd",
+            "workspace_status",
+            "workspace_source",
+            "workspace_namespace_id",
+        }
+    ),
+}
 LEGACY_DERIVED_WORKSPACE_ID = "legacy_unscoped"
 WORKSPACE_ANALYSIS_INPUT_REVISION_VERSION = "workspace-analysis-input-v1"
 REDACTION_AUDIT_BUSY_TIMEOUT_MS = 10
@@ -111,6 +174,16 @@ _EVENT_PAYLOAD_METADATA_COLUMNS = """
     post_input_sha256,
     post_structure_sha256
 """
+
+
+class SchemaCompatibilityError(RuntimeError):
+    """Raised when a Hook runtime cannot safely use the current database."""
+
+    def __init__(self, code: str, detail: str) -> None:
+        super().__init__(detail)
+        self.code = code
+
+
 _QUALIFIED_PRE_EVENT_PAYLOAD_METADATA_COLUMNS = """
     pre_scope.event_id,
     pre_scope.metadata_version,
@@ -1050,6 +1123,71 @@ class EventStore:
             self._backfill_event_sequence_numbers(conn)
             self._backfill_event_workspaces(conn)
             self._backfill_tool_operation_outcomes(conn)
+            conn.execute(f"PRAGMA user_version = {CURRENT_SCHEMA_VERSION}")
+
+    def require_runtime_schema(self) -> None:
+        """Validate Hook compatibility without DDL, migration, or backfill."""
+        if not self.db_path.is_file():
+            raise SchemaCompatibilityError(
+                "database_missing",
+                "database is not initialized; run 'tooluseproxy init --codex'",
+            )
+        try:
+            uri = f"{self.db_path.resolve().as_uri()}?mode=ro"
+            with sqlite3.connect(uri, uri=True, timeout=0.05) as conn:
+                row = conn.execute("PRAGMA user_version").fetchone()
+                version = 0 if row is None else int(row[0])
+                tables = {
+                    item[0]
+                    for item in conn.execute(
+                        "SELECT name FROM sqlite_master WHERE type = 'table'"
+                    ).fetchall()
+                }
+                columns = {
+                    table: {
+                        item[1]
+                        for item in conn.execute(
+                            f"PRAGMA table_info({table})"
+                        ).fetchall()
+                    }
+                    for table in RUNTIME_REQUIRED_COLUMNS
+                    if table in tables
+                }
+        except sqlite3.Error as exc:
+            raise SchemaCompatibilityError(
+                "database_unreadable",
+                f"database cannot be read: {type(exc).__name__}",
+            ) from None
+        if version < CURRENT_SCHEMA_VERSION:
+            raise SchemaCompatibilityError(
+                "schema_upgrade_required",
+                "database schema requires 'tooluseproxy init --codex'",
+            )
+        if version > CURRENT_SCHEMA_VERSION:
+            raise SchemaCompatibilityError(
+                "schema_too_new",
+                "database schema is newer than this ToolUseProxy runtime",
+            )
+        missing = sorted(RUNTIME_REQUIRED_TABLES - tables)
+        if missing:
+            raise SchemaCompatibilityError(
+                "schema_incomplete",
+                f"database schema is incomplete: {', '.join(missing)}",
+            )
+        incomplete_columns = {
+            table: sorted(required - columns.get(table, set()))
+            for table, required in RUNTIME_REQUIRED_COLUMNS.items()
+            if required - columns.get(table, set())
+        }
+        if incomplete_columns:
+            detail = "; ".join(
+                f"{table} missing {', '.join(missing_columns)}"
+                for table, missing_columns in sorted(incomplete_columns.items())
+            )
+            raise SchemaCompatibilityError(
+                "schema_incomplete",
+                f"database schema is incomplete: {detail}",
+            )
 
     def record(
         self,
@@ -7619,6 +7757,61 @@ class EventStore:
             ).fetchone()
         return None if row is None else _workspace_context_from_registry_row(row)
 
+    def register_workspace(self, workspace: WorkspaceContext) -> None:
+        """Persist an explicitly initialized workspace without fabricating an event."""
+        if not workspace.ready:
+            raise ValueError("only a ready workspace can be registered")
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            self._upsert_workspace(conn, workspace)
+
+    def list_workspaces(self) -> list[WorkspaceContext]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT
+                    workspace_id,
+                    canonical_root,
+                    lexical_root,
+                    discovered_by
+                FROM workspaces
+                ORDER BY canonical_root
+                """
+            ).fetchall()
+        return [_workspace_context_from_registry_row(row) for row in rows]
+
+    def find_registered_workspace_root(self, cwd: str | None) -> str | None:
+        """Return the longest registered root containing cwd without mutating the DB."""
+        execution = resolve_workspace(cwd)
+        if not execution.ready or execution.canonical_root is None:
+            return None
+        if not self.db_path.is_file():
+            return None
+        try:
+            uri = f"{self.db_path.resolve().as_uri()}?mode=ro"
+            with sqlite3.connect(uri, uri=True, timeout=0.05) as conn:
+                rows = conn.execute(
+                    """
+                    SELECT canonical_root
+                    FROM workspaces
+                    ORDER BY LENGTH(canonical_root) DESC, canonical_root
+                    """
+                ).fetchall()
+        except sqlite3.Error:
+            return None
+        for (registered_root,) in rows:
+            try:
+                if (
+                    os.path.commonpath(
+                        (registered_root, execution.canonical_root)
+                    )
+                    == registered_root
+                ):
+                    return str(registered_root)
+            except (TypeError, ValueError):
+                continue
+        return None
+
     def get_runtime_analysis_scope(self, event_id: str) -> RuntimeAnalysisScope:
         with self._connect() as conn:
             row = conn.execute(
@@ -9790,7 +9983,7 @@ def _validate_event_workspace(event: NormalizedEvent) -> None:
         raise ValueError("workspace status is required")
     if not event.workspace_source:
         raise ValueError("workspace source is required")
-    if event.workspace_source == "configured_root":
+    if event.workspace_source in {"configured_root", "registered_root"}:
         if event.workspace_namespace_id is None:
             raise ValueError("configured workspace namespace is required")
         if event.workspace_status == "ready":
@@ -9814,7 +10007,11 @@ def _validate_event_workspace(event: NormalizedEvent) -> None:
         assert event.workspace_id is not None and event.workspace_root is not None
         if make_workspace_id(event.workspace_root) != event.workspace_id:
             raise ValueError("workspace id does not match canonical root")
-        if event.workspace_source not in {"configured_root", "hook_cwd"}:
+        if event.workspace_source not in {
+            "configured_root",
+            "hook_cwd",
+            "registered_root",
+        }:
             raise ValueError("ready workspace event has an invalid source")
         assert event.workspace_execution_cwd is not None
         if not os.path.isabs(event.workspace_root) or not os.path.isabs(
@@ -9834,10 +10031,14 @@ def _validate_event_workspace(event: NormalizedEvent) -> None:
             raise ValueError("workspace execution cwd is outside canonical root")
         configured_root = (
             event.workspace_lexical_root
-            if event.workspace_source == "configured_root"
+            if event.workspace_source in {"configured_root", "registered_root"}
             else None
         )
-        expected_workspace = resolve_workspace(event.cwd, configured_root)
+        expected_workspace = resolve_workspace(
+            event.cwd,
+            configured_root,
+            discovered_by=event.workspace_source,
+        )
         stored_workspace = WorkspaceContext(
             workspace_id=event.workspace_id,
             canonical_root=event.workspace_root,
