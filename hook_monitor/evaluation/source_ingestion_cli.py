@@ -20,7 +20,7 @@ from hook_monitor.evaluation.source_ingestion_dataset import (
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DATASET_ROOT = (
-    REPO_ROOT / "tests" / "fixtures" / "similarity" / "ingestion" / "v2"
+    REPO_ROOT / "tests" / "fixtures" / "similarity" / "ingestion" / "v3"
 )
 
 
@@ -44,7 +44,7 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
     else:
         print(render_source_ingestion_report(report))
-    if args.check and not report["summary"]["parity_passed"]:
+    if args.check and not report["summary"]["quality_gate_passed"]:
         return 1
     return 0
 
@@ -94,7 +94,10 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument(
         "--check",
         action="store_true",
-        help="Return exit code 1 if full/incremental runtime parity fails.",
+        help=(
+            "Return exit code 1 if parity fails, or if a scored v3 quality "
+            "metric regresses."
+        ),
     )
     return parser.parse_args(argv)
 

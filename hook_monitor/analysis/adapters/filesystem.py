@@ -911,6 +911,7 @@ def _select_command_context(
         and context.artifact_role == "tool_input"
         and context.fragment.semantic_role == "command"
         and context.fragment.json_pointer != "/"
+        and context.fragment.fragment_kind != "bash_segment"
     ]
     if not commands:
         return None

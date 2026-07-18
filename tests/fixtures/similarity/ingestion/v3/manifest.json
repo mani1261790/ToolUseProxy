@@ -1,0 +1,9 @@
+{
+  "schema_version": 2,
+  "dataset_id": "tooluseproxy-source-ingestion",
+  "dataset_version": "3.0.0",
+  "description": "Bash submitted-value v3 source-ingestion corpus: selector-aware sources plus ordered static curl operands, segment isolation, and explicit coarse fallback labels.",
+  "files": {
+    "scenarios": "scenarios.jsonl"
+  }
+}

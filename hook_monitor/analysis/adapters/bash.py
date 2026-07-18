@@ -11,7 +11,11 @@ from hook_monitor.analysis.adapters.common import (
     make_submitted_to_edge,
     normalize_tool_name,
 )
-from hook_monitor.analysis.bash_file_parser import BashSegment, parse_bash_command_plan
+from hook_monitor.analysis.bash_file_parser import (
+    BashSegment,
+    bash_segment_command_tokens,
+    parse_bash_command_plan,
+)
 from hook_monitor.runtime.models import ArtifactContext, FlowEdge, SinkCandidate
 from hook_monitor.runtime.operations import bash_segment_fragment_ids
 
@@ -59,9 +63,12 @@ class BashAdapter:
                                 reason="Bash pipeline forwards stdout to the next segment",
                             )
                         )
+                    command_tokens = bash_segment_command_tokens(segment)
+                    if not command_tokens:
+                        continue
                     classification = _classify_segment(
-                        _basename(segment.tokens[0].value),
-                        [token.value for token in segment.tokens],
+                        _basename(command_tokens[0].value),
+                        [token.value for token in command_tokens],
                     )
                     if classification is None:
                         continue
@@ -139,6 +146,12 @@ def _select_command_contexts(group: list[ArtifactContext]) -> list[ArtifactConte
 def _planned_segment_contexts(
     group: list[ArtifactContext],
 ) -> tuple[ArtifactContext, list[tuple[BashSegment, ArtifactContext]]] | None:
+    stored_segment_contexts = [
+        context
+        for context in group
+        if context.phase == "pre_tool_use"
+        and context.fragment.fragment_kind == "bash_segment"
+    ]
     parents = [
         context
         for context in group
@@ -147,6 +160,20 @@ def _planned_segment_contexts(
         and context.fragment.semantic_role == "command"
         and context.fragment.fragment_kind == "operation_container"
     ]
+    if not parents and stored_segment_contexts:
+        parent_ids = {
+            context.fragment.parent_fragment_id
+            for context in stored_segment_contexts
+            if context.fragment.parent_fragment_id is not None
+        }
+        parents = [
+            context
+            for context in group
+            if context.phase == "pre_tool_use"
+            and context.artifact_role == "tool_input"
+            and context.fragment.semantic_role == "command"
+            and context.fragment.fragment_id in parent_ids
+        ]
     if not parents:
         return None
     parent = min(parents, key=lambda context: context.fragment.fragment_id)
@@ -156,9 +183,7 @@ def _planned_segment_contexts(
     ids = bash_segment_fragment_ids(parent.fragment, plan)
     contexts_by_id = {
         context.fragment.fragment_id: context
-        for context in group
-        if context.phase == "pre_tool_use"
-        and context.fragment.fragment_kind == "bash_segment"
+        for context in stored_segment_contexts
     }
     result: list[tuple[BashSegment, ArtifactContext]] = []
     for segment in plan.segments:

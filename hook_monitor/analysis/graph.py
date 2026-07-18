@@ -7,6 +7,7 @@ from itertools import groupby
 from pathlib import Path
 
 from hook_monitor.analysis.adapters.common import make_structured_edge, normalize_tool_name
+from hook_monitor.analysis.bash_submission import extract_bash_http_submissions
 from hook_monitor.analysis.similarity import compare_text, make_shingles
 from hook_monitor.runtime.fragments import is_artifact_root_fragment
 from hook_monitor.runtime.models import (
@@ -140,12 +141,35 @@ def build_source_binding_edges(
     }
     hash_index: dict[tuple[str | None, str], list[str]] = defaultdict(list)
     shingle_index: dict[tuple[str | None, str], set[str]] = defaultdict(set)
+    bash_submission_hash_index: dict[
+        tuple[str | None, str],
+        set[str],
+    ] = defaultdict(set)
+    bash_submission_values: dict[str, tuple[str, ...]] = {}
     for context in canonical_contexts:
         hash_index[(context.workspace_id, context.fragment.text_hash)].append(
             context.fragment.fragment_id
         )
         for shingle in make_shingles(context.fragment.normalized_text):
             shingle_index[(context.workspace_id, shingle)].add(
+                context.fragment.fragment_id
+            )
+        if context.fragment.fragment_kind != "bash_segment":
+            continue
+        projected_values = tuple(
+            value
+            for projection in extract_bash_http_submissions(
+                context.fragment.text
+            )
+            if projection.extraction == "static_values"
+            for value in projection.submitted_values
+        )
+        if not projected_values:
+            continue
+        bash_submission_values[context.fragment.fragment_id] = projected_values
+        for value in projected_values:
+            value_hash = hashlib.sha256(value.encode("utf-8")).hexdigest()
+            bash_submission_hash_index[(context.workspace_id, value_hash)].add(
                 context.fragment.fragment_id
             )
 
@@ -168,6 +192,11 @@ def build_source_binding_edges(
         candidate_ids = set(
             hash_index[(chunk_workspace_id, chunk.text_hash)]
         )
+        candidate_ids.update(
+            bash_submission_hash_index[
+                (chunk_workspace_id, chunk.text_hash)
+            ]
+        )
         overlap_counts: dict[str, int] = defaultdict(int)
         for shingle in make_shingles(chunk.normalized_text):
             for fragment_id in shingle_index[(chunk_workspace_id, shingle)]:
@@ -184,6 +213,22 @@ def build_source_binding_edges(
         matched: dict[str, FlowEdge] = {}
         for fragment_id in candidate_ids:
             context = by_id[fragment_id]
+            if chunk.text in bash_submission_values.get(fragment_id, ()):
+                matched[fragment_id] = _make_edge(
+                    src_kind="source_chunk",
+                    src_id=chunk.chunk_id,
+                    dst_kind="artifact_fragment",
+                    dst_id=context.fragment.fragment_id,
+                    relation="source_binding",
+                    evidence_level="content_exact",
+                    method="bash_submission_exact",
+                    score=1.0,
+                    reason=(
+                        "static curl submission operand exactly matches "
+                        "protected source chunk"
+                    ),
+                )
+                continue
             if context.fragment.fragment_kind == "json_key":
                 if (
                     chunk.text_hash != context.fragment.text_hash
@@ -230,7 +275,7 @@ def build_source_binding_edges(
         matched_ids = set(matched)
         for fragment_id, edge in matched.items():
             matching_predecessors = incoming_from_artifact[fragment_id] & matched_ids
-            if matching_predecessors:
+            if matching_predecessors and edge.method != "bash_submission_exact":
                 continue
             if (
                 target_fragment_ids is not None

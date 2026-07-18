@@ -15,8 +15,12 @@ from hook_monitor.runtime.source_config import (
 )
 
 
-DATASET_SCHEMA_VERSION = 1
-SUPPORTED_DATASET_VERSIONS = frozenset({"1.0.0", "2.0.0"})
+DATASET_SCHEMA_BY_VERSION = {
+    "1.0.0": 1,
+    "2.0.0": 1,
+    "3.0.0": 2,
+}
+SUPPORTED_DATASET_VERSIONS = frozenset(DATASET_SCHEMA_BY_VERSION)
 SUPPORTED_SPLITS = frozenset({"development", "validation"})
 SUPPORTED_PHASES = frozenset({"pre_tool_use", "post_tool_use", "stop"})
 SUPPORTED_ACTIONS = frozenset({"allow", "warn", "block", "continue_review"})
@@ -49,6 +53,7 @@ _SCENARIO_KEYS = frozenset(
         "rationale",
     }
 )
+_SCENARIO_KEYS_V3 = _SCENARIO_KEYS | {"expected_bash_submissions"}
 _SOURCE_KEYS_V1 = frozenset(
     {
         "id",
@@ -101,6 +106,13 @@ class RawHookEvent:
 
 
 @dataclass(frozen=True)
+class ExpectedBashSubmission:
+    segment_index: int
+    extraction: str
+    submitted_values: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class SourceIngestionScenario:
     scenario_id: str
     split: str
@@ -113,6 +125,7 @@ class SourceIngestionScenario:
     observe_only: bool
     tags: tuple[str, ...]
     rationale: str
+    expected_bash_submissions: tuple[ExpectedBashSubmission, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -210,7 +223,10 @@ def _parse_scenario(
     dataset_version: str,
 ) -> SourceIngestionScenario:
     location = f"{path}:{line_no}"
-    _require_exact_keys(record, _SCENARIO_KEYS, location)
+    scenario_keys = (
+        _SCENARIO_KEYS_V3 if dataset_version == "3.0.0" else _SCENARIO_KEYS
+    )
+    _require_exact_keys(record, scenario_keys, location)
     _require_version(record, location, expected_dataset_version=dataset_version)
     if record["provenance"] != "synthetic":
         raise SourceIngestionDatasetError(
@@ -285,6 +301,13 @@ def _parse_scenario(
         raise SourceIngestionDatasetError(
             f"{location}: external sink scenarios must end with a pre_tool_use event"
         )
+    expected_bash_submissions = _parse_expected_bash_submissions(
+        record.get("expected_bash_submissions", []),
+        location,
+        required=dataset_version == "3.0.0" and expected_adapter == "bash",
+        allowed=expected_adapter == "bash",
+        target_event=events[-1],
+    )
     return SourceIngestionScenario(
         scenario_id=scenario_id,
         split=split,
@@ -305,6 +328,7 @@ def _parse_scenario(
             "rationale",
             location,
         ),
+        expected_bash_submissions=expected_bash_submissions,
     )
 
 
@@ -316,7 +340,11 @@ def _parse_source(
 ) -> SourceFixture:
     if not isinstance(value, dict):
         raise SourceIngestionDatasetError(f"{location}: source must be an object")
-    source_keys = _SOURCE_KEYS_V2 if dataset_version == "2.0.0" else _SOURCE_KEYS_V1
+    source_keys = (
+        _SOURCE_KEYS_V2
+        if dataset_version in {"2.0.0", "3.0.0"}
+        else _SOURCE_KEYS_V1
+    )
     _require_exact_keys(value, source_keys, f"{location}.source")
     source_path = _require_relative_source_path(value["path"], location)
     source_type = _require_nonempty_string(
@@ -375,7 +403,7 @@ def _parse_source(
         for tag in raw_policy_tags
     )
     selector = None
-    if dataset_version == "2.0.0":
+    if dataset_version in {"2.0.0", "3.0.0"}:
         try:
             selector = parse_protected_source_selector(
                 value["selector"],
@@ -389,7 +417,7 @@ def _parse_source(
             ) from None
         if selector is None:
             raise SourceIngestionDatasetError(
-                f"{location}: source.selector is required for dataset v2"
+                f"{location}: source.selector is required for dataset {dataset_version}"
             )
     return SourceFixture(
         source_key=_require_identifier(
@@ -409,6 +437,104 @@ def _parse_source(
         protected_values=protected_values,
         selector=selector,
     )
+
+
+def _parse_expected_bash_submissions(
+    value: object,
+    location: object,
+    *,
+    required: bool,
+    allowed: bool,
+    target_event: RawHookEvent,
+) -> tuple[ExpectedBashSubmission, ...]:
+    if not isinstance(value, list) or len(value) > 32:
+        raise SourceIngestionDatasetError(
+            f"{location}: expected_bash_submissions must be a list of at most 32 objects"
+        )
+    if required and not value:
+        raise SourceIngestionDatasetError(
+            f"{location}: Bash scenarios require expected_bash_submissions"
+        )
+    if not allowed and value:
+        raise SourceIngestionDatasetError(
+            f"{location}: expected_bash_submissions is reserved for Bash scenarios"
+        )
+
+    parsed: list[ExpectedBashSubmission] = []
+    previous_index = -1
+    target_text = json.dumps(
+        target_event.payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        allow_nan=False,
+    )
+    expected_keys = frozenset(
+        {"segment_index", "extraction", "submitted_values"}
+    )
+    for index, raw_projection in enumerate(value):
+        projection_location = (
+            f"{location}.expected_bash_submissions[{index}]"
+        )
+        if not isinstance(raw_projection, dict):
+            raise SourceIngestionDatasetError(
+                f"{projection_location}: projection must be an object"
+            )
+        _require_exact_keys(raw_projection, expected_keys, projection_location)
+        segment_index = raw_projection["segment_index"]
+        if type(segment_index) is not int or segment_index < 0:
+            raise SourceIngestionDatasetError(
+                f"{projection_location}: segment_index must be a non-negative integer"
+            )
+        if segment_index <= previous_index:
+            raise SourceIngestionDatasetError(
+                f"{location}: expected Bash segment indexes must be strictly increasing"
+            )
+        previous_index = segment_index
+        extraction = _require_choice(
+            raw_projection["extraction"],
+            "extraction",
+            frozenset({"static_values", "coarse_fallback"}),
+            projection_location,
+        )
+        raw_values = raw_projection["submitted_values"]
+        if not isinstance(raw_values, list) or len(raw_values) > 32:
+            raise SourceIngestionDatasetError(
+                f"{projection_location}: submitted_values must be a list of at most 32 strings"
+            )
+        submitted_values = tuple(
+            _require_nonempty_string(
+                item,
+                "submitted_values",
+                projection_location,
+            )
+            for item in raw_values
+        )
+        if extraction == "static_values" and not submitted_values:
+            raise SourceIngestionDatasetError(
+                f"{projection_location}: static_values requires submitted values"
+            )
+        if extraction == "coarse_fallback" and submitted_values:
+            raise SourceIngestionDatasetError(
+                f"{projection_location}: coarse_fallback cannot declare submitted values"
+            )
+        for submitted_value in submitted_values:
+            _validate_fixture_text(
+                submitted_value,
+                "submitted_values",
+                projection_location,
+            )
+            if submitted_value not in target_text:
+                raise SourceIngestionDatasetError(
+                    f"{projection_location}: submitted value must appear in target event"
+                )
+        parsed.append(
+            ExpectedBashSubmission(
+                segment_index=segment_index,
+                extraction=extraction,
+                submitted_values=submitted_values,
+            )
+        )
+    return tuple(parsed)
 
 
 def _parse_events(value: Any, location: object) -> tuple[RawHookEvent, ...]:
@@ -664,14 +790,15 @@ def _require_version(
     *,
     expected_dataset_version: str | None = None,
 ) -> str:
-    if record.get("schema_version") != DATASET_SCHEMA_VERSION:
-        raise SourceIngestionDatasetError(
-            f"{location}: schema_version must be {DATASET_SCHEMA_VERSION}"
-        )
     dataset_version = record.get("dataset_version")
     if dataset_version not in SUPPORTED_DATASET_VERSIONS:
         raise SourceIngestionDatasetError(
             f"{location}: dataset_version is not supported"
+        )
+    expected_schema_version = DATASET_SCHEMA_BY_VERSION[dataset_version]
+    if record.get("schema_version") != expected_schema_version:
+        raise SourceIngestionDatasetError(
+            f"{location}: schema_version must be {expected_schema_version}"
         )
     if (
         expected_dataset_version is not None

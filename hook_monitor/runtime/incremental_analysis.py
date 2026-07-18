@@ -10,6 +10,7 @@ from hook_monitor.analysis.adapters.registry import (
     run_adapters_incremental,
 )
 from hook_monitor.analysis.chunking import SOURCE_CHUNKER_VERSION
+from hook_monitor.analysis.bash_submission import BASH_SUBMISSION_EXTRACTOR_VERSION
 from hook_monitor.analysis.graph import (
     MAX_LEXICAL_CANDIDATES,
     build_artifact_flow_edges,
@@ -49,7 +50,8 @@ _MCP_PROFILE_GRAPH_VERSION = (
     DEFAULT_MCP_PROFILE_REGISTRY.registry_version.rsplit(":", 1)[-1][:12]
 )
 RUNTIME_GRAPH_DETECTOR_VERSION = (
-    f"runtime-graph-v17-{SOURCE_CHUNKER_VERSION}-"
+    f"runtime-graph-v18-{SOURCE_CHUNKER_VERSION}-"
+    f"{BASH_SUBMISSION_EXTRACTOR_VERSION}-"
     f"mcp-profiles-{_MCP_PROFILE_GRAPH_VERSION}"
 )
 

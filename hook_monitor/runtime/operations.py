@@ -12,6 +12,7 @@ from hook_monitor.analysis.bash_file_parser import (
 )
 from hook_monitor.analysis.patch_parser import PatchOperation, parse_apply_patch
 from hook_monitor.runtime.models import (
+    ArtifactContext,
     ArtifactFragment,
     ArtifactRecord,
     NormalizedEvent,
@@ -26,6 +27,16 @@ class OperationExtraction:
     fragments: tuple[ArtifactFragment, ...]
 
 
+_BASH_OPERATION_TOOL_NAMES = {
+    "bash",
+    "shell",
+    "exec",
+    "command",
+    "terminal",
+    "run_command",
+}
+
+
 def extract_tool_operations(
     event: NormalizedEvent,
     artifacts: list[ArtifactRecord],
@@ -34,23 +45,70 @@ def extract_tool_operations(
     """PreToolUse inputを、永続化できる静的operationへ分解する。"""
     if event.phase != "pre_tool_use":
         return OperationExtraction((), ())
-    normalized_tool_name = re.sub(
-        r"[^a-z0-9]+",
-        "_",
-        (event.tool_name or "").casefold(),
-    ).strip("_")
+    normalized_tool_name = _normalize_tool_name(event.tool_name)
     if normalized_tool_name == "apply_patch":
         return _extract_apply_patch_operations(event, artifacts, fragments)
-    if normalized_tool_name in {
-        "bash",
-        "shell",
-        "exec",
-        "command",
-        "terminal",
-        "run_command",
-    }:
+    if normalized_tool_name in _BASH_OPERATION_TOOL_NAMES:
         return _extract_bash_operations(event, artifacts, fragments)
     return OperationExtraction((), ())
+
+
+def build_missing_bash_segment_fragments(
+    contexts: list[ArtifactContext],
+) -> tuple[ArtifactFragment, ...]:
+    """Recreate deterministic Bash segment fragments for pre-segment logs."""
+    existing_ids = {
+        context.fragment.fragment_id for context in contexts
+    }
+    groups: dict[str, list[ArtifactContext]] = {}
+    for context in contexts:
+        groups.setdefault(context.event_id, []).append(context)
+
+    missing: list[ArtifactFragment] = []
+    ordered_groups = sorted(
+        groups.values(),
+        key=lambda group: (
+            min(context.sequence_no for context in group),
+            min(context.event_id for context in group),
+        ),
+    )
+    for group in ordered_groups:
+        representative = group[0]
+        if (
+            representative.phase != "pre_tool_use"
+            or _normalize_tool_name(representative.tool_name)
+            not in _BASH_OPERATION_TOOL_NAMES
+        ):
+            continue
+        parents = [
+            context.fragment
+            for context in group
+            if context.artifact_role == "tool_input"
+            and context.fragment.semantic_role == "command"
+            and context.fragment.json_pointer != "/"
+            and context.fragment.fragment_kind != "bash_segment"
+        ]
+        if not parents:
+            continue
+        parent = min(parents, key=lambda fragment: fragment.fragment_id)
+        plan = parse_bash_command_plan(parent.text)
+        if plan is None:
+            continue
+        for segment in plan.segments:
+            fragment = make_bash_segment_fragment(parent, segment)
+            if fragment.fragment_id in existing_ids:
+                continue
+            existing_ids.add(fragment.fragment_id)
+            missing.append(fragment)
+    return tuple(missing)
+
+
+def _normalize_tool_name(tool_name: str | None) -> str:
+    return re.sub(
+        r"[^a-z0-9]+",
+        "_",
+        (tool_name or "").casefold(),
+    ).strip("_")
 
 
 def _extract_apply_patch_operations(

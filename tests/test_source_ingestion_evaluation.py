@@ -24,6 +24,9 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 DATASET_ROOT = (
     REPO_ROOT / "tests" / "fixtures" / "similarity" / "ingestion" / "v2"
 )
+DATASET_V3_ROOT = (
+    REPO_ROOT / "tests" / "fixtures" / "similarity" / "ingestion" / "v3"
+)
 CLI_MODULE = "hook_monitor.evaluation.source_ingestion_cli"
 
 
@@ -62,22 +65,19 @@ class SourceIngestionEvaluationTest(unittest.TestCase):
             {key: reach[key] for key in ("tp", "fp", "tn", "fn")},
         )
         self.assertEqual(1.0, reach["f1"])
-        self.assertEqual(0.833333, end_to_end["action_accuracy"])
+        self.assertEqual(1.0, end_to_end["action_accuracy"])
         self.assertEqual(1.0, chunking["exact_value_recall"])
         self.assertEqual(6, chunking["source_chunk_count"])
         self.assertEqual([], reach["false_negative_ids"])
         self.assertEqual([], reach["false_positive_ids"])
-        self.assertEqual(
-            ["dev-ingest-dotenv-bash-01"],
-            end_to_end["action_mismatch_ids"],
-        )
+        self.assertEqual([], end_to_end["action_mismatch_ids"])
         self.assertEqual(1.0, adapters["accuracy"])
         self.assertEqual(6, adapters["matched"])
         self.assertTrue(parity["passed"])
         self.assertEqual(6, parity["case_count"])
         self.assertEqual([], parity["mismatch_ids"])
         self.assertEqual(1.0, report["summary"]["gate_reachability_f1"])
-        self.assertEqual(0.833333, report["summary"]["gate_action_accuracy"])
+        self.assertEqual(1.0, report["summary"]["gate_action_accuracy"])
         self.assertEqual(1.0, report["summary"]["exact_value_chunk_recall"])
         self.assertEqual(1.0, report["summary"]["adapter_coverage_accuracy"])
         self.assertTrue(report["summary"]["parity_passed"])
@@ -108,6 +108,7 @@ class SourceIngestionEvaluationTest(unittest.TestCase):
             "decisions_equal",
             "cursor_equal",
             "outcome_equal",
+            "bash_submissions_equal",
             "full_mode_valid",
             "incremental_mode_valid",
             "passed",
@@ -217,7 +218,9 @@ class SourceIngestionEvaluationTest(unittest.TestCase):
             saved_report = json.loads(output_path.read_text(encoding="utf-8"))
             self.assertEqual(stdout_report, saved_report)
             self.assertEqual("development", saved_report["dataset"]["split"])
+            self.assertEqual("3.0.0", saved_report["dataset"]["version"])
             self.assertTrue(saved_report["summary"]["parity_passed"])
+            self.assertTrue(saved_report["summary"]["quality_gate_passed"])
             self.assertEqual([], list(Path(temporary_directory).glob(".*.tmp")))
 
     def test_cli_rejects_a_missing_dataset_without_a_traceback(self) -> None:
@@ -238,6 +241,81 @@ class SourceIngestionEvaluationTest(unittest.TestCase):
         self.assertEqual(2, result.returncode)
         self.assertIn("missing source-ingestion dataset file", result.stderr)
         self.assertNotIn("Traceback", result.stderr)
+
+
+class SourceIngestionV3EvaluationTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.dataset = load_source_ingestion_dataset(DATASET_V3_ROOT)
+        cls.report = evaluate_source_ingestion(cls.dataset, split=None)
+
+    def test_v3_closes_action_and_extraction_gates_without_false_blocks(
+        self,
+    ) -> None:
+        report = self.report
+        gate = report["metrics"]["end_to_end"]["gate"]
+        reach = gate["reachability"]
+        extraction = report["metrics"]["bash_submission_extraction"]
+        parity = report["metrics"]["full_incremental_parity"]
+
+        self.assertEqual(2, report["schema_version"])
+        self.assertEqual("source-ingestion-evaluation-v3", report["runner_version"])
+        self.assertEqual(20, report["dataset"]["scenario_count"])
+        self.assertEqual(
+            {"tp": 10, "fp": 0, "tn": 10, "fn": 0},
+            {key: reach[key] for key in ("tp", "fp", "tn", "fn")},
+        )
+        self.assertEqual(1.0, reach["f1"])
+        self.assertEqual(1.0, gate["action_accuracy"])
+        self.assertEqual([], gate["false_blocks"])
+        self.assertEqual([], gate["missed_blocks"])
+        self.assertEqual(12, extraction["case_count"])
+        self.assertEqual(1.0, extraction["case_accuracy"])
+        self.assertEqual(13, extraction["segment_count"])
+        self.assertEqual(1.0, extraction["segment_accuracy"])
+        self.assertEqual(10, extraction["static_segment_count"])
+        self.assertEqual(3, extraction["fallback_segment_count"])
+        self.assertEqual(1.0, extraction["fallback_accuracy"])
+        self.assertEqual(11, extraction["expected_value_count"])
+        self.assertEqual(11, extraction["actual_value_count"])
+        self.assertEqual(1.0, extraction["value_precision"])
+        self.assertEqual(1.0, extraction["value_recall"])
+        self.assertEqual(1.0, extraction["value_f1"])
+        self.assertEqual([], extraction["case_mismatch_ids"])
+        self.assertEqual([], extraction["segment_mismatch_ids"])
+        self.assertEqual([], extraction["fallback_mismatch_ids"])
+        self.assertTrue(parity["passed"])
+        self.assertEqual(20, parity["case_count"])
+        self.assertTrue(report["summary"]["quality_gate_passed"])
+
+    def test_v3_report_exposes_counts_but_no_submission_values(self) -> None:
+        serialized = json.dumps(self.report, ensure_ascii=False, sort_keys=True)
+        rendered = render_source_ingestion_report(self.report)
+
+        for scenario in self.dataset.scenarios:
+            for projection in scenario.expected_bash_submissions:
+                for submitted_value in projection.submitted_values:
+                    with self.subTest(
+                        scenario=scenario.scenario_id,
+                        segment=projection.segment_index,
+                    ):
+                        self.assertNotIn(submitted_value, serialized)
+                        self.assertNotIn(submitted_value, rendered)
+        self.assertIn("bash submission extraction", rendered)
+
+    def test_v3_quality_gate_fails_when_extraction_regresses(self) -> None:
+        with patch.object(
+            source_ingestion_evaluation,
+            "extract_bash_http_submissions",
+            return_value=(),
+        ):
+            report = evaluate_source_ingestion(self.dataset, split=None)
+
+        extraction = report["metrics"]["bash_submission_extraction"]
+        self.assertTrue(report["summary"]["parity_passed"])
+        self.assertLess(extraction["case_accuracy"], 1.0)
+        self.assertLess(extraction["segment_accuracy"], 1.0)
+        self.assertFalse(report["summary"]["quality_gate_passed"])
 
 
 if __name__ == "__main__":

@@ -23,12 +23,18 @@ from hook_monitor.analysis.adapters.mcp_profiles import (  # noqa: E402
 )
 from hook_monitor.analysis.lineage import propagate_lineage  # noqa: E402
 from hook_monitor.analysis.chunking import SOURCE_CHUNKER_VERSION  # noqa: E402
+from hook_monitor.analysis.bash_submission import (  # noqa: E402
+    BASH_SUBMISSION_EXTRACTOR_VERSION,
+)
 from hook_monitor.analysis.query import (  # noqa: E402
     AnalysisScopeError,
     resolve_registered_workspace,
 )
 from hook_monitor.analysis.source_index import load_sources_and_chunks  # noqa: E402
 from hook_monitor.runtime.fragments import build_artifact_fragments  # noqa: E402
+from hook_monitor.runtime.operations import (  # noqa: E402
+    build_missing_bash_segment_fragments,
+)
 from hook_monitor.runtime.source_config import DEFAULT_CONFIG_PATH  # noqa: E402
 from hook_monitor.runtime.storage import (  # noqa: E402
     EventStore,
@@ -40,7 +46,8 @@ _MCP_PROFILE_GRAPH_VERSION = (
     DEFAULT_MCP_PROFILE_REGISTRY.registry_version.rsplit(":", 1)[-1][:12]
 )
 DETECTOR_VERSION = (
-    f"artifact-graph-v19-{SOURCE_CHUNKER_VERSION}-"
+    f"artifact-graph-v20-{SOURCE_CHUNKER_VERSION}-"
+    f"{BASH_SUBMISSION_EXTRACTOR_VERSION}-"
     f"mcp-profiles-{_MCP_PROFILE_GRAPH_VERSION}"
 )
 GRAPH_IDENTITY_VERSION = "workspace-graph-v2"
@@ -62,7 +69,7 @@ def main() -> int:
     workspace_id = workspace.workspace_id
     workspace_root = Path(workspace.canonical_root)
 
-    # 旧ログにもfragmentを追加できるよう、artifactからidempotentに補完する。
+    # 旧ログにもgeneric / Bash segment fragmentをidempotentに補完する。
     # 同じworkspaceへHookが書き込んだ場合は、混在した入力をpublishしない。
     for _ in range(3):
         artifacts = store.list_artifacts_for_workspace(workspace_id)
@@ -71,7 +78,11 @@ def main() -> int:
             for artifact in artifacts
             for fragment in build_artifact_fragments(artifact)
         ]
-        store.upsert_artifact_fragments(fragments)
+        store.insert_artifact_fragments_if_missing(fragments)
+        backfill_contexts = store.list_artifact_contexts_for_workspace(workspace_id)
+        store.insert_artifact_fragments_if_missing(
+            list(build_missing_bash_segment_fragments(backfill_contexts))
+        )
         try:
             input_revision = store.get_workspace_analysis_input_revision(workspace_id)
         except ValueError as exc:

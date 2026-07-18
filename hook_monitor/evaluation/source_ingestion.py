@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Sequence
 
+from hook_monitor.analysis.bash_submission import extract_bash_http_submissions
 from hook_monitor.analysis.leak_detection import LeakFinding, detect_leaks
 from hook_monitor.evaluation.source_ingestion_dataset import (
     SourceIngestionDataset,
@@ -55,7 +56,7 @@ from hook_monitor.runtime.source_config import (
 from hook_monitor.runtime.storage import EventStore
 
 
-RUNNER_VERSION = "source-ingestion-evaluation-v2"
+RUNNER_VERSION = "source-ingestion-evaluation-v3"
 DEFAULT_MINIMUM_PATH_SCORE = 0.15
 DEFAULT_FINDING_MIN_SCORE = 0.30
 _ACTION_PRIORITY = {
@@ -80,6 +81,7 @@ class _ExecutionSnapshot:
     finding_signatures: tuple[tuple[Any, ...], ...]
     decision_signatures: tuple[tuple[Any, ...], ...]
     cursor_signature: tuple[Any, ...] | None
+    bash_submission_signatures: tuple[tuple[Any, ...], ...]
 
 
 def evaluate_source_ingestion(
@@ -103,6 +105,10 @@ def evaluate_source_ingestion(
             scenario,
             minimum_path_score=minimum_path_score,
             finding_min_score=finding_min_score,
+        )
+        bash_submission = _compare_bash_submissions(
+            scenario,
+            full.bash_submission_signatures,
         )
         cases.append(
             {
@@ -133,13 +139,31 @@ def evaluate_source_ingestion(
                 ],
                 "full_mode": full.mode,
                 "incremental_mode": incremental.mode,
+                "bash_submission": bash_submission,
             }
         )
         parity_cases.append(_compare_executions(scenario, full, incremental))
 
     metrics = _metrics(cases, parity_cases)
+    gate_end_to_end = metrics["end_to_end"]["gate"]
+    quality_gate_passed = metrics["full_incremental_parity"]["passed"]
+    if dataset.dataset_version == "3.0.0":
+        quality_gate_passed = quality_gate_passed and all(
+            (
+                gate_end_to_end["reachability"]["f1"] == 1.0,
+                gate_end_to_end["action_accuracy"] == 1.0,
+                not gate_end_to_end["false_blocks"],
+                metrics["bash_submission_extraction"]["case_accuracy"]
+                == 1.0,
+                metrics["bash_submission_extraction"]["segment_accuracy"]
+                == 1.0,
+                metrics["bash_submission_extraction"]["value_f1"] == 1.0,
+                metrics["bash_submission_extraction"]["fallback_accuracy"]
+                == 1.0,
+            )
+        )
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "runner_version": RUNNER_VERSION,
         "dataset": {
             "id": dataset.dataset_id,
@@ -167,10 +191,14 @@ def evaluate_source_ingestion(
             "adapter_coverage_accuracy": metrics["adapter_extraction"][
                 "accuracy"
             ],
+            "bash_submission_case_accuracy": metrics[
+                "bash_submission_extraction"
+            ]["case_accuracy"],
             "exact_value_chunk_recall": metrics["chunking"][
                 "exact_value_recall"
             ],
             "parity_passed": metrics["full_incremental_parity"]["passed"],
+            "quality_gate_passed": quality_gate_passed,
             "observe_only_scenarios": sum(item.observe_only for item in scenarios),
         },
         "cases": {
@@ -186,6 +214,7 @@ def render_source_ingestion_report(report: dict[str, Any]) -> str:
     reach = end_to_end["reachability"]
     chunking = report["metrics"]["chunking"]
     adapters = report["metrics"]["adapter_extraction"]
+    bash_submissions = report["metrics"]["bash_submission_extraction"]
     parity = report["metrics"]["full_incremental_parity"]
     lines = [
         (
@@ -208,9 +237,24 @@ def render_source_ingestion_report(report: dict[str, Any]) -> str:
             f"chunks={chunking['source_chunk_count']}"
         ),
         (
-            "adapter extraction "
+            "adapter sink coverage "
             f"accuracy={_format_ratio(adapters['accuracy'])} "
             f"matched={adapters['matched']}/{adapters['case_count']}"
+        ),
+        *(
+            [
+                (
+                    "bash submission extraction "
+                    f"case_accuracy={_format_ratio(bash_submissions['case_accuracy'])} "
+                    f"segment_accuracy="
+                    f"{_format_ratio(bash_submissions['segment_accuracy'])} "
+                    f"value_f1={_format_ratio(bash_submissions['value_f1'])} "
+                    f"fallback_accuracy="
+                    f"{_format_ratio(bash_submissions['fallback_accuracy'])}"
+                )
+            ]
+            if bash_submissions["case_count"]
+            else []
         ),
         (
             f"full/incremental parity={'PASS' if parity['passed'] else 'FAIL'} "
@@ -222,6 +266,7 @@ def render_source_ingestion_report(report: dict[str, Any]) -> str:
             *reach["false_positive_ids"],
             *reach["false_negative_ids"],
             *end_to_end["action_mismatch_ids"],
+            *bash_submissions["case_mismatch_ids"],
         }
     )
     lines.append(f"accuracy mismatches={','.join(failures) if failures else 'none'}")
@@ -516,7 +561,90 @@ def _snapshot_execution(
         finding_signatures=_finding_signatures(findings),
         decision_signatures=_decision_signatures(decisions),
         cursor_signature=_cursor_signature(cursor),
+        bash_submission_signatures=_bash_submission_signatures(target_event),
     )
+
+
+def _bash_submission_signatures(
+    target_event: NormalizedEvent,
+) -> tuple[tuple[Any, ...], ...]:
+    tool_input = target_event.raw_payload.get("tool_input")
+    if not isinstance(tool_input, dict):
+        return ()
+    command = tool_input.get("command")
+    if not isinstance(command, str):
+        return ()
+    return tuple(
+        (
+            projection.segment_index,
+            projection.extraction,
+            projection.submitted_values,
+        )
+        for projection in extract_bash_http_submissions(command)
+    )
+
+
+def _compare_bash_submissions(
+    scenario: SourceIngestionScenario,
+    actual: tuple[tuple[Any, ...], ...],
+) -> dict[str, Any]:
+    expected = tuple(
+        (
+            projection.segment_index,
+            projection.extraction,
+            projection.submitted_values,
+        )
+        for projection in scenario.expected_bash_submissions
+    )
+    expected_by_segment = {item[0]: item for item in expected}
+    actual_by_segment = {item[0]: item for item in actual}
+    segment_indexes = sorted(set(expected_by_segment) | set(actual_by_segment))
+    mismatched_segments = [
+        index
+        for index in segment_indexes
+        if expected_by_segment.get(index) != actual_by_segment.get(index)
+    ]
+    expected_values = {
+        (segment_index, ordinal, value)
+        for segment_index, extraction, values in expected
+        if extraction == "static_values"
+        for ordinal, value in enumerate(values)
+    }
+    actual_values = {
+        (segment_index, ordinal, value)
+        for segment_index, extraction, values in actual
+        if extraction == "static_values"
+        for ordinal, value in enumerate(values)
+    }
+    expected_fallbacks = {
+        segment_index
+        for segment_index, extraction, _values in expected
+        if extraction == "coarse_fallback"
+    }
+    actual_fallbacks = {
+        segment_index
+        for segment_index, extraction, _values in actual
+        if extraction == "coarse_fallback"
+    }
+    return {
+        "scored": bool(expected),
+        "matched": expected == actual,
+        "expected_segment_count": len(expected),
+        "actual_segment_count": len(actual),
+        "segment_comparison_count": len(segment_indexes),
+        "matched_segment_count": len(segment_indexes) - len(mismatched_segments),
+        "mismatched_segment_indexes": mismatched_segments,
+        "expected_value_count": len(expected_values),
+        "actual_value_count": len(actual_values),
+        "value_true_positive_count": len(expected_values & actual_values),
+        "value_false_positive_count": len(actual_values - expected_values),
+        "value_false_negative_count": len(expected_values - actual_values),
+        "expected_fallback_count": len(expected_fallbacks),
+        "actual_fallback_count": len(actual_fallbacks),
+        "matched_fallback_count": len(expected_fallbacks & actual_fallbacks),
+        "fallback_comparison_count": len(expected_fallbacks | actual_fallbacks),
+        "fallback_mismatch": expected_fallbacks != actual_fallbacks,
+    }
 
 
 def _compare_executions(
@@ -548,6 +676,10 @@ def _compare_executions(
         ),
         "cursor_equal": full.cursor_signature == incremental.cursor_signature,
         "outcome_equal": full.outcome == incremental.outcome,
+        "bash_submissions_equal": (
+            full.bash_submission_signatures
+            == incremental.bash_submission_signatures
+        ),
         "full_mode_valid": full.mode == "session-full",
         "incremental_mode_valid": incremental.mode == "session-incremental",
     }
@@ -772,6 +904,7 @@ def _metrics(
                 item["id"] for item in cases if not item["adapter_observed"]
             ),
         },
+        "bash_submission_extraction": _bash_submission_metrics(cases),
         "chunking": {
             "protected_value_count": protected_value_count,
             "exact_value_chunk_count": exact_value_count,
@@ -807,6 +940,110 @@ def _metrics(
             "passed": not mismatches,
             "mismatch_ids": mismatches,
         },
+    }
+
+
+def _bash_submission_metrics(cases: list[dict[str, Any]]) -> dict[str, Any]:
+    scored_cases = [
+        item for item in cases if item["bash_submission"]["scored"]
+    ]
+    case_mismatches = sorted(
+        item["id"]
+        for item in scored_cases
+        if not item["bash_submission"]["matched"]
+    )
+    segment_count = sum(
+        item["bash_submission"]["expected_segment_count"]
+        for item in scored_cases
+    )
+    segment_comparison_count = sum(
+        item["bash_submission"]["segment_comparison_count"]
+        for item in scored_cases
+    )
+    matched_segments = sum(
+        item["bash_submission"]["matched_segment_count"]
+        for item in scored_cases
+    )
+    expected_values = sum(
+        item["bash_submission"]["expected_value_count"]
+        for item in scored_cases
+    )
+    actual_values = sum(
+        item["bash_submission"]["actual_value_count"]
+        for item in scored_cases
+    )
+    value_tp = sum(
+        item["bash_submission"]["value_true_positive_count"]
+        for item in scored_cases
+    )
+    value_fp = sum(
+        item["bash_submission"]["value_false_positive_count"]
+        for item in scored_cases
+    )
+    value_fn = sum(
+        item["bash_submission"]["value_false_negative_count"]
+        for item in scored_cases
+    )
+    value_precision = _optional_ratio(value_tp, value_tp + value_fp)
+    value_recall = _optional_ratio(value_tp, value_tp + value_fn)
+    value_f1 = (
+        _safe_ratio(
+            2 * value_precision * value_recall,
+            value_precision + value_recall,
+        )
+        if value_precision is not None
+        and value_recall is not None
+        and value_precision + value_recall
+        else None
+    )
+    fallback_count = sum(
+        item["bash_submission"]["expected_fallback_count"]
+        for item in scored_cases
+    )
+    fallback_comparison_count = sum(
+        item["bash_submission"]["fallback_comparison_count"]
+        for item in scored_cases
+    )
+    matched_fallbacks = sum(
+        item["bash_submission"]["matched_fallback_count"]
+        for item in scored_cases
+    )
+    segment_mismatch_ids = sorted(
+        f"{item['id']}:{segment_index}"
+        for item in scored_cases
+        for segment_index in item["bash_submission"][
+            "mismatched_segment_indexes"
+        ]
+    )
+    return {
+        "case_count": len(scored_cases),
+        "case_accuracy": _safe_ratio(
+            len(scored_cases) - len(case_mismatches),
+            len(scored_cases),
+        ),
+        "segment_count": segment_count,
+        "segment_accuracy": _safe_ratio(
+            matched_segments,
+            segment_comparison_count,
+        ),
+        "static_segment_count": segment_count - fallback_count,
+        "fallback_segment_count": fallback_count,
+        "fallback_accuracy": _safe_ratio(
+            matched_fallbacks,
+            fallback_comparison_count,
+        ),
+        "expected_value_count": expected_values,
+        "actual_value_count": actual_values,
+        "value_precision": value_precision,
+        "value_recall": value_recall,
+        "value_f1": value_f1,
+        "case_mismatch_ids": case_mismatches,
+        "segment_mismatch_ids": segment_mismatch_ids,
+        "fallback_mismatch_ids": sorted(
+            item["id"]
+            for item in scored_cases
+            if item["bash_submission"]["fallback_mismatch"]
+        ),
     }
 
 

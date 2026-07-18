@@ -2476,6 +2476,46 @@ class EventStore:
                 ],
             )
 
+    def insert_artifact_fragments_if_missing(
+        self,
+        fragments: list[ArtifactFragment],
+    ) -> None:
+        """Backfill generic fragments without replacing richer derived evidence."""
+        with self._connect() as conn:
+            conn.executemany(
+                """
+                INSERT OR IGNORE INTO artifact_fragments (
+                    fragment_id,
+                    artifact_id,
+                    json_pointer,
+                    semantic_role,
+                    text,
+                    text_hash,
+                    normalized_text,
+                    token_count,
+                    fragment_kind,
+                    parent_fragment_id,
+                    operation_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        fragment.fragment_id,
+                        fragment.artifact_id,
+                        fragment.json_pointer,
+                        fragment.semantic_role,
+                        fragment.text,
+                        fragment.text_hash,
+                        fragment.normalized_text,
+                        fragment.token_count,
+                        fragment.fragment_kind,
+                        fragment.parent_fragment_id,
+                        fragment.operation_id,
+                    )
+                    for fragment in fragments
+                ],
+            )
+
     def start_analysis_run(
         self,
         detector_version: str,

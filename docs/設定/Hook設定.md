@@ -336,6 +336,14 @@ TOOLUSEPROXY_PRE_TOOL_POLICY=1 python3 /Users/mani/Developer/ToolUseProxy/hooks/
 TOOLUSEPROXY_PRE_TOOL_POLICY=1 TOOLUSEPROXY_PRE_TOOL_MCP_POLICY=1 python3 /Users/mani/Developer/ToolUseProxy/hooks/monitor_pre_tool.py
 ```
 
+### Bash curl送信値の静的抽出
+
+直接実行される`curl`では、`-d VALUE`、`-dVALUE`と、`--data`、`--data-ascii`、`--data-binary`、`--data-raw`、`--data-urlencode`、`--json`、`--form-string`のseparated / `=`形式をsegment単位で静的解析します。複数operandの順序は保ちますが最終bodyは合成しません。operand全体とprotected source chunkのraw valueが完全一致した場合だけscore 1.0のbindingを作ります。
+
+shell変数、command substitution、glob / brace / tilde展開、body以外のdynamic option / operand、dynamic redirection、unknown option arity、file-backedな`@file` / `@-`、空値、上限超過があれば、そのsegmentの抽出値をすべて破棄して`coarse_fallback`にします。ただし`--data-raw @literal`と`--form-string name=@literal`はcurlが`@`をliteralとして扱うためstaticです。`--data-urlencode`もfile formだけをfallbackにします。fallbackでもexternal sinkと従来のsegment-to-sink / path / pipe evidenceは残しますが、未知のruntime値を秘密値とは仮定しません。
+
+この抽出はshell、subprocess、networkを実行せず、fileも読みません。上限は1 segmentあたり32値、1値32 KiB、合計128 KiBです。projection値を追加fragment、DB row、評価report本文へ複製しません。
+
 MCP Hookのmatcherは、たとえば`^mcp__.*$`、または対象を絞った`^mcp__github__.*$`を使用します。実CodexのMCP payloadは`tool_name: mcp__<server>__<tool>`で、`tool_input`にはMCP toolへ渡すraw argumentsが入ります。adapterが外部送信と分類するwrite-like toolだけがsinkとなり、read-only toolは記録して通過させます。MCP tool名はUTF-8で4 KiBを上限とし、超過時はartifact / sinkをmaterializeする前に`tool_name_bytes_exceeded`でdenyします。tool名自体が1 MiBのraw read上限を跨いで後続`cwd`を読めない場合も、明示`TOOLUSEPROXY_WORKSPACE_ROOT`が有効ならそのrootだけを早期deny scopeとして検証します。
 
 現在eventの`event_id`、`sequence_no`、`tool_use_id`、adapter種別が一致するexternal sinkだけを評価します。過去eventの未解消findingを理由に現在の呼出しを止めません。
@@ -542,6 +550,8 @@ selector省略時は従来どおり全decoded string valueを保護します。s
 
 selectorが限定するのはdirect content-bindingです。登録pathそのものをRead、copy、`cat ... | curl`、または意味を証明できないtransformへ渡した場合、fileがselected secretを内包するためpath-based taintは保守的に維持します。public siblingのliteralを直接送るだけなら保護対象にしませんが、protected file全体を経由した操作をpublicとは推定しません。
 
+直接実行される`curl`の静的body optionでは、送信operandとselected secret valueが完全一致した場合だけ、command全体の長さに影響されないcritical bindingを作ります。shell変数やcommand substitutionは展開せず、unknown option、`@file` / `@-`、上限超過を含むsegmentは値単位の証明をせず従来のsegment-level evidenceへ戻します。抽出値は追加の永続rowや評価reportへ保存しません。
+
 JSONの例:
 
 ```json
@@ -635,6 +645,7 @@ python3 /Users/mani/Developer/ToolUseProxy/scripts/rebuild_lineage.py \
 
 - hook 実行時の記録経路を変えたいなら `hook_monitor/runtime/`
 - 類似度計算や source 追跡を変えたいなら `hook_monitor/analysis/`
+- Bash curl送信値の静的抽出を変えたいなら `hook_monitor/analysis/bash_submission.py`
 - 情報流エッジを強化したいなら `analysis` 側に拡張を足す
 
 現在の`hook_monitor/`は記録の骨格に加え、workspace・session差分graph、漏えい検知、Stop継続、Bash/MCP PreToolUse deny、operation単位lineage、PostToolUse snapshot、複数workspace分離、offline run snapshotとatomic publish、MCP exact profileと全scalar value / JSON key sink coverageまでを接続しています。PermissionRequestは実payloadとdeny / allowを評価しましたが、PreToolUseの代替にならず、payloadにstableなcall IDがなく、`allow`が通常承認を自動通過させるため、production Hookには設定しません。将来接続する場合もdeny-onlyの独立adapterとし、判断なしは空stdoutでCodex本来の承認へ委ねます。redactはblockを維持するpure preview planner、immutableなhash-only audit、future renderer向けのdormant decision linkage、rendered planだけを対象にしたPost confirmationまでDBへ追加しました。runnerはprepare APIやrendererを呼ばず、Hook stdoutは従来のdenyのままで`updatedInput`をrenderしません。複数rewrite競合のgateが解消するまでproduction Hookへruntime rewriteを追加しません。詳細は [Redact設計](../設計/Redact.md) を参照してください。

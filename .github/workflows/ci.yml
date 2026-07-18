@@ -51,7 +51,7 @@ jobs:
       - name: Check source-ingestion runtime parity
         run: >-
           python -m hook_monitor.evaluation.source_ingestion_cli
-          --dataset tests/fixtures/similarity/ingestion/v2
+          --dataset tests/fixtures/similarity/ingestion/v3
           --split all
           --format text
           --check

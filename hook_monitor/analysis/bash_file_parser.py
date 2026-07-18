@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -20,6 +19,8 @@ class ShellToken:
     is_operator: bool
     start: int
     end: int
+    is_static_literal: bool = True
+    is_assignment_word: bool = False
 
 
 @dataclass(frozen=True)
@@ -67,9 +68,6 @@ _UNSUPPORTED_COMMAND_WORDS = {
     "until",
     "while",
 }
-_ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=.*", flags=re.DOTALL)
-
-
 def parse_bash_command_plan(command: str) -> BashCommandPlan | None:
     """理解できる静的shell構造だけをsegment付きplanへ変換する。"""
     tokens = _shell_tokens(command)
@@ -101,6 +99,8 @@ def parse_bash_command_plan(command: str) -> BashCommandPlan | None:
     raw_segments.append(
         _make_segment(command, len(raw_segments), connector_from, current)
     )
+    if any(_segment_has_malformed_redirection(segment) for segment in raw_segments):
+        return None
     if any(_segment_has_unsupported_command(segment) for segment in raw_segments):
         return None
 
@@ -128,6 +128,33 @@ def parse_bash_file_operations(command: str) -> list[BashFileOperation]:
     return [operation for segment in plan.segments for operation in segment.operations]
 
 
+def bash_segment_argv_tokens(segment: BashSegment) -> tuple[ShellToken, ...]:
+    """Return shell argv words while excluding redirection syntax and operands."""
+    ignored = _redirect_operand_indexes(segment.tokens)
+    return tuple(
+        token
+        for index, token in enumerate(segment.tokens)
+        if index not in ignored and not token.is_operator
+    )
+
+
+def bash_segment_command_tokens(segment: BashSegment) -> tuple[ShellToken, ...]:
+    """Return argv words beginning at the direct command after assignments."""
+    words = bash_segment_argv_tokens(segment)
+    command_index = 0
+    while command_index < len(words) and words[command_index].is_assignment_word:
+        command_index += 1
+    return words[command_index:]
+
+
+def bash_segment_redirection_tokens(segment: BashSegment) -> tuple[ShellToken, ...]:
+    """Return redirection operators, descriptors, and operands."""
+    indexes = _redirect_operand_indexes(segment.tokens)
+    return tuple(
+        token for index, token in enumerate(segment.tokens) if index in indexes
+    )
+
+
 def _shell_tokens(command: str) -> list[ShellToken] | None:
     if "\n" in command or "\r" in command:
         return None
@@ -135,12 +162,13 @@ def _shell_tokens(command: str) -> list[ShellToken] | None:
     tokens: list[ShellToken] = []
     value: list[str] = []
     token_start: int | None = None
+    token_is_static_literal = True
     quote: str | None = None
     escaped = False
     index = 0
 
     def finish(end: int) -> None:
-        nonlocal value, token_start
+        nonlocal value, token_start, token_is_static_literal
         if token_start is None:
             return
         tokens.append(
@@ -149,10 +177,15 @@ def _shell_tokens(command: str) -> list[ShellToken] | None:
                 is_operator=False,
                 start=token_start,
                 end=end,
+                is_static_literal=token_is_static_literal,
+                is_assignment_word=_is_shell_assignment_word(
+                    command[token_start:end]
+                ),
             )
         )
         value = []
         token_start = None
+        token_is_static_literal = True
 
     while index < len(command):
         char = command[index]
@@ -165,7 +198,17 @@ def _shell_tokens(command: str) -> list[ShellToken] | None:
             if char == quote:
                 quote = None
             elif char == "\\" and quote == '"':
-                escaped = True
+                if index + 1 >= len(command):
+                    return None
+                following = command[index + 1]
+                if following in {'$', '`', '"', "\\"}:
+                    value.append(following)
+                    index += 2
+                    continue
+                value.append("\\")
+            elif quote == '"' and char in {"$", "`", "!"}:
+                token_is_static_literal = False
+                value.append(char)
             else:
                 value.append(char)
             index += 1
@@ -200,6 +243,8 @@ def _shell_tokens(command: str) -> list[ShellToken] | None:
                     is_operator=True,
                     start=index,
                     end=index + len(operator),
+                    is_static_literal=True,
+                    is_assignment_word=False,
                 )
             )
             index += len(operator)
@@ -207,6 +252,12 @@ def _shell_tokens(command: str) -> list[ShellToken] | None:
 
         if token_start is None:
             token_start = index
+            if char == "~":
+                token_is_static_literal = False
+        if char in {"$", "`", "!", "*", "?", "[", "]", "{", "}"}:
+            token_is_static_literal = False
+        if char == "\0" or ord(char) < 32 or ord(char) == 127:
+            token_is_static_literal = False
         value.append(char)
         index += 1
 
@@ -239,6 +290,29 @@ def _operator_at(command: str, index: int) -> str | None:
     return None
 
 
+def _is_shell_assignment_word(raw_token: str) -> bool:
+    """Recognize only an unquoted shell NAME= / NAME+= prefix.
+
+    Quotes and backslashes are valid in the value after ``=``, but using them
+    in the name or around the equals sign turns the token into a command word.
+    Looking at the decoded token would lose that distinction.
+    """
+    if not raw_token or not _is_ascii_name_start(raw_token[0]):
+        return False
+    index = 1
+    while index < len(raw_token) and _is_ascii_name_character(raw_token[index]):
+        index += 1
+    return raw_token.startswith("=", index) or raw_token.startswith("+=", index)
+
+
+def _is_ascii_name_start(character: str) -> bool:
+    return character == "_" or "A" <= character <= "Z" or "a" <= character <= "z"
+
+
+def _is_ascii_name_character(character: str) -> bool:
+    return _is_ascii_name_start(character) or "0" <= character <= "9"
+
+
 def _make_segment(
     command: str,
     index: int,
@@ -269,7 +343,7 @@ def _segment_has_unsupported_command(segment: BashSegment) -> bool:
     for index, token in enumerate(segment.tokens):
         if index in ignored or token.is_operator:
             continue
-        if not words and _ASSIGNMENT.fullmatch(token.value):
+        if not words and token.is_assignment_word:
             continue
         words.append(token.value)
     if not words:
@@ -287,6 +361,18 @@ def _segment_has_unsupported_command(segment: BashSegment) -> bool:
             return False
         command = Path(words[command_index]).name or words[command_index]
     return command in _CWD_MUTATORS
+
+
+def _segment_has_malformed_redirection(segment: BashSegment) -> bool:
+    return any(
+        token.is_operator
+        and token.value in _REDIRECTIONS
+        and (
+            index + 1 >= len(segment.tokens)
+            or segment.tokens[index + 1].is_operator
+        )
+        for index, token in enumerate(segment.tokens)
+    )
 
 
 def _redirection_operations(segment: BashSegment) -> list[BashFileOperation]:

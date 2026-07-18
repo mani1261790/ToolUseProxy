@@ -23,14 +23,17 @@ DATASET_ROOT = (
 DATASET_V2_ROOT = (
     REPO_ROOT / "tests" / "fixtures" / "similarity" / "ingestion" / "v2"
 )
+DATASET_V3_ROOT = (
+    REPO_ROOT / "tests" / "fixtures" / "similarity" / "ingestion" / "v3"
+)
 SYNTHETIC_VALUE_PATTERN = re.compile(r"^C\.[A-Z0-9][A-Za-z0-9._/-]+$")
 
 
 @contextmanager
-def copied_dataset() -> Iterator[Path]:
+def copied_dataset(source: Path = DATASET_ROOT) -> Iterator[Path]:
     temporary = tempfile.TemporaryDirectory()
-    root = Path(temporary.name) / "v1"
-    shutil.copytree(DATASET_ROOT, root)
+    root = Path(temporary.name) / source.name
+    shutil.copytree(source, root)
     try:
         yield root
     finally:
@@ -132,6 +135,70 @@ class SourceIngestionDatasetTest(unittest.TestCase):
                     new.source.protected_values,
                 )
 
+    def test_version_three_preserves_v2_and_adds_scored_bash_contract(
+        self,
+    ) -> None:
+        selected = load_source_ingestion_dataset(DATASET_V2_ROOT)
+        submitted = load_source_ingestion_dataset(DATASET_V3_ROOT)
+
+        self.assertEqual("3.0.0", submitted.dataset_version)
+        self.assertEqual(
+            "9fec2f91e1ea39d9e3471723c4cf9ac6418b3ce3553ce45e3bc1670867b5ebfb",
+            submitted.digest_sha256,
+        )
+        self.assertEqual(20, len(submitted.scenarios))
+        self.assertEqual(10, len(submitted.select_scenarios("development")))
+        self.assertEqual(10, len(submitted.select_scenarios("validation")))
+        for old, new in zip(
+            selected.scenarios,
+            submitted.scenarios[: len(selected.scenarios)],
+            strict=True,
+        ):
+            with self.subTest(scenario=new.scenario_id):
+                self.assertEqual(old.scenario_id, new.scenario_id)
+                self.assertEqual(old.source, new.source)
+                self.assertEqual(old.events, new.events)
+                self.assertEqual(old.should_reach_sink, new.should_reach_sink)
+                self.assertEqual(old.expected_action, new.expected_action)
+
+        bash_scenarios = [
+            scenario
+            for scenario in submitted.scenarios
+            if scenario.expected_adapter == "bash"
+        ]
+        projections = [
+            projection
+            for scenario in bash_scenarios
+            for projection in scenario.expected_bash_submissions
+        ]
+        self.assertEqual(12, len(bash_scenarios))
+        self.assertEqual(13, len(projections))
+        self.assertEqual(
+            10,
+            sum(item.extraction == "static_values" for item in projections),
+        )
+        self.assertEqual(
+            3,
+            sum(item.extraction == "coarse_fallback" for item in projections),
+        )
+        self.assertEqual(
+            11,
+            sum(len(item.submitted_values) for item in projections),
+        )
+        self.assertTrue(
+            all(
+                scenario.expected_bash_submissions
+                for scenario in bash_scenarios
+            )
+        )
+        self.assertTrue(
+            all(
+                not scenario.expected_bash_submissions
+                for scenario in submitted.scenarios
+                if scenario.expected_adapter != "bash"
+            )
+        )
+
     def test_scored_fixture_text_uses_neutral_synthetic_values(self) -> None:
         dataset = load_source_ingestion_dataset(DATASET_ROOT)
 
@@ -187,6 +254,54 @@ class SourceIngestionDatasetTest(unittest.TestCase):
             with self.subTest(expected_message=expected_message):
                 with copied_dataset() as root:
                     mutate(root)
+                    with self.assertRaisesRegex(
+                        SourceIngestionDatasetError,
+                        expected_message,
+                    ):
+                        load_source_ingestion_dataset(root)
+
+    def test_v3_loader_rejects_invalid_bash_submission_contracts(self) -> None:
+        mutations = (
+            (
+                "missing=expected_bash_submissions",
+                lambda records: records[0].pop("expected_bash_submissions"),
+            ),
+            (
+                "coarse_fallback cannot declare submitted values",
+                lambda records: records[0]["expected_bash_submissions"][0].update(
+                    {
+                        "extraction": "coarse_fallback",
+                        "submitted_values": ["C.SYNTHETIC_VALUE"],
+                    }
+                ),
+            ),
+            (
+                "reserved for Bash scenarios",
+                lambda records: records[2].__setitem__(
+                    "expected_bash_submissions",
+                    [
+                        {
+                            "segment_index": 0,
+                            "extraction": "static_values",
+                            "submitted_values": ["C.SYNTHETIC_VALUE"],
+                        }
+                    ],
+                ),
+            ),
+            (
+                "submitted value must appear in target event",
+                lambda records: records[0]["expected_bash_submissions"][0].update(
+                    {"submitted_values": ["C.NOT_IN_TARGET_EVENT"]}
+                ),
+            ),
+        )
+        for expected_message, mutate in mutations:
+            with self.subTest(expected_message=expected_message):
+                with copied_dataset(DATASET_V3_ROOT) as root:
+                    path = root / "scenarios.jsonl"
+                    records = read_jsonl(path)
+                    mutate(records)
+                    write_jsonl(path, records)
                     with self.assertRaisesRegex(
                         SourceIngestionDatasetError,
                         expected_message,
