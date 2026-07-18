@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "dataset_id": "tooluseproxy-similarity",
+  "dataset_version": "1.0.0",
+  "description": "Synthetic labeled examples for offline similarity and lineage evaluation.",
+  "files": {
+    "pairs": "pairs.jsonl",
+    "scenarios": "scenarios.jsonl"
+  }
+}
