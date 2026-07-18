@@ -6,9 +6,17 @@ ToolUseProxyのCodex Pluginは、repository rootを自己完結したPlugin bund
 
 - Python 3.11以上
 - macOS: local package、relocated Plugin bundle、Codex CLIのisolated local marketplace installを自動検証
-- Linux: launcherとdata-directory規約を実装済み。clean environment CIは未検証
+- Linux: Ubuntu CIでpackage、relocated Plugin bundle、wheelのcheckout外実行を検証。Codex CLI marketplace installの実環境E2Eは未検証
 - Windows: `py -3.11`を使うlauncherを同梱。実機検証は未完了で、protected-source登録workflow全体は現在未対応
 - Hook内network access、remote embedding、telemetry: なし
+
+Python 3.12のCI契約、Windows実機、install / update / removeのcross-platform E2Eはpublic alphaまでの残作業です。最新の優先順位は[実装タスク計画](../運用/実装タスク.md)を参照してください。
+
+## 現在versionと更新
+
+現在versionは`0.1.0-alpha.3`です。類似度profile v2とruntime graph v19を導入しています。既存sessionを次に解析する際は古いcandidate indexを使い続けず、そのsessionのgraphとindexを一度全再構築します。
+
+SQLite schemaはv4のままなので、alpha.3への更新だけを理由にDB migrationや`init`を再実行する必要はありません。将来SQLite schema更新を伴うreleaseで`doctor` / `status`がupgrade必要と報告した場合だけ、Hook外で明示的な`init --codex`を実行します。更新後は新しいHook definitionをreview・trustして新しいtaskを開始し、`doctor` / `status`を実行してください。
 
 ## install
 
@@ -114,7 +122,7 @@ Plugin更新でprotected-source detector versionが変わると、更新前の`p
 
 reject / ignoreの抑止は同じfile内容とdetector versionの組に限定されるため、旧versionのnegative reviewは新versionの候補を抑止しません。一方、すでに`approved`となりmanifestへ登録されたsourceはuser-owned manifestをauthorityとして維持し、detector更新だけを理由に削除・再登録・selector変更しません。更新前に開始済みの`approving`または完了済み`approved`候補へ同じexact approve入力を再送する操作は、途中停止からのdurability recoveryに限って許可されます。新しい提案の承認には流用しません。
 
-`PLUGIN_DATA`のcandidate / review監査はPlugin code更新後も保持します。通常のHookは候補scan、candidate migration、manifest変更を行いません。Plugin更新後は新しいHook definitionをreview・trustして新しいtaskを開始し、`doctor` / `status`を実行してからpending候補を再scanしてください。`0.1.0-alpha.3`は類似度profile v2とruntime graph v19を導入します。既存sessionを次に解析する際は古いcandidate indexを使い続けず、そのsessionのgraphとindexを一度全再構築します。SQLite schemaはv4のままなので、この更新だけを理由にDB migrationや`init`を再実行する必要はありません。将来SQLite schema更新を伴うreleaseで`doctor` / `status`がupgrade必要と報告した場合だけ、Hook外で明示的な`init --codex`を実行します。
+`PLUGIN_DATA`のcandidate / review監査はPlugin code更新後も保持します。通常のHookは候補scan、candidate migration、manifest変更を行いません。Plugin更新後は[現在versionと更新](#現在versionと更新)の手順を行ってからpending候補を再scanしてください。
 
 ### 明示pathのfallbackと候補承認
 
@@ -162,6 +170,8 @@ release artifactは、古い`build/`や`.DS_Store`を混入させないclean sta
 python3.11 scripts/build_package.py --outdir dist --sdist
 ```
 
+現行sdistはruntimeに不要な一部testを含む一方、そのfixtureを含まないため、public alphaのartifact契約としては未確定です。公開前にruntime allowlistへ固定し、Python 3.11 / 3.12でcheckout外installをCI検証します。immutable tag、checksum、SBOM、release notes、LICENSE / privacyを含むrelease gateは[実装タスク計画](../運用/実装タスク.md)と[#19](https://github.com/mani1261790/ToolUseProxy/issues/19)で管理します。
+
 ## disable / uninstall
 
 Pluginを外すときはCodexのPlugin commandを使います。
@@ -172,6 +182,8 @@ codex plugin marketplace remove tooluseproxy
 ```
 
 現段階では、Pluginをremoveしてもlocal監査dataを自動削除しません。保持・削除を選べる`tooluseproxy uninstall`は未実装です。dataを削除する場合も、対象の`PLUGIN_DATA`を確認し、明示的なユーザー承認を得てから行ってください。
+
+upgrade / rollbackとdata retentionを含むlifecycle E2Eもpublic alphaのrelease gateです。
 
 ## trustとfailure時の挙動
 

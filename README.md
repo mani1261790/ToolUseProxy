@@ -1,103 +1,111 @@
 # ToolUseProxy
 
-Codex の tool use における情報の流れを追跡し、ローカルの秘密情報が外部へ流出する過程を検知・制御するための研究プロジェクトです。
+Codexのtool useをローカルで観測し、protected sourceから外部toolや最終回答までの情報流を追跡・検知・制御するための研究実装です。
 
-## 背景
+> 現在は`0.1.0-alpha.3`です。中核機能は動作しますが、公開release、配布物の供給網、cross-platform E2Eはまだ整備中です。
 
-LLM コーディングエージェントは、ローカルファイルの読み書き、shell 実行、Git 操作、Web 検索、MCP tool の呼び出しなどを組み合わせて開発を進めます。その過程では、エージェントが一度読み取った未公開コード、研究ノート、Git diff、実験ログ、`.env` などの情報が、後続の tool input や最終回答へ意図せず含まれる可能性があります。
+- [Codex Pluginとして試す](docs/設定/Plugin導入.md)
+- [現在地と実装ロードマップ](docs/運用/実装タスク.md)
+- [ドキュメント索引](docs/索引.md)
+- [GitHub Project](https://github.com/users/mani1261790/projects/1)
 
-API キーや認証情報のように文字列パターンで判別しやすい秘密だけでなく、未公開の実装方針や研究中のアイデアのように、由来や文脈によって private になる情報も対象です。このような情報は、出力された文字列だけを調べても秘密だと判断できない場合があります。
+## できること
 
-本プロジェクトでは、情報が「どの入力や tool result から来て、どの tool input や出力へ移ったのか」を記録し、その情報流を根拠として流出を検知する方法を検討します。最初から遮断機能を作るのではなく、次の3段階で研究と実装を進めます。
+- Codexの`PreToolUse` / `PostToolUse` / `Stop`をSQLiteへ記録する
+- exact、substring、token-equivalent、shingle類似度とtool固有adapterから情報流グラフを構築する
+- `.env` / JSONなどのprotected sourceを起点にlineageと漏えい候補を説明する
+- opt-in時にcriticalなBash / MCP外部送信を実行前にdenyする
+- final answerのcritical findingを`continue_review`で差し戻す
+- coding agentが値を表示せず候補を提案し、ユーザーの明示承認後だけmanifestへ原子的に登録する
 
-## 研究ロードマップ
-
-### 1. 情報流を追跡可能にする
-
-まず、Codex が扱う入力・tool use・出力を観測し、情報がどのように受け渡されたかを再構成できる状態を目指します。
-
-- Codex の event と Hooks の実装・データ形式を解析する
-- 必要に応じて MCP call に対象を絞り、tool の入出力を取得する方法を調査する
-- tool の入出力間でコサイン類似度が情報流の推定に使えるか検証する
-- コサイン類似度で不十分な場合は、完全一致、部分一致、n-gram、embedding などの手法を比較する
-- 類似度や一致関係をもとに、入力から中間出力、最終出力までの情報の流れをたどる
-- 入力・中間出力・最終出力に一意な ID を付与する
-- 共通のイベントログ形式を設計する
-- イベントログを時系列で保存する
-- 情報流をグラフとして表現・可視化する
-
-この段階では「漏えいかどうか」の判定よりも、後から情報の経路を説明できることを優先します。
-
-### 2. 情報流から流出を検知する
-
-追跡可能になった情報流を使い、秘密情報源から外部への流れを判定します。
-
-- 情報流の源泉に、事前に指定した秘密情報源が含まれるかを調べる
-- 秘密情報源との一致度や類似度から流出を検知する
-- API キーや認証情報など、明確な秘密情報の流出も検知する
-- プロンプト、tool input、tool output、最終回答を別々の検知点として扱う
-- 判定ログに、検知理由と根拠になった情報流を残す
-- secret canary を埋め込み、追跡・検知できるか実験する
-- 誤検知と見逃しの事例を収集する
-- ベンチマーク用の正常シナリオと攻撃シナリオを作成する
-
-検知結果だけでなく、「どの秘密情報源から、どのイベントを経由して、どこへ到達したため危険と判断したのか」を説明できることを目標とします。
-
-### 3. 情報流出を Stop する
-
-流出を十分に検知できるようになった後、危険な tool use の実行前に介入します。
-
-- MCP call などの実行前に DLP チェックを挟む
-- 危険度に応じて、許可・ユーザー確認・マスク・遮断を切り替える
-- tool arguments から秘密情報に該当する部分を削除または置換する
-- ユーザー確認を必要とする条件を定義する
-- ブロック時の代替応答を設計する
-- 誤遮断を安全に解除する方法を設計する
-- 遮断の理由と対象になった情報流をログに残す
-- Codex Hooks、OpenClaw、または外部プロキシとの接続方法を検討する
+Hook内のnetwork access、remote embedding、telemetryは使いません。runtimeによるtool inputの書換えは、複数Hook間で最終入力を証明できないため意図的に無効です。
 
 ## 現在地
 
-現在は第3段階の実行時介入へ進み、外部tool送信とCodex最終応答をgraph上の出口として扱っています。Codexの`PreToolUse` / `PostToolUse` / `Stop` HooksからeventとartifactをSQLiteへ記録し、artifact fragment間の類似関係とadapterが作るstructured edgeから情報流グラフを構築します。`apply_patch`はfile operation単位、Bashは静的に理解できるsegment単位へ分解し、成功を確認できた`PostToolUse`では変更対象pathだけをbounded snapshotの候補にします。snapshot本文は既定で保存せず、安定して全体を読み取れたファイルのSHA-256をresource versionへ接続します。operation outcomeとsnapshotもsession差分解析へ統合しています。
+| 領域 | 状態 | 現在の境界 |
+| --- | --- | --- |
+| 1. Trace | 中核完了 | event / artifact / resource / sinkをworkspace・session単位で追跡し、再現可能な解析runを保存 |
+| 2. Detect | 中核完了 | protected source binding、lineage、finding、policy、類似度profile v2を実装 |
+| 3. Stop | alpha実装済み | Stopの`continue_review`と、opt-inのBash / MCP PreToolUse denyを提供。runtime redactは無効 |
+| Plugin化 | alpha.3 | installable package、relocatable Plugin、`PLUGIN_ROOT` / `PLUGIN_DATA`、初期化・診断・traceを実装 |
+| protected source登録 | 明示承認型を実装済み | `scan` / `suggest` → exact proposal → `approve` / `reject` / `ignore`。無承認登録はしない |
+| Public alpha | 準備中 | immutable release、LICENSE / privacy、checksum / SBOM、upgrade / rollback、cross-platform E2Eが未完了 |
 
-`scripts/detect_leaks.py`はsource lineageが`sink_candidate`へ到達した場合にfindingを出し、`scripts/evaluate_policy.py`は`allow` / `warn` / `block` / `continue_review`へ変換します。実Hookでは、Stopが`final_answer`漏えい候補を`continue_review`で差し戻し、opt-inのBashとMCP PreToolUseがcriticalなexternal sinkを`permissionDecision: deny`で実行前遮断します。MCPは追加のopt-inを必要とし、write-like toolだけを対象にします。両方ともworkspace・session単位の差分解析を共有し、介入判断は`policy_decisions`へ保存します。
+設計全体は[アーキテクチャ概要](docs/設計/アーキテクチャ.md)、詳細な完了範囲と残作業は[実装タスク計画](docs/運用/実装タスク.md)を参照してください。
 
-複数workspaceの分離も実装済みです。明示したcanonical workspace rootをidentityとし、event、source、cursor、resource、edge、解析runをworkspaceごとに分離します。runtimeは現在eventのworkspaceとsessionだけを更新し、offline CLIは`--analysis-run ID`または`--workspace-root PATH --latest`の明示を必須にします。completed offline runはedgeだけでなくnode metadataもcontent-addressed snapshotとして保持するため、後からlive DBのnodeが変わっても過去runを再現できます。`PermissionRequest`は実payload、公式実装、実Codexのdeny / allowを検証した結果、PreToolUseの代替にならず、現時点では汎用runtime接続を追加しないと判断しました。redactは現行Codexの複数rewrite競合を考慮してruntime rewriteへは接続せず、versioned MCP exact profile、全argument scalar value / JSON keyのsink coverage、call内全critical findingをまとめるpreview planner、hash-only監査保存、future renderer向けのdormant decision linkageとPost confirmationまで実装しました。PreToolUseはcurrent callのcritical findingを全件確定した後にplannerを呼び、findingが参照するworkspace-owned source chunk IDだけを32件以下で取得します。bounded envelope内のeligible / rejected planと全targetはimmutableな1 transactionで保存し、新規insert前に完了runのcurrent-call critical lineageとpure planner結果を再構成して完全一致を確認します。dormant prepare APIはeligible previewから`enforce / eligible` planとtarget exact cloneを作り、元BLOCK decisionからversion付きで導出した全finding分のREDACT identityをhash-only linkへ同じtransactionで保存・再読込します。これは監査側の準備完了であり、実行許可やstdout生成を意味しません。Post confirmationは記録済みPost eventの後で、exact call scope、stable profile、bounded canonical input、verified preview clone、全decision linkを照合しますが、現行preview planとprepared planは一切遷移させません。record時は保存JSONのUTF-8 byte数・SHA-256、sequence、call-scope hash、boundedなPost input hash/statusをwideなevent rowと分離したimmutable sidecarへ同一transactionで保存します。confirmationはplanがある場合も`events` tableを読まず、sidecarだけでowner・最初のPost・1 MiB上限・input hashを再証明します。source取得、planner、保存、prepare、confirmationの失敗時も先に生成したdenyやPost event本体を維持します。final sidecar直前の実Codex E2Eでは、public MCP callはPre / Post各1件、metadata 2件、server call 1件でplanなし、protected callはPre 1件、metadata 1件、Post / server call各0件、eligible preview 1件のままblockされることを確認しました。final hash-only sidecarとdormant linkageはruntime配線を増やしておらず、実Codex再試行はusage limitでturn開始前に止まったため未完了ですが、実Hook entrypointを含むlocal回帰で同じdeny / no-rewrite契約を検証しています。Codex 0.142.5の複数rewriterはHook内から最終採用inputを証明できないため、Hook stdoutへ`updatedInput`は返しません。
+## Pluginを試す
 
-protected sourceの登録は、coding agentがmanifestを直接書き換えるのではなく、明示的に実行するvalue-freeな`protect scan`または明示pathの`protect suggest`と、ユーザー承認後の`protect approve`に分離しています。`scan`は依存関係・VCS・cacheなどを除外したworkspaceを固定上限内でoffline探索し、値を出さずに`.env` / `.env.*` / JSON候補を1件ずつ提示します。sourceとmanifestは変更しませんが、local runtime DBにvalue-freeな候補・監査と内部再検証用のsource hash/statを保存します。workspace lockをDB上の`proposed`→`approving`予約からmanifest更新、DB確定まで保持し、expected manifest hashによる楽観的な事前条件とatomic replaceを通過した場合だけ`protected_sources.json`へ追加します。候補を1件承認するとmanifest hashが変わるため、agentは次の候補を扱う前にscanを再実行し、更新された提案へ別の明示承認を得ます。schema省略またはschema v1のlegacy manifestはruntimeで読み続けますが、新規登録前にvalue-freeな`protect migrate plan`を提示し、ユーザーがそのexact planを明示承認した後だけ`protect migrate apply`でv2へ移します。移行は既存entry、selector、保護semanticsを変えず、schema宣言と、`sources`欠損時だけ意味的に等価な空配列を補います。元manifestのexact-byte backupをdata directory内へprivateに保存した上で、出力をUTF-8・2-space indent・LFへ正規化します。manifest移行の承認は後続source登録の承認を兼ねません。この登録・移行workflowは現在POSIX（macOS/Linux）対応です。同一UIDの非協調的な外部editorはworkspace lockに従わないため、filesystemの最終再検証から置換まで、またはdurability再確認から確定までの競合を含む直列化は保証外です。`init`やHook中のworkspace探索、一括承認、無承認の自動登録、暗黙migrationは行いません。
+Python 3.11以上とCodex CLIを用意し、現在のcheckoutをlocal marketplaceとして追加します。
 
-Plugin更新でprotected-source detectorが変わった場合、更新前の未承認proposalは再利用しません。古い`proposed`候補のID / opaque revisionによるapprove、reject、ignoreはmanifest・候補・reviewを変更せず終了するため、agentは`protect scan`を再実行し、現在のdetectorが作った新しい候補を提示して改めて承認を得ます。reject / ignoreはfile内容とdetector versionの組にだけ適用され、旧versionの判断は新versionを抑止しません。すでに承認されmanifestへ登録されたsourceは更新後も保持し、Hookや`init`がdetector変更を理由に書き換えません。
+```bash
+codex plugin marketplace add /absolute/path/to/ToolUseProxy
+codex plugin add tooluseproxy@tooluseproxy
+```
 
-offline rebuildは、解析結果を先にメモリ上で完成させ、live source/resource/sink/graph、immutable run snapshot、lineage、completionをselected workspace単位の1 transactionでpublishします。入力revision、直前run、graph stateをCASし、失敗時は旧live derived rows/stateを維持します。重いrevision読込はHook writerを塞がず、writer競合はbounded retryします。これはatomicですがshadow generationとpointerの短時間swapではないため、writer phase中はSQLite single-writer境界でHook writeが待つ可能性があります。runtime runはHook latencyと保存量を優先して現在sessionのmutable viewのままであり、全runの履歴copyは行いません。
+Codexが表示するHook definitionを確認してtrustし、新しいtaskを開始します。Pluginが示す`PLUGIN_ROOT` / `PLUGIN_DATA`を使って、対象workspaceで初期化と診断を行います。
 
-Hook の構成と接続方法は [docs/設定/Hook設定.md](docs/設定/Hook設定.md) にまとめています。
-package / Codex Plugin の導入手順は [docs/設定/Plugin導入.md](docs/設定/Plugin導入.md) にまとめています。
-ドキュメント全体の索引は [docs/索引.md](docs/索引.md) にまとめています。
-情報流グラフと lineage の設計は [docs/設計/情報流追跡.md](docs/設計/情報流追跡.md) にまとめています。
-tool固有のI/Oを共通グラフへ変換するadapterは [docs/設計/アダプター.md](docs/設計/アダプター.md) にまとめています。
-外部流出候補を表す SinkCandidate と adapter の関係は [docs/設計/外部流出候補.md](docs/設計/外部流出候補.md) にまとめています。
-情報流から漏えい候補を検知する設計とCLIは [docs/設計/漏えい検知.md](docs/設計/漏えい検知.md) にまとめています。
-検知結果を実行判断へ変換するpolicy判断は [docs/設計/Policy判断.md](docs/設計/Policy判断.md) にまとめています。
-tool inputの安全な書換境界とpreview-first rolloutは [docs/設計/Redact.md](docs/設計/Redact.md) にまとめています。
-情報流グラフの経路確認とMermaid/DOT出力は [docs/設計/可視化.md](docs/設計/可視化.md) にまとめています。
-関連文献の整理は [docs/調査/関連文献.md](docs/調査/関連文献.md) にまとめています。
-次に実装するタスクは [docs/運用/実装タスク.md](docs/運用/実装タスク.md) にまとめています。
+```bash
+sh "<PLUGIN_ROOT>/hooks/run_cli.sh" init --codex --data-dir "<PLUGIN_DATA>"
+sh "<PLUGIN_ROOT>/hooks/run_cli.sh" doctor --workspace "$PWD" --data-dir "<PLUGIN_DATA>"
+sh "<PLUGIN_ROOT>/hooks/run_cli.sh" status --workspace "$PWD" --data-dir "<PLUGIN_DATA>"
+```
+
+これは開発版の導入方法です。可変なremote `main`を実行元にせず、公開配布時はimmutableなtag / artifactへpinします。protected sourceの候補発見・承認、更新、削除時のdata保持を含む完全な手順は[Plugin導入](docs/設定/Plugin導入.md)にあります。
+
+## 安全側の既定値
+
+- 初期化前、壊れた設定、未知のschemaではHookをfail-openし、Hook中にmigrationしない
+- protected sourceは`init`やHookから自動登録しない
+- 候補の本文・値・source hash・absolute pathをagent向け出力へ含めない
+- PreToolUse blockとMCP blockは既定で無効
+- runtime redact / `updatedInput`は無効
+- local監査dataをPlugin削除時に自動削除しない
+
+## 品質ゲート
+
+類似度profile v2はversioned synthetic corpusで次を固定しています。
+
+- 38 pair、9 E2E scenario、16 candidate retrieval pool
+- pair precision / recall / F1: `1.0`
+- artifact recall@50、source recall@200: `1.0`
+- E2E reachability / action: `1.0`
+- false block、privacy exposure: `0`
+- full / incremental parity: `9 / 9`
+
+dataset digestは`241a4f536ea53694b8172accc5a528961673a843983f99702651357cff3619b3`です。再現方法、split、既知の限界は[類似度評価](docs/運用/類似度評価.md)に記録しています。
+
+## 次に進めること
+
+優先順位の正本は[実装タスク計画](docs/運用/実装タスク.md)とGitHub Issues / Projectです。
+
+1. [#19](https://github.com/mani1261790/ToolUseProxy/issues/19): sdist内容、Python 3.11 / 3.12 CI、LICENSE / privacy、support matrixを固定する
+2. [#19](https://github.com/mani1261790/ToolUseProxy/issues/19): alpha.3をimmutableなartifactから実Codexへ導入し、trustからblock・trace・removeまでdogfoodする
+3. [#20](https://github.com/mani1261790/ToolUseProxy/issues/20): 長い英字の公開compound誤検知と有限candidate capをadversarial corpusで改善・検証する
+4. [#18](https://github.com/mani1261790/ToolUseProxy/issues/18): protected source onboardingを実Plugin E2Eで閉じ、runtime observed-pathやauto-enrollは別の研究判断として扱う
+5. [#19](https://github.com/mani1261790/ToolUseProxy/issues/19): checksum / SBOM / release notes、upgrade / rollback、uninstall / retentionを揃えてpre-release化する
+
+## 研究の考え方
+
+API keyのように文字列patternで判別しやすい秘密だけでなく、未公開コード、研究ノート、Git diff、設計方針など「由来によってprivateになる情報」を対象にします。そのため、出力文字列だけを見るのではなく、どの入力・tool resultからどのtool input・最終回答へ移ったかを根拠に判断します。
+
+研究は次の順に進めてきました。
+
+1. Trace: 情報流を後から再構成できるようにする
+2. Detect: protected sourceからsinkまでの到達を検知・説明する
+3. Stop: 十分な根拠がある境界だけ、確認・差戻し・遮断へ接続する
+
+現在は3段階の中核を維持しながら、第三者が安全に導入・更新・削除できるproductizationと、未知の反例に対するprecision hardeningへ進んでいます。
+
+## 対象
+
+- 未公開のソースコードやGit diff
+- 研究ノート、Markdownメモ、実験ログ
+- `.env`、SSH config、認証情報
+- local database
+- 公開前の設計方針、関数名、閾値、アイデア
+
+企業向けの大規模DLPを導入しにくい個人開発者・学生研究者が、ローカルで軽量に試せる仕組みを目指します。
 
 ## 進捗管理
 
-研究・実装タスクはGitHub IssuesとGitHub Projectで管理し、毎週の進捗は`weekly-report`ラベルを付けたIssueとして記録します。READMEには研究全体の目的と現在地だけを掲載し、週報本文は蓄積しません。
-
-- [研究Project](https://github.com/users/mani1261790/projects/1)
-- [週次進捗報告](https://github.com/mani1261790/ToolUseProxy/issues?q=label%3Aweekly-report)
-- [進捗管理の運用方法](docs/運用/進捗管理.md)
-- [実装タスク計画](docs/運用/実装タスク.md)
-
-## 想定する対象
-
-- 未公開のソースコードや Git diff
-- 研究ノート、Obsidian、Markdown メモ
-- `.env`、SSH config、認証情報
-- ローカルデータベースや実験ログ
-- 公開前の設計方針、関数名、閾値、アイデア
-
-特に、企業向けの大規模な DLP や監査基盤を導入しにくい個人開発者・学生研究者が、ローカル環境で軽量に利用できる仕組みを目指します。
+実装単位は[GitHub Issues](https://github.com/mani1261790/ToolUseProxy/issues)と[GitHub Project](https://github.com/users/mani1261790/projects/1)、public alphaの横断作業は[`v0.1.0 Public Alpha` milestone](https://github.com/mani1261790/ToolUseProxy/milestone/1)、週次の結果は[`weekly-report` Issue](https://github.com/mani1261790/ToolUseProxy/issues?q=label%3Aweekly-report)で管理します。運用規約は[進捗管理](docs/運用/進捗管理.md)にあります。

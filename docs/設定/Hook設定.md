@@ -60,7 +60,7 @@ project単位では、trustedなrepositoryの`.codex/hooks.json`へ次のよう�
         "hooks": [
           {
             "type": "command",
-            "command": "TOOLUSEPROXY_WORKSPACE_ROOT=/absolute/path/to/workspace python3 /Users/mani/Developer/ToolUseProxy/hooks/monitor_pre_tool.py",
+            "command": "TOOLUSEPROXY_WORKSPACE_ROOT=/absolute/path/to/workspace python3 /absolute/path/to/ToolUseProxy/hooks/monitor_pre_tool.py",
             "timeout": 5
           }
         ]
@@ -72,7 +72,7 @@ project単位では、trustedなrepositoryの`.codex/hooks.json`へ次のよう�
         "hooks": [
           {
             "type": "command",
-            "command": "TOOLUSEPROXY_WORKSPACE_ROOT=/absolute/path/to/workspace python3 /Users/mani/Developer/ToolUseProxy/hooks/monitor_post_tool.py",
+            "command": "TOOLUSEPROXY_WORKSPACE_ROOT=/absolute/path/to/workspace python3 /absolute/path/to/ToolUseProxy/hooks/monitor_post_tool.py",
             "timeout": 5
           }
         ]
@@ -83,7 +83,7 @@ project単位では、trustedなrepositoryの`.codex/hooks.json`へ次のよう�
         "hooks": [
           {
             "type": "command",
-            "command": "TOOLUSEPROXY_WORKSPACE_ROOT=/absolute/path/to/workspace python3 /Users/mani/Developer/ToolUseProxy/hooks/monitor_stop.py",
+            "command": "TOOLUSEPROXY_WORKSPACE_ROOT=/absolute/path/to/workspace python3 /absolute/path/to/ToolUseProxy/hooks/monitor_stop.py",
             "timeout": 5
           }
         ]
@@ -112,9 +112,9 @@ project単位では、trustedなrepositoryの`.codex/hooks.json`へ次のよう�
 
 Codex の GUI か設定ファイルで、次の command を指定します。`/absolute/path/to/workspace`は保護対象projectの絶対pathへ置き換えます。
 
-- `PreToolUse` -> `TOOLUSEPROXY_WORKSPACE_ROOT=/absolute/path/to/workspace python3 /Users/mani/Developer/ToolUseProxy/hooks/monitor_pre_tool.py`
-- `PostToolUse` -> `TOOLUSEPROXY_WORKSPACE_ROOT=/absolute/path/to/workspace python3 /Users/mani/Developer/ToolUseProxy/hooks/monitor_post_tool.py`
-- `Stop` -> `TOOLUSEPROXY_WORKSPACE_ROOT=/absolute/path/to/workspace python3 /Users/mani/Developer/ToolUseProxy/hooks/monitor_stop.py`
+- `PreToolUse` -> `TOOLUSEPROXY_WORKSPACE_ROOT=/absolute/path/to/workspace python3 /absolute/path/to/ToolUseProxy/hooks/monitor_pre_tool.py`
+- `PostToolUse` -> `TOOLUSEPROXY_WORKSPACE_ROOT=/absolute/path/to/workspace python3 /absolute/path/to/ToolUseProxy/hooks/monitor_post_tool.py`
+- `Stop` -> `TOOLUSEPROXY_WORKSPACE_ROOT=/absolute/path/to/workspace python3 /absolute/path/to/ToolUseProxy/hooks/monitor_stop.py`
 
 ### workspace identity
 
@@ -312,14 +312,14 @@ Stop hook が返す `reason` は、source、sink、score、severity、trace comm
 Stop hook が実際に介入した場合は、`policy_decisions` table に判断を保存します。保存された判断は次のコマンドで確認できます。
 
 ```bash
-python3 /Users/mani/Developer/ToolUseProxy/scripts/list_policy_decisions.py
-python3 /Users/mani/Developer/ToolUseProxy/scripts/trace_lineage.py --decision "$DECISION_ID"
+python3 /absolute/path/to/ToolUseProxy/scripts/list_policy_decisions.py
+python3 /absolute/path/to/ToolUseProxy/scripts/trace_lineage.py --decision "$DECISION_ID"
 ```
 
 Stop policy 接続は環境変数で無効化できます。
 
 ```bash
-TOOLUSEPROXY_STOP_POLICY=0 python3 /Users/mani/Developer/ToolUseProxy/hooks/monitor_stop.py
+TOOLUSEPROXY_STOP_POLICY=0 python3 /absolute/path/to/ToolUseProxy/hooks/monitor_stop.py
 ```
 
 ## PreToolUse hook の policy 接続
@@ -327,13 +327,13 @@ TOOLUSEPROXY_STOP_POLICY=0 python3 /Users/mani/Developer/ToolUseProxy/hooks/moni
 PreToolUse policyはopt-inです。Hook commandに次の環境変数を追加します。
 
 ```text
-TOOLUSEPROXY_PRE_TOOL_POLICY=1 python3 /Users/mani/Developer/ToolUseProxy/hooks/monitor_pre_tool.py
+TOOLUSEPROXY_PRE_TOOL_POLICY=1 python3 /absolute/path/to/ToolUseProxy/hooks/monitor_pre_tool.py
 ```
 
 この設定で対象になるのは、実payloadを確認済みの`Bash`です。MCPも対象にする場合は、影響範囲を明示するために二つ目のopt-inを追加します。
 
 ```text
-TOOLUSEPROXY_PRE_TOOL_POLICY=1 TOOLUSEPROXY_PRE_TOOL_MCP_POLICY=1 python3 /Users/mani/Developer/ToolUseProxy/hooks/monitor_pre_tool.py
+TOOLUSEPROXY_PRE_TOOL_POLICY=1 TOOLUSEPROXY_PRE_TOOL_MCP_POLICY=1 python3 /absolute/path/to/ToolUseProxy/hooks/monitor_pre_tool.py
 ```
 
 ### Bash curl送信値の静的抽出
@@ -524,7 +524,7 @@ repository内の旧`.tooluseproxy/events.db`は自動探索しません。移行
 先に「このファイルは秘密情報源である」と設定しておく必要があります。
 
 このリポジトリでは、その定義を `protected_sources.json` のような設定ファイルで持つ想定です。
-サンプルは [protected_sources.example.json](/Users/mani/Developer/ToolUseProxy/protected_sources.example.json) に置いてあります。
+サンプルは [protected_sources.example.json](../../protected_sources.example.json) に置いてあります。
 
 ```json
 {
@@ -590,46 +590,21 @@ JSONの例:
 }
 ```
 
-## embedding や cos 類似度はどこに入るか
+## 類似度profile v2
 
-embedding を使って自然言語をベクトル化し、cos 類似度を取る方針はもちろん可能です。
+現在は`similarity-profile-v2`を使い、artifact fragment同士、およびsource chunkとartifact fragmentをboundedかつdeterministicに比較します。比較は次の順です。
 
-ただし、今の段階ではまだ入れていません。
-理由は、研究の順番としてまず
+1. raw text hashまたはcanonical representationの`exact`
+2. 内容衝突とlow-signal containmentを棄却する`substring`
+3. 明示した少数のaliasだけを扱う`token_equivalent`
+4. deterministic conflict guardを通過した`shingle_jaccard`
+5. backendが明示的に渡された場合だけ`embedding_cosine`
 
-1. event と artifact を壊れず保存する
-2. どの artifact 同士を比較するか決める
-3. その上で exact match / substring / n-gram / embedding を比較する
+canonicalizationはNFKC、1回だけのpercent decode、JSON escape、identifier separatorを固定段数・固定byte上限内で扱います。上限を超えた本文はraw exact以外をfail closedにし、短いlow-information phrase、否定や条件が衝突する表現、一般的な数値phraseを近似一致へ昇格しません。
 
-の順で進めたいからです。
+候補探索ではcanonical / raw exactをlexical上限の外で先に保持し、残りをbounded feature indexからcoverageとoverlapの二つの順位で取得します。artifactは50件、sourceは200件を上限とし、full rebuildとsession incrementalで同じranking helperを使います。
 
-将来的には、たとえば `embeddings.py` や `similarity.py` を追加して、
-
-- `artifact_fragments` のテキストをベクトル化する
-- fragment 同士の cos 類似度を計算する
-- その結果を `information_flow_edges` に保存する
-
-という形に伸ばせます。
-
-## 現在の比較器
-
-現在の実装では、artifact fragment同士、およびsource chunkとartifact fragmentの比較を段階的に行います。
-
-1. `exact`
-2. `substring`
-3. `shingle_jaccard`
-4. `embedding_cosine` を将来追加
-
-これは、速度の速い手法で候補をなるべく拾い、その後で意味的な類似度を足す方が実用的だからです。
-
-- `exact`
-  - `.env` の値や完全一致の断片に強い
-- `substring`
-  - source の一部がそのまま後続 artifact に混ざる場合に強い
-- `shingle_jaccard`
-  - 少し崩れたコピーや近似的な再利用を拾いやすい
-- `embedding_cosine`
-  - 要約や言い換えの検出に向くが、コストは高い
+`embedding_cosine`のinterfaceは比較器に残していますが、現在のHook runtimeはembedding backend、network、remote serviceを使いません。意味的な言い換えは研究gapとして評価corpusへ残しています。固定corpus、promotion基準、full / incremental parity、privacy invariantは[類似度評価](../運用/類似度評価.md)を参照してください。
 
 ## 再解析コマンド
 
@@ -638,7 +613,7 @@ embedding を使って自然言語をベクトル化し、cos 類似度を取る
 そのために、source 設定と `events.db` を使ってartifactグラフとlineageを再構築するコマンドを用意しています。
 
 ```bash
-python3 /Users/mani/Developer/ToolUseProxy/scripts/rebuild_lineage.py \
+python3 /absolute/path/to/ToolUseProxy/scripts/rebuild_lineage.py \
   --db /absolute/path/to/events.db \
   --workspace-root /absolute/path/to/workspace
 ```

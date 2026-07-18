@@ -16,9 +16,9 @@ ToolUseProxyが想定しているHook payloadと、実際のCodex CLIが送るpa
 - 実施日: 2026-07-11
 - Codex CLI: `0.142.5`
 - Model: `gpt-5.5`
-- Workspace: `/Users/mani/Developer/ToolUseProxy`
+- Workspace: local ToolUseProxy checkout（実験者固有の絶対pathは省略）
 - Hook trust: 実験時のみ`--dangerously-bypass-hook-trust`
-- 保存先: `/private/tmp/tooluseproxy-real-hook.db`
+- 保存先: `/private/tmp`配下の一時SQLite DB
 - Stop policy: payload観測を分離するため無効
 
 Hook仕様は、実験時点の[公式Codex Hooksドキュメント](https://developers.openai.com/codex/hooks)と照合した。
@@ -41,7 +41,7 @@ Codexへ次の操作を順番に行わせた。
 4. shellの`cat`で再度読み込む
 5. 固定マーカーを最終回答として返す
 
-実験用Hook設定とダミーファイルは観測後に削除した。SQLite DBは再検証用に`/private/tmp`へ残している。
+実験用Hook設定とダミーファイルは観測後に削除した。SQLite DBもrepository artifactではなく、一時保存先に現在も存在することは保証しない。再検証時は同じ手順で新しい一時DBを取得する。
 
 ## 観測結果
 
@@ -229,7 +229,7 @@ printf PUBLIC_E2E_DATA | curl --data-binary @- http://127.0.0.1:18765/allow-test
 - DBへPreToolUseとPostToolUseが保存された
 - allow判断は`policy_decisions`へ保存しなかった
 
-最初の試行では`--ignore-user-config`によりproject Hook自体が読み込まれず、requestが到達した。DBが0 byteだったためpolicy誤判定ではなくHook未ロードと確認し、設定読込を有効にして上記のdeny / allowを再検証した。実験用Hook設定、source設定、ダミーファイルは実験後に削除した。検証DBとCodex JSONLは`/private/tmp/tooluseproxy-pretool-*`へ残している。
+最初の試行では`--ignore-user-config`によりproject Hook自体が読み込まれず、requestが到達した。DBが0 byteだったためpolicy誤判定ではなくHook未ロードと確認し、設定読込を有効にして上記のdeny / allowを再検証した。実験用Hook設定、source設定、ダミーファイルは実験後に削除した。検証時のDBとCodex JSONLは`/private/tmp/tooluseproxy-pretool-*`へ一時保存したが、repository artifactではなく、現在の存在は保証しない。
 
 ## Search / MCP payload観測
 
@@ -276,7 +276,7 @@ read-onlyケースでは`read_status()`を呼び出した。
 - MCP serverの`tools/call`ログは1件だった
 - sink candidateとpolicy decisionは作られなかった
 
-最初のdeny試行ではmodelがtoolを呼ばず、DBもMCP server logも作られなかった。これは遮断成功として数えず、read-only callでserverとHookのロードを確認してから、tool呼出しを必須にしたpromptでdenyを再検証した。実験用project config、Hook設定、MCP server、source設定、ダミーファイルは実験後に削除した。検証DBとCodex JSONLは`/private/tmp/tooluseproxy-mcp-*`へ残している。
+最初のdeny試行ではmodelがtoolを呼ばず、DBもMCP server logも作られなかった。これは遮断成功として数えず、read-only callでserverとHookのロードを確認してから、tool呼出しを必須にしたpromptでdenyを再検証した。実験用project config、Hook設定、MCP server、source設定、ダミーファイルは実験後に削除した。検証時のDBとCodex JSONLは`/private/tmp/tooluseproxy-mcp-*`へ一時保存したが、repository artifactではなく、現在の存在は保証しない。
 
 ## Operation fragment / snapshot実Codex E2E
 
