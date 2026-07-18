@@ -93,9 +93,24 @@ workspace lockが直列化するのはToolUseProxyの協調writer同士です。
 
 migration applyの承認はprotected source候補の承認を兼ねません。移行後に`doctor` / `status`でschema v2と`registration_writable: true`を確認し、対象sourceについて改めて次の提案・承認を行います。
 
-### protected sourceの提案と承認
+### bounded offline scanによる候補発見
 
-coding agentはユーザーが指定したworkspace内の`.env` / `.env.*` / JSON pathについて、次の2段階CLIを使えます。
+schema v2と`registration_writable: true`を確認後、coding agentは次の明示commandでworkspace内の`.env` / `.env.*` / JSON候補をoffline探索できます。
+
+```bash
+sh "<PLUGIN_ROOT>/hooks/run_cli.sh" protect scan \
+  --workspace "$PWD" \
+  --data-dir "<PLUGIN_DATA>" \
+  --json
+```
+
+`scan`はVCS、依存関係、virtual environment、build / cache directory、symlink、ToolUseProxyのruntime dataを除外し、深さ、entry数、file数、総read bytes、candidate数の固定上限内でだけ読みます。network、remote embedding、Hook runtimeは使いません。sourceとmanifestに対してread-onlyですが、local runtime DBにはvalue-freeな候補・review監査と内部再検証用のsource hash/statを保存します。sourceの値や本文断片、source hash、absolute pathは表示せず、review監査にもraw本文を保存しません。外向きには相対path、検出rule、confidence、dotenv keyまたはJSON Pointer、上限と集計値だけを返します。
+
+1回のscanが表示するreview candidateはstableな相対path順の1件だけです。`remaining_candidate_count`は続きの有無、`continuation_required`は再scanが必要か、`scan_complete`は固定上限内で探索を完了できたかを示します。`scan_complete: false`の場合、agentは候補がないと言い切らず、到達した上限reasonと未探索範囲が残ることを説明します。同一内容とdetector versionでreject / ignoreされた候補は再提示せず、登録済みや承認処理中もcountにだけ反映します。
+
+### 明示pathのfallbackと候補承認
+
+ユーザーまたはagentが対象pathを既に特定している場合、またはbounded scanの対象外を提案する場合は、従来の明示path commandを使います。
 
 ```bash
 sh "<PLUGIN_ROOT>/hooks/run_cli.sh" protect suggest \
@@ -105,7 +120,7 @@ sh "<PLUGIN_ROOT>/hooks/run_cli.sh" protect suggest \
   --json
 ```
 
-`suggest`はsourceとmanifestに対してread-onlyで、両方を変更しません。一方、local runtime DBにはvalue-freeな候補・review監査と内部再検証用のsource hash/statを保存します。sourceの値や本文断片、source hashは表示せず、review監査にも保存しません。外向きには相対path、検出rule、confidence、dotenv keyまたはJSON Pointerを含む提案だけを返します。coding agentはこの提案をユーザーへ示し、同じ提案に対する明示承認を得ます。承認後だけ、返されたopaque revisionとmanifest SHA-256を変更せず渡します。
+`suggest`のsource / manifestに対するread-only性、value-freeなDB記録、外向きoutputの制限はscanと同じです。coding agentはscanまたはsuggestが返した提案entryをユーザーへ示し、そのexact proposalへの明示承認を得ます。承認後だけ、返されたopaque revisionとmanifest SHA-256を変更せず渡します。
 
 ```bash
 sh "<PLUGIN_ROOT>/hooks/run_cli.sh" protect approve <CANDIDATE_ID> \
@@ -116,9 +131,9 @@ sh "<PLUGIN_ROOT>/hooks/run_cli.sh" protect approve <CANDIDATE_ID> \
   --json
 ```
 
-承認時はworkspace lockを取得してから候補を`proposed`から`approving`へ予約し、sourceのidentity・内容・selector解決とexpected manifest hashによる楽観的な事前条件を再検証します。lockは同一directoryの一時file、file fsync、atomic replace、directory fsync、DB確定または安全なreleaseまで保持し、その間の`reject` / `ignore`と別の承認試行を防ぎます。途中停止や一時的なstate errorでは、同じcandidate ID、opaque revision、manifest SHA-256のapprove入力を再実行します。exact登録の回復はdirectory fsyncと再検証に成功した後だけDBをapprovedへ進めます。workspace lockが直列化するのはToolUseProxyの協調writer同士です。同一UIDの非協調的な外部editorはlockに従わないため、filesystemの最終再検証からatomic replaceまで、またはdurability再確認からDB確定までの競合を含むfilesystem / DB横断の直列化は保証外です。sourceまたはmanifestが提案後に変わっていれば登録せず、再提案を要求します。`reject` / `ignore`は同じ内容・検出versionの再提示を抑止します。CLIは任意entryを承認時に受け取らないため、agentが提案JSONを書き換えて登録することはできません。この登録workflowは現在POSIX（macOS/Linux）のみ対応し、Windowsでは`protect suggest / approve / reject / ignore`を未対応とします。
+承認時はworkspace lockを取得してから候補を`proposed`から`approving`へ予約し、sourceのidentity・内容・selector解決とexpected manifest hashによる楽観的な事前条件を再検証します。lockは同一directoryの一時file、file fsync、atomic replace、directory fsync、DB確定または安全なreleaseまで保持し、その間の`reject` / `ignore`と別の承認試行を防ぎます。候補を1件approveするとmanifest hashが変わるため、別の候補に古いscanのrevision / hashを使ってはいけません。agentはapprove後にscanを再実行し、更新された次のexact proposalへ改めて明示承認を得ます。途中停止や一時的なstate errorでは、同じcandidate ID、opaque revision、manifest SHA-256のapprove入力を再実行します。exact登録の回復はdirectory fsyncと再検証に成功した後だけDBをapprovedへ進めます。workspace lockが直列化するのはToolUseProxyの協調writer同士です。同一UIDの非協調的な外部editorはlockに従わないため、filesystemの最終再検証からatomic replaceまで、またはdurability再確認からDB確定までの競合を含むfilesystem / DB横断の直列化は保証外です。sourceまたはmanifestが提案後に変わっていれば登録せず、再scanまたは再提案を要求します。`reject` / `ignore`は同じ内容・検出versionの再提示を抑止します。CLIは任意entryを承認時に受け取らないため、agentが提案JSONを書き換えて登録することはできません。この登録workflowは現在POSIX（macOS/Linux）のみ対応し、Windowsでは`protect scan / suggest / approve / reject / ignore`を未対応とします。
 
-この段階の候補検出は明示pathだけです。workspace全体の探索、Hook中の探索、一括承認、無承認の自動登録は行いません。legacy manifestはruntime読み取り互換を維持し、coding agentは`protect migrate plan`を提示せずに独断でv2へ変更しません。
+workspace探索は明示的なoffline `protect scan`に限定し、`init`やHook中では実行しません。一括承認、無承認の自動登録、scanの上限引き上げoptionはありません。legacy manifestはruntime読み取り互換を維持しますが、scanはsource fileを読む前に値のない`manifest_schema_legacy`で終了します。coding agentは`protect migrate plan`を提示せずに独断でv2へ変更しません。
 
 ## package CLIの開発install
 

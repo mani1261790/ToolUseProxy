@@ -38,6 +38,81 @@ MANIFEST_MIGRATION_KIND = "protected_sources_manifest_v1_to_v2"
 MANIFEST_MIGRATION_WRITER_VERSION = "protected-source-manifest-migration-v1"
 MANIFEST_MIGRATION_FORMATTING_POLICY = "utf8_2_space_lf"
 MANIFEST_BACKUP_DIRECTORY = "manifest-backups"
+PROTECTED_SOURCE_SCANNER_VERSION = "protected-source-scan-v1"
+
+
+@dataclass(frozen=True)
+class ProtectedSourceScanLimits:
+    max_depth: int = 8
+    max_entries: int = 20_000
+    max_files: int = 10_000
+    max_eligible_files: int = 512
+    max_total_read_bytes: int = 16 * 1024 * 1024
+    max_candidates: int = 64
+    max_public_metadata_bytes: int = 512 * 1024
+
+
+DEFAULT_PROTECTED_SOURCE_SCAN_LIMITS = ProtectedSourceScanLimits()
+
+_PROTECTED_SOURCE_SCAN_EXCLUDED_DIRECTORIES = frozenset(
+    {
+        ".cache",
+        ".git",
+        ".hg",
+        ".mypy_cache",
+        ".next",
+        ".nox",
+        ".nuxt",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".svn",
+        ".tooluseproxy",
+        ".tox",
+        ".turbo",
+        ".venv",
+        "__pycache__",
+        "build",
+        "dist",
+        "node_modules",
+        "site-packages",
+        "target",
+        "vendor",
+        "venv",
+    }
+)
+_PROTECTED_SOURCE_SCAN_MAX_RELATIVE_PATH_BYTES = 4096
+_PROTECTED_SOURCE_SCAN_REASON_ORDER = (
+    "entry_limit",
+    "depth_limit",
+    "file_limit",
+    "eligible_file_limit",
+    "total_read_bytes_limit",
+    "candidate_limit",
+    "public_metadata_limit",
+    "directory_read_error",
+    "entry_read_error",
+    "invalid_name",
+    "source_changed",
+    "source_not_safe",
+    "source_not_utf8",
+    "source_not_parseable",
+    "dotenv_duplicate_key",
+    "json_duplicate_key",
+    "json_too_deep",
+    "json_too_many_items",
+    "too_many_selectors",
+    "selector_too_long",
+    "source_id_conflict",
+    "source_path_conflict",
+    "source_too_large",
+    "excluded_path",
+    "excluded_directory",
+    "symlink",
+    "hardlink",
+    "non_regular",
+    "cross_device",
+    "no_secret_selector",
+)
 
 _DOTENV_ASSIGNMENT = re.compile(
     r"^(?:export\s+)?([A-Za-z_][A-Za-z0-9_.-]*)\s*=(.*)$"
@@ -117,6 +192,7 @@ _ERROR_MESSAGES = {
     "manifest_backup_unavailable": "the private manifest backup directory is unavailable",
     "manifest_backup_missing": "the original manifest backup required for recovery is missing",
     "manifest_backup_conflict": "the original manifest backup does not match the reviewed migration",
+    "scan_limits_invalid": "protected source scan limits are invalid",
 }
 
 
@@ -337,6 +413,49 @@ class ProtectedSourceCandidate:
 
 
 @dataclass(frozen=True)
+class ProtectedSourceScanResult:
+    scanner_version: str
+    manifest_sha256: str
+    scan_complete: bool
+    truncation_reasons: tuple[str, ...]
+    candidates: tuple[ProtectedSourceCandidate, ...] = field(repr=False)
+    already_registered_count: int = 0
+    entries_seen: int = 0
+    directories_scanned: int = 0
+    files_seen: int = 0
+    eligible_files_seen: int = 0
+    inspected_bytes: int = 0
+    detected_candidate_count: int = 0
+    public_candidate_bytes: int = 0
+    skipped_counts: tuple[tuple[str, int], ...] = ()
+
+
+@dataclass(repr=False)
+class _ProtectedSourceScanState:
+    limits: ProtectedSourceScanLimits
+    excluded_relative_parts: tuple[tuple[str, ...], ...]
+    excluded_path_identities: frozenset[tuple[int, int]]
+    registered_file_identities: frozenset[str]
+    entries_seen: int = 0
+    directories_scanned: int = 0
+    files_seen: int = 0
+    eligible_files_seen: int = 0
+    inspected_bytes: int = 0
+    detected_candidate_count: int = 0
+    already_registered_count: int = 0
+    public_candidate_bytes: int = 0
+    candidates: list[ProtectedSourceCandidate] = field(default_factory=list)
+    skipped_counts: dict[str, int] = field(default_factory=dict)
+    incomplete_reasons: set[str] = field(default_factory=set)
+    entry_limit_reached: bool = False
+
+    def skip(self, code: str, *, incomplete: bool = False) -> None:
+        self.skipped_counts[code] = self.skipped_counts.get(code, 0) + 1
+        if incomplete:
+            self.incomplete_reasons.add(code)
+
+
+@dataclass(frozen=True)
 class ApprovalResult:
     status: Literal["approved", "already_registered"]
     candidate_id: str
@@ -448,9 +567,12 @@ def suggest_protected_source(
     if not isinstance(workspace_id, str) or not workspace_id.strip():
         _raise("candidate_invalid")
     normalized_path = _normalize_relative_path(relative_path)
-    source_kind = _source_kind(normalized_path)
+    _source_kind(normalized_path)
     root_fd, root_path, root_stat = _open_workspace(workspace_root)
     try:
+        manifest_text, manifest_binding = _read_manifest_text(root_fd, root_stat.st_dev)
+        _verify_workspace_path(root_path, root_stat)
+        manifest = _parse_and_validate_manifest(manifest_text, root_path)
         source_text, source_binding = _read_relative_text(
             root_fd,
             normalized_path,
@@ -460,36 +582,144 @@ def suggest_protected_source(
             too_large_code="source_too_large",
             not_utf8_code="source_not_utf8",
         )
-        manifest_text, manifest_binding = _read_manifest_text(root_fd, root_stat.st_dev)
         _verify_workspace_path(root_path, root_stat)
-        manifest = _parse_and_validate_manifest(manifest_text, root_path)
-        selector, reason_codes, confidence = _discover_selector(source_kind, source_text)
-        proposed_source = _build_proposed_source(normalized_path, selector)
-        already_registered = _validate_new_source_against_manifest(
-            manifest,
-            proposed_source,
-            root_path,
-        )
-
-        # Prefix the opaque revision so it can always be passed as an argparse
-        # option value without being mistaken for another option.
-        candidate_revision = f"r1_{secrets.token_urlsafe(32)}"
-        revision_sha256 = hashlib.sha256(candidate_revision.encode("ascii")).hexdigest()
-        return ProtectedSourceCandidate(
-            candidate_id="",
+        return _build_protected_source_candidate(
             workspace_id=workspace_id,
-            relative_path=normalized_path,
-            reason_codes=reason_codes,
-            confidence=confidence,
-            proposed_source=proposed_source,
+            normalized_path=normalized_path,
+            source_text=source_text,
             source_binding=source_binding,
+            manifest=manifest,
             manifest_binding=manifest_binding,
-            candidate_revision_sha256=revision_sha256,
-            candidate_revision=candidate_revision,
-            already_registered=already_registered,
+            root_path=root_path,
         )
     finally:
         os.close(root_fd)
+
+
+def scan_protected_sources(
+    workspace_root: Path,
+    workspace_id: str,
+    workspace_lock: ProtectedSourceWorkspaceLock | None = None,
+    excluded_relative_paths: tuple[str, ...] = (),
+    limits: ProtectedSourceScanLimits = DEFAULT_PROTECTED_SOURCE_SCAN_LIMITS,
+) -> ProtectedSourceScanResult:
+    """Discover value-free candidates with a deterministic, bounded POSIX walk."""
+
+    if not isinstance(workspace_id, str) or not workspace_id.strip():
+        _raise("candidate_invalid")
+    _validate_protected_source_scan_limits(limits)
+    excluded_parts = _normalize_scan_exclusions(excluded_relative_paths)
+    if workspace_lock is None:
+        with lock_protected_source_workspace(workspace_root) as acquired_lock:
+            return scan_protected_sources(
+                workspace_root,
+                workspace_id,
+                workspace_lock=acquired_lock,
+                excluded_relative_paths=excluded_relative_paths,
+                limits=limits,
+            )
+
+    root_fd, root_path, root_stat = _require_workspace_lock(
+        workspace_root,
+        workspace_lock,
+    )
+    manifest_text, manifest_binding = _read_manifest_text(
+        root_fd,
+        root_stat.st_dev,
+    )
+    _verify_workspace_path(root_path, root_stat)
+    manifest = _parse_and_validate_manifest(manifest_text, root_path)
+    state = _ProtectedSourceScanState(
+        limits=limits,
+        excluded_relative_parts=excluded_parts,
+        excluded_path_identities=_resolve_scan_exclusion_identities(
+            root_fd,
+            root_stat.st_dev,
+            excluded_parts,
+        ),
+        registered_file_identities=_registered_manifest_file_identities(
+            manifest,
+            root_path,
+        ),
+    )
+    _scan_protected_source_directory(
+        root_fd,
+        root_fd,
+        root_path,
+        root_stat,
+        (),
+        manifest,
+        manifest_binding,
+        workspace_id,
+        state,
+    )
+
+    _verify_workspace_path(root_path, root_stat)
+    _, confirmed_manifest_binding = _read_manifest_text(
+        root_fd,
+        root_stat.st_dev,
+    )
+    if confirmed_manifest_binding != manifest_binding:
+        _raise("manifest_conflict")
+
+    candidates = () if state.entry_limit_reached else tuple(state.candidates)
+    public_candidate_bytes = (
+        0 if state.entry_limit_reached else state.public_candidate_bytes
+    )
+    return ProtectedSourceScanResult(
+        scanner_version=PROTECTED_SOURCE_SCANNER_VERSION,
+        manifest_sha256=manifest_binding.sha256,
+        scan_complete=not state.incomplete_reasons,
+        truncation_reasons=_ordered_scan_reason_codes(state.incomplete_reasons),
+        candidates=candidates,
+        already_registered_count=state.already_registered_count,
+        entries_seen=state.entries_seen,
+        directories_scanned=state.directories_scanned,
+        files_seen=state.files_seen,
+        eligible_files_seen=state.eligible_files_seen,
+        inspected_bytes=state.inspected_bytes,
+        detected_candidate_count=state.detected_candidate_count,
+        public_candidate_bytes=public_candidate_bytes,
+        skipped_counts=_ordered_scan_counts(state.skipped_counts),
+    )
+
+
+def _build_protected_source_candidate(
+    *,
+    workspace_id: str,
+    normalized_path: str,
+    source_text: str,
+    source_binding: FileBinding,
+    manifest: dict[str, object],
+    manifest_binding: FileBinding,
+    root_path: Path,
+) -> ProtectedSourceCandidate:
+    source_kind = _source_kind(normalized_path)
+    selector, reason_codes, confidence = _discover_selector(source_kind, source_text)
+    proposed_source = _build_proposed_source(normalized_path, selector)
+    already_registered = _validate_new_source_against_manifest(
+        manifest,
+        proposed_source,
+        root_path,
+    )
+
+    # Prefix the opaque revision so it can always be passed as an argparse
+    # option value without being mistaken for another option.
+    candidate_revision = f"r1_{secrets.token_urlsafe(32)}"
+    revision_sha256 = hashlib.sha256(candidate_revision.encode("ascii")).hexdigest()
+    return ProtectedSourceCandidate(
+        candidate_id="",
+        workspace_id=workspace_id,
+        relative_path=normalized_path,
+        reason_codes=reason_codes,
+        confidence=confidence,
+        proposed_source=proposed_source,
+        source_binding=source_binding,
+        manifest_binding=manifest_binding,
+        candidate_revision_sha256=revision_sha256,
+        candidate_revision=candidate_revision,
+        already_registered=already_registered,
+    )
 
 
 @contextmanager
@@ -1167,6 +1397,445 @@ def _validate_proposed_source(
     ):
         _raise("candidate_invalid")
     return _copy_json_object(value)
+
+
+def _validate_protected_source_scan_limits(
+    limits: ProtectedSourceScanLimits,
+) -> None:
+    if not isinstance(limits, ProtectedSourceScanLimits):
+        _raise("scan_limits_invalid")
+    for name in (
+        "max_depth",
+        "max_entries",
+        "max_files",
+        "max_eligible_files",
+        "max_total_read_bytes",
+        "max_candidates",
+        "max_public_metadata_bytes",
+    ):
+        value = getattr(limits, name)
+        hard_maximum = getattr(DEFAULT_PROTECTED_SOURCE_SCAN_LIMITS, name)
+        if type(value) is not int or not 1 <= value <= hard_maximum:
+            _raise("scan_limits_invalid")
+
+
+def _normalize_scan_exclusions(
+    values: tuple[str, ...],
+) -> tuple[tuple[str, ...], ...]:
+    if not isinstance(values, tuple):
+        _raise("invalid_relative_path")
+    normalized: set[tuple[str, ...]] = set()
+    for value in values:
+        relative_path = _normalize_relative_path(value)
+        try:
+            encoded = relative_path.encode("utf-8")
+        except UnicodeEncodeError:
+            _raise("invalid_relative_path")
+        if len(encoded) > _PROTECTED_SOURCE_SCAN_MAX_RELATIVE_PATH_BYTES:
+            _raise("invalid_relative_path")
+        normalized.add(PurePath(relative_path).parts)
+    return tuple(
+        sorted(
+            normalized,
+            key=lambda parts: "/".join(parts).encode("utf-8"),
+        )
+    )
+
+
+def _scan_protected_source_directory(
+    root_fd: int,
+    directory_fd: int,
+    root_path: Path,
+    root_stat: os.stat_result,
+    directory_parts: tuple[str, ...],
+    manifest: dict[str, object],
+    manifest_binding: FileBinding,
+    workspace_id: str,
+    state: _ProtectedSourceScanState,
+) -> None:
+    if state.entry_limit_reached:
+        return
+    state.directories_scanned += 1
+    entries: list[tuple[bytes, str]] = []
+    try:
+        with os.scandir(directory_fd) as iterator:
+            for entry in iterator:
+                if state.entries_seen >= state.limits.max_entries:
+                    state.skip("entry_limit", incomplete=True)
+                    state.entry_limit_reached = True
+                    return
+                state.entries_seen += 1
+                name = entry.name
+                key = _scan_entry_name_key(name)
+                if key is None:
+                    state.skip("invalid_name", incomplete=True)
+                    continue
+                entries.append((key, name))
+    except OSError:
+        state.skip("directory_read_error", incomplete=True)
+        return
+
+    for _, name in sorted(entries, key=lambda item: item[0]):
+        if state.entry_limit_reached:
+            return
+        relative_parts = (*directory_parts, name)
+        if _scan_path_is_excluded(relative_parts, state.excluded_relative_parts):
+            state.skip("excluded_path")
+            continue
+        if relative_parts == (MANIFEST_FILENAME,):
+            continue
+        relative_path = "/".join(relative_parts)
+        try:
+            normalized_path = _normalize_relative_path(relative_path)
+            encoded_path = normalized_path.encode("utf-8")
+        except (ProtectedSourceRegistrationError, UnicodeEncodeError):
+            state.skip("invalid_name", incomplete=True)
+            continue
+        if len(encoded_path) > _PROTECTED_SOURCE_SCAN_MAX_RELATIVE_PATH_BYTES:
+            state.skip("invalid_name", incomplete=True)
+            continue
+
+        try:
+            metadata = os.stat(
+                name,
+                dir_fd=directory_fd,
+                follow_symlinks=False,
+            )
+        except OSError:
+            state.skip("entry_read_error", incomplete=True)
+            continue
+        if (metadata.st_dev, metadata.st_ino) in state.excluded_path_identities:
+            state.skip("excluded_path")
+            continue
+        if stat.S_ISLNK(metadata.st_mode):
+            state.skip("symlink")
+            continue
+        if stat.S_ISDIR(metadata.st_mode):
+            if name.casefold() in _PROTECTED_SOURCE_SCAN_EXCLUDED_DIRECTORIES:
+                state.skip("excluded_directory")
+                continue
+            if metadata.st_dev != root_stat.st_dev:
+                state.skip("cross_device")
+                continue
+            if len(relative_parts) >= state.limits.max_depth:
+                state.skip("depth_limit", incomplete=True)
+                continue
+            child_fd: int | None = None
+            try:
+                flags = os.O_RDONLY
+                flags |= getattr(os, "O_DIRECTORY", 0)
+                flags |= getattr(os, "O_NOFOLLOW", 0)
+                flags |= getattr(os, "O_CLOEXEC", 0)
+                child_fd = os.open(name, flags, dir_fd=directory_fd)
+                opened = os.fstat(child_fd)
+                if (
+                    not stat.S_ISDIR(opened.st_mode)
+                    or opened.st_dev != root_stat.st_dev
+                    or opened.st_dev != metadata.st_dev
+                    or opened.st_ino != metadata.st_ino
+                ):
+                    state.skip("entry_read_error", incomplete=True)
+                    continue
+                _scan_protected_source_directory(
+                    root_fd,
+                    child_fd,
+                    root_path,
+                    root_stat,
+                    relative_parts,
+                    manifest,
+                    manifest_binding,
+                    workspace_id,
+                    state,
+                )
+            except OSError:
+                state.skip("entry_read_error", incomplete=True)
+            finally:
+                if child_fd is not None:
+                    os.close(child_fd)
+            continue
+        if not stat.S_ISREG(metadata.st_mode):
+            state.skip("non_regular")
+            continue
+        if metadata.st_dev != root_stat.st_dev:
+            state.skip("cross_device")
+            continue
+        if metadata.st_nlink != 1:
+            state.skip("hardlink")
+            continue
+        _scan_protected_source_file(
+            root_fd,
+            root_path,
+            root_stat,
+            normalized_path,
+            metadata,
+            manifest,
+            manifest_binding,
+            workspace_id,
+            state,
+        )
+
+
+def _scan_protected_source_file(
+    root_fd: int,
+    root_path: Path,
+    root_stat: os.stat_result,
+    normalized_path: str,
+    metadata: os.stat_result,
+    manifest: dict[str, object],
+    manifest_binding: FileBinding,
+    workspace_id: str,
+    state: _ProtectedSourceScanState,
+) -> None:
+    if state.files_seen >= state.limits.max_files:
+        state.skip("file_limit", incomplete=True)
+        return
+    state.files_seen += 1
+    try:
+        _source_kind(normalized_path)
+    except ProtectedSourceRegistrationError as exc:
+        if exc.code == "unsupported_source_format":
+            return
+        raise
+
+    source_identity = f"{metadata.st_dev}:{metadata.st_ino}"
+    if source_identity in state.registered_file_identities:
+        state.already_registered_count += 1
+        return
+
+    if state.eligible_files_seen >= state.limits.max_eligible_files:
+        state.skip("eligible_file_limit", incomplete=True)
+        return
+    state.eligible_files_seen += 1
+    if metadata.st_size > MAX_PROTECTED_FILE_BYTES:
+        state.skip("source_too_large", incomplete=True)
+        return
+    remaining_bytes = state.limits.max_total_read_bytes - state.inspected_bytes
+    if metadata.st_size > remaining_bytes:
+        state.skip("total_read_bytes_limit", incomplete=True)
+        return
+    # Reserve the stable enumerated size before I/O. A changed file cannot
+    # consume a later candidate's aggregate budget even when it is rejected.
+    state.inspected_bytes += metadata.st_size
+    try:
+        source_text, source_binding = _read_scan_source_text(
+            root_fd,
+            normalized_path,
+            root_device=root_stat.st_dev,
+            expected=metadata,
+        )
+        candidate = _build_protected_source_candidate(
+            workspace_id=workspace_id,
+            normalized_path=normalized_path,
+            source_text=source_text,
+            source_binding=source_binding,
+            manifest=manifest,
+            manifest_binding=manifest_binding,
+            root_path=root_path,
+        )
+    except ProtectedSourceRegistrationError as exc:
+        incomplete = exc.code != "no_secret_selector"
+        state.skip(exc.code, incomplete=incomplete)
+        return
+
+    if candidate.already_registered:
+        state.already_registered_count += 1
+        return
+    state.detected_candidate_count += 1
+    if len(state.candidates) >= state.limits.max_candidates:
+        state.skip("candidate_limit", incomplete=True)
+        return
+    public_bytes = _protected_source_candidate_public_bytes(candidate)
+    if (
+        state.public_candidate_bytes + public_bytes
+        > state.limits.max_public_metadata_bytes
+    ):
+        state.skip("public_metadata_limit", incomplete=True)
+        return
+    state.candidates.append(candidate)
+    state.public_candidate_bytes += public_bytes
+
+
+def _read_scan_source_text(
+    root_fd: int,
+    relative_path: str,
+    *,
+    root_device: int,
+    expected: os.stat_result,
+) -> tuple[str, FileBinding]:
+    parts = PurePath(relative_path).parts
+    current_fd: int | None = None
+    file_fd: int | None = None
+    try:
+        current_fd = os.dup(root_fd)
+        for part in parts[:-1]:
+            flags = os.O_RDONLY
+            flags |= getattr(os, "O_DIRECTORY", 0)
+            flags |= getattr(os, "O_NOFOLLOW", 0)
+            flags |= getattr(os, "O_CLOEXEC", 0)
+            assert current_fd is not None
+            next_fd = os.open(part, flags, dir_fd=current_fd)
+            opened = os.fstat(next_fd)
+            if not stat.S_ISDIR(opened.st_mode) or opened.st_dev != root_device:
+                os.close(next_fd)
+                _raise("source_changed")
+            os.close(current_fd)
+            current_fd = next_fd
+
+        flags = os.O_RDONLY
+        flags |= getattr(os, "O_NOFOLLOW", 0)
+        flags |= getattr(os, "O_NONBLOCK", 0)
+        flags |= getattr(os, "O_CLOEXEC", 0)
+        assert current_fd is not None
+        file_fd = os.open(parts[-1], flags, dir_fd=current_fd)
+        before = os.fstat(file_fd)
+        if not _same_stat(expected, before):
+            _raise("source_changed")
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_dev != root_device
+            or before.st_nlink != 1
+        ):
+            _raise("source_not_safe")
+        if before.st_size > MAX_PROTECTED_FILE_BYTES:
+            _raise("source_too_large")
+
+        chunks: list[bytes] = []
+        read_bytes = 0
+        while read_bytes < before.st_size:
+            chunk = os.read(file_fd, min(64 * 1024, before.st_size - read_bytes))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            read_bytes += len(chunk)
+        after = os.fstat(file_fd)
+        body = b"".join(chunks)
+        if not _same_stat(before, after) or len(body) != after.st_size:
+            _raise("source_changed")
+        try:
+            text = body.decode("utf-8")
+        except UnicodeDecodeError:
+            _raise("source_not_utf8")
+        return text, _make_binding(body, after)
+    except ProtectedSourceRegistrationError:
+        raise
+    except FileNotFoundError:
+        _raise("source_changed")
+    except (OSError, ValueError):
+        _raise("source_not_safe")
+    finally:
+        if file_fd is not None:
+            os.close(file_fd)
+        if current_fd is not None:
+            os.close(current_fd)
+
+
+def _protected_source_candidate_public_bytes(
+    candidate: ProtectedSourceCandidate,
+) -> int:
+    public_candidate = candidate.with_candidate_id("0" * 32).to_public_payload()
+    return len(_canonical_json_bytes(public_candidate))
+
+
+def _scan_entry_name_key(name: object) -> bytes | None:
+    if not isinstance(name, str) or not name:
+        return None
+    if any(ord(character) < 32 for character in name):
+        return None
+    try:
+        return name.encode("utf-8")
+    except UnicodeEncodeError:
+        return None
+
+
+def _scan_path_is_excluded(
+    relative_parts: tuple[str, ...],
+    exclusions: tuple[tuple[str, ...], ...],
+) -> bool:
+    return any(
+        len(relative_parts) >= len(excluded)
+        and relative_parts[: len(excluded)] == excluded
+        for excluded in exclusions
+    )
+
+
+def _resolve_scan_exclusion_identities(
+    root_fd: int,
+    root_device: int,
+    exclusions: tuple[tuple[str, ...], ...],
+) -> frozenset[tuple[int, int]]:
+    """Resolve existing exclusions without following symlinks or reading contents."""
+
+    identities: set[tuple[int, int]] = set()
+    for parts in exclusions:
+        current_fd: int | None = None
+        next_fd: int | None = None
+        target_fd: int | None = None
+        try:
+            current_fd = os.dup(root_fd)
+            for part in parts[:-1]:
+                flags = os.O_RDONLY
+                flags |= getattr(os, "O_DIRECTORY", 0)
+                flags |= getattr(os, "O_NOFOLLOW", 0)
+                flags |= getattr(os, "O_CLOEXEC", 0)
+                next_fd = os.open(part, flags, dir_fd=current_fd)
+                opened = os.fstat(next_fd)
+                if not stat.S_ISDIR(opened.st_mode) or opened.st_dev != root_device:
+                    break
+                os.close(current_fd)
+                current_fd = next_fd
+                next_fd = None
+            else:
+                flags = os.O_RDONLY
+                flags |= getattr(os, "O_NOFOLLOW", 0)
+                flags |= getattr(os, "O_NONBLOCK", 0)
+                flags |= getattr(os, "O_CLOEXEC", 0)
+                target_fd = os.open(parts[-1], flags, dir_fd=current_fd)
+                opened = os.fstat(target_fd)
+                identities.add((opened.st_dev, opened.st_ino))
+        except OSError:
+            # The lexical exclusion remains authoritative. Missing, replaced,
+            # inaccessible, or symlinked aliases do not make the scan fail.
+            continue
+        finally:
+            if next_fd is not None:
+                os.close(next_fd)
+            if target_fd is not None:
+                os.close(target_fd)
+            if current_fd is not None:
+                os.close(current_fd)
+    return frozenset(identities)
+
+
+def _ordered_scan_reason_codes(values: set[str]) -> tuple[str, ...]:
+    order = {
+        code: index for index, code in enumerate(_PROTECTED_SOURCE_SCAN_REASON_ORDER)
+    }
+    return tuple(sorted(values, key=lambda code: (order.get(code, len(order)), code)))
+
+
+def _ordered_scan_counts(
+    values: Mapping[str, int],
+) -> tuple[tuple[str, int], ...]:
+    ordered_codes = _ordered_scan_reason_codes(set(values))
+    return tuple((code, values[code]) for code in ordered_codes)
+
+
+def _registered_manifest_file_identities(
+    manifest: Mapping[str, object],
+    root_path: Path,
+) -> frozenset[str]:
+    raw_sources = manifest.get("sources")
+    if not isinstance(raw_sources, list):
+        _raise("manifest_sources_invalid")
+    identities: set[str] = set()
+    for raw_source in raw_sources:
+        if not isinstance(raw_source, Mapping):
+            _raise("manifest_source_invalid")
+        source_path = raw_source.get("path")
+        if not isinstance(source_path, str):
+            _raise("manifest_source_invalid")
+        identities.add(_canonical_manifest_source_path(root_path, source_path))
+    return frozenset(identities)
 
 
 def _source_kind(relative_path: str) -> Literal["dotenv", "json"]:

@@ -239,6 +239,7 @@ PROTECTED_SOURCE_CANDIDATE_AUTHORITIES = frozenset({"cli_explicit", "system_reco
 _PROTECTED_SOURCE_CANDIDATE_IDENTIFIER_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}\Z")
 _PROTECTED_SOURCE_CANDIDATE_MAX_PATH_BYTES = 4096
 _PROTECTED_SOURCE_CANDIDATE_MAX_RULES = 32
+_PROTECTED_SOURCE_CANDIDATE_FINGERPRINT_LOOKUP_MAX = 64
 _PROTECTED_SOURCE_CANDIDATE_SOURCE_KEYS = frozenset(
     {"id", "path", "type", "sensitivity", "policy_tags", "selector"}
 )
@@ -7144,6 +7145,43 @@ class EventStore:
                 LIMIT ?
                 """,
                 parameters,
+            ).fetchall()
+        return [_protected_source_candidate_from_row(row) for row in rows]
+
+    def list_protected_source_candidates_by_suppression_fingerprints(
+        self,
+        workspace_id: str,
+        suppression_fingerprints: tuple[str, ...],
+    ) -> list[ProtectedSourceCandidate]:
+        """Load only the bounded, exact candidate dispositions requested."""
+
+        _validate_protected_source_candidate_workspace_id(workspace_id)
+        if not isinstance(suppression_fingerprints, tuple):
+            raise ValueError("candidate suppression fingerprints must be a tuple")
+        if (
+            len(suppression_fingerprints)
+            > _PROTECTED_SOURCE_CANDIDATE_FINGERPRINT_LOOKUP_MAX
+        ):
+            raise ValueError("candidate suppression fingerprint lookup limit exceeded")
+        for fingerprint in suppression_fingerprints:
+            _validate_candidate_sha256(fingerprint, "suppression fingerprint")
+        if len(set(suppression_fingerprints)) != len(suppression_fingerprints):
+            raise ValueError("candidate suppression fingerprints must be unique")
+        if not suppression_fingerprints:
+            return []
+
+        ordered_fingerprints = tuple(sorted(suppression_fingerprints))
+        placeholders = ",".join("?" for _ in ordered_fingerprints)
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT {_PROTECTED_SOURCE_CANDIDATE_SELECT_COLUMNS}
+                FROM protected_source_candidates
+                WHERE workspace_id = ?
+                  AND suppression_fingerprint IN ({placeholders})
+                ORDER BY suppression_fingerprint
+                """,
+                (workspace_id, *ordered_fingerprints),
             ).fetchall()
         return [_protected_source_candidate_from_row(row) for row in rows]
 

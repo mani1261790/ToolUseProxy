@@ -55,3 +55,11 @@ jobs:
           --split all
           --format text
           --check
+
+      - name: Check protected-source discovery baseline
+        run: >-
+          python -m hook_monitor.evaluation.protected_source_discovery_cli
+          --dataset tests/fixtures/protected_source_discovery/v1
+          --split all
+          --format text
+          --check

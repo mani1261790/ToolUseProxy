@@ -22,6 +22,46 @@ from tooluseproxy.protected_sources import suggest_protected_source
 
 
 class ProtectedSourceCandidateStorageTest(unittest.TestCase):
+    def test_bounded_exact_suppression_fingerprint_lookup(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            store, candidate = self._candidate(Path(temporary_directory))
+            missing_fingerprint = hashlib.sha256(b"missing candidate").hexdigest()
+
+            found = (
+                store.list_protected_source_candidates_by_suppression_fingerprints(
+                    candidate.workspace_id,
+                    (missing_fingerprint, candidate.suppression_fingerprint),
+                )
+            )
+
+            self.assertEqual([candidate.candidate_id], [item.candidate_id for item in found])
+            self.assertEqual(
+                [],
+                store.list_protected_source_candidates_by_suppression_fingerprints(
+                    candidate.workspace_id,
+                    (),
+                ),
+            )
+            invalid_inputs = (
+                [candidate.suppression_fingerprint],
+                ("not-a-sha256",),
+                (
+                    candidate.suppression_fingerprint,
+                    candidate.suppression_fingerprint,
+                ),
+                tuple(
+                    hashlib.sha256(f"candidate-{index}".encode()).hexdigest()
+                    for index in range(65)
+                ),
+            )
+            for fingerprints in invalid_inputs:
+                with self.subTest(fingerprints_type=type(fingerprints).__name__):
+                    with self.assertRaises(ValueError):
+                        store.list_protected_source_candidates_by_suppression_fingerprints(
+                            candidate.workspace_id,
+                            fingerprints,  # type: ignore[arg-type]
+                        )
+
     def test_claim_then_finalize_records_one_approval_attempt(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             store, candidate = self._candidate(Path(temporary_directory))

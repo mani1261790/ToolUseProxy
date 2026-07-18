@@ -19,6 +19,9 @@ from hook_monitor.runtime.source_config import (
     LEGACY_MANIFEST_SCHEMA_VERSION,
     SourceConfigError,
 )
+from hook_monitor.runtime.models import (
+    ProtectedSourceCandidate as StoredProtectedSourceCandidate,
+)
 from hook_monitor.runtime.storage import (
     CURRENT_SCHEMA_VERSION,
     EventStore,
@@ -36,8 +39,11 @@ from tooluseproxy.paths import (
     secure_database_permissions,
 )
 from tooluseproxy.protected_sources import (
+    DEFAULT_PROTECTED_SOURCE_SCAN_LIMITS,
     MAX_MANIFEST_SOURCES,
     MAX_PROTECTED_FILE_BYTES,
+    ProtectedSourceCandidate,
+    ProtectedSourceScanResult,
     ProtectedSourceWorkspaceLock,
     ProtectedSourceRegistrationError,
     approve_protected_source,
@@ -46,6 +52,7 @@ from tooluseproxy.protected_sources import (
     lock_protected_source_workspace,
     plan_protected_source_manifest_migration,
     reject_protected_source_candidate,
+    scan_protected_sources,
     suggest_protected_source,
 )
 
@@ -166,6 +173,14 @@ def _build_parser() -> argparse.ArgumentParser:
     suggest.add_argument("--workspace", type=Path, default=Path.cwd())
     suggest.add_argument("--json", action="store_true", help="Print machine-readable output.")
     _add_runtime_path_arguments(suggest)
+
+    scan = protect_subparsers.add_parser(
+        "scan",
+        help="Discover one value-free proposal with a bounded offline workspace scan.",
+    )
+    scan.add_argument("--workspace", type=Path, default=Path.cwd())
+    scan.add_argument("--json", action="store_true", help="Print machine-readable output.")
+    _add_runtime_path_arguments(scan)
 
     approve = protect_subparsers.add_parser(
         "approve",
@@ -442,6 +457,13 @@ def _run_protect(args: argparse.Namespace) -> int:
                 workspace_path,
                 (args.path,),
             )
+        elif args.protect_command == "scan":
+            payload = _scan_protected_source_candidates(
+                store,
+                workspace,
+                workspace_path,
+                paths,
+            )
         elif args.protect_command == "approve":
             payload = _approve_protected_source_candidate(
                 store,
@@ -497,6 +519,7 @@ def _run_protect(args: argparse.Namespace) -> int:
         return 1
     except ValueError:
         migration_command = args.protect_command == "migrate"
+        scan_command = args.protect_command == "scan"
         _render_protect_error(
             (
                 "migration_state_conflict"
@@ -506,7 +529,11 @@ def _run_protect(args: argparse.Namespace) -> int:
             (
                 "protected source manifest changed; create a new migration plan"
                 if migration_command
-                else "protected source candidate state changed; run suggest again"
+                else (
+                    "protected source candidate state changed; run scan again"
+                    if scan_command
+                    else "protected source candidate state changed; run suggest again"
+                )
             ),
             as_json=args.json,
         )
@@ -561,6 +588,247 @@ def _suggest_protected_sources(
             relative_paths,
             workspace_lock=workspace_lock,
         )
+
+
+def _scan_protected_source_candidates(
+    store: EventStore,
+    workspace: WorkspaceContext,
+    workspace_path: Path,
+    paths: RuntimePaths,
+) -> dict[str, Any]:
+    assert workspace.workspace_id is not None
+    with lock_protected_source_workspace(workspace_path) as workspace_lock:
+        scan = scan_protected_sources(
+            workspace_path,
+            workspace_id=workspace.workspace_id,
+            workspace_lock=workspace_lock,
+            excluded_relative_paths=_scan_excluded_relative_paths(
+                workspace_path,
+                paths,
+            ),
+        )
+        return _save_next_scanned_candidate(
+            store,
+            workspace,
+            scan,
+        )
+
+
+def _save_next_scanned_candidate(
+    store: EventStore,
+    workspace: WorkspaceContext,
+    scan: ProtectedSourceScanResult,
+) -> dict[str, Any]:
+    """Persist and expose at most one candidate from one bounded scan."""
+
+    assert workspace.workspace_id is not None
+    suppression_fingerprints = tuple(
+        candidate.suppression_fingerprint for candidate in scan.candidates
+    )
+    stored_candidates = (
+        store.list_protected_source_candidates_by_suppression_fingerprints(
+            workspace.workspace_id,
+            suppression_fingerprints,
+        )
+    )
+    stored_by_fingerprint = {
+        candidate.suppression_fingerprint: candidate
+        for candidate in stored_candidates
+    }
+    selected: ProtectedSourceCandidate | None = None
+    selected_candidate_id: str | None = None
+    for candidate in scan.candidates:
+        stored = stored_by_fingerprint.get(candidate.suppression_fingerprint)
+        if not _scan_candidate_requires_proposal(candidate, stored):
+            continue
+        created = store.create_or_get_protected_source_candidate(
+            **candidate.to_storage_record(discovery_source="bounded_scan")
+        )
+        if (
+            created.suppressed
+            or created.already_approved
+            or created.approval_in_progress
+        ):
+            continue
+        if (
+            created.candidate.candidate_revision_sha256
+            != candidate.candidate_revision_sha256
+        ):
+            raise _ProtectCliError(
+                "candidate_state_conflict",
+                "protected source candidate changed during scan",
+            )
+        selected = candidate
+        selected_candidate_id = created.candidate.candidate_id
+        break
+
+    current_candidates = (
+        store.list_protected_source_candidates_by_suppression_fingerprints(
+            workspace.workspace_id,
+            suppression_fingerprints,
+        )
+    )
+    current_by_fingerprint = {
+        candidate.suppression_fingerprint: candidate
+        for candidate in current_candidates
+    }
+    candidates: list[dict[str, object]] = []
+    selected_fingerprint: str | None = None
+    if selected is not None and selected_candidate_id is not None:
+        current = current_by_fingerprint.get(selected.suppression_fingerprint)
+        if (
+            current is None
+            or current.candidate_id != selected_candidate_id
+            or current.status != "proposed"
+            or current.candidate_revision_sha256
+            != selected.candidate_revision_sha256
+        ):
+            raise _ProtectCliError(
+                "candidate_state_conflict",
+                "protected source candidate changed during scan",
+            )
+        candidates.append(
+            selected.with_candidate_id(selected_candidate_id).to_public_payload()
+        )
+        selected_fingerprint = selected.suppression_fingerprint
+
+    suppressed_count = 0
+    approved_count = int(scan.already_registered_count)
+    approval_in_progress_count = 0
+    remaining_candidate_count = 0
+    for candidate in scan.candidates:
+        if candidate.suppression_fingerprint == selected_fingerprint:
+            continue
+        stored = current_by_fingerprint.get(candidate.suppression_fingerprint)
+        if _scan_candidate_requires_proposal(candidate, stored):
+            remaining_candidate_count += 1
+        elif stored is not None and stored.status in {"rejected", "ignored"}:
+            suppressed_count += 1
+        elif stored is not None and stored.status == "approved":
+            approved_count += 1
+        elif stored is not None and stored.status == "approving":
+            approval_in_progress_count += 1
+
+    if candidates:
+        status = "review_required"
+    elif approval_in_progress_count:
+        status = "approval_in_progress"
+    elif remaining_candidate_count:
+        raise _ProtectCliError(
+            "candidate_state_conflict",
+            "protected source candidate changed during scan",
+        )
+    elif not scan.scan_complete:
+        status = "scan_incomplete"
+    elif suppressed_count:
+        status = "suppressed"
+    else:
+        status = "no_candidate"
+
+    scan_counts = {
+        name: int(getattr(scan, name))
+        for name in (
+            "entries_seen",
+            "directories_scanned",
+            "files_seen",
+            "eligible_files_seen",
+            "inspected_bytes",
+            "detected_candidate_count",
+            "public_candidate_bytes",
+        )
+    }
+    continuation_required = bool(
+        candidates
+        or remaining_candidate_count
+        or approval_in_progress_count
+        or not scan.scan_complete
+    )
+    return {
+        "schema_version": PROTECT_OUTPUT_SCHEMA_VERSION,
+        "status": status,
+        "scanner_version": scan.scanner_version,
+        "scan_complete": bool(scan.scan_complete),
+        "truncation_reasons": list(scan.truncation_reasons),
+        "scan_limits": asdict(DEFAULT_PROTECTED_SOURCE_SCAN_LIMITS),
+        "scan_counts": scan_counts,
+        "skipped_counts": dict(scan.skipped_counts),
+        "manifest_sha256": scan.manifest_sha256,
+        "candidate_count": len(candidates),
+        "candidates": candidates,
+        "suppressed_count": suppressed_count,
+        "already_registered_count": approved_count,
+        "approval_in_progress_count": approval_in_progress_count,
+        "remaining_candidate_count": remaining_candidate_count,
+        "continuation_required": continuation_required,
+        "approval_mode": "one_at_a_time",
+        "rescan_required_after_manifest_change": True,
+    }
+
+
+def _scan_candidate_requires_proposal(
+    candidate: ProtectedSourceCandidate,
+    stored: StoredProtectedSourceCandidate | None,
+) -> bool:
+    if stored is None or stored.status in {"proposed", "stale"}:
+        return True
+    return bool(
+        stored.status == "approved"
+        and stored.manifest_sha256 != candidate.manifest_sha256
+    )
+
+
+def _scan_excluded_relative_paths(
+    workspace_path: Path,
+    paths: RuntimePaths,
+) -> tuple[str, ...]:
+    canonical_workspace = Path(os.path.realpath(workspace_path))
+    canonical_data_dir = Path(os.path.realpath(paths.data_dir))
+    relative_data_dir = _relative_path_from_filesystem_ancestor(
+        canonical_workspace,
+        canonical_data_dir,
+    )
+    if relative_data_dir is None:
+        return ()
+    if relative_data_dir != Path("."):
+        return (relative_data_dir.as_posix(),)
+
+    exclusions = ["manifest-backups"]
+    canonical_database = Path(os.path.realpath(paths.db_path))
+    relative_database = _relative_path_from_filesystem_ancestor(
+        canonical_workspace,
+        canonical_database,
+    )
+    if relative_database is not None and relative_database != Path("."):
+        database_path = relative_database.as_posix()
+        exclusions.extend(
+            (
+                database_path,
+                f"{database_path}-wal",
+                f"{database_path}-shm",
+            )
+        )
+    return tuple(sorted(set(exclusions), key=lambda value: value.encode("utf-8")))
+
+
+def _relative_path_from_filesystem_ancestor(
+    ancestor: Path,
+    target: Path,
+) -> Path | None:
+    """Return a relative path using filesystem identity for existing ancestors."""
+
+    current = target
+    suffix: list[str] = []
+    while True:
+        try:
+            if os.path.samefile(ancestor, current):
+                return Path(*reversed(suffix)) if suffix else Path(".")
+        except OSError:
+            pass
+        parent = current.parent
+        if parent == current:
+            return None
+        suffix.append(current.name)
+        current = parent
 
 
 def _suggest_protected_sources_under_lock(
@@ -882,6 +1150,28 @@ def _render_protect_payload(payload: dict[str, Any], *, as_json: bool) -> None:
     print(f"status: {payload['status']}")
     if payload.get("manifest_sha256") is not None:
         print(f"manifest_sha256: {payload['manifest_sha256']}")
+    for key in (
+        "scanner_version",
+        "scan_complete",
+        "truncation_reasons",
+        "scan_limits",
+        "scan_counts",
+        "skipped_counts",
+        "candidate_count",
+        "suppressed_count",
+        "already_registered_count",
+        "approval_in_progress_count",
+        "remaining_candidate_count",
+        "continuation_required",
+        "approval_mode",
+        "rescan_required_after_manifest_change",
+    ):
+        if key not in payload:
+            continue
+        value = payload[key]
+        if isinstance(value, (dict, list)):
+            value = json.dumps(value, ensure_ascii=False, sort_keys=True)
+        print(f"{key}: {value}")
     for candidate in payload.get("candidates", []):
         print(json.dumps(candidate, ensure_ascii=False, sort_keys=True))
     if "candidate_id" in payload:

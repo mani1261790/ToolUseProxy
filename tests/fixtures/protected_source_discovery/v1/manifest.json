@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "dataset_id": "tooluseproxy-protected-source-discovery",
+  "dataset_version": "1.0.0",
+  "description": "Synthetic template workspaces for bounded protected-source discovery evaluation.",
+  "files": {
+    "scenarios": "scenarios.jsonl"
+  },
+  "expected_counts": {
+    "scenarios": 24,
+    "files": 240,
+    "development_scenarios": 12,
+    "validation_scenarios": 12,
+    "supported_positive": 48,
+    "supported_negative": 144,
+    "out_of_scope_protected": 24,
+    "excluded_irrelevant": 24
+  },
+  "go_no_go": {
+    "minimum_precision": 0.9,
+    "minimum_recall": 0.8,
+    "minimum_selector_precision": 1.0,
+    "minimum_selector_recall": 1.0,
+    "minimum_selector_exact_match_rate": 1.0,
+    "maximum_workspace_candidate_median": 2.0,
+    "maximum_privacy_exposures": 0
+  },
+  "baseline": {
+    "detector_version": "protected-source-candidate-v1",
+    "tp": 48,
+    "fp": 96,
+    "tn": 48,
+    "fn": 0,
+    "selector_tp": 48,
+    "selector_fp": 96,
+    "selector_fn": 0,
+    "selector_exact_matches": 48,
+    "complete_scans": 24,
+    "workspace_candidate_median": 6.0,
+    "out_of_scope_candidates": 0,
+    "excluded_candidates": 0,
+    "privacy_exposures": 0
+  }
+}

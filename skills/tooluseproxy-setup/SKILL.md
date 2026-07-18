@@ -33,21 +33,28 @@ Use this workflow only when the user asks to set up or diagnose ToolUseProxy. Ne
    ```
 
    The apply command accepts no replacement JSON. If the manifest changed, run `protect migrate plan` again, present the new plan, and obtain new approval. For an interruption or durability-unknown result, retry the exact same apply command. The workspace lock serializes cooperating ToolUseProxy writers, but not a same-UID non-cooperating editor; filesystem updates are not guaranteed to be serialized across the final validation-to-replace or durability-revalidation-to-completion windows. Run migration only on POSIX (macOS/Linux); it is unsupported on Windows. Migration approval never approves a later protected-source proposal.
-7. For a user-identified `.env`, `.env.*`, or JSON file, create a separate value-free source proposal with:
+7. After schema v2 and `registration_writable: true` are confirmed, explicitly run the bounded offline scanner:
+
+   ```text
+   sh "<PLUGIN_ROOT>/hooks/run_cli.sh" protect scan --workspace <workspace-root> --data-dir <PLUGIN_DATA> --json
+   ```
+
+   The scanner is read-only for source files and the manifest, performs no network access, and uses fixed limits for traversal depth, entries, supported files, total bytes, and candidates. It excludes VCS, dependencies, virtual environments, build/cache directories, symlinks, and ToolUseProxy runtime data. It writes only a value-free candidate/review audit plus internal source hash/stat to the local runtime database and returns at most one review candidate in stable relative-path order. Show the relative path, reason codes, confidence, proposed source entry, and scan completeness. Never show or repeat source values, source hashes, absolute paths, or file previews. If `scan_complete` is false, explain the reached limit reasons and that unscanned scope remains; never report that no protected source exists.
+8. If the user or agent already knows one `.env`, `.env.*`, or JSON path, or needs to propose a file outside the bounded scanner's policy, use the explicit-path fallback:
 
    ```text
    sh "<PLUGIN_ROOT>/hooks/run_cli.sh" protect suggest --path <workspace-relative-path> --workspace <workspace-root> --data-dir <PLUGIN_DATA> --json
    ```
 
-   `suggest` is read-only for the source and manifest, but it writes a value-free candidate, review audit, and an internal source hash/stat to the local runtime database. Show the returned relative path, reason codes, confidence, and proposed source entry. Never show or repeat source values, source hashes, or file previews.
-8. Wait for explicit user approval of that exact source proposal. Approval is not implied by setup, diagnosis, manifest migration, a prior request to inspect the file, or permission to edit other project files. After approval, pass the unchanged opaque revision and manifest hash returned by `suggest`:
+   `suggest` has the same source/manifest read-only and value-free output/storage boundary as `scan`, but it evaluates only the requested path.
+9. Wait for explicit user approval of that exact source proposal. Approval is not implied by setup, diagnosis, manifest migration, running a scan, a prior request to inspect the file, or permission to edit other project files. After approval, pass the unchanged opaque revision and manifest hash returned by `scan` or `suggest`:
 
    ```text
    sh "<PLUGIN_ROOT>/hooks/run_cli.sh" protect approve <candidate-id> --candidate-revision <opaque-revision> --expected-manifest-sha256 <manifest-sha256> --workspace <workspace-root> --data-dir <PLUGIN_DATA> --json
    ```
 
-   Approval holds the workspace lock from the candidate reservation through manifest I/O and DB finalize/release. The expected manifest hash is an optimistic precondition; the lock serializes cooperating ToolUseProxy writers but does not exclude a same-UID non-cooperating editor. Filesystem/DB serialization is therefore not guaranteed across either the final validation-to-replace window or the durability-revalidation-to-DB-finalize window. For an interruption or transient state failure, retry the exact same approve command and unchanged candidate ID, opaque revision, and manifest hash. Exact-entry recovery re-fsyncs the workspace directory and revalidates the source and manifest before finalizing. If approval reports that the source or manifest changed, run `suggest` again and present the new proposal. Do not weaken the comparison or retry with an edited proposal. Use `protect reject` or `protect ignore` to persist a user's negative decision. Run the whole `protect suggest / approve / reject / ignore` workflow only on POSIX (macOS/Linux); it is not supported on Windows yet.
+   Approval holds the workspace lock from the candidate reservation through manifest I/O and DB finalize/release. The expected manifest hash is an optimistic precondition; the lock serializes cooperating ToolUseProxy writers but does not exclude a same-UID non-cooperating editor. Filesystem/DB serialization is therefore not guaranteed across either the final validation-to-replace window or the durability-revalidation-to-DB-finalize window. For an interruption or transient state failure, retry the exact same approve command and unchanged candidate ID, opaque revision, and manifest hash. Exact-entry recovery re-fsyncs the workspace directory and revalidates the source and manifest before finalizing. One approval changes the manifest hash, so never use another candidate's old scan revision/hash afterward. Run `protect scan` again, show the refreshed next proposal, and obtain a separate explicit approval. If an explicit-path approval reports that the source or manifest changed, run `suggest` again and present the new proposal. Do not weaken the comparison or retry with an edited proposal. Use `protect reject` or `protect ignore` to persist a user's negative decision. Run the whole `protect scan / suggest / approve / reject / ignore` workflow only on POSIX (macOS/Linux); it is not supported on Windows yet. Neither `init` nor a Hook runs the scanner implicitly.
 
-9. Use `status` to verify the database, canonical workspace registration, schema v2 manifest, and protected sources all resolve to the same workspace.
+10. Use `status` to verify the database, canonical workspace registration, schema v2 manifest, and protected sources all resolve to the same workspace. `status: active` means runtime health, not that a complete scan ran or that every sensitive file is registered.
 
 The default onboarding boundary records tool activity and reviews final responses. PreToolUse blocking and MCP blocking remain explicit opt-ins; do not silently enable them.

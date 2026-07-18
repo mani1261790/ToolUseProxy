@@ -812,7 +812,7 @@ class PluginBundleTest(unittest.TestCase):
             ).encode("utf-8")
             legacy_manifest.write_bytes(legacy_manifest_before)
             legacy_manifest.chmod(0o600)
-            data_dir = root / "plugin data"
+            data_dir = workspace / ".tooluseproxy data"
             environment = dict(os.environ)
             environment.update(
                 {
@@ -901,6 +901,68 @@ class PluginBundleTest(unittest.TestCase):
             self.assertTrue(
                 legacy_status_payload["protected_sources"]["migration_required"]
             )
+
+            registration_secret = "RELOCATED.PLUGIN.SECRET.9d31"
+            decoy_secret = "RELOCATED.EXCLUDED.SECRET.61b7"
+            registered_json = workspace / "config" / "runtime.json"
+            registered_json.parent.mkdir()
+            registered_json.write_text(
+                json.dumps(
+                    {
+                        "private_token": registration_secret,
+                        "public_mode": "demo",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            dependency_decoy = workspace / "node_modules" / "package" / "runtime.json"
+            dependency_decoy.parent.mkdir(parents=True)
+            dependency_decoy.write_text(
+                json.dumps({"private_token": decoy_secret}),
+                encoding="utf-8",
+            )
+            data_decoy = data_dir / "runtime.json"
+            data_decoy.write_text(
+                json.dumps({"private_token": decoy_secret}),
+                encoding="utf-8",
+            )
+
+            legacy_scan = subprocess.run(
+                [
+                    "sh",
+                    str(cli_launcher),
+                    "protect",
+                    "scan",
+                    "--workspace",
+                    str(workspace),
+                    "--data-dir",
+                    str(data_dir),
+                    "--json",
+                ],
+                cwd=workspace,
+                env=environment,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(1, legacy_scan.returncode)
+            self.assertEqual("", legacy_scan.stdout)
+            self.assertEqual(
+                "manifest_schema_legacy",
+                json.loads(legacy_scan.stderr)["error"]["code"],
+            )
+            self.assertNotIn(
+                registration_secret,
+                legacy_scan.stdout + legacy_scan.stderr,
+            )
+            self.assertNotIn(decoy_secret, legacy_scan.stdout + legacy_scan.stderr)
+            with sqlite3.connect(data_dir / "events.db") as conn:
+                self.assertEqual(
+                    0,
+                    conn.execute(
+                        "SELECT COUNT(*) FROM protected_source_candidates"
+                    ).fetchone()[0],
+                )
 
             migration_plan = subprocess.run(
                 [
@@ -999,19 +1061,13 @@ class PluginBundleTest(unittest.TestCase):
                 migrated_manifest["future_top_field"],
             )
 
-            registration_secret = "RELOCATED.PLUGIN.SECRET.9d31"
-            (workspace / ".env.agent").write_text(
-                f"PRIVATE_TOKEN={registration_secret}\nPUBLIC_MODE=demo\n",
-                encoding="utf-8",
-            )
+            manifest_before_scan = legacy_manifest.read_bytes()
             suggestion = subprocess.run(
                 [
                     "sh",
                     str(cli_launcher),
                     "protect",
-                    "suggest",
-                    "--path",
-                    ".env.agent",
+                    "scan",
                     "--workspace",
                     str(workspace),
                     "--data-dir",
@@ -1026,16 +1082,29 @@ class PluginBundleTest(unittest.TestCase):
             )
             suggestion_payload = json.loads(suggestion.stdout)
             self.assertEqual("review_required", suggestion_payload["status"])
+            self.assertTrue(suggestion_payload["scan_complete"])
+            self.assertEqual("one_at_a_time", suggestion_payload["approval_mode"])
+            self.assertTrue(
+                suggestion_payload["rescan_required_after_manifest_change"]
+            )
+            self.assertEqual(0, suggestion_payload["remaining_candidate_count"])
+            self.assertTrue(suggestion_payload["continuation_required"])
             self.assertEqual(1, len(suggestion_payload["candidates"]))
             candidate = suggestion_payload["candidates"][0]
             self.assertIs(candidate["review_required"], True)
-            self.assertEqual(".env.agent", candidate["path"])
+            self.assertEqual("config/runtime.json", candidate["path"])
             self.assertEqual(
-                {"dotenv_keys": ["PRIVATE_TOKEN"]},
+                {"json_pointers": ["/private_token"]},
                 candidate["proposed_source"]["selector"],
             )
+            self.assertEqual(manifest_before_scan, legacy_manifest.read_bytes())
             self.assertNotIn(
                 registration_secret,
+                suggestion.stdout + suggestion.stderr,
+            )
+            self.assertNotIn(decoy_secret, suggestion.stdout + suggestion.stderr)
+            self.assertNotIn(
+                str(workspace.resolve()),
                 suggestion.stdout + suggestion.stderr,
             )
 
@@ -1080,11 +1149,11 @@ class PluginBundleTest(unittest.TestCase):
             registered_source = next(
                 source
                 for source in protected_manifest["sources"]
-                if source["path"] == ".env.agent"
+                if source["path"] == "config/runtime.json"
             )
             self.assertEqual("secretfile", registered_source["type"])
             self.assertEqual(
-                {"dotenv_keys": ["PRIVATE_TOKEN"]},
+                {"json_pointers": ["/private_token"]},
                 registered_source["selector"],
             )
             candidate_database_check = subprocess.run(
@@ -1106,6 +1175,42 @@ class PluginBundleTest(unittest.TestCase):
                 check=True,
             )
             self.assertEqual("absent", candidate_database_check.stdout.strip())
+
+            repeated_scan = subprocess.run(
+                [
+                    "sh",
+                    str(cli_launcher),
+                    "protect",
+                    "scan",
+                    "--workspace",
+                    str(workspace),
+                    "--data-dir",
+                    str(data_dir),
+                    "--json",
+                ],
+                cwd=workspace,
+                env=environment,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            repeated_scan_payload = json.loads(repeated_scan.stdout)
+            self.assertEqual("no_candidate", repeated_scan_payload["status"])
+            self.assertEqual([], repeated_scan_payload["candidates"])
+            self.assertTrue(repeated_scan_payload["scan_complete"])
+            self.assertFalse(repeated_scan_payload["continuation_required"])
+            self.assertGreaterEqual(
+                repeated_scan_payload["already_registered_count"],
+                2,
+            )
+            self.assertNotIn(
+                registration_secret,
+                repeated_scan.stdout + repeated_scan.stderr,
+            )
+            self.assertNotIn(
+                decoy_secret,
+                repeated_scan.stdout + repeated_scan.stderr,
+            )
 
             doctor = subprocess.run(
                 [
@@ -1193,7 +1298,7 @@ class PluginBundleTest(unittest.TestCase):
                     """
                     SELECT source_id, selector_json
                     FROM protected_sources
-                    WHERE path = '.env.agent'
+                    WHERE path = 'config/runtime.json'
                     """
                 ).fetchone()
                 legacy_runtime_source = conn.execute(
@@ -1234,7 +1339,7 @@ class PluginBundleTest(unittest.TestCase):
                 phases,
             )
             self.assertEqual(
-                {"dotenv_keys": ["PRIVATE_TOKEN"]},
+                {"json_pointers": ["/private_token"]},
                 json.loads(runtime_source[1]),
             )
             self.assertEqual(1, source_chunk_count)
@@ -1581,7 +1686,7 @@ class WheelInstallationTest(unittest.TestCase):
             ).encode("utf-8")
             legacy_manifest.write_bytes(legacy_manifest_before)
             legacy_manifest.chmod(0o600)
-            data_dir = root / "installed-runtime"
+            data_dir = outside / ".tooluseproxy data"
             initialize = subprocess.run(
                 [
                     str(python),
@@ -1605,6 +1710,68 @@ class WheelInstallationTest(unittest.TestCase):
             self.assertEqual("initialized", initialize_payload["status"])
             self.assertFalse(initialize_payload["manifest_created"])
             db_path = data_dir / "events.db"
+
+            installed_secret = "INSTALLED.REGISTRATION.SECRET.7b2e"
+            decoy_secret = "INSTALLED.EXCLUDED.SECRET.30f1"
+            installed_json = outside / "config" / "runtime.json"
+            installed_json.parent.mkdir()
+            installed_json.write_text(
+                json.dumps(
+                    {
+                        "private_token": installed_secret,
+                        "public_mode": "demo",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            dependency_decoy = outside / "node_modules" / "package" / "runtime.json"
+            dependency_decoy.parent.mkdir(parents=True)
+            dependency_decoy.write_text(
+                json.dumps({"private_token": decoy_secret}),
+                encoding="utf-8",
+            )
+            (data_dir / "runtime.json").write_text(
+                json.dumps({"private_token": decoy_secret}),
+                encoding="utf-8",
+            )
+
+            legacy_scan = subprocess.run(
+                [
+                    str(python),
+                    "-m",
+                    "tooluseproxy",
+                    "protect",
+                    "scan",
+                    "--workspace",
+                    str(outside),
+                    "--data-dir",
+                    str(data_dir),
+                    "--json",
+                ],
+                cwd=outside,
+                env=clean_environment,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(1, legacy_scan.returncode)
+            self.assertEqual("", legacy_scan.stdout)
+            self.assertEqual(
+                "manifest_schema_legacy",
+                json.loads(legacy_scan.stderr)["error"]["code"],
+            )
+            self.assertNotIn(
+                installed_secret,
+                legacy_scan.stdout + legacy_scan.stderr,
+            )
+            self.assertNotIn(decoy_secret, legacy_scan.stdout + legacy_scan.stderr)
+            with sqlite3.connect(db_path) as conn:
+                self.assertEqual(
+                    0,
+                    conn.execute(
+                        "SELECT COUNT(*) FROM protected_source_candidates"
+                    ).fetchone()[0],
+                )
 
             migration_plan = subprocess.run(
                 [
@@ -1705,20 +1872,14 @@ class WheelInstallationTest(unittest.TestCase):
                 migrated_manifest["future_top_field"],
             )
 
-            installed_secret = "INSTALLED.REGISTRATION.SECRET.7b2e"
-            (outside / ".env.agent").write_text(
-                f"PRIVATE_TOKEN={installed_secret}\nPUBLIC_MODE=demo\n",
-                encoding="utf-8",
-            )
+            manifest_before_scan = legacy_manifest.read_bytes()
             suggestion = subprocess.run(
                 [
                     str(python),
                     "-m",
                     "tooluseproxy",
                     "protect",
-                    "suggest",
-                    "--path",
-                    ".env.agent",
+                    "scan",
                     "--workspace",
                     str(outside),
                     "--data-dir",
@@ -1733,8 +1894,23 @@ class WheelInstallationTest(unittest.TestCase):
             )
             suggestion_payload = json.loads(suggestion.stdout)
             self.assertEqual("review_required", suggestion_payload["status"])
+            self.assertTrue(suggestion_payload["scan_complete"])
+            self.assertEqual("one_at_a_time", suggestion_payload["approval_mode"])
+            self.assertEqual(0, suggestion_payload["remaining_candidate_count"])
+            self.assertTrue(suggestion_payload["continuation_required"])
             self.assertNotIn(installed_secret, suggestion.stdout + suggestion.stderr)
+            self.assertNotIn(decoy_secret, suggestion.stdout + suggestion.stderr)
+            self.assertNotIn(
+                str(outside.resolve()),
+                suggestion.stdout + suggestion.stderr,
+            )
+            self.assertEqual(manifest_before_scan, legacy_manifest.read_bytes())
             installed_candidate = suggestion_payload["candidates"][0]
+            self.assertEqual("config/runtime.json", installed_candidate["path"])
+            self.assertEqual(
+                {"json_pointers": ["/private_token"]},
+                installed_candidate["proposed_source"]["selector"],
+            )
             approval = subprocess.run(
                 [
                     str(python),
@@ -1768,6 +1944,42 @@ class WheelInstallationTest(unittest.TestCase):
             self.assertEqual(
                 {"value": legacy_metadata},
                 registered_manifest["future_top_field"],
+            )
+            repeated_scan = subprocess.run(
+                [
+                    str(python),
+                    "-m",
+                    "tooluseproxy",
+                    "protect",
+                    "scan",
+                    "--workspace",
+                    str(outside),
+                    "--data-dir",
+                    str(data_dir),
+                    "--json",
+                ],
+                cwd=outside,
+                env=clean_environment,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            repeated_scan_payload = json.loads(repeated_scan.stdout)
+            self.assertEqual("no_candidate", repeated_scan_payload["status"])
+            self.assertEqual([], repeated_scan_payload["candidates"])
+            self.assertTrue(repeated_scan_payload["scan_complete"])
+            self.assertFalse(repeated_scan_payload["continuation_required"])
+            self.assertGreaterEqual(
+                repeated_scan_payload["already_registered_count"],
+                2,
+            )
+            self.assertNotIn(
+                installed_secret,
+                repeated_scan.stdout + repeated_scan.stderr,
+            )
+            self.assertNotIn(
+                decoy_secret,
+                repeated_scan.stdout + repeated_scan.stderr,
             )
             payload = {
                 "hook_event_name": "PreToolUse",
@@ -1853,7 +2065,7 @@ class WheelInstallationTest(unittest.TestCase):
                     """
                     SELECT path, source_id, selector_json
                     FROM protected_sources
-                    WHERE path IN ('.env.legacy', '.env.agent')
+                    WHERE path IN ('.env.legacy', 'config/runtime.json')
                     ORDER BY path
                     """
                 ).fetchall()
@@ -1875,7 +2087,7 @@ class WheelInstallationTest(unittest.TestCase):
                 ).fetchone()
             self.assertEqual(3, count)
             self.assertEqual(
-                [".env.agent", ".env.legacy"],
+                [".env.legacy", "config/runtime.json"],
                 [path for path, _, _ in runtime_sources],
             )
             selectors = {
@@ -1883,11 +2095,14 @@ class WheelInstallationTest(unittest.TestCase):
                 for path, _, selector_json in runtime_sources
             }
             self.assertEqual(
-                {"dotenv_keys": ["PRIVATE_TOKEN"]},
-                selectors[".env.agent"],
+                {"json_pointers": ["/private_token"]},
+                selectors["config/runtime.json"],
             )
             self.assertIsNone(selectors[".env.legacy"])
-            self.assertEqual({".env.agent": 1, ".env.legacy": 1}, chunk_counts)
+            self.assertEqual(
+                {".env.legacy": 1, "config/runtime.json": 1},
+                chunk_counts,
+            )
             self.assertEqual(
                 "session-full",
                 json.loads(runtime_analysis[0])["runtime_reanalysis"],
