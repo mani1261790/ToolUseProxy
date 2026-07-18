@@ -26,9 +26,53 @@ from tooluseproxy.paths import (
     default_user_data_dir,
     resolve_runtime_paths,
 )
+from tooluseproxy.protected_sources import LEGACY_DETECTOR_VERSION
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _rewrite_candidate_detector_version(
+    database_path: Path,
+    candidate_id: str,
+    detector_version: str,
+) -> None:
+    with sqlite3.connect(database_path) as conn:
+        row = conn.execute(
+            """
+            SELECT workspace_id, relative_path, source_sha256,
+                   proposed_source_json
+            FROM protected_source_candidates
+            WHERE candidate_id = ?
+            """,
+            (candidate_id,),
+        ).fetchone()
+        if row is None:
+            raise AssertionError("candidate upgrade fixture is missing")
+        workspace_id, relative_path, source_sha256, proposed_source_json = row
+        suppression_fingerprint = hashlib.sha256(
+            json.dumps(
+                {
+                    "detector_version": detector_version,
+                    "workspace_id": workspace_id,
+                    "path": relative_path,
+                    "source_sha256": source_sha256,
+                    "proposed_source": json.loads(proposed_source_json),
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            ).encode("utf-8")
+        ).hexdigest()
+        conn.execute(
+            """
+            UPDATE protected_source_candidates
+            SET detector_version = ?, suppression_fingerprint = ?
+            WHERE candidate_id = ?
+            """,
+            (detector_version, suppression_fingerprint, candidate_id),
+        )
 
 
 class RuntimePathsTest(unittest.TestCase):
@@ -1175,6 +1219,32 @@ class PluginBundleTest(unittest.TestCase):
                 check=True,
             )
             self.assertEqual("absent", candidate_database_check.stdout.strip())
+            _rewrite_candidate_detector_version(
+                data_dir / "events.db",
+                str(candidate["candidate_id"]),
+                LEGACY_DETECTOR_VERSION,
+            )
+            with sqlite3.connect(data_dir / "events.db") as conn:
+                legacy_candidate = conn.execute(
+                    """
+                    SELECT detector_version, status
+                    FROM protected_source_candidates
+                    WHERE candidate_id = ?
+                    """,
+                    (candidate["candidate_id"],),
+                ).fetchone()
+                legacy_review_count = conn.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM protected_source_candidate_reviews
+                    WHERE candidate_id = ?
+                    """,
+                    (candidate["candidate_id"],),
+                ).fetchone()[0]
+            self.assertEqual(
+                (LEGACY_DETECTOR_VERSION, "approved"),
+                legacy_candidate,
+            )
 
             repeated_scan = subprocess.run(
                 [
@@ -1237,6 +1307,28 @@ class PluginBundleTest(unittest.TestCase):
                     for check in doctor_payload["checks"]
                     if check["name"] == "plugin_environment"
                 )["ok"]
+            )
+            status = subprocess.run(
+                [
+                    "sh",
+                    str(cli_launcher),
+                    "status",
+                    "--workspace",
+                    str(workspace),
+                    "--data-dir",
+                    str(data_dir),
+                    "--json",
+                ],
+                cwd=workspace,
+                env=environment,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            self.assertEqual("active", json.loads(status.stdout)["status"])
+            self.assertNotIn(
+                registration_secret,
+                status.stdout + status.stderr,
             )
 
             active = subprocess.run(
@@ -1333,6 +1425,22 @@ class PluginBundleTest(unittest.TestCase):
                     LIMIT 1
                     """
                 ).fetchone()
+                final_legacy_candidate = conn.execute(
+                    """
+                    SELECT detector_version, status
+                    FROM protected_source_candidates
+                    WHERE candidate_id = ?
+                    """,
+                    (candidate["candidate_id"],),
+                ).fetchone()
+                final_legacy_review_count = conn.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM protected_source_candidate_reviews
+                    WHERE candidate_id = ?
+                    """,
+                    (candidate["candidate_id"],),
+                ).fetchone()[0]
             self.assertEqual((str(workspace.resolve()), "hook_cwd"), row)
             self.assertEqual(
                 [("pre_tool_use",), ("post_tool_use",), ("stop",)],
@@ -1345,6 +1453,11 @@ class PluginBundleTest(unittest.TestCase):
             self.assertEqual(1, source_chunk_count)
             self.assertIsNone(json.loads(legacy_runtime_source[1]))
             self.assertEqual(1, legacy_chunk_count)
+            self.assertEqual(
+                (LEGACY_DETECTOR_VERSION, "approved"),
+                final_legacy_candidate,
+            )
+            self.assertEqual(legacy_review_count, final_legacy_review_count)
             self.assertEqual(
                 "session-full",
                 json.loads(runtime_analysis[0])["runtime_reanalysis"],
@@ -1598,7 +1711,7 @@ class WheelInstallationTest(unittest.TestCase):
                 capture_output=True,
                 text=True,
             )
-            self.assertIn("tooluseproxy 0.1.0a1", version.stdout)
+            self.assertEqual(f"tooluseproxy {__version__}", version.stdout.strip())
             trace_help = subprocess.run(
                 [str(python), "-m", "tooluseproxy", "trace", "--help"],
                 cwd=outside,

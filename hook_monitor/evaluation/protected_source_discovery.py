@@ -7,7 +7,7 @@ import re
 import statistics
 import tempfile
 from collections import Counter, defaultdict
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, Protocol
@@ -15,8 +15,10 @@ from typing import Any, Protocol
 from hook_monitor.runtime.source_config import CURRENT_MANIFEST_SCHEMA_VERSION
 
 
-DATASET_SCHEMA_VERSION = 1
-SUPPORTED_DATASET_VERSION = "1.0.0"
+V1_DATASET_SCHEMA_VERSION = 1
+V1_DATASET_VERSION = "1.0.0"
+V2_DATASET_SCHEMA_VERSION = 2
+V2_DATASET_VERSION = "2.0.0"
 SUPPORTED_SPLITS = frozenset({"development", "validation"})
 SUPPORTED_CATEGORIES = frozenset(
     {
@@ -26,13 +28,23 @@ SUPPORTED_CATEGORIES = frozenset(
         "excluded_irrelevant",
     }
 )
-RUNNER_VERSION = "protected-source-discovery-evaluation-v1"
+RUNNER_VERSION = "protected-source-discovery-evaluation-v2"
 EXPECTED_V1_DATASET_SHA256 = (
     "ac7f5a24f1fc65a2549392797bcc3177519fbb4f3cbcdb271fd0f3d7cc896ee5"
 )
+EXPECTED_V2_DATASET_SHA256 = (
+    "a4cd72ba5eabb230a8eba2d3a798838f3085398973024eac65c370fca54dc565"
+)
+_PINNED_DATASET_SHA256 = {
+    V1_DATASET_VERSION: EXPECTED_V1_DATASET_SHA256,
+    V2_DATASET_VERSION: EXPECTED_V2_DATASET_SHA256,
+}
 
 _ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 _TAG_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+_PROPOSED_SOURCE_ID_PATTERN = re.compile(
+    r"^protected_[a-z0-9_]{1,40}_[a-f0-9]{16}$"
+)
 _FORBIDDEN_SECRET_PATTERNS = (
     ("AWS access key", re.compile(r"\bAKIA[0-9A-Z]{16}\b")),
     ("GitHub token", re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}\b")),
@@ -47,7 +59,7 @@ _FORBIDDEN_SECRET_PATTERNS = (
         ),
     ),
 )
-_MANIFEST_KEYS = frozenset(
+_V1_MANIFEST_KEYS = frozenset(
     {
         "schema_version",
         "dataset_id",
@@ -57,6 +69,19 @@ _MANIFEST_KEYS = frozenset(
         "expected_counts",
         "go_no_go",
         "baseline",
+    }
+)
+_V2_MANIFEST_KEYS = frozenset(
+    {
+        "schema_version",
+        "dataset_id",
+        "dataset_version",
+        "description",
+        "files",
+        "scenario_contract",
+        "expected_counts",
+        "go_no_go",
+        "baselines",
     }
 )
 _EXPECTED_COUNT_KEYS = frozenset(
@@ -79,6 +104,11 @@ _GO_NO_GO_KEYS = frozenset(
         "maximum_privacy_exposures",
     }
 )
+_V2_GO_NO_GO_KEYS = _GO_NO_GO_KEYS | {
+    "minimum_detected_selector_exact_match_rate",
+    "minimum_hard_positive_recall",
+    "minimum_negative_family_specificity",
+}
 _BASELINE_KEYS = frozenset(
     {
         "detector_version",
@@ -97,6 +127,12 @@ _BASELINE_KEYS = frozenset(
         "privacy_exposures",
     }
 )
+_V2_BASELINE_KEYS = _BASELINE_KEYS | {
+    "detected_selector_exact_matches",
+    "detected_positive_files",
+    "case_outcomes_sha256",
+    "scenario_outcomes_sha256",
+}
 _SCENARIO_KEYS = frozenset(
     {
         "id",
@@ -110,7 +146,7 @@ _SCENARIO_KEYS = frozenset(
         "rationale",
     }
 )
-_FILE_KEYS = frozenset(
+_V1_FILE_KEYS = frozenset(
     {
         "id",
         "path",
@@ -120,6 +156,40 @@ _FILE_KEYS = frozenset(
         "canaries",
         "tags",
         "rationale",
+    }
+)
+_V2_FILE_KEYS = _V1_FILE_KEYS | {
+    "challenge_family",
+    "counterfactual_group",
+}
+_V2_SCENARIO_CONTRACT_KEYS = frozenset(
+    {
+        "files_per_scenario",
+        "category_counts",
+        "challenge_family_counts",
+        "hard_positive_families",
+        "negative_families",
+        "profile_prefixes",
+        "split_shape_sha256",
+    }
+)
+_V2_VOCABULARY_KEYS = frozenset(
+    {
+        "schema_version",
+        "dataset_version",
+        "normalization",
+        "shared_format_tokens",
+        "maximum_cross_split_feature_overlap",
+        "splits",
+    }
+)
+_V2_VOCABULARY_SPLIT_KEYS = frozenset(
+    {
+        "pattern_tokens",
+        "placeholder_values",
+        "protocol_values",
+        "path_tokens",
+        "canary_prefixes",
     }
 )
 _PUBLIC_HASH_KEYS = frozenset(
@@ -146,6 +216,8 @@ class DiscoveryFileFixture:
     canaries: tuple[str, ...]
     tags: tuple[str, ...]
     rationale: str
+    challenge_family: str
+    counterfactual_group: str | None
 
     @property
     def expected_candidate(self) -> bool:
@@ -164,14 +236,36 @@ class DiscoveryScenario:
 
 @dataclass(frozen=True)
 class DiscoveryDataset:
+    schema_version: int
     dataset_id: str
     dataset_version: str
     description: str
     digest_sha256: str
+    pinned_digest_sha256: str
     expected_counts: dict[str, int]
     go_no_go: dict[str, float]
-    baseline: dict[str, object]
+    baselines: dict[str, dict[str, object]]
     scenarios: tuple[DiscoveryScenario, ...]
+    files_per_scenario: int
+    category_counts_per_scenario: dict[str, int]
+    challenge_family_counts_per_scenario: dict[str, int]
+    hard_positive_families: tuple[str, ...]
+    negative_families: tuple[str, ...]
+    split_vocabulary: dict[str, dict[str, tuple[str, ...]]]
+    profile_prefixes: dict[str, str]
+    split_shape_sha256: dict[str, str]
+    shared_vocabulary_tokens: tuple[str, ...]
+    maximum_cross_split_feature_overlap: float
+    cross_split_feature_overlap: float
+
+    @property
+    def baseline(self) -> dict[str, object]:
+        """Backward-compatible access to the complete-corpus baseline."""
+
+        return self.baselines["all"]
+
+    def select_baseline(self, split: str | None) -> dict[str, object]:
+        return self.baselines[split or "all"]
 
     def select_scenarios(
         self,
@@ -209,8 +303,22 @@ def load_protected_source_discovery_dataset(root: Path) -> DiscoveryDataset:
     root = Path(root)
     manifest_path = root / "manifest.json"
     manifest = _load_json_object(manifest_path)
-    _require_exact_keys(manifest, _MANIFEST_KEYS, manifest_path)
-    _require_version(manifest, manifest_path)
+    version = (manifest.get("schema_version"), manifest.get("dataset_version"))
+    if version == (V1_DATASET_SCHEMA_VERSION, V1_DATASET_VERSION):
+        return _load_v1_dataset(root, manifest_path, manifest)
+    if version == (V2_DATASET_SCHEMA_VERSION, V2_DATASET_VERSION):
+        return _load_v2_dataset(root, manifest_path, manifest)
+    raise ProtectedSourceDiscoveryDatasetError(
+        f"{manifest_path}: unsupported discovery dataset version"
+    )
+
+
+def _load_v1_dataset(
+    root: Path,
+    manifest_path: Path,
+    manifest: dict[str, Any],
+) -> DiscoveryDataset:
+    _require_exact_keys(manifest, _V1_MANIFEST_KEYS, manifest_path)
 
     dataset_id = _require_identifier(
         manifest["dataset_id"], "dataset_id", manifest_path
@@ -237,20 +345,175 @@ def load_protected_source_discovery_dataset(root: Path) -> DiscoveryDataset:
 
     records = _load_jsonl(scenario_path)
     scenarios = tuple(
-        _parse_scenario(record, scenario_path, line_no)
+        _parse_scenario(
+            record,
+            scenario_path,
+            line_no,
+            schema_version=V1_DATASET_SCHEMA_VERSION,
+            dataset_version=V1_DATASET_VERSION,
+            files_per_scenario=10,
+            file_keys=_V1_FILE_KEYS,
+        )
         for line_no, record in records
     )
-    _validate_dataset(scenarios, expected_counts, scenario_path)
-    digest = _dataset_digest((manifest_path, scenario_path))
+    category_counts = {
+        "supported_positive": 2,
+        "supported_negative": 6,
+        "out_of_scope_protected": 1,
+        "excluded_irrelevant": 1,
+    }
+    _validate_dataset(
+        scenarios,
+        expected_counts,
+        scenario_path,
+        category_counts_per_scenario=category_counts,
+        challenge_family_counts_per_scenario={},
+        require_disjoint_profiles=False,
+    )
+    split_counts = _selected_expected_counts(
+        tuple(item for item in scenarios if item.split == "development")
+    )
+    split_baseline = _derive_split_baseline(
+        baseline,
+        split_counts,
+        full_supported_positive_count=expected_counts["supported_positive"],
+    )
+    digest = _dataset_digest(
+        (manifest_path, scenario_path),
+        domain=b"tooluseproxy-protected-source-discovery-dataset-v1\0",
+    )
     return DiscoveryDataset(
+        schema_version=V1_DATASET_SCHEMA_VERSION,
         dataset_id=dataset_id,
-        dataset_version=SUPPORTED_DATASET_VERSION,
+        dataset_version=V1_DATASET_VERSION,
         description=description,
         digest_sha256=digest,
+        pinned_digest_sha256=_PINNED_DATASET_SHA256[V1_DATASET_VERSION],
         expected_counts=expected_counts,
         go_no_go=go_no_go,
-        baseline=baseline,
+        baselines={
+            "all": baseline,
+            "development": dict(split_baseline),
+            "validation": dict(split_baseline),
+        },
         scenarios=scenarios,
+        files_per_scenario=10,
+        category_counts_per_scenario=category_counts,
+        challenge_family_counts_per_scenario={},
+        hard_positive_families=(),
+        negative_families=(),
+        split_vocabulary={},
+        profile_prefixes={},
+        split_shape_sha256={},
+        shared_vocabulary_tokens=(),
+        maximum_cross_split_feature_overlap=1.0,
+        cross_split_feature_overlap=0.0,
+    )
+
+
+def _load_v2_dataset(
+    root: Path,
+    manifest_path: Path,
+    manifest: dict[str, Any],
+) -> DiscoveryDataset:
+    _require_exact_keys(manifest, _V2_MANIFEST_KEYS, manifest_path)
+    dataset_id = _require_identifier(
+        manifest["dataset_id"], "dataset_id", manifest_path
+    )
+    description = _require_nonempty_string(
+        manifest["description"], "description", manifest_path
+    )
+    files = manifest["files"]
+    if not isinstance(files, dict) or set(files) != {"scenarios", "vocabulary"}:
+        raise ProtectedSourceDiscoveryDatasetError(
+            f"{manifest_path}: files must contain exactly scenarios and vocabulary"
+        )
+    scenario_path = _resolve_fixture_file(
+        root, files["scenarios"], "files.scenarios", manifest_path
+    )
+    vocabulary_path = _resolve_fixture_file(
+        root, files["vocabulary"], "files.vocabulary", manifest_path
+    )
+    (
+        files_per_scenario,
+        category_counts,
+        challenge_family_counts,
+        hard_positive_families,
+        negative_families,
+        profile_prefixes,
+        split_shape_sha256,
+    ) = _parse_v2_scenario_contract(manifest["scenario_contract"], manifest_path)
+    expected_counts = _parse_expected_counts(
+        manifest["expected_counts"], manifest_path
+    )
+    go_no_go = _parse_go_no_go(
+        manifest["go_no_go"], manifest_path, keys=_V2_GO_NO_GO_KEYS
+    )
+    baselines = _parse_v2_baselines(manifest["baselines"], manifest_path)
+    vocabulary, shared_vocabulary_tokens, maximum_feature_overlap = _parse_v2_vocabulary(
+        _load_json_object(vocabulary_path), vocabulary_path
+    )
+    records = _load_jsonl(scenario_path)
+    scenarios = tuple(
+        _parse_scenario(
+            record,
+            scenario_path,
+            line_no,
+            schema_version=V2_DATASET_SCHEMA_VERSION,
+            dataset_version=V2_DATASET_VERSION,
+            files_per_scenario=files_per_scenario,
+            file_keys=_V2_FILE_KEYS,
+        )
+        for line_no, record in records
+    )
+    _validate_dataset(
+        scenarios,
+        expected_counts,
+        scenario_path,
+        category_counts_per_scenario=category_counts,
+        challenge_family_counts_per_scenario=challenge_family_counts,
+        require_disjoint_profiles=True,
+    )
+    cross_split_feature_overlap = _validate_v2_vocabulary(
+        scenarios,
+        vocabulary,
+        shared_vocabulary_tokens=shared_vocabulary_tokens,
+        maximum_feature_overlap=maximum_feature_overlap,
+        location=vocabulary_path,
+    )
+    _validate_counterfactual_groups(scenarios, scenario_path)
+    _validate_v2_shape_contract(
+        scenarios,
+        profile_prefixes=profile_prefixes,
+        expected_shape_sha256=split_shape_sha256,
+        location=scenario_path,
+    )
+    digest = _dataset_digest(
+        (manifest_path, scenario_path, vocabulary_path),
+        domain=b"tooluseproxy-protected-source-discovery-dataset-v2\0",
+    )
+    return DiscoveryDataset(
+        schema_version=V2_DATASET_SCHEMA_VERSION,
+        dataset_id=dataset_id,
+        dataset_version=V2_DATASET_VERSION,
+        description=description,
+        digest_sha256=digest,
+        pinned_digest_sha256=_PINNED_DATASET_SHA256[V2_DATASET_VERSION],
+        expected_counts=expected_counts,
+        go_no_go=go_no_go,
+        baselines=baselines,
+        scenarios=scenarios,
+        files_per_scenario=files_per_scenario,
+        category_counts_per_scenario=category_counts,
+        challenge_family_counts_per_scenario=challenge_family_counts,
+        hard_positive_families=hard_positive_families,
+        negative_families=negative_families,
+        split_vocabulary=vocabulary,
+        profile_prefixes=profile_prefixes,
+        split_shape_sha256=split_shape_sha256,
+        shared_vocabulary_tokens=shared_vocabulary_tokens,
+        maximum_cross_split_feature_overlap=maximum_feature_overlap,
+        cross_split_feature_overlap=cross_split_feature_overlap,
     )
 
 
@@ -272,10 +535,13 @@ def evaluate_protected_source_discovery(
     detector_versions: set[str] = set()
     aggregate_skips: Counter[str] = Counter()
     candidate_surface_exposures = 0
+    candidate_selected_scalar_exposures = 0
+    candidate_selected_scalar_fingerprint_exposures = 0
     candidate_absolute_path_exposures = 0
     candidate_hash_field_exposures = 0
     duplicate_candidate_count = 0
     unknown_candidate_count = 0
+    invalid_candidate_public_contract_count = 0
     invalid_selector_candidate_count = 0
     scanner_error_count = 0
     out_of_scope_candidates = 0
@@ -289,6 +555,7 @@ def evaluate_protected_source_discovery(
             known_by_path = {
                 fixture.relative_path: fixture for fixture in scenario.files
             }
+            expected_protected_scalars = _expected_protected_scalars(scenario.files)
             candidates_by_path: dict[str, list[_ScannerCandidate]] = defaultdict(list)
             scan_complete = False
             truncation_reasons: tuple[str, ...] = ()
@@ -317,6 +584,9 @@ def evaluate_protected_source_discovery(
                     path = str(candidate.relative_path)
                     candidates_by_path[path].append(candidate)
                     detector_versions.add(str(candidate.detector_version))
+                    invalid_candidate_public_contract_count += int(
+                        not _candidate_public_contract_valid(candidate)
+                    )
                     surface = _candidate_public_surface(candidate)
                     encoded_surface = json.dumps(
                         surface,
@@ -327,6 +597,16 @@ def evaluate_protected_source_discovery(
                     candidate_surface_exposures += _count_canary_exposures(
                         encoded_surface,
                         scenario.files,
+                    )
+                    candidate_selected_scalar_exposures += (
+                        _count_selected_scalar_leaf_exposures(
+                            surface, expected_protected_scalars
+                        )
+                    )
+                    candidate_selected_scalar_fingerprint_exposures += (
+                        _count_selected_scalar_fingerprint_leaf_exposures(
+                            surface, expected_protected_scalars
+                        )
                     )
                     candidate_absolute_path_exposures += int(
                         str(workspace.resolve()) in encoded_surface
@@ -373,6 +653,8 @@ def evaluate_protected_source_discovery(
                         "split": scenario.split,
                         "relative_path": fixture.relative_path,
                         "category": fixture.category,
+                        "challenge_family": fixture.challenge_family,
+                        "counterfactual_group": fixture.counterfactual_group,
                         "tags": list(fixture.tags),
                         "expected_candidate": fixture.expected_candidate,
                         "actual_candidate": actual_candidate,
@@ -409,8 +691,18 @@ def evaluate_protected_source_discovery(
     classification = _classification_metrics(supported_cases)
     selector_metrics = _selector_metrics(file_cases, scenarios)
     by_tag = _by_tag_metrics(supported_cases)
+    by_challenge_family = _by_challenge_family_metrics(file_cases)
+    hard_positive_recall = _hard_positive_recall(
+        supported_cases, dataset.hard_positive_families
+    )
+    negative_family_specificity = _negative_family_specificity(
+        supported_cases, dataset.negative_families
+    )
+    counterfactual_metrics = _counterfactual_metrics(file_cases)
     complete_scans = sum(bool(case["scan_complete"]) for case in scenario_cases)
     workspace_candidate_median = float(statistics.median(candidate_counts))
+    case_outcomes_sha256 = _case_outcomes_digest(file_cases)
+    scenario_outcomes_sha256 = _scenario_outcomes_digest(scenario_cases)
 
     selected_expected_counts = _selected_expected_counts(scenarios)
     deterministic_metrics = {
@@ -422,27 +714,25 @@ def evaluate_protected_source_discovery(
         "selector_fp": selector_metrics["fp"],
         "selector_fn": selector_metrics["fn"],
         "selector_exact_matches": selector_metrics["exact_matches"],
+        "detected_selector_exact_matches": selector_metrics[
+            "detected_exact_matches"
+        ],
+        "detected_positive_files": selector_metrics["detected_positive_files"],
         "complete_scans": complete_scans,
         "workspace_candidate_median": workspace_candidate_median,
         "out_of_scope_candidates": out_of_scope_candidates,
         "excluded_candidates": excluded_candidates,
         "privacy_exposures": (
             candidate_surface_exposures
+            + candidate_selected_scalar_exposures
+            + candidate_selected_scalar_fingerprint_exposures
             + candidate_absolute_path_exposures
             + candidate_hash_field_exposures
         ),
+        "case_outcomes_sha256": case_outcomes_sha256,
+        "scenario_outcomes_sha256": scenario_outcomes_sha256,
     }
-    baseline_expected = (
-        dataset.baseline
-        if split is None
-        else _derive_split_baseline(
-            dataset.baseline,
-            selected_expected_counts,
-            full_supported_positive_count=dataset.expected_counts[
-                "supported_positive"
-            ],
-        )
-    )
+    baseline_expected = dataset.select_baseline(split)
     baseline_reproduced = _baseline_matches(
         baseline_expected,
         deterministic_metrics,
@@ -460,6 +750,10 @@ def evaluate_protected_source_discovery(
         dataset.go_no_go,
         classification=classification,
         selector_metrics=selector_metrics,
+        hard_positive_recall=hard_positive_recall,
+        minimum_negative_family_specificity=negative_family_specificity[
+            "minimum_specificity"
+        ],
         workspace_candidate_median=workspace_candidate_median,
         privacy_exposures=deterministic_metrics["privacy_exposures"],
     )
@@ -468,6 +762,9 @@ def evaluate_protected_source_discovery(
         "no_scanner_errors": scanner_error_count == 0,
         "no_duplicate_candidates": duplicate_candidate_count == 0,
         "no_unknown_candidates": unknown_candidate_count == 0,
+        "no_invalid_candidate_public_contracts": (
+            invalid_candidate_public_contract_count == 0
+        ),
         "no_invalid_candidate_selectors": invalid_selector_candidate_count == 0,
         "no_out_of_scope_candidates": out_of_scope_candidates == 0,
         "no_excluded_candidates": excluded_candidates == 0,
@@ -475,15 +772,20 @@ def evaluate_protected_source_discovery(
     invariants_passed = all(runtime_invariants.values())
 
     report: dict[str, Any] = {
-        "schema_version": 1,
+        "schema_version": 2,
         "runner_version": RUNNER_VERSION,
         "dataset": {
             "id": dataset.dataset_id,
             "version": dataset.dataset_version,
             "sha256": dataset.digest_sha256,
-            "digest_matches_pinned_v1": (
-                dataset.digest_sha256 == EXPECTED_V1_DATASET_SHA256
+            "digest_matches_pinned": (
+                dataset.digest_sha256 == dataset.pinned_digest_sha256
             ),
+            "cross_split_feature_overlap": dataset.cross_split_feature_overlap,
+            "maximum_cross_split_feature_overlap": (
+                dataset.maximum_cross_split_feature_overlap
+            ),
+            "split_shape_sha256": dict(sorted(dataset.split_shape_sha256.items())),
             "split": split or "all",
             **selected_expected_counts,
         },
@@ -495,6 +797,9 @@ def evaluate_protected_source_discovery(
             "workspace_candidate_median": workspace_candidate_median,
             "duplicate_candidate_count": duplicate_candidate_count,
             "unknown_candidate_count": unknown_candidate_count,
+            "invalid_candidate_public_contract_count": (
+                invalid_candidate_public_contract_count
+            ),
             "invalid_selector_candidate_count": invalid_selector_candidate_count,
             "scanner_error_count": scanner_error_count,
             "skipped_counts": dict(sorted(aggregate_skips.items())),
@@ -503,6 +808,10 @@ def evaluate_protected_source_discovery(
             "file_classification": classification,
             "selector_classification": selector_metrics,
             "by_tag": by_tag,
+            "by_challenge_family": by_challenge_family,
+            "hard_positive_recall": hard_positive_recall,
+            "negative_family_specificity": negative_family_specificity,
+            "counterfactual": counterfactual_metrics,
             "scope_coverage": {
                 "supported_protected_files": selected_expected_counts[
                     "supported_positive"
@@ -518,6 +827,12 @@ def evaluate_protected_source_discovery(
                 "candidate_public_canary_exposure_count": (
                     candidate_surface_exposures
                 ),
+                "candidate_selected_scalar_leaf_exposure_count": (
+                    candidate_selected_scalar_exposures
+                ),
+                "candidate_selected_scalar_fingerprint_leaf_exposure_count": (
+                    candidate_selected_scalar_fingerprint_exposures
+                ),
                 "candidate_absolute_workspace_path_exposure_count": (
                     candidate_absolute_path_exposures
                 ),
@@ -525,6 +840,8 @@ def evaluate_protected_source_discovery(
                     candidate_hash_field_exposures
                 ),
                 "report_canary_exposure_count": 0,
+                "report_selected_scalar_leaf_exposure_count": 0,
+                "report_selected_scalar_fingerprint_leaf_exposure_count": 0,
                 "total_exposure_count": deterministic_metrics[
                     "privacy_exposures"
                 ],
@@ -557,8 +874,25 @@ def evaluate_protected_source_discovery(
     report["metrics"]["privacy"][
         "report_canary_exposure_count"
     ] = report_canary_exposures
-    report["metrics"]["privacy"]["total_exposure_count"] += report_canary_exposures
-    report["baseline"]["observed"]["privacy_exposures"] += report_canary_exposures
+    report_selected_scalar_exposures = _count_report_selected_scalar_exposures(
+        report, scenarios
+    )
+    report["metrics"]["privacy"][
+        "report_selected_scalar_leaf_exposure_count"
+    ] = report_selected_scalar_exposures
+    report_selected_scalar_fingerprint_exposures = (
+        _count_report_selected_scalar_fingerprint_exposures(report, scenarios)
+    )
+    report["metrics"]["privacy"][
+        "report_selected_scalar_fingerprint_leaf_exposure_count"
+    ] = report_selected_scalar_fingerprint_exposures
+    final_report_exposures = (
+        report_canary_exposures
+        + report_selected_scalar_exposures
+        + report_selected_scalar_fingerprint_exposures
+    )
+    report["metrics"]["privacy"]["total_exposure_count"] += final_report_exposures
+    report["baseline"]["observed"]["privacy_exposures"] += final_report_exposures
     privacy_passed = report["metrics"]["privacy"]["total_exposure_count"] == 0
     report["baseline"]["reproduced"] = _baseline_matches(
         baseline_expected,
@@ -574,7 +908,7 @@ def evaluate_protected_source_discovery(
     report["summary"]["baseline_reproduced"] = report["baseline"]["reproduced"]
     report["summary"]["privacy_passed"] = privacy_passed
     report["summary"]["check_passed"] = bool(
-        report["dataset"]["digest_matches_pinned_v1"]
+        report["dataset"]["digest_matches_pinned"]
         and report["baseline"]["reproduced"]
         and privacy_passed
         and invariants_passed
@@ -589,6 +923,8 @@ def render_protected_source_discovery_report(report: Mapping[str, Any]) -> str:
     scanner = report["scanner"]
     privacy = report["metrics"]["privacy"]
     scope = report["metrics"]["scope_coverage"]
+    hard_positive_recall = report["metrics"]["hard_positive_recall"]
+    negative_specificity = report["metrics"]["negative_family_specificity"]
     summary = report["summary"]
     lines = [
         (
@@ -614,6 +950,8 @@ def render_protected_source_discovery_report(report: Mapping[str, Any]) -> str:
             f"precision={_format_ratio(selectors['precision'])} "
             f"recall={_format_ratio(selectors['recall'])} "
             f"exact={_format_ratio(selectors['exact_match_rate'])} "
+            "detected_exact="
+            f"{_format_ratio(selectors['detected_exact_match_rate'])} "
             f"tp={selectors['tp']} fp={selectors['fp']} fn={selectors['fn']}"
         ),
         (
@@ -621,6 +959,12 @@ def render_protected_source_discovery_report(report: Mapping[str, Any]) -> str:
             f"candidate_median={scanner['workspace_candidate_median']:.1f} "
             f"duplicates={scanner['duplicate_candidate_count']} "
             f"errors={scanner['scanner_error_count']}"
+        ),
+        (
+            "family gate "
+            f"hard_positive_recall={_format_ratio(hard_positive_recall)} "
+            "minimum_negative_specificity="
+            f"{_format_ratio(negative_specificity['minimum_specificity'])}"
         ),
         (
             "scope "
@@ -688,6 +1032,38 @@ def _candidate_public_surface(candidate: _ScannerCandidate) -> dict[str, object]
         "confidence": float(candidate.confidence),
         "proposed_source": _json_safe_copy(candidate.proposed_source),
     }
+
+
+def _candidate_public_contract_valid(candidate: _ScannerCandidate) -> bool:
+    proposed = candidate.proposed_source
+    relative_path = str(candidate.relative_path)
+    expected_reason_codes = (
+        ("secret_like_json_key",)
+        if relative_path.casefold().endswith(".json")
+        else ("secret_like_dotenv_key",)
+    )
+    if not isinstance(proposed, Mapping) or set(proposed) != {
+        "id",
+        "path",
+        "type",
+        "sensitivity",
+        "policy_tags",
+        "selector",
+    }:
+        return False
+    source_id = proposed.get("id")
+    return (
+        isinstance(source_id, str)
+        and _PROPOSED_SOURCE_ID_PATTERN.fullmatch(source_id) is not None
+        and proposed.get("path") == relative_path
+        and proposed.get("type") == "secretfile"
+        and proposed.get("sensitivity") == "high"
+        and proposed.get("policy_tags") == ["no_external", "no_search"]
+        and _candidate_selector(candidate) is not None
+        and tuple(candidate.reason_codes) == expected_reason_codes
+        and type(candidate.confidence) in {int, float}
+        and float(candidate.confidence) == 0.95
+    )
 
 
 def _candidate_selector(
@@ -763,12 +1139,18 @@ def _selector_metrics(
     actual_items: set[tuple[str, str, str]] = set()
     exact_matches = 0
     expected_files = 0
+    detected_positive_files = 0
+    detected_exact_matches = 0
     for case in file_cases:
         fixture = fixtures[str(case["id"])]
         if fixture.expected_selector is not None:
             expected_files += 1
             if bool(case["selector_exact"]):
                 exact_matches += 1
+            if bool(case["actual_candidate"]):
+                detected_positive_files += 1
+                if bool(case["selector_exact"]):
+                    detected_exact_matches += 1
             for kind, values in fixture.expected_selector.items():
                 expected_items.update(
                     (fixture.file_id, kind, value) for value in values
@@ -798,6 +1180,11 @@ def _selector_metrics(
         "expected_file_count": expected_files,
         "exact_matches": exact_matches,
         "exact_match_rate": _ratio(exact_matches, expected_files),
+        "detected_positive_files": detected_positive_files,
+        "detected_exact_matches": detected_exact_matches,
+        "detected_exact_match_rate": _ratio(
+            detected_exact_matches, detected_positive_files
+        ),
     }
 
 
@@ -810,6 +1197,92 @@ def _by_tag_metrics(cases: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
             )
         )
         for tag in tags
+    }
+
+
+def _by_challenge_family_metrics(
+    cases: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    families = sorted({str(case["challenge_family"]) for case in cases})
+    return {
+        family: _compact_classification(
+            _classification_metrics(
+                [case for case in cases if case["challenge_family"] == family]
+            )
+        )
+        for family in families
+    }
+
+
+def _hard_positive_recall(
+    cases: Sequence[Mapping[str, Any]],
+    families: Sequence[str],
+) -> float:
+    selected = [
+        case
+        for case in cases
+        if case["category"] == "supported_positive"
+        and (not families or case["challenge_family"] in families)
+    ]
+    return _classification_metrics(selected)["recall"] if selected else 0.0
+
+
+def _negative_family_specificity(
+    cases: Sequence[Mapping[str, Any]],
+    families: Sequence[str],
+) -> dict[str, Any]:
+    selected_families = tuple(families) or tuple(
+        sorted(
+            {
+                str(case["challenge_family"])
+                for case in cases
+                if case["category"] == "supported_negative"
+            }
+        )
+    )
+    by_family: dict[str, float] = {}
+    for family in selected_families:
+        family_cases = [
+            case
+            for case in cases
+            if case["category"] == "supported_negative"
+            and case["challenge_family"] == family
+        ]
+        if family_cases:
+            true_negatives = sum(
+                not bool(case["actual_candidate"]) for case in family_cases
+            )
+            by_family[family] = _ratio(true_negatives, len(family_cases))
+    return {
+        "by_family": dict(sorted(by_family.items())),
+        "minimum_specificity": min(by_family.values(), default=0.0),
+    }
+
+
+def _counterfactual_metrics(cases: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    grouped: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
+    for case in cases:
+        group = case.get("counterfactual_group")
+        if isinstance(group, str):
+            grouped[group].append(case)
+    passed_ids: list[str] = []
+    failed_ids: list[str] = []
+    for group, group_cases in sorted(grouped.items()):
+        passed = all(
+            bool(case["actual_candidate"]) == bool(case["expected_candidate"])
+            and (
+                not bool(case["expected_candidate"])
+                or bool(case["selector_exact"])
+            )
+            for case in group_cases
+        )
+        (passed_ids if passed else failed_ids).append(group)
+    return {
+        "group_count": len(grouped),
+        "passed": len(passed_ids),
+        "failed": len(failed_ids),
+        "accuracy": _ratio(len(passed_ids), len(grouped)),
+        "failed_ids": failed_ids,
     }
 
 
@@ -836,6 +1309,8 @@ def _go_no_go_assessment(
     *,
     classification: Mapping[str, Any],
     selector_metrics: Mapping[str, Any],
+    hard_positive_recall: float,
+    minimum_negative_family_specificity: float,
     workspace_candidate_median: float,
     privacy_exposures: object,
 ) -> dict[str, Any]:
@@ -855,6 +1330,20 @@ def _go_no_go_assessment(
         "privacy": int(privacy_exposures)
         <= int(thresholds["maximum_privacy_exposures"]),
     }
+    if "minimum_detected_selector_exact_match_rate" in thresholds:
+        checks["detected_selector_exact_match"] = (
+            float(selector_metrics["detected_exact_match_rate"])
+            >= thresholds["minimum_detected_selector_exact_match_rate"]
+        )
+    if "minimum_hard_positive_recall" in thresholds:
+        checks["hard_positive_recall"] = (
+            hard_positive_recall >= thresholds["minimum_hard_positive_recall"]
+        )
+    if "minimum_negative_family_specificity" in thresholds:
+        checks["negative_family_specificity"] = (
+            minimum_negative_family_specificity
+            >= thresholds["minimum_negative_family_specificity"]
+        )
     return {
         "thresholds": dict(sorted(thresholds.items())),
         "checks": checks,
@@ -911,13 +1400,60 @@ def _baseline_matches(
     detector_versions: set[str],
 ) -> bool:
     expected_version = expected.get("detector_version")
-    if expected_version not in detector_versions:
+    if detector_versions != {expected_version}:
         return False
     return all(
         observed.get(key) == value
         for key, value in expected.items()
         if key != "detector_version"
     )
+
+
+def _case_outcomes_digest(cases: Sequence[Mapping[str, Any]]) -> str:
+    payload = [
+        {
+            "id": str(case["id"]),
+            "actual_candidate": bool(case["actual_candidate"]),
+            "actual_selector": case["actual_selector"],
+            "selector_exact": bool(case["selector_exact"]),
+        }
+        for case in sorted(cases, key=lambda item: str(item["id"]))
+    ]
+    return _outcomes_digest(
+        b"tooluseproxy-protected-source-discovery-case-outcomes-v1\0",
+        payload,
+    )
+
+
+def _scenario_outcomes_digest(cases: Sequence[Mapping[str, Any]]) -> str:
+    payload = [
+        {
+            "id": str(case["id"]),
+            "scan_complete": bool(case["scan_complete"]),
+            "truncation_reasons": list(case["truncation_reasons"]),
+            "candidate_count": int(case["candidate_count"]),
+            "skipped_counts": dict(case["skipped_counts"]),
+            "scanner_error_type": case["scanner_error_type"],
+        }
+        for case in sorted(cases, key=lambda item: str(item["id"]))
+    ]
+    return _outcomes_digest(
+        b"tooluseproxy-protected-source-discovery-scenario-outcomes-v1\0",
+        payload,
+    )
+
+
+def _outcomes_digest(domain: bytes, payload: object) -> str:
+    digest = hashlib.sha256(domain)
+    digest.update(
+        json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    )
+    return digest.hexdigest()
 
 
 def _count_report_canary_exposures(
@@ -947,6 +1483,139 @@ def _count_canary_exposures(
         for fixture in fixtures
         for canary in fixture.canaries
     )
+
+
+def _expected_protected_scalars(
+    fixtures: Sequence[DiscoveryFileFixture],
+) -> frozenset[str]:
+    values: set[str] = set()
+    for fixture in fixtures:
+        selector = fixture.expected_selector
+        if selector is None:
+            continue
+        if "dotenv_keys" in selector:
+            assignments = _fixture_dotenv_assignments(fixture.content)
+            values.update(
+                value
+                for key in selector["dotenv_keys"]
+                if (value := assignments.get(key))
+            )
+        elif "json_pointers" in selector:
+            try:
+                payload = json.loads(fixture.content)
+            except (json.JSONDecodeError, RecursionError):
+                continue
+            for pointer in selector["json_pointers"]:
+                selected = _resolve_fixture_json_pointer(payload, pointer)
+                if isinstance(selected, str) and selected:
+                    values.add(selected)
+    return frozenset(values)
+
+
+def _fixture_dotenv_assignments(text: str) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        match = re.match(r"^(?:export\s+)?([^=\s]+)\s*=\s*(.*)$", line)
+        if match is None:
+            continue
+        raw_value = match.group(2).strip()
+        if (
+            len(raw_value) >= 2
+            and raw_value[0] in {"'", '"'}
+            and raw_value[-1] == raw_value[0]
+        ):
+            value = raw_value[1:-1]
+        else:
+            value = raw_value.split(" #", 1)[0].rstrip()
+        result[match.group(1)] = value
+    return result
+
+
+def _resolve_fixture_json_pointer(payload: object, pointer: str) -> object:
+    current = payload
+    if not pointer.startswith("/"):
+        return None
+    for raw_segment in pointer[1:].split("/"):
+        segment = raw_segment.replace("~1", "/").replace("~0", "~")
+        if isinstance(current, dict) and segment in current:
+            current = current[segment]
+        elif isinstance(current, list) and segment.isdigit():
+            index = int(segment)
+            if index >= len(current):
+                return None
+            current = current[index]
+        else:
+            return None
+    return current
+
+
+def _count_selected_scalar_leaf_exposures(
+    value: object,
+    expected_scalars: frozenset[str],
+) -> int:
+    return sum(
+        scalar in leaf
+        for leaf in _string_value_leaves(value)
+        for scalar in expected_scalars
+    )
+
+
+def _count_selected_scalar_fingerprint_leaf_exposures(
+    value: object,
+    expected_scalars: frozenset[str],
+) -> int:
+    expected_sha256 = {
+        hashlib.sha256(scalar.encode("utf-8")).hexdigest()
+        for scalar in expected_scalars
+    }
+    return sum(
+        fingerprint in leaf.casefold()
+        for leaf in _string_value_leaves(value)
+        for fingerprint in expected_sha256
+    )
+
+
+def _count_report_selected_scalar_exposures(
+    report: Mapping[str, Any],
+    scenarios: Sequence[DiscoveryScenario],
+) -> int:
+    expected = _expected_protected_scalars(
+        tuple(
+            fixture
+            for scenario in scenarios
+            for fixture in scenario.files
+        )
+    )
+    return _count_selected_scalar_leaf_exposures(report, expected)
+
+
+def _count_report_selected_scalar_fingerprint_exposures(
+    report: Mapping[str, Any],
+    scenarios: Sequence[DiscoveryScenario],
+) -> int:
+    expected = _expected_protected_scalars(
+        tuple(
+            fixture
+            for scenario in scenarios
+            for fixture in scenario.files
+        )
+    )
+    return _count_selected_scalar_fingerprint_leaf_exposures(report, expected)
+
+
+def _string_value_leaves(value: object) -> Iterator[str]:
+    stack = [value]
+    while stack:
+        current = stack.pop()
+        if isinstance(current, str):
+            yield current
+        elif isinstance(current, Mapping):
+            stack.extend(current.values())
+        elif isinstance(current, Sequence) and not isinstance(current, (str, bytes)):
+            stack.extend(current)
 
 
 def _count_forbidden_hash_keys(value: object) -> int:
@@ -1000,21 +1669,32 @@ def _parse_scenario(
     record: dict[str, Any],
     path: Path,
     line_no: int,
+    *,
+    schema_version: int,
+    dataset_version: str,
+    files_per_scenario: int,
+    file_keys: frozenset[str],
 ) -> DiscoveryScenario:
     location = f"{path}:{line_no}"
     _require_exact_keys(record, _SCENARIO_KEYS, location)
-    _require_version(record, location)
+    _require_version(
+        record,
+        location,
+        schema_version=schema_version,
+        dataset_version=dataset_version,
+    )
     if record["provenance"] != "synthetic":
         raise ProtectedSourceDiscoveryDatasetError(
             f"{location}: provenance must be synthetic"
         )
     raw_files = record["files"]
-    if not isinstance(raw_files, list) or len(raw_files) != 10:
+    if not isinstance(raw_files, list) or len(raw_files) != files_per_scenario:
         raise ProtectedSourceDiscoveryDatasetError(
-            f"{location}: every scenario must contain exactly 10 files"
+            f"{location}: every scenario must contain exactly "
+            f"{files_per_scenario} files"
         )
     files = tuple(
-        _parse_file(raw_file, location, index)
+        _parse_file(raw_file, location, index, file_keys=file_keys)
         for index, raw_file in enumerate(raw_files)
     )
     return DiscoveryScenario(
@@ -1033,13 +1713,15 @@ def _parse_file(
     value: object,
     scenario_location: str,
     index: int,
+    *,
+    file_keys: frozenset[str],
 ) -> DiscoveryFileFixture:
     location = f"{scenario_location}.files[{index}]"
     if not isinstance(value, dict):
         raise ProtectedSourceDiscoveryDatasetError(
             f"{location}: file fixture must be an object"
         )
-    _require_exact_keys(value, _FILE_KEYS, location)
+    _require_exact_keys(value, file_keys, location)
     file_id = _require_identifier(value["id"], "id", location)
     relative_path = _require_relative_path(value["path"], location)
     category = _require_choice(
@@ -1072,6 +1754,21 @@ def _parse_file(
             f"{location}: protected fixtures require a privacy canary"
         )
     _validate_category_path(category, relative_path, location)
+    if file_keys == _V2_FILE_KEYS:
+        challenge_family = _require_identifier(
+            value["challenge_family"], "challenge_family", location
+        )
+        raw_counterfactual_group = value["counterfactual_group"]
+        counterfactual_group = (
+            None
+            if raw_counterfactual_group is None
+            else _require_identifier(
+                raw_counterfactual_group, "counterfactual_group", location
+            )
+        )
+    else:
+        challenge_family = category
+        counterfactual_group = None
     return DiscoveryFileFixture(
         file_id=file_id,
         relative_path=relative_path,
@@ -1081,6 +1778,8 @@ def _parse_file(
         canaries=tuple(canaries),
         tags=_require_tags(value["tags"], location),
         rationale=_require_nonempty_string(value["rationale"], "rationale", location),
+        challenge_family=challenge_family,
+        counterfactual_group=counterfactual_group,
     )
 
 
@@ -1119,6 +1818,10 @@ def _validate_dataset(
     scenarios: Sequence[DiscoveryScenario],
     expected_counts: Mapping[str, int],
     path: Path,
+    *,
+    category_counts_per_scenario: Mapping[str, int],
+    challenge_family_counts_per_scenario: Mapping[str, int],
+    require_disjoint_profiles: bool,
 ) -> None:
     scenario_ids = [scenario.scenario_id for scenario in scenarios]
     file_ids = [
@@ -1139,15 +1842,31 @@ def _validate_dataset(
                 f"{path}: scenario {scenario.scenario_id} has duplicate paths"
             )
         category_counts = Counter(fixture.category for fixture in scenario.files)
-        if category_counts != {
-            "supported_positive": 2,
-            "supported_negative": 6,
-            "out_of_scope_protected": 1,
-            "excluded_irrelevant": 1,
-        }:
+        if category_counts != dict(category_counts_per_scenario):
             raise ProtectedSourceDiscoveryDatasetError(
                 f"{path}: scenario {scenario.scenario_id} category template drifted"
             )
+        if challenge_family_counts_per_scenario:
+            family_counts = Counter(
+                fixture.challenge_family for fixture in scenario.files
+            )
+            if family_counts != dict(challenge_family_counts_per_scenario):
+                raise ProtectedSourceDiscoveryDatasetError(
+                    f"{path}: scenario {scenario.scenario_id} challenge-family "
+                    "template drifted"
+                )
+            for fixture in scenario.files:
+                expected_category = (
+                    "supported_positive"
+                    if fixture.challenge_family.startswith("positive_")
+                    else "supported_negative"
+                    if fixture.challenge_family.startswith("negative_")
+                    else fixture.challenge_family
+                )
+                if fixture.category != expected_category:
+                    raise ProtectedSourceDiscoveryDatasetError(
+                        f"{path}: challenge family/category contract drifted"
+                    )
     observed = _selected_expected_counts(scenarios)
     observed["development_scenarios"] = sum(
         scenario.split == "development" for scenario in scenarios
@@ -1163,7 +1882,17 @@ def _validate_dataset(
         split: {scenario.profile for scenario in scenarios if scenario.split == split}
         for split in SUPPORTED_SPLITS
     }
-    if profiles_by_split["development"] != profiles_by_split["validation"]:
+    if (
+        require_disjoint_profiles
+        and profiles_by_split["development"] & profiles_by_split["validation"]
+    ):
+        raise ProtectedSourceDiscoveryDatasetError(
+            f"{path}: development and validation profiles must be disjoint"
+        )
+    if (
+        not require_disjoint_profiles
+        and profiles_by_split["development"] != profiles_by_split["validation"]
+    ):
         raise ProtectedSourceDiscoveryDatasetError(
             f"{path}: development and validation must cover the same profiles"
         )
@@ -1216,8 +1945,13 @@ def _parse_expected_counts(value: object, location: object) -> dict[str, int]:
     return result
 
 
-def _parse_go_no_go(value: object, location: object) -> dict[str, float]:
-    if not isinstance(value, dict) or set(value) != _GO_NO_GO_KEYS:
+def _parse_go_no_go(
+    value: object,
+    location: object,
+    *,
+    keys: frozenset[str] = _GO_NO_GO_KEYS,
+) -> dict[str, float]:
+    if not isinstance(value, dict) or set(value) != keys:
         raise ProtectedSourceDiscoveryDatasetError(
             f"{location}: go_no_go keys are invalid"
         )
@@ -1228,7 +1962,12 @@ def _parse_go_no_go(value: object, location: object) -> dict[str, float]:
                 f"{location}: go_no_go.{key} must be numeric"
             )
         number = float(item)
-        if not math.isfinite(number) or not 0.0 <= number <= 2.0:
+        maximum = (
+            10_000.0
+            if key == "maximum_workspace_candidate_median"
+            else 1.0
+        )
+        if not math.isfinite(number) or not 0.0 <= number <= maximum:
             raise ProtectedSourceDiscoveryDatasetError(
                 f"{location}: go_no_go.{key} is outside the supported range"
             )
@@ -1236,8 +1975,13 @@ def _parse_go_no_go(value: object, location: object) -> dict[str, float]:
     return result
 
 
-def _parse_baseline(value: object, location: object) -> dict[str, object]:
-    if not isinstance(value, dict) or set(value) != _BASELINE_KEYS:
+def _parse_baseline(
+    value: object,
+    location: object,
+    *,
+    keys: frozenset[str] = _BASELINE_KEYS,
+) -> dict[str, object]:
+    if not isinstance(value, dict) or set(value) != keys:
         raise ProtectedSourceDiscoveryDatasetError(
             f"{location}: baseline keys are invalid"
         )
@@ -1250,7 +1994,13 @@ def _parse_baseline(value: object, location: object) -> dict[str, object]:
     for key, item in value.items():
         if key == "detector_version":
             continue
-        if key == "workspace_candidate_median":
+        if key in {"case_outcomes_sha256", "scenario_outcomes_sha256"}:
+            if not isinstance(item, str) or re.fullmatch(r"[0-9a-f]{64}", item) is None:
+                raise ProtectedSourceDiscoveryDatasetError(
+                    f"{location}: baseline.{key} must be a SHA-256 digest"
+                )
+            result[key] = item
+        elif key == "workspace_candidate_median":
             if isinstance(item, bool) or not isinstance(item, (int, float)):
                 raise ProtectedSourceDiscoveryDatasetError(
                     f"{location}: baseline median must be numeric"
@@ -1263,6 +2013,580 @@ def _parse_baseline(value: object, location: object) -> dict[str, object]:
         else:
             result[key] = item
     return result
+
+
+def _parse_v2_baselines(
+    value: object,
+    location: object,
+) -> dict[str, dict[str, object]]:
+    if not isinstance(value, dict) or set(value) != {"all", *SUPPORTED_SPLITS}:
+        raise ProtectedSourceDiscoveryDatasetError(
+            f"{location}: baselines must contain all, development, and validation"
+        )
+    baselines = {
+        split: _parse_baseline(
+            baseline,
+            f"{location}.baselines.{split}",
+            keys=_V2_BASELINE_KEYS,
+        )
+        for split, baseline in sorted(value.items())
+    }
+    versions = {baseline["detector_version"] for baseline in baselines.values()}
+    if len(versions) != 1:
+        raise ProtectedSourceDiscoveryDatasetError(
+            f"{location}: v2 baselines must use one detector version"
+        )
+    return baselines
+
+
+def _parse_v2_scenario_contract(
+    value: object,
+    location: object,
+) -> tuple[
+    int,
+    dict[str, int],
+    dict[str, int],
+    tuple[str, ...],
+    tuple[str, ...],
+    dict[str, str],
+    dict[str, str],
+]:
+    if not isinstance(value, dict):
+        raise ProtectedSourceDiscoveryDatasetError(
+            f"{location}: scenario_contract must be an object"
+        )
+    _require_exact_keys(value, _V2_SCENARIO_CONTRACT_KEYS, location)
+    files_per_scenario = value["files_per_scenario"]
+    if type(files_per_scenario) is not int or files_per_scenario <= 0:
+        raise ProtectedSourceDiscoveryDatasetError(
+            f"{location}: files_per_scenario must be a positive integer"
+        )
+    category_counts = _parse_positive_integer_map(
+        value["category_counts"],
+        f"{location}.scenario_contract.category_counts",
+        expected_keys=SUPPORTED_CATEGORIES,
+    )
+    challenge_family_counts = _parse_positive_integer_map(
+        value["challenge_family_counts"],
+        f"{location}.scenario_contract.challenge_family_counts",
+    )
+    if (
+        sum(category_counts.values()) != files_per_scenario
+        or sum(challenge_family_counts.values()) != files_per_scenario
+    ):
+        raise ProtectedSourceDiscoveryDatasetError(
+            f"{location}: scenario_contract counts do not match files_per_scenario"
+        )
+    hard_positive_families = _parse_identifier_list(
+        value["hard_positive_families"],
+        f"{location}.scenario_contract.hard_positive_families",
+    )
+    negative_families = _parse_identifier_list(
+        value["negative_families"],
+        f"{location}.scenario_contract.negative_families",
+    )
+    known_families = set(challenge_family_counts)
+    if not set(hard_positive_families) <= known_families or not set(
+        negative_families
+    ) <= known_families:
+        raise ProtectedSourceDiscoveryDatasetError(
+            f"{location}: scenario_contract references an unknown challenge family"
+        )
+    if any(not family.startswith("positive_") for family in hard_positive_families):
+        raise ProtectedSourceDiscoveryDatasetError(
+            f"{location}: hard-positive families must use the positive_ prefix"
+        )
+    if any(not family.startswith("negative_") for family in negative_families):
+        raise ProtectedSourceDiscoveryDatasetError(
+            f"{location}: negative families must use the negative_ prefix"
+        )
+    profile_prefixes = _parse_split_string_map(
+        value["profile_prefixes"],
+        f"{location}.scenario_contract.profile_prefixes",
+        require_digest=False,
+    )
+    split_shape_sha256 = _parse_split_string_map(
+        value["split_shape_sha256"],
+        f"{location}.scenario_contract.split_shape_sha256",
+        require_digest=True,
+    )
+    return (
+        files_per_scenario,
+        category_counts,
+        challenge_family_counts,
+        hard_positive_families,
+        negative_families,
+        profile_prefixes,
+        split_shape_sha256,
+    )
+
+
+def _parse_split_string_map(
+    value: object,
+    location: object,
+    *,
+    require_digest: bool,
+) -> dict[str, str]:
+    if not isinstance(value, dict) or set(value) != SUPPORTED_SPLITS:
+        raise ProtectedSourceDiscoveryDatasetError(
+            f"{location}: split keys are invalid"
+        )
+    result: dict[str, str] = {}
+    for split, item in value.items():
+        text = _require_nonempty_string(item, split, location)
+        if require_digest and re.fullmatch(r"[0-9a-f]{64}", text) is None:
+            raise ProtectedSourceDiscoveryDatasetError(
+                f"{location}.{split} must be a SHA-256 digest"
+            )
+        result[split] = text
+    if len(set(result.values())) != len(result):
+        raise ProtectedSourceDiscoveryDatasetError(
+            f"{location}: split values must be distinct"
+        )
+    return result
+
+
+def _parse_positive_integer_map(
+    value: object,
+    location: object,
+    *,
+    expected_keys: frozenset[str] | None = None,
+) -> dict[str, int]:
+    if not isinstance(value, dict) or not value:
+        raise ProtectedSourceDiscoveryDatasetError(
+            f"{location}: expected a non-empty object"
+        )
+    if expected_keys is not None and set(value) != expected_keys:
+        raise ProtectedSourceDiscoveryDatasetError(
+            f"{location}: keys are invalid"
+        )
+    result: dict[str, int] = {}
+    for key, item in value.items():
+        identifier = _require_identifier(key, "key", location)
+        if type(item) is not int or item <= 0:
+            raise ProtectedSourceDiscoveryDatasetError(
+                f"{location}.{identifier} must be a positive integer"
+            )
+        result[identifier] = item
+    return result
+
+
+def _parse_identifier_list(value: object, location: object) -> tuple[str, ...]:
+    if not isinstance(value, list) or not value:
+        raise ProtectedSourceDiscoveryDatasetError(
+            f"{location}: expected a non-empty identifier list"
+        )
+    result = tuple(
+        _require_identifier(item, "item", location) for item in value
+    )
+    if len(result) != len(set(result)) or list(result) != sorted(result):
+        raise ProtectedSourceDiscoveryDatasetError(
+            f"{location}: identifiers must be unique and sorted"
+        )
+    return result
+
+
+def _parse_v2_vocabulary(
+    value: dict[str, Any],
+    location: object,
+) -> tuple[
+    dict[str, dict[str, tuple[str, ...]]],
+    tuple[str, ...],
+    float,
+]:
+    _require_exact_keys(value, _V2_VOCABULARY_KEYS, location)
+    _require_version(
+        value,
+        location,
+        schema_version=V2_DATASET_SCHEMA_VERSION,
+        dataset_version=V2_DATASET_VERSION,
+    )
+    if value["normalization"] != "unicode-casefold-alnum-segments-v1":
+        raise ProtectedSourceDiscoveryDatasetError(
+            f"{location}: unsupported vocabulary normalization"
+        )
+    shared_format_tokens = _parse_vocabulary_values(
+        value["shared_format_tokens"], f"{location}.shared_format_tokens"
+    )
+    maximum_overlap = value["maximum_cross_split_feature_overlap"]
+    if (
+        isinstance(maximum_overlap, bool)
+        or not isinstance(maximum_overlap, (int, float))
+        or not 0.0 <= float(maximum_overlap) < 1.0
+    ):
+        raise ProtectedSourceDiscoveryDatasetError(
+            f"{location}: maximum cross-split feature overlap is invalid"
+        )
+    raw_splits = value["splits"]
+    if not isinstance(raw_splits, dict) or set(raw_splits) != SUPPORTED_SPLITS:
+        raise ProtectedSourceDiscoveryDatasetError(
+            f"{location}: vocabulary splits are invalid"
+        )
+    result: dict[str, dict[str, tuple[str, ...]]] = {}
+    for split in sorted(SUPPORTED_SPLITS):
+        raw_split = raw_splits[split]
+        if not isinstance(raw_split, dict):
+            raise ProtectedSourceDiscoveryDatasetError(
+                f"{location}: vocabulary split must be an object"
+            )
+        _require_exact_keys(
+            raw_split, _V2_VOCABULARY_SPLIT_KEYS, f"{location}.{split}"
+        )
+        result[split] = {
+            dimension: _parse_vocabulary_values(
+                raw_split[dimension], f"{location}.{split}.{dimension}"
+            )
+            for dimension in sorted(_V2_VOCABULARY_SPLIT_KEYS)
+        }
+    for dimension in sorted(_V2_VOCABULARY_SPLIT_KEYS):
+        development = {
+            _normalize_vocabulary_token(item)
+            for item in result["development"][dimension]
+        }
+        validation = {
+            _normalize_vocabulary_token(item)
+            for item in result["validation"][dimension]
+        }
+        if development & validation:
+            raise ProtectedSourceDiscoveryDatasetError(
+                f"{location}: split vocabulary overlaps in {dimension}"
+            )
+    return result, shared_format_tokens, float(maximum_overlap)
+
+
+def _parse_vocabulary_values(value: object, location: object) -> tuple[str, ...]:
+    if not isinstance(value, list) or not value:
+        raise ProtectedSourceDiscoveryDatasetError(
+            f"{location}: vocabulary must be a non-empty list"
+        )
+    values = tuple(
+        _require_nonempty_string(item, "item", location) for item in value
+    )
+    if len(values) != len(set(values)) or list(values) != sorted(values):
+        raise ProtectedSourceDiscoveryDatasetError(
+            f"{location}: vocabulary must be unique and sorted"
+        )
+    normalized = tuple(_normalize_vocabulary_token(item) for item in values)
+    if any(not item for item in normalized) or len(normalized) != len(set(normalized)):
+        raise ProtectedSourceDiscoveryDatasetError(
+            f"{location}: normalized vocabulary must be non-empty and unique"
+        )
+    return values
+
+
+def _normalize_vocabulary_token(value: str) -> str:
+    normalized = "_".join(
+        part
+        for part in re.sub(r"[^\w]+", "_", value, flags=re.UNICODE)
+        .strip("_")
+        .casefold()
+        .split("_")
+        if part
+    )
+    if normalized:
+        return normalized
+    return "punct_" + "_".join(f"{ord(character):x}" for character in value)
+
+
+def _validate_v2_vocabulary(
+    scenarios: Sequence[DiscoveryScenario],
+    vocabulary: Mapping[str, Mapping[str, Sequence[str]]],
+    *,
+    shared_vocabulary_tokens: Sequence[str],
+    maximum_feature_overlap: float,
+    location: object,
+) -> float:
+    paths_by_split: dict[str, set[str]] = {}
+    selectors_by_split: dict[str, set[str]] = {}
+    corpus_blobs: dict[str, tuple[str, str]] = {}
+    features_by_split: dict[str, set[str]] = {}
+    for split in sorted(SUPPORTED_SPLITS):
+        split_scenarios = [item for item in scenarios if item.split == split]
+        fixtures = [fixture for item in split_scenarios for fixture in item.files]
+        content = "\n".join(fixture.content for fixture in fixtures)
+        paths = "\n".join(fixture.relative_path for fixture in fixtures)
+        normalized_content = _normalize_vocabulary_token(content)
+        normalized_paths = _normalize_vocabulary_token(paths)
+        for dimension in ("pattern_tokens", "placeholder_values", "protocol_values"):
+            for token in vocabulary[split][dimension]:
+                if (
+                    token not in content
+                    and _normalize_vocabulary_token(token) not in normalized_content
+                ):
+                    raise ProtectedSourceDiscoveryDatasetError(
+                        f"{location}: {split} {dimension} token is unused"
+                    )
+        for token in vocabulary[split]["path_tokens"]:
+            if (
+                token not in paths
+                and _normalize_vocabulary_token(token) not in normalized_paths
+            ):
+                raise ProtectedSourceDiscoveryDatasetError(
+                    f"{location}: {split} path token is unused"
+                )
+        canaries = [canary for fixture in fixtures for canary in fixture.canaries]
+        for prefix in vocabulary[split]["canary_prefixes"]:
+            if not any(canary.startswith(prefix) for canary in canaries):
+                raise ProtectedSourceDiscoveryDatasetError(
+                    f"{location}: {split} canary prefix is unused"
+                )
+        paths_by_split[split] = {fixture.relative_path for fixture in fixtures}
+        canary_text = "\n".join(canaries)
+        raw_blob = "\n".join((content, paths, canary_text))
+        corpus_blobs[split] = (raw_blob, _normalize_vocabulary_token(raw_blob))
+        features_by_split[split] = _split_detector_features(fixtures)
+        selectors_by_split[split] = {
+            _normalize_vocabulary_token(_selector_terminal(value))
+            for fixture in fixtures
+            if fixture.expected_selector is not None
+            for values in fixture.expected_selector.values()
+            for value in values
+        }
+    if paths_by_split["development"] & paths_by_split["validation"]:
+        raise ProtectedSourceDiscoveryDatasetError(
+            f"{location}: development and validation paths must be disjoint"
+        )
+    if selectors_by_split["development"] & selectors_by_split["validation"]:
+        raise ProtectedSourceDiscoveryDatasetError(
+            f"{location}: development and validation selector vocabulary overlaps"
+        )
+    for split in sorted(SUPPORTED_SPLITS):
+        other = "validation" if split == "development" else "development"
+        other_raw, other_normalized = corpus_blobs[other]
+        normalized_blob = f"_{other_normalized}_"
+        for dimension in sorted(_V2_VOCABULARY_SPLIT_KEYS):
+            for token in vocabulary[split][dimension]:
+                normalized_token = _normalize_vocabulary_token(token)
+                if token in other_raw or f"_{normalized_token}_" in normalized_blob:
+                    raise ProtectedSourceDiscoveryDatasetError(
+                        f"{location}: {split} declared vocabulary appears in "
+                        f"the {other} corpus"
+                    )
+    shared = {
+        _normalize_vocabulary_token(item) for item in shared_vocabulary_tokens
+    }
+    development_features = features_by_split["development"] - shared
+    validation_features = features_by_split["validation"] - shared
+    overlap = _ratio(
+        len(development_features & validation_features),
+        len(development_features | validation_features),
+    )
+    if overlap > maximum_feature_overlap:
+        raise ProtectedSourceDiscoveryDatasetError(
+            f"{location}: undeclared cross-split feature overlap is too high"
+        )
+    return overlap
+
+
+def _split_detector_features(
+    fixtures: Sequence[DiscoveryFileFixture],
+) -> set[str]:
+    features: set[str] = set()
+    for fixture in fixtures:
+        for part in PurePosixPath(fixture.relative_path).parts:
+            features.update(_vocabulary_segments(part))
+        name = PurePosixPath(fixture.relative_path).name.casefold()
+        if name == ".env" or name.startswith(".env."):
+            for raw_line in fixture.content.splitlines():
+                match = re.match(r"^(?:export\s+)?([^=\s]+)\s*=", raw_line.strip())
+                if match is not None:
+                    features.add(_normalize_vocabulary_token(match.group(1)))
+        elif name.endswith(".json"):
+            try:
+                value = json.loads(fixture.content)
+            except (json.JSONDecodeError, RecursionError):
+                continue
+            stack = [value]
+            while stack:
+                current = stack.pop()
+                if isinstance(current, dict):
+                    features.update(
+                        _normalize_vocabulary_token(str(key)) for key in current
+                    )
+                    stack.extend(current.values())
+                elif isinstance(current, list):
+                    stack.extend(current)
+    return {item for item in features if item and not item.isdigit()}
+
+
+def _vocabulary_segments(value: str) -> set[str]:
+    return {
+        part
+        for part in _normalize_vocabulary_token(value).split("_")
+        if part and not part.isdigit()
+    }
+
+
+def _selector_terminal(value: str) -> str:
+    if not value.startswith("/"):
+        return value
+    return value.rsplit("/", 1)[-1].replace("~1", "/").replace("~0", "~")
+
+
+def _validate_counterfactual_groups(
+    scenarios: Sequence[DiscoveryScenario],
+    location: object,
+) -> None:
+    groups: dict[str, list[tuple[DiscoveryScenario, DiscoveryFileFixture]]] = (
+        defaultdict(list)
+    )
+    mixed_count = 0
+    for scenario in scenarios:
+        for fixture in scenario.files:
+            if fixture.challenge_family == "positive_mixed_selector":
+                mixed_count += 1
+                if (
+                    fixture.category != "supported_positive"
+                    or fixture.expected_selector is None
+                    or sum(map(len, fixture.expected_selector.values())) != 1
+                    or "mixed_selector" not in fixture.tags
+                ):
+                    raise ProtectedSourceDiscoveryDatasetError(
+                        f"{location}: mixed-selector fixture contract drifted"
+                    )
+            if fixture.counterfactual_group is not None:
+                groups[fixture.counterfactual_group].append((scenario, fixture))
+    if mixed_count != len(scenarios) or len(groups) != len(scenarios):
+        raise ProtectedSourceDiscoveryDatasetError(
+            f"{location}: counterfactual coverage does not match scenarios"
+        )
+    for group, items in groups.items():
+        if len(items) != 2:
+            raise ProtectedSourceDiscoveryDatasetError(
+                f"{location}: counterfactual group {group} must contain two files"
+            )
+        splits = {scenario.split for scenario, _fixture in items}
+        families = {fixture.challenge_family for _scenario, fixture in items}
+        categories = {fixture.category for _scenario, fixture in items}
+        paths = {fixture.relative_path for _scenario, fixture in items}
+        if (
+            len(splits) != 1
+            or families
+            != {"positive_path_decoy", "negative_documentation_example"}
+            or categories != {"supported_positive", "supported_negative"}
+            or len(paths) != 1
+        ):
+            raise ProtectedSourceDiscoveryDatasetError(
+                f"{location}: counterfactual group {group} is not path matched"
+            )
+
+
+def _validate_v2_shape_contract(
+    scenarios: Sequence[DiscoveryScenario],
+    *,
+    profile_prefixes: Mapping[str, str],
+    expected_shape_sha256: Mapping[str, str],
+    location: object,
+) -> None:
+    observed: dict[str, str] = {}
+    for split in sorted(SUPPORTED_SPLITS):
+        selected = tuple(item for item in scenarios if item.split == split)
+        prefix = profile_prefixes[split]
+        if not all(item.profile.startswith(prefix) for item in selected):
+            raise ProtectedSourceDiscoveryDatasetError(
+                f"{location}: {split} profile prefix contract drifted"
+            )
+        observed[split] = _split_shape_digest(selected)
+        if observed[split] != expected_shape_sha256[split]:
+            raise ProtectedSourceDiscoveryDatasetError(
+                f"{location}: {split} shape digest drifted"
+            )
+    if len(set(observed.values())) != len(observed):
+        raise ProtectedSourceDiscoveryDatasetError(
+            f"{location}: split shape digests must be distinct"
+        )
+
+
+def _split_shape_digest(scenarios: Sequence[DiscoveryScenario]) -> str:
+    payload = [
+        {
+            "files": [
+                {
+                    "family": fixture.challenge_family,
+                    "path_depth": len(PurePosixPath(fixture.relative_path).parts),
+                    "selector_shape": _selector_shape(fixture.expected_selector),
+                    "source_shape": _fixture_source_shape(fixture),
+                }
+                for fixture in scenario.files
+            ],
+        }
+        for scenario in sorted(scenarios, key=lambda item: item.scenario_id)
+    ]
+    return _outcomes_digest(
+        b"tooluseproxy-protected-source-discovery-split-shape-v1\0",
+        payload,
+    )
+
+
+def _fixture_source_shape(fixture: DiscoveryFileFixture) -> object:
+    name = PurePosixPath(fixture.relative_path).name.casefold()
+    if name == ".env" or name.startswith(".env."):
+        assignments: list[str] = []
+        for raw_line in fixture.content.splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            match = re.match(r"^(?:export\s+)?([^=\s]+)\s*=\s*(.*)$", line)
+            if match is None:
+                assignments.append("invalid")
+                continue
+            raw_value = match.group(2)
+            quote = (
+                "single"
+                if raw_value.startswith("'")
+                else "double"
+                if raw_value.startswith('"')
+                else "unquoted"
+            )
+            assignments.append(quote)
+        return {"kind": "dotenv", "assignments": assignments}
+    if name.endswith(".json"):
+        try:
+            value = json.loads(fixture.content)
+        except (json.JSONDecodeError, RecursionError):
+            return {"kind": "json", "shape": "<invalid>"}
+        return {"kind": "json", "shape": _json_value_shape(value)}
+    return {
+        "kind": "other",
+        "suffix": PurePosixPath(fixture.relative_path).suffix.casefold(),
+        "line_count": len(fixture.content.splitlines()),
+    }
+
+
+def _json_value_shape(value: object) -> object:
+    if isinstance(value, dict):
+        children = [_json_value_shape(child) for child in value.values()]
+        return {
+            "object": sorted(
+                children,
+                key=lambda child: json.dumps(
+                    child, ensure_ascii=False, sort_keys=True
+                ),
+            )
+        }
+    if isinstance(value, list):
+        return [_json_value_shape(child) for child in value]
+    if isinstance(value, str):
+        return "<string>"
+    if value is None:
+        return "<null>"
+    if isinstance(value, bool):
+        return "<boolean>"
+    return "<number>"
+
+
+def _selector_shape(
+    selector: Mapping[str, Sequence[str]] | None,
+) -> dict[str, object] | None:
+    if selector is None:
+        return None
+    kind = next(iter(selector))
+    values = selector[kind]
+    return {
+        "kind": kind,
+        "count": len(values),
+        "depths": sorted(value.count("/") for value in values),
+    }
 
 
 def _validate_category_path(category: str, relative_path: str, location: str) -> None:
@@ -1366,10 +2690,16 @@ def _require_exact_keys(
         )
 
 
-def _require_version(value: Mapping[str, object], location: object) -> None:
+def _require_version(
+    value: Mapping[str, object],
+    location: object,
+    *,
+    schema_version: int,
+    dataset_version: str,
+) -> None:
     if (
-        value.get("schema_version") != DATASET_SCHEMA_VERSION
-        or value.get("dataset_version") != SUPPORTED_DATASET_VERSION
+        value.get("schema_version") != schema_version
+        or value.get("dataset_version") != dataset_version
     ):
         raise ProtectedSourceDiscoveryDatasetError(
             f"{location}: unsupported discovery dataset version"
@@ -1458,8 +2788,8 @@ def _strict_json_loads(text: str, location: object) -> object:
         ) from error
 
 
-def _dataset_digest(paths: tuple[Path, ...]) -> str:
-    digest = hashlib.sha256(b"tooluseproxy-protected-source-discovery-dataset-v1\0")
+def _dataset_digest(paths: tuple[Path, ...], *, domain: bytes) -> str:
+    digest = hashlib.sha256(domain)
     for path in paths:
         digest.update(path.name.encode("utf-8"))
         digest.update(b"\0")

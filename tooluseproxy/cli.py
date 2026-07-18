@@ -40,6 +40,8 @@ from tooluseproxy.paths import (
 )
 from tooluseproxy.protected_sources import (
     DEFAULT_PROTECTED_SOURCE_SCAN_LIMITS,
+    DETECTOR_VERSION,
+    LEGACY_DETECTOR_VERSION,
     MAX_MANIFEST_SOURCES,
     MAX_PROTECTED_FILE_BYTES,
     ProtectedSourceCandidate,
@@ -974,6 +976,10 @@ def _approve_protected_source_candidate_under_lock(
     workspace_lock: ProtectedSourceWorkspaceLock,
 ) -> dict[str, object]:
     stored = _load_workspace_candidate(store, workspace, candidate_id)
+    _reject_stale_candidate(
+        stored,
+        allow_legacy_approval_recovery=True,
+    )
     _verify_stored_candidate_revision(stored.candidate_revision_sha256, candidate_revision)
     if stored.status not in {"proposed", "approving", "approved"}:
         raise _ProtectCliError(
@@ -1073,6 +1079,7 @@ def _review_protected_source_candidate(
     decision: str,
 ) -> dict[str, object]:
     stored = _load_workspace_candidate(store, workspace, candidate_id)
+    _reject_stale_candidate(stored)
     if stored.status != "proposed":
         raise _ProtectCliError(
             "candidate_not_proposed",
@@ -1102,6 +1109,25 @@ def _review_protected_source_candidate(
         result_manifest_sha256=None,
     )
     return review.to_public_payload()
+
+
+def _reject_stale_candidate(
+    candidate: StoredProtectedSourceCandidate,
+    *,
+    allow_legacy_approval_recovery: bool = False,
+) -> None:
+    if candidate.detector_version == DETECTOR_VERSION:
+        return
+    if (
+        allow_legacy_approval_recovery
+        and candidate.detector_version == LEGACY_DETECTOR_VERSION
+        and candidate.status in {"approving", "approved"}
+    ):
+        return
+    raise _ProtectCliError(
+        "candidate_detector_stale",
+        "candidate detector is stale; run protect scan again",
+    )
 
 
 def _load_workspace_candidate(

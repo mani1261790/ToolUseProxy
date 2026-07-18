@@ -108,6 +108,14 @@ sh "<PLUGIN_ROOT>/hooks/run_cli.sh" protect scan \
 
 1回のscanが表示するreview candidateはstableな相対path順の1件だけです。`remaining_candidate_count`は続きの有無、`continuation_required`は再scanが必要か、`scan_complete`は固定上限内で探索を完了できたかを示します。`scan_complete: false`の場合、agentは候補がないと言い切らず、到達した上限reasonと未探索範囲が残ることを説明します。同一内容とdetector versionでreject / ignoreされた候補は再提示せず、登録済みや承認処理中もcountにだけ反映します。
 
+### Plugin更新時のpending候補
+
+Plugin更新でprotected-source detector versionが変わると、更新前の`proposed`候補は現在の検出契約では未承認として扱えません。古いcandidate ID / opaque revisionを使った`approve`、`reject`、`ignore`はvalue-freeな`candidate_detector_stale`で終了し、manifest、candidate row、review rowを変更しません。coding agentはcached commandを再利用せず、`protect scan`を再実行して現在versionの新しいcandidate IDとrevisionを取得し、そのproposalをユーザーへ提示して新しい明示承認を得ます。同じ現在versionでの再scanはcandidate IDを維持してrevisionを回転させます。
+
+reject / ignoreの抑止は同じfile内容とdetector versionの組に限定されるため、旧versionのnegative reviewは新versionの候補を抑止しません。一方、すでに`approved`となりmanifestへ登録されたsourceはuser-owned manifestをauthorityとして維持し、detector更新だけを理由に削除・再登録・selector変更しません。更新前に開始済みの`approving`または完了済み`approved`候補へ同じexact approve入力を再送する操作は、途中停止からのdurability recoveryに限って許可されます。新しい提案の承認には流用しません。
+
+`PLUGIN_DATA`のcandidate / review監査はPlugin code更新後も保持します。通常のHookは候補scan、candidate migration、manifest変更を行いません。Plugin更新後は新しいHook definitionをreview・trustして新しいtaskを開始し、`doctor` / `status`を実行してからpending候補を再scanしてください。`0.1.0-alpha.2`のdetector更新はSQLite schema v4を変更しないため、この更新だけを理由にDB migrationや`init`を再実行する必要はありません。将来SQLite schema更新を伴うreleaseで`doctor` / `status`がupgrade必要と報告した場合だけ、Hook外で明示的な`init --codex`を実行します。
+
 ### 明示pathのfallbackと候補承認
 
 ユーザーまたはagentが対象pathを既に特定している場合、またはbounded scanの対象外を提案する場合は、従来の明示path commandを使います。

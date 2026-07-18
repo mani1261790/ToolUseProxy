@@ -1,0 +1,88 @@
+{
+  "schema_version": 2,
+  "dataset_version": "2.0.0",
+  "normalization": "unicode-casefold-alnum-segments-v1",
+  "shared_format_tokens": [
+    "active",
+    "audit_canary",
+    "enabled",
+    "endpoint",
+    "env",
+    "json",
+    "ordinal",
+    "public_mode",
+    "username"
+  ],
+  "maximum_cross_split_feature_overlap": 0.25,
+  "splits": {
+    "development": {
+      "pattern_tokens": [
+        "api_key",
+        "auth",
+        "credential",
+        "password",
+        "secret",
+        "token"
+      ],
+      "placeholder_values": [
+        "${DEV_SECRET_REF}",
+        "********",
+        "changeme",
+        "example_only",
+        "replace_this"
+      ],
+      "protocol_values": [
+        "Basic",
+        "Bearer",
+        "client_secret_post",
+        "oauth2",
+        "password"
+      ],
+      "path_tokens": [
+        "devspace",
+        "docs",
+        "examples",
+        "samples",
+        "templates"
+      ],
+      "canary_prefixes": [
+        "Bearer-live-d-",
+        "d-canary-",
+        "replace-resistant-d-"
+      ]
+    },
+    "validation": {
+      "pattern_tokens": [
+        "access_key",
+        "passwd",
+        "private_key"
+      ],
+      "placeholder_values": [
+        "$VALIDATION_VAULT_REF",
+        "[withheld]",
+        "__SET_ME__",
+        "configure_later",
+        "illustrative_only"
+      ],
+      "protocol_values": [
+        "DPoP",
+        "Digest",
+        "openid",
+        "private_key_jwt",
+        "refresh"
+      ],
+      "path_tokens": [
+        "blueprints",
+        "cookbook",
+        "mocks",
+        "reference",
+        "valspace"
+      ],
+      "canary_prefixes": [
+        "DPoP-live-v-",
+        "configure-resistant-v-",
+        "v-canary-"
+      ]
+    }
+  }
+}

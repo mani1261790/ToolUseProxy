@@ -56,10 +56,29 @@ jobs:
           --format text
           --check
 
-      - name: Check protected-source discovery baseline
+      - name: Check protected-source discovery development gate
         run: >-
           python -m hook_monitor.evaluation.protected_source_discovery_cli
-          --dataset tests/fixtures/protected_source_discovery/v1
+          --dataset tests/fixtures/protected_source_discovery/v2
+          --split development
+          --format text
+          --check
+          --require-go
+
+      - name: Check protected-source discovery validation gate
+        run: >-
+          python -m hook_monitor.evaluation.protected_source_discovery_cli
+          --dataset tests/fixtures/protected_source_discovery/v2
+          --split validation
+          --format text
+          --check
+          --require-go
+
+      - name: Check protected-source discovery complete gate
+        run: >-
+          python -m hook_monitor.evaluation.protected_source_discovery_cli
+          --dataset tests/fixtures/protected_source_discovery/v2
           --split all
           --format text
           --check
+          --require-go

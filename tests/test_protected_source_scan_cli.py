@@ -17,7 +17,11 @@ from tooluseproxy.cli import (
     main as cli_main,
 )
 from tooluseproxy.paths import RuntimePaths
-from tooluseproxy.protected_sources import scan_protected_sources
+from tooluseproxy.protected_sources import (
+    DETECTOR_VERSION,
+    LEGACY_DETECTOR_VERSION,
+    scan_protected_sources,
+)
 
 
 @unittest.skipIf(os.name == "nt", "protected-source scan is POSIX-only")
@@ -124,6 +128,19 @@ class ProtectedSourceScanCliTest(unittest.TestCase):
             )
         )
 
+    def _ignore(
+        self,
+        candidate: dict[str, object],
+    ) -> tuple[int, dict[str, object], str]:
+        return self._run_json(
+            *self._protect_arguments(
+                "ignore",
+                str(candidate["candidate_id"]),
+                "--candidate-revision",
+                str(candidate["candidate_revision"]),
+            )
+        )
+
     def _write_json_source(self, relative_path: str, secret: str) -> Path:
         path = self.workspace / relative_path
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -154,6 +171,67 @@ class ProtectedSourceScanCliTest(unittest.TestCase):
                 for row in conn.execute(f'SELECT {quoted} FROM "{table_name}"'):
                     values.extend(str(value) for value in row if value is not None)
         return "\n".join(values)
+
+    def _rewrite_candidate_detector_version(
+        self,
+        candidate_id: str,
+        detector_version: str,
+    ) -> None:
+        with sqlite3.connect(self.data_dir / "events.db") as conn:
+            row = conn.execute(
+                """
+                SELECT workspace_id, relative_path, source_sha256,
+                       proposed_source_json
+                FROM protected_source_candidates
+                WHERE candidate_id = ?
+                """,
+                (candidate_id,),
+            ).fetchone()
+            self.assertIsNotNone(row)
+            workspace_id, relative_path, source_sha256, proposed_source_json = row
+            fingerprint_payload = {
+                "detector_version": detector_version,
+                "workspace_id": workspace_id,
+                "path": relative_path,
+                "source_sha256": source_sha256,
+                "proposed_source": json.loads(proposed_source_json),
+            }
+            suppression_fingerprint = hashlib.sha256(
+                json.dumps(
+                    fingerprint_payload,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    allow_nan=False,
+                ).encode("utf-8")
+            ).hexdigest()
+            conn.execute(
+                """
+                UPDATE protected_source_candidates
+                SET detector_version = ?, suppression_fingerprint = ?
+                WHERE candidate_id = ?
+                """,
+                (detector_version, suppression_fingerprint, candidate_id),
+            )
+
+    def _candidate_storage_snapshot(
+        self,
+        candidate_id: str,
+    ) -> tuple[tuple[object, ...], tuple[tuple[object, ...], ...]]:
+        with sqlite3.connect(self.data_dir / "events.db") as conn:
+            candidate = conn.execute(
+                "SELECT * FROM protected_source_candidates WHERE candidate_id = ?",
+                (candidate_id,),
+            ).fetchone()
+            reviews = tuple(
+                conn.execute(
+                    "SELECT * FROM protected_source_candidate_reviews "
+                    "WHERE candidate_id = ? ORDER BY rowid",
+                    (candidate_id,),
+                ).fetchall()
+            )
+        self.assertIsNotNone(candidate)
+        return candidate, reviews
 
     def _bury_candidate_beyond_recent_history(self, candidate_id: str) -> None:
         with sqlite3.connect(self.data_dir / "events.db") as conn:
@@ -429,6 +507,283 @@ class ProtectedSourceScanCliTest(unittest.TestCase):
                 (first["candidate_id"],),
             ).fetchone()[0]
         self.assertEqual("proposed", status)
+
+    def test_stale_detector_proposal_is_rejected_before_any_mutation(self) -> None:
+        secret = "SCAN.UPGRADE.PENDING.SECRET.5d10"
+        self._write_json_source("config/runtime.json", secret)
+        first_scan, _ = self._scan()
+        first = self._single_candidate(first_scan)
+        candidate_id = str(first["candidate_id"])
+        self._rewrite_candidate_detector_version(
+            candidate_id,
+            LEGACY_DETECTOR_VERSION,
+        )
+        manifest_before = self.manifest_path.read_bytes()
+        storage_before = self._candidate_storage_snapshot(candidate_id)
+
+        for action in ("approve", "reject", "ignore"):
+            with self.subTest(action=action):
+                if action == "approve":
+                    exit_code, payload, stderr = self._approve(first_scan, first)
+                elif action == "reject":
+                    exit_code, payload, stderr = self._reject(first)
+                else:
+                    exit_code, payload, stderr = self._ignore(first)
+                self.assertEqual(1, exit_code)
+                self.assertEqual({}, payload)
+                error = json.loads(stderr)
+                self.assertEqual(
+                    "candidate_detector_stale",
+                    error["error"]["code"],
+                )
+                self.assertIn("protect scan", error["error"]["message"])
+                self.assertNotIn(secret, stderr)
+                self.assertEqual(manifest_before, self.manifest_path.read_bytes())
+                self.assertEqual(
+                    storage_before,
+                    self._candidate_storage_snapshot(candidate_id),
+                )
+        wrong_revision = dict(first)
+        wrong_revision["candidate_revision"] = "not-the-saved-revision"
+        exit_code, payload, stderr = self._approve(first_scan, wrong_revision)
+        self.assertEqual(1, exit_code)
+        self.assertEqual({}, payload)
+        self.assertEqual(
+            "candidate_detector_stale",
+            json.loads(stderr)["error"]["code"],
+        )
+        self.assertEqual(
+            storage_before,
+            self._candidate_storage_snapshot(candidate_id),
+        )
+        self.assertNotIn(secret, self._database_text())
+
+        upgraded_scan, _ = self._scan()
+        upgraded = self._single_candidate(upgraded_scan)
+        self.assertNotEqual(candidate_id, upgraded["candidate_id"])
+        repeated_scan, _ = self._scan()
+        repeated = self._single_candidate(repeated_scan)
+        self.assertEqual(upgraded["candidate_id"], repeated["candidate_id"])
+        self.assertNotEqual(
+            upgraded["candidate_revision"],
+            repeated["candidate_revision"],
+        )
+        with sqlite3.connect(self.data_dir / "events.db") as conn:
+            versions = dict(
+                conn.execute(
+                    "SELECT candidate_id, detector_version "
+                    "FROM protected_source_candidates"
+                ).fetchall()
+            )
+        self.assertEqual(LEGACY_DETECTOR_VERSION, versions[candidate_id])
+        self.assertEqual(
+            DETECTOR_VERSION,
+            versions[str(upgraded["candidate_id"])],
+        )
+
+    def test_legacy_negative_reviews_do_not_suppress_current_detector(self) -> None:
+        self._write_json_source("config/a.json", "SCAN.OLD.REJECTED.98a3")
+        self._write_json_source("config/z.json", "SCAN.OLD.IGNORED.14b8")
+        first_scan, _ = self._scan()
+        first = self._single_candidate(first_scan)
+        exit_code, rejected, stderr = self._reject(first)
+        self.assertEqual(0, exit_code, stderr)
+        self.assertEqual("rejected", rejected["status"])
+        second_scan, _ = self._scan()
+        second = self._single_candidate(second_scan)
+        exit_code, ignored, stderr = self._ignore(second)
+        self.assertEqual(0, exit_code, stderr)
+        self.assertEqual("ignored", ignored["status"])
+        self._rewrite_candidate_detector_version(
+            str(first["candidate_id"]),
+            LEGACY_DETECTOR_VERSION,
+        )
+        self._rewrite_candidate_detector_version(
+            str(second["candidate_id"]),
+            LEGACY_DETECTOR_VERSION,
+        )
+
+        upgraded_first_scan, _ = self._scan()
+        upgraded_first = self._single_candidate(upgraded_first_scan)
+        self.assertEqual("config/a.json", upgraded_first["path"])
+        self.assertNotEqual(first["candidate_id"], upgraded_first["candidate_id"])
+        self.assertEqual(0, upgraded_first_scan["suppressed_count"])
+        exit_code, rejected, stderr = self._reject(upgraded_first)
+        self.assertEqual(0, exit_code, stderr)
+        self.assertEqual("rejected", rejected["status"])
+
+        upgraded_second_scan, _ = self._scan()
+        upgraded_second = self._single_candidate(upgraded_second_scan)
+        self.assertEqual("config/z.json", upgraded_second["path"])
+        self.assertNotEqual(
+            second["candidate_id"],
+            upgraded_second["candidate_id"],
+        )
+        with sqlite3.connect(self.data_dir / "events.db") as conn:
+            legacy_statuses = dict(
+                conn.execute(
+                    "SELECT candidate_id, status FROM protected_source_candidates "
+                    "WHERE candidate_id IN (?, ?)",
+                    (first["candidate_id"], second["candidate_id"]),
+                ).fetchall()
+            )
+        self.assertEqual("rejected", legacy_statuses[str(first["candidate_id"])])
+        self.assertEqual("ignored", legacy_statuses[str(second["candidate_id"])])
+
+    def test_unknown_detector_approving_is_rejected_before_release_mutation(
+        self,
+    ) -> None:
+        secret = "SCAN.UPGRADE.UNKNOWN.SECRET.19c4"
+        self._write_json_source("config/runtime.json", secret)
+        first_scan, _ = self._scan()
+        first = self._single_candidate(first_scan)
+        candidate_id = str(first["candidate_id"])
+        with sqlite3.connect(self.data_dir / "events.db") as conn:
+            conn.execute(
+                """
+                UPDATE protected_source_candidates
+                SET status = 'approving',
+                    approval_attempt_id = ?,
+                    approval_started_at = CURRENT_TIMESTAMP
+                WHERE candidate_id = ?
+                """,
+                ("d" * 32, candidate_id),
+            )
+        self._rewrite_candidate_detector_version(
+            candidate_id,
+            "protected-source-candidate-v999",
+        )
+        manifest_before = self.manifest_path.read_bytes()
+        storage_before = self._candidate_storage_snapshot(candidate_id)
+
+        for action in ("approve", "reject", "ignore"):
+            with self.subTest(action=action):
+                if action == "approve":
+                    exit_code, payload, stderr = self._approve(first_scan, first)
+                elif action == "reject":
+                    exit_code, payload, stderr = self._reject(first)
+                else:
+                    exit_code, payload, stderr = self._ignore(first)
+                self.assertEqual(1, exit_code)
+                self.assertEqual({}, payload)
+                self.assertEqual(
+                    "candidate_detector_stale",
+                    json.loads(stderr)["error"]["code"],
+                )
+                self.assertNotIn(secret, stderr)
+                self.assertEqual(manifest_before, self.manifest_path.read_bytes())
+                self.assertEqual(
+                    storage_before,
+                    self._candidate_storage_snapshot(candidate_id),
+                )
+        self.assertNotIn(secret, self._database_text())
+
+    def test_legacy_approved_candidate_keeps_manifest_and_runtime_active(self) -> None:
+        secret = "SCAN.UPGRADE.APPROVED.SECRET.7cb2"
+        self._write_json_source("config/runtime.json", secret)
+        first_scan, _ = self._scan()
+        first = self._single_candidate(first_scan)
+        exit_code, approved, stderr = self._approve(first_scan, first)
+        self.assertEqual(0, exit_code, stderr)
+        self.assertEqual("approved", approved["status"])
+        manifest_before = self.manifest_path.read_bytes()
+        self._rewrite_candidate_detector_version(
+            str(first["candidate_id"]),
+            LEGACY_DETECTOR_VERSION,
+        )
+        approved_storage = self._candidate_storage_snapshot(
+            str(first["candidate_id"])
+        )
+
+        exit_code, recovered, stderr = self._approve(first_scan, first)
+        self.assertEqual(0, exit_code, stderr)
+        self.assertEqual("already_registered", recovered["status"])
+        self.assertEqual(
+            approved_storage,
+            self._candidate_storage_snapshot(str(first["candidate_id"])),
+        )
+        self.assertNotIn(secret, json.dumps(recovered) + stderr)
+
+        repeated_scan, stderr = self._scan()
+
+        self.assertEqual("no_candidate", repeated_scan["status"])
+        self.assertGreaterEqual(repeated_scan["already_registered_count"], 1)
+        self.assertEqual(manifest_before, self.manifest_path.read_bytes())
+        self.assertNotIn(secret, json.dumps(repeated_scan) + stderr)
+        for command, expected_status in (("doctor", "ok"), ("status", "active")):
+            with self.subTest(command=command):
+                exit_code, payload, stderr = self._run_json(
+                    command,
+                    "--workspace",
+                    str(self.workspace),
+                    "--data-dir",
+                    str(self.data_dir),
+                    "--json",
+                )
+                self.assertEqual(0, exit_code, stderr)
+                self.assertEqual(expected_status, payload["status"])
+                self.assertNotIn(secret, json.dumps(payload) + stderr)
+
+    def test_legacy_approving_candidate_can_finish_exact_recovery(self) -> None:
+        secret = "SCAN.UPGRADE.APPROVING.SECRET.6e91"
+        self._write_json_source("config/runtime.json", secret)
+        first_scan, _ = self._scan()
+        first = self._single_candidate(first_scan)
+        installed_manifest = {
+            "schema_version": 2,
+            "sources": [first["proposed_source"]],
+        }
+        self.manifest_path.write_text(
+            json.dumps(installed_manifest, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        approval_attempt_id = "a" * 32
+        with sqlite3.connect(self.data_dir / "events.db") as conn:
+            conn.execute(
+                """
+                UPDATE protected_source_candidates
+                SET status = 'approving',
+                    approval_attempt_id = ?,
+                    approval_started_at = CURRENT_TIMESTAMP
+                WHERE candidate_id = ?
+                """,
+                (approval_attempt_id, first["candidate_id"]),
+            )
+        self._rewrite_candidate_detector_version(
+            str(first["candidate_id"]),
+            LEGACY_DETECTOR_VERSION,
+        )
+        manifest_before = self.manifest_path.read_bytes()
+
+        exit_code, recovered, stderr = self._approve(first_scan, first)
+
+        self.assertEqual(0, exit_code, stderr)
+        self.assertEqual("already_registered", recovered["status"])
+        self.assertEqual(manifest_before, self.manifest_path.read_bytes())
+        self.assertNotIn(secret, json.dumps(recovered) + stderr)
+        with sqlite3.connect(self.data_dir / "events.db") as conn:
+            stored = conn.execute(
+                """
+                SELECT detector_version, status, approval_attempt_id
+                FROM protected_source_candidates
+                WHERE candidate_id = ?
+                """,
+                (first["candidate_id"],),
+            ).fetchone()
+            decision = conn.execute(
+                """
+                SELECT decision_code
+                FROM protected_source_candidate_reviews
+                WHERE candidate_id = ?
+                ORDER BY rowid DESC LIMIT 1
+                """,
+                (first["candidate_id"],),
+            ).fetchone()[0]
+        self.assertEqual(
+            (LEGACY_DETECTOR_VERSION, "approved", None),
+            stored,
+        )
+        self.assertEqual("already_registered", decision)
 
     def test_legacy_manifest_stops_before_candidate_storage(self) -> None:
         secret = "SCAN.LEGACY.SECRET.40c1"

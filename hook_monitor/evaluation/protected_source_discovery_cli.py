@@ -16,7 +16,7 @@ from hook_monitor.evaluation.protected_source_discovery import (
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DATASET_ROOT = (
-    REPO_ROOT / "tests" / "fixtures" / "protected_source_discovery" / "v1"
+    REPO_ROOT / "tests" / "fixtures" / "protected_source_discovery" / "v2"
 )
 
 
@@ -40,6 +40,8 @@ def main(argv: list[str] | None = None) -> int:
         print(render_protected_source_discovery_report(report))
     if args.check and not report["summary"]["check_passed"]:
         return 1
+    if args.require_go and not report["summary"]["go_no_go_passed"]:
+        return 1
     return 0
 
 
@@ -60,7 +62,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         "--split",
         choices=("development", "validation", "all"),
         default="all",
-        help="Dataset split. Defaults to the complete 24-workspace corpus.",
+        help="Dataset split. Defaults to the complete versioned corpus.",
     )
     parser.add_argument(
         "--format",
@@ -81,6 +83,11 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
             "and scanner invariants. Numeric go/no-go targets remain reported but "
             "do not control this reproducibility check."
         ),
+    )
+    parser.add_argument(
+        "--require-go",
+        action="store_true",
+        help="Exit with status 1 when the selected split misses a numeric GO gate.",
     )
     return parser.parse_args(argv)
 

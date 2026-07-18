@@ -7,6 +7,7 @@ import os
 import re
 import secrets
 import stat
+import unicodedata
 from collections.abc import Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
@@ -26,7 +27,11 @@ except ImportError:  # pragma: no cover - Windows compatibility fallback
 
 
 REGISTRATION_SCHEMA_VERSION = 1
-DETECTOR_VERSION = "protected-source-candidate-v1"
+LEGACY_DETECTOR_VERSION = "protected-source-candidate-v1"
+DETECTOR_VERSION = "protected-source-candidate-v2"
+# Source ids are durable manifest identities. Detector upgrades may change the
+# evidence used to propose a source, but must not rename the same path.
+_SOURCE_ID_DERIVATION_DOMAIN = LEGACY_DETECTOR_VERSION
 MANIFEST_FILENAME = "protected_sources.json"
 MAX_PROTECTED_FILE_BYTES = 1024 * 1024
 MAX_JSON_DEPTH = 32
@@ -117,6 +122,18 @@ _PROTECTED_SOURCE_SCAN_REASON_ORDER = (
 _DOTENV_ASSIGNMENT = re.compile(
     r"^(?:export\s+)?([A-Za-z_][A-Za-z0-9_.-]*)\s*=(.*)$"
 )
+_ACRONYM_KEY_BOUNDARY = re.compile(r"([A-Z]+)([A-Z][a-z])")
+_CAMEL_KEY_BOUNDARY = re.compile(r"([a-z0-9])([A-Z])")
+_NON_ASCII_ALNUM = re.compile(r"[^A-Za-z0-9]+")
+_SHELL_REFERENCE = re.compile(r"\$[A-Za-z_][A-Za-z0-9_]*\Z")
+_BRACED_SHELL_REFERENCE = re.compile(
+    r"\$\{[A-Za-z_][A-Za-z0-9_]*(?::[-+?=][^{}]*)?\}\Z"
+)
+_MUSTACHE_REFERENCE = re.compile(r"\{\{[^{}]+\}\}\Z")
+_ANGLE_PLACEHOLDER = re.compile(r"<[^<>]+>\Z")
+_REFERENCE_URI = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://\S+\Z")
+_REFERENCE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,255}\Z")
+_METADATA_DESCRIPTOR = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/ -]{0,255}\Z")
 _SAFE_SOURCE_ID = re.compile(r"[a-z][a-z0-9_-]{0,95}\Z")
 _SAFE_REASON_CODE = re.compile(r"[a-z][a-z0-9_]{0,63}\Z")
 _HEX_SHA256 = re.compile(r"[0-9a-f]{64}\Z")
@@ -135,6 +152,146 @@ _SECRET_MARKERS = frozenset(
         "access_key",
     }
 )
+_V2_SECRET_MARKERS = _SECRET_MARKERS | frozenset(
+    {"authentication", "authorization"}
+)
+_DEFINITIVE_PLACEHOLDER_VALUES = frozenset(
+    {
+        "change_me",
+        "changeme",
+        "configure_later",
+        "example_only",
+        "illustrative_only",
+        "not_set",
+        "redacted",
+        "replace_me",
+        "replace_this",
+        "set_me",
+        "unset",
+        "withheld",
+    }
+)
+_WEAK_PLACEHOLDER_TOKENS = frozenset(
+    {
+        "demo",
+        "dummy",
+        "example",
+        "fake",
+        "fixture",
+        "illustrative",
+        "mock",
+        "sample",
+        "test",
+    }
+)
+_PLACEHOLDER_BASENAME_TOKENS = _WEAK_PLACEHOLDER_TOKENS | frozenset(
+    {
+        "blueprint",
+        "cookbook",
+        "default",
+        "defaults",
+        "dist",
+        "placeholder",
+        "reference",
+        "skeleton",
+        "template",
+    }
+)
+_PROTOCOL_METADATA_VALUES = frozenset(
+    {
+        "access",
+        "api_key",
+        "authorization_code",
+        "basic",
+        "bearer",
+        "client_secret_basic",
+        "client_secret_jwt",
+        "client_secret_post",
+        "digest",
+        "dpop",
+        "id_token",
+        "jwt",
+        "mac",
+        "none",
+        "ntlm",
+        "oauth",
+        "oauth2",
+        "oidc",
+        "openid",
+        "password",
+        "private_key_jwt",
+        "refresh",
+        "refresh_token",
+        "saml",
+    }
+)
+_ALGORITHM_METADATA_VALUES = frozenset(
+    {
+        "aes",
+        "ed25519",
+        "es256",
+        "es384",
+        "es512",
+        "hs256",
+        "hs384",
+        "hs512",
+        "none",
+        "ps256",
+        "ps384",
+        "ps512",
+        "rs256",
+        "rs384",
+        "rs512",
+        "rsa",
+    }
+)
+_METADATA_KEY_QUALIFIERS = frozenset(
+    {
+        "algorithm",
+        "endpoint",
+        "file",
+        "format",
+        "header",
+        "id",
+        "identifier",
+        "method",
+        "mode",
+        "name",
+        "path",
+        "policy",
+        "prefix",
+        "ref",
+        "reference",
+        "scheme",
+        "scope",
+        "scopes",
+        "type",
+        "uri",
+        "url",
+        "version",
+    }
+)
+_SECRET_MANAGER_REFERENCE_PREFIXES = (
+    "arn:aws:secretsmanager:",
+    "arn:aws:ssm:",
+    "aws-secretsmanager://",
+    "azure-keyvault://",
+    "doppler://",
+    "gcp-secret-manager://",
+    "op://",
+    "secret-manager://",
+    "secret://",
+    "sm://",
+    "ssm://",
+    "vault://",
+)
+_MAX_VALUE_CLASSIFICATION_CHARACTERS = 8192
+_SCALAR_LABEL_ALIASES = {
+    "d_po_p": "dpop",
+    "o_auth": "oauth",
+    "o_auth2": "oauth2",
+    "open_id": "openid",
+}
 _REVIEW_REASON_CODES = frozenset(
     {
         "user_rejected",
@@ -178,6 +335,7 @@ _ERROR_MESSAGES = {
     "source_id_conflict": "the proposed source id is already used by another source",
     "source_path_conflict": "the proposed path is already registered differently",
     "candidate_invalid": "saved candidate data is invalid",
+    "candidate_detector_stale": "saved candidate uses a stale detector version",
     "candidate_revision_invalid": "candidate revision does not match the saved candidate",
     "review_reason_invalid": "candidate review reason code is invalid",
     "manifest_validation_failed": "the updated protected source manifest is invalid",
@@ -271,11 +429,11 @@ class ProtectedSourceCandidate:
     reason_codes: tuple[str, ...]
     confidence: float
     proposed_source: dict[str, object]
-    source_binding: FileBinding
-    manifest_binding: FileBinding
-    candidate_revision_sha256: str
+    source_binding: FileBinding = field(repr=False)
+    manifest_binding: FileBinding = field(repr=False)
+    candidate_revision_sha256: str = field(repr=False)
     detector_version: str = DETECTOR_VERSION
-    candidate_revision: str | None = None
+    candidate_revision: str | None = field(default=None, repr=False)
     status: Literal["proposed", "approving", "approved"] = "proposed"
     already_registered: bool = False
 
@@ -361,6 +519,17 @@ class ProtectedSourceCandidate:
             revision_sha256 = value.get("candidate_revision_sha256")
             detector_version = value.get("detector_version")
             status = value.get("status", "proposed")
+            if isinstance(detector_version, str):
+                if detector_version not in {
+                    DETECTOR_VERSION,
+                    LEGACY_DETECTOR_VERSION,
+                }:
+                    _raise("candidate_detector_stale")
+                if (
+                    detector_version == LEGACY_DETECTOR_VERSION
+                    and status == "proposed"
+                ):
+                    _raise("candidate_detector_stale")
             if (
                 not isinstance(candidate_id, str)
                 or _CANDIDATE_ID.fullmatch(candidate_id) is None
@@ -379,7 +548,8 @@ class ProtectedSourceCandidate:
                 or not isinstance(proposed_source, Mapping)
                 or not isinstance(revision_sha256, str)
                 or _HEX_SHA256.fullmatch(revision_sha256) is None
-                or detector_version != DETECTOR_VERSION
+                or detector_version
+                not in {DETECTOR_VERSION, LEGACY_DETECTOR_VERSION}
                 or status not in {"proposed", "approving", "approved"}
             ):
                 _raise("candidate_invalid")
@@ -695,7 +865,11 @@ def _build_protected_source_candidate(
     root_path: Path,
 ) -> ProtectedSourceCandidate:
     source_kind = _source_kind(normalized_path)
-    selector, reason_codes, confidence = _discover_selector(source_kind, source_text)
+    selector, reason_codes, confidence = _discover_selector(
+        source_kind,
+        source_text,
+        relative_path=normalized_path,
+    )
     proposed_source = _build_proposed_source(normalized_path, selector)
     already_registered = _validate_new_source_against_manifest(
         manifest,
@@ -914,7 +1088,7 @@ def approve_protected_source(
         workspace_root,
         workspace_lock,
     )
-    saved = _coerce_candidate(candidate)
+    saved = _coerce_candidate(candidate, allow_legacy_recovery=True)
     supplied_revision = candidate_revision or saved.candidate_revision
     _verify_candidate_revision(saved, supplied_revision)
     expected_sha256 = expected_manifest_sha256 or saved.manifest_sha256
@@ -1094,12 +1268,24 @@ def _review_candidate(
 
 def _coerce_candidate(
     candidate: ProtectedSourceCandidate | Mapping[str, object],
+    *,
+    allow_legacy_recovery: bool = False,
 ) -> ProtectedSourceCandidate:
     if isinstance(candidate, ProtectedSourceCandidate):
-        return candidate
-    if isinstance(candidate, Mapping):
-        return ProtectedSourceCandidate.from_storage_record(candidate)
-    _raise("candidate_invalid")
+        saved = candidate
+    elif isinstance(candidate, Mapping):
+        saved = ProtectedSourceCandidate.from_storage_record(candidate)
+    else:
+        _raise("candidate_invalid")
+    if saved.detector_version == DETECTOR_VERSION:
+        return saved
+    if (
+        allow_legacy_recovery
+        and saved.detector_version == LEGACY_DETECTOR_VERSION
+        and saved.status in {"approving", "approved"}
+    ):
+        return saved
+    _raise("candidate_detector_stale")
 
 
 def _verify_candidate_revision(
@@ -1134,7 +1320,12 @@ def _revalidate_source(
     if not _source_binding_matches(binding, candidate.source_binding):
         _raise("source_changed")
     source_kind = _source_kind(candidate.relative_path)
-    selector, reason_codes, confidence = _discover_selector(source_kind, text)
+    selector, reason_codes, confidence = _discover_selector(
+        source_kind,
+        text,
+        relative_path=candidate.relative_path,
+        detector_version=candidate.detector_version,
+    )
     proposed = _build_proposed_source(candidate.relative_path, selector)
     if (
         proposed != candidate.proposed_source
@@ -1147,15 +1338,34 @@ def _revalidate_source(
 def _discover_selector(
     source_kind: Literal["dotenv", "json"],
     text: str,
+    *,
+    relative_path: str,
+    detector_version: str = DETECTOR_VERSION,
 ) -> tuple[dict[str, list[str]], tuple[str, ...], float]:
+    if detector_version not in {DETECTOR_VERSION, LEGACY_DETECTOR_VERSION}:
+        _raise("candidate_detector_stale")
+    value_aware = detector_version == DETECTOR_VERSION
     if source_kind == "dotenv":
-        keys = _discover_dotenv_keys(text)
+        keys = _discover_dotenv_keys(
+            text,
+            relative_path=relative_path,
+            value_aware=value_aware,
+        )
         return {"dotenv_keys": keys}, ("secret_like_dotenv_key",), 0.95
-    pointers = _discover_json_pointers(text)
+    pointers = _discover_json_pointers(
+        text,
+        relative_path=relative_path,
+        value_aware=value_aware,
+    )
     return {"json_pointers": pointers}, ("secret_like_json_key",), 0.95
 
 
-def _discover_dotenv_keys(text: str) -> list[str]:
+def _discover_dotenv_keys(
+    text: str,
+    *,
+    relative_path: str,
+    value_aware: bool,
+) -> list[str]:
     selected: list[str] = []
     seen: set[str] = set()
     for raw_line in text.splitlines():
@@ -1172,7 +1382,19 @@ def _discover_dotenv_keys(text: str) -> list[str]:
         value = _parse_dotenv_value(match.group(2))
         if value is None:
             _raise("source_not_parseable")
-        if value.strip() and _is_secret_like_key(key):
+        secret_like_key = (
+            _is_secret_like_key(key)
+            if value_aware
+            else _is_secret_like_key_v1(key)
+        )
+        if value.strip() and secret_like_key and (
+            not value_aware
+            or _is_supported_secret_scalar(
+                key,
+                value,
+                relative_path=relative_path,
+            )
+        ):
             selected.append(key)
     if not selected:
         _raise("no_secret_selector")
@@ -1237,7 +1459,12 @@ def _strip_dotenv_inline_comment(value: str) -> str:
     return value
 
 
-def _discover_json_pointers(text: str) -> list[str]:
+def _discover_json_pointers(
+    text: str,
+    *,
+    relative_path: str,
+    value_aware: bool,
+) -> list[str]:
     payload = _strict_json_loads(text, duplicate_code="json_duplicate_key")
     pointers: list[str] = []
     item_count = 0
@@ -1252,10 +1479,23 @@ def _discover_json_pointers(text: str) -> list[str]:
                 if item_count > MAX_JSON_ITEMS:
                     _raise("json_too_many_items")
                 child_pointer = f"{pointer}/{_escape_json_pointer_segment(key)}"
+                secret_like_key = (
+                    _is_secret_like_key(key)
+                    if value_aware
+                    else _is_secret_like_key_v1(key)
+                )
                 if (
                     isinstance(child, str)
                     and child.strip()
-                    and _is_secret_like_key(key)
+                    and secret_like_key
+                    and (
+                        not value_aware
+                        or _is_supported_secret_scalar(
+                            key,
+                            child,
+                            relative_path=relative_path,
+                        )
+                    )
                 ):
                     pointers.append(child_pointer)
                 walk(child, child_pointer, depth + 1)
@@ -1314,8 +1554,30 @@ def _strict_candidate_json(text: str) -> dict[str, object]:
 
 
 def _is_secret_like_key(key: str) -> bool:
-    snake = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", key)
-    normalized = re.sub(r"[^A-Za-z0-9]+", "_", snake).strip("_").casefold()
+    segments = _normalized_identifier_segments(key)
+    if not segments:
+        return False
+    normalized = "_".join(segments)
+    if normalized in _V2_SECRET_MARKERS:
+        return True
+    if any(
+        marker in segments
+        for marker in _V2_SECRET_MARKERS
+        if "_" not in marker
+    ):
+        return True
+    joined_pairs = {
+        "_".join(segments[index : index + 2])
+        for index in range(len(segments) - 1)
+    }
+    return bool(joined_pairs & _V2_SECRET_MARKERS)
+
+
+def _is_secret_like_key_v1(key: str) -> bool:
+    """Preserve the released v1 key contract for approval recovery only."""
+
+    snake = _CAMEL_KEY_BOUNDARY.sub(r"\1_\2", key)
+    normalized = _NON_ASCII_ALNUM.sub("_", snake).strip("_").casefold()
     if not normalized:
         return False
     if normalized in _SECRET_MARKERS:
@@ -1323,8 +1585,206 @@ def _is_secret_like_key(key: str) -> bool:
     segments = tuple(part for part in normalized.split("_") if part)
     if any(marker in segments for marker in _SECRET_MARKERS if "_" not in marker):
         return True
-    joined_pairs = {"_".join(segments[index : index + 2]) for index in range(len(segments) - 1)}
+    joined_pairs = {
+        "_".join(segments[index : index + 2])
+        for index in range(len(segments) - 1)
+    }
     return bool(joined_pairs & _SECRET_MARKERS)
+
+
+def _is_supported_secret_scalar(
+    key: str,
+    value: str,
+    *,
+    relative_path: str,
+) -> bool:
+    """Classify one scalar without retaining or returning its raw value."""
+
+    stripped = value.strip()
+    if not stripped:
+        return False
+    if _is_secret_manager_reference(stripped):
+        return False
+    if len(stripped) <= _MAX_VALUE_CLASSIFICATION_CHARACTERS:
+        if _is_definitive_placeholder(stripped):
+            return False
+        if (
+            _has_weak_placeholder_value(stripped)
+            and _has_placeholder_like_basename(relative_path)
+        ):
+            return False
+        key_segments = _normalized_identifier_segments(key)
+        if _is_metadata_scalar(key_segments, stripped):
+            return False
+    return True
+
+
+def _normalized_identifier_segments(value: str) -> tuple[str, ...]:
+    normalized = unicodedata.normalize("NFKC", value)
+    normalized = _ACRONYM_KEY_BOUNDARY.sub(r"\1_\2", normalized)
+    normalized = _CAMEL_KEY_BOUNDARY.sub(r"\1_\2", normalized)
+    normalized = _NON_ASCII_ALNUM.sub("_", normalized).strip("_").casefold()
+    return tuple(segment for segment in normalized.split("_") if segment)
+
+
+def _canonical_scalar_label(value: str) -> str:
+    label = "_".join(_normalized_identifier_segments(value))
+    return _SCALAR_LABEL_ALIASES.get(label, label)
+
+
+def _is_definitive_placeholder(value: str) -> bool:
+    normalized = unicodedata.normalize("NFKC", value).strip()
+    if (
+        _SHELL_REFERENCE.fullmatch(normalized) is not None
+        or _BRACED_SHELL_REFERENCE.fullmatch(normalized) is not None
+        or _MUSTACHE_REFERENCE.fullmatch(normalized) is not None
+        or _ANGLE_PLACEHOLDER.fullmatch(normalized) is not None
+    ):
+        return True
+    if len(normalized) >= 4 and set(normalized) <= {"*", "x", "X", "-", "_"}:
+        return True
+    label = _canonical_scalar_label(normalized)
+    if label in _DEFINITIVE_PLACEHOLDER_VALUES:
+        return True
+    segments = _normalized_identifier_segments(normalized)
+    return bool(
+        len(segments) >= 2
+        and segments[0] in {"change", "configure", "replace", "set"}
+        and segments[-1] in {"later", "me", "placeholder", "this"}
+    )
+
+
+def _has_weak_placeholder_value(value: str) -> bool:
+    return bool(
+        set(_normalized_identifier_segments(value)) & _WEAK_PLACEHOLDER_TOKENS
+    )
+
+
+def _has_placeholder_like_basename(relative_path: str) -> bool:
+    basename = PurePath(relative_path).name
+    return bool(
+        set(_normalized_identifier_segments(basename))
+        & _PLACEHOLDER_BASENAME_TOKENS
+    )
+
+
+def _is_secret_manager_reference(value: str) -> bool:
+    normalized = unicodedata.normalize("NFKC", value).strip().casefold()
+    if normalized.startswith(_SECRET_MANAGER_REFERENCE_PREFIXES):
+        return True
+    parts = tuple(part for part in normalized.split("/") if part)
+    return bool(
+        len(parts) >= 6
+        and parts[0] == "projects"
+        and parts[2] == "secrets"
+        and parts[4] == "versions"
+    )
+
+
+def _is_metadata_scalar(key_segments: tuple[str, ...], value: str) -> bool:
+    if not key_segments or _is_access_key_id(key_segments):
+        return False
+    key_tokens = set(key_segments)
+    value_label = _canonical_scalar_label(value)
+    qualifiers = key_tokens & _METADATA_KEY_QUALIFIERS
+    protocol_key = bool(
+        key_tokens
+        & {"auth", "authentication", "authorization", "bearer", "token"}
+        or qualifiers & {"method", "mode", "scheme", "type"}
+    )
+    # Exact protocol vocabulary is metadata only when the key also describes
+    # an authentication protocol. CLIENT_SECRET=jwt and PASSWORD=password are
+    # therefore retained, while AUTH=OAuth2 and TOKEN_TYPE=Bearer are not.
+    if protocol_key and value_label in _PROTOCOL_METADATA_VALUES:
+        return True
+    if not qualifiers:
+        return False
+    if qualifiers & {"algorithm", "format"}:
+        return value_label in (
+            _ALGORITHM_METADATA_VALUES | _PROTOCOL_METADATA_VALUES
+        )
+    if qualifiers & {"method", "mode", "scheme", "type"}:
+        return value_label in _PROTOCOL_METADATA_VALUES
+    if "policy" in qualifiers:
+        return value_label in {
+            "default",
+            "disabled",
+            "enforced",
+            "optional",
+            "required",
+            "strict",
+        }
+    reference_qualifiers = qualifiers & {
+        "endpoint",
+        "file",
+        "header",
+        "id",
+        "identifier",
+        "name",
+        "path",
+        "prefix",
+        "ref",
+        "reference",
+        "scope",
+        "scopes",
+        "uri",
+        "url",
+        "version",
+    }
+    return bool(
+        reference_qualifiers
+        and _looks_like_reference_metadata(value, reference_qualifiers)
+    )
+
+
+def _is_access_key_id(key_segments: tuple[str, ...]) -> bool:
+    return any(
+        key_segments[index : index + 3] == ("access", "key", "id")
+        for index in range(max(0, len(key_segments) - 2))
+    )
+
+
+def _looks_like_reference_metadata(
+    value: str,
+    qualifiers: set[str],
+) -> bool:
+    normalized = unicodedata.normalize("NFKC", value).strip()
+    if _REFERENCE_URI.fullmatch(normalized) is not None:
+        return True
+    if qualifiers & {"endpoint", "file", "path", "ref", "reference", "uri", "url"}:
+        if (
+            normalized.startswith(("/", "./", "../", "~/"))
+            or "/" in normalized
+            or "\\" in normalized
+        ):
+            return True
+    return bool(
+        qualifiers
+        & {
+            "file",
+            "header",
+            "id",
+            "identifier",
+            "name",
+            "path",
+            "prefix",
+            "ref",
+            "reference",
+            "scope",
+            "scopes",
+            "endpoint",
+            "uri",
+            "url",
+            "version",
+        }
+        and (
+            _REFERENCE_NAME.fullmatch(normalized) is not None
+            or (
+                qualifiers & {"scope", "scopes"}
+                and _METADATA_DESCRIPTOR.fullmatch(normalized) is not None
+            )
+        )
+    )
 
 
 def _escape_json_pointer_segment(value: str) -> str:
@@ -1338,7 +1798,7 @@ def _build_proposed_source(
     path = PurePath(relative_path)
     slug_source = re.sub(r"[^a-z0-9]+", "_", path.name.casefold()).strip("_")
     slug = slug_source[:40] or "source"
-    identity = f"{DETECTOR_VERSION}\0{relative_path}".encode("utf-8")
+    identity = f"{_SOURCE_ID_DERIVATION_DOMAIN}\0{relative_path}".encode("utf-8")
     source_id = f"protected_{slug}_{hashlib.sha256(identity).hexdigest()[:16]}"
     if _SAFE_SOURCE_ID.fullmatch(source_id) is None:
         _raise("candidate_invalid")

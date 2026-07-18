@@ -1,0 +1,140 @@
+{
+  "schema_version": 2,
+  "dataset_id": "tooluseproxy-protected-source-discovery",
+  "dataset_version": "2.0.0",
+  "description": "Synthetic split-isolated workspaces for contextual placeholder and protocol-metadata detection with counterfactual hard positives.",
+  "files": {
+    "scenarios": "scenarios.jsonl",
+    "vocabulary": "vocabulary.json"
+  },
+  "scenario_contract": {
+    "files_per_scenario": 13,
+    "category_counts": {
+      "supported_positive": 3,
+      "supported_negative": 8,
+      "out_of_scope_protected": 1,
+      "excluded_irrelevant": 1
+    },
+    "challenge_family_counts": {
+      "excluded_irrelevant": 1,
+      "negative_documentation_example": 1,
+      "negative_neutral_control": 1,
+      "negative_placeholder_literal": 1,
+      "negative_placeholder_masked": 1,
+      "negative_placeholder_reference": 1,
+      "negative_protocol_auth_method": 1,
+      "negative_protocol_auth_scheme": 1,
+      "negative_protocol_token_kind": 1,
+      "out_of_scope_protected": 1,
+      "positive_control": 1,
+      "positive_mixed_selector": 1,
+      "positive_path_decoy": 1
+    },
+    "hard_positive_families": [
+      "positive_mixed_selector",
+      "positive_path_decoy"
+    ],
+    "negative_families": [
+      "negative_documentation_example",
+      "negative_neutral_control",
+      "negative_placeholder_literal",
+      "negative_placeholder_masked",
+      "negative_placeholder_reference",
+      "negative_protocol_auth_method",
+      "negative_protocol_auth_scheme",
+      "negative_protocol_token_kind"
+    ],
+    "profile_prefixes": {
+      "development": "dev-",
+      "validation": "validation-"
+    },
+    "split_shape_sha256": {
+      "development": "c8cba7c72a94bad985a9d91ad8ceff444d478932f9279593c3c4230bb66475e4",
+      "validation": "e81d2d552f4065c6c48981c891d4e0e0c4dafa5df289be4ebf276989c6ec50e0"
+    }
+  },
+  "expected_counts": {
+    "scenarios": 32,
+    "files": 416,
+    "development_scenarios": 16,
+    "validation_scenarios": 16,
+    "supported_positive": 96,
+    "supported_negative": 256,
+    "out_of_scope_protected": 32,
+    "excluded_irrelevant": 32
+  },
+  "go_no_go": {
+    "minimum_precision": 0.9,
+    "minimum_recall": 0.8,
+    "minimum_selector_precision": 1,
+    "minimum_selector_recall": 0.8,
+    "minimum_selector_exact_match_rate": 0.8,
+    "maximum_workspace_candidate_median": 3,
+    "maximum_privacy_exposures": 0,
+    "minimum_detected_selector_exact_match_rate": 1,
+    "minimum_hard_positive_recall": 0.8,
+    "minimum_negative_family_specificity": 0.8
+  },
+  "baselines": {
+    "all": {
+      "detector_version": "protected-source-candidate-v2",
+      "tp": 96,
+      "fp": 0,
+      "tn": 256,
+      "fn": 0,
+      "selector_tp": 96,
+      "selector_fp": 0,
+      "selector_fn": 0,
+      "selector_exact_matches": 96,
+      "complete_scans": 32,
+      "workspace_candidate_median": 3,
+      "out_of_scope_candidates": 0,
+      "excluded_candidates": 0,
+      "privacy_exposures": 0,
+      "detected_selector_exact_matches": 96,
+      "detected_positive_files": 96,
+      "case_outcomes_sha256": "e4861acec69a46a081887df63e6a62f0062023ba6c989baff9b409ab5b8254ca",
+      "scenario_outcomes_sha256": "d61e755e4a44ed2de22a0b5d28ea729fdb1d2462ce9d690c07b2d0437dd37705"
+    },
+    "development": {
+      "detector_version": "protected-source-candidate-v2",
+      "tp": 48,
+      "fp": 0,
+      "tn": 128,
+      "fn": 0,
+      "selector_tp": 48,
+      "selector_fp": 0,
+      "selector_fn": 0,
+      "selector_exact_matches": 48,
+      "complete_scans": 16,
+      "workspace_candidate_median": 3,
+      "out_of_scope_candidates": 0,
+      "excluded_candidates": 0,
+      "privacy_exposures": 0,
+      "detected_selector_exact_matches": 48,
+      "detected_positive_files": 48,
+      "case_outcomes_sha256": "7dc13d4a43ccc293facc637c1775279542cc6738db8bd8f1f778035555e1b024",
+      "scenario_outcomes_sha256": "46f264269c1a111790965afa14d89cd490fbebf45b52bca1748a02d11947a898"
+    },
+    "validation": {
+      "detector_version": "protected-source-candidate-v2",
+      "tp": 48,
+      "fp": 0,
+      "tn": 128,
+      "fn": 0,
+      "selector_tp": 48,
+      "selector_fp": 0,
+      "selector_fn": 0,
+      "selector_exact_matches": 48,
+      "complete_scans": 16,
+      "workspace_candidate_median": 3,
+      "out_of_scope_candidates": 0,
+      "excluded_candidates": 0,
+      "privacy_exposures": 0,
+      "detected_selector_exact_matches": 48,
+      "detected_positive_files": 48,
+      "case_outcomes_sha256": "4f42e34d8a68361336b801dac0d9b606b36165e4b550b4f2110076673f784b40",
+      "scenario_outcomes_sha256": "3466d811df1af959acf7ca903d0a3f6040607ae40f8d173d3090c68ce8ee6cec"
+    }
+  }
+}
