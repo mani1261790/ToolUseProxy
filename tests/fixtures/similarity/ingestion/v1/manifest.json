@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "dataset_id": "tooluseproxy-source-ingestion",
+  "dataset_version": "1.0.0",
+  "description": "Synthetic protected-source files and raw Codex Hook events for production ingestion-path evaluation.",
+  "files": {
+    "scenarios": "scenarios.jsonl"
+  }
+}
