@@ -8,7 +8,12 @@ from pathlib import Path
 
 from hook_monitor.analysis.adapters.common import make_structured_edge, normalize_tool_name
 from hook_monitor.analysis.bash_submission import extract_bash_http_submissions
-from hook_monitor.analysis.similarity import compare_text, make_shingles
+from hook_monitor.analysis.similarity import (
+    SimilarityCandidateStats,
+    compare_text,
+    prepare_similarity_text,
+    rank_similarity_candidate_ids,
+)
 from hook_monitor.runtime.fragments import is_artifact_root_fragment
 from hook_monitor.runtime.models import (
     ArtifactContext,
@@ -21,6 +26,8 @@ from hook_monitor.runtime.models import (
 
 MAX_LEXICAL_CANDIDATES = 50
 MAX_SOURCE_CANDIDATES = 200
+ARTIFACT_SIMILARITY_MINIMUM_LENGTH = 8
+SOURCE_SIMILARITY_MINIMUM_LENGTH = 4
 CONTENT_BEARING_ROLES = frozenset(
     {
         "command",
@@ -44,10 +51,10 @@ def select_canonical_similarity_contexts(
     for context in contexts:
         if not _is_similarity_context(context):
             continue
-        if (
-            context.fragment.fragment_kind in {"artifact_root", "payload"}
-            and not _is_mcp_argument_scalar(context)
-        ):
+        if context.fragment.fragment_kind in {
+            "artifact_root",
+            "payload",
+        } and not _is_mcp_argument_scalar(context):
             identity = (
                 context.fragment.artifact_id,
                 context.fragment.semantic_role,
@@ -69,8 +76,22 @@ def build_artifact_flow_edges(
         key=lambda item: (item.sequence_no, item.fragment.fragment_id),
     )
     by_id = {item.fragment.fragment_id: item for item in ordered}
-    hash_index: dict[tuple[tuple[str, str, str], str], str] = {}
-    shingle_index: dict[tuple[tuple[str, str, str], str], set[str]] = defaultdict(set)
+    prepared_by_id = {
+        item.fragment.fragment_id: prepare_similarity_text(
+            item.fragment.text,
+            normalized_text=item.fragment.normalized_text,
+        )
+        for item in ordered
+    }
+    exact_index: dict[tuple[tuple[str, str, str], str], str] = {}
+    feature_index: dict[tuple[tuple[str, str, str], str], set[str]] = defaultdict(set)
+    feature_counts = {
+        fragment_id: len(prepared.candidate_features)
+        for fragment_id, prepared in prepared_by_id.items()
+    }
+    normalized_lengths = {
+        item.fragment.fragment_id: len(item.fragment.normalized_text) for item in ordered
+    }
     edges: dict[tuple[str, str], FlowEdge] = {}
 
     for _sequence_no, sequence_contexts_iter in groupby(
@@ -84,7 +105,18 @@ def build_artifact_flow_edges(
             scope = _comparison_scope(current)
             if scope is None:
                 continue
-            candidate_ids = _candidate_ids(current, hash_index, shingle_index)
+            candidate_ids = _candidate_ids(
+                current,
+                artifact_candidate_exact_key(
+                    current,
+                    prepared_by_id[current.fragment.fragment_id].primary_exact_key,
+                ),
+                prepared_by_id[current.fragment.fragment_id].candidate_features,
+                exact_index,
+                feature_index,
+                feature_counts,
+                normalized_lengths,
+            )
             for candidate_id in candidate_ids:
                 previous = by_id[candidate_id]
                 edge = _compare_artifact_pair(previous, current)
@@ -98,13 +130,22 @@ def build_artifact_flow_edges(
             scope = _comparison_scope(current)
             if scope is None:
                 continue
-            hash_index[(scope, current.fragment.text_hash)] = (
-                current.fragment.fragment_id
-            )
-            for shingle in make_shingles(current.fragment.normalized_text):
-                shingle_index[(scope, shingle)].add(
-                    current.fragment.fragment_id
+            prepared = prepared_by_id[current.fragment.fragment_id]
+            exact_index[
+                (
+                    scope,
+                    artifact_candidate_exact_key(
+                        current,
+                        prepared.primary_exact_key,
+                    ),
                 )
+            ] = current.fragment.fragment_id
+            if (
+                normalized_lengths[current.fragment.fragment_id]
+                >= ARTIFACT_SIMILARITY_MINIMUM_LENGTH
+            ):
+                for feature in prepared.candidate_features:
+                    feature_index[(scope, feature)].add(current.fragment.fragment_id)
 
     return list(edges.values())
 
@@ -136,31 +177,40 @@ def build_source_binding_edges(
     available for the same topology decision as a full rebuild.
     """
     canonical_contexts = select_canonical_similarity_contexts(contexts)
-    by_id = {
-        context.fragment.fragment_id: context for context in canonical_contexts
+    by_id = {context.fragment.fragment_id: context for context in canonical_contexts}
+    prepared_contexts = {
+        context.fragment.fragment_id: prepare_similarity_text(
+            context.fragment.text,
+            normalized_text=context.fragment.normalized_text,
+        )
+        for context in canonical_contexts
     }
-    hash_index: dict[tuple[str | None, str], list[str]] = defaultdict(list)
-    shingle_index: dict[tuple[str | None, str], set[str]] = defaultdict(set)
+    exact_index: dict[tuple[str | None, str], list[str]] = defaultdict(list)
+    feature_index: dict[tuple[str | None, str], set[str]] = defaultdict(set)
     bash_submission_hash_index: dict[
         tuple[str | None, str],
         set[str],
     ] = defaultdict(set)
     bash_submission_values: dict[str, tuple[str, ...]] = {}
     for context in canonical_contexts:
-        hash_index[(context.workspace_id, context.fragment.text_hash)].append(
-            context.fragment.fragment_id
-        )
-        for shingle in make_shingles(context.fragment.normalized_text):
-            shingle_index[(context.workspace_id, shingle)].add(
-                context.fragment.fragment_id
+        prepared = prepared_contexts[context.fragment.fragment_id]
+        exact_index[
+            (
+                context.workspace_id,
+                artifact_candidate_exact_key(
+                    context,
+                    prepared.primary_exact_key,
+                ),
             )
+        ].append(context.fragment.fragment_id)
+        if len(context.fragment.normalized_text) >= SOURCE_SIMILARITY_MINIMUM_LENGTH:
+            for feature in prepared.candidate_features:
+                feature_index[(context.workspace_id, feature)].add(context.fragment.fragment_id)
         if context.fragment.fragment_kind != "bash_segment":
             continue
         projected_values = tuple(
             value
-            for projection in extract_bash_http_submissions(
-                context.fragment.text
-            )
+            for projection in extract_bash_http_submissions(context.fragment.text)
             if projection.extraction == "static_values"
             for value in projection.submitted_values
         )
@@ -175,10 +225,7 @@ def build_source_binding_edges(
 
     incoming_from_artifact: dict[str, set[str]] = defaultdict(set)
     for edge in artifact_edges or []:
-        if (
-            edge.src_node_kind == "artifact_fragment"
-            and edge.dst_node_kind == "artifact_fragment"
-        ):
+        if edge.src_node_kind == "artifact_fragment" and edge.dst_node_kind == "artifact_fragment":
             incoming_from_artifact[edge.dst_node_id].add(edge.src_node_id)
 
     edges: list[FlowEdge] = []
@@ -189,26 +236,39 @@ def build_source_binding_edges(
         )
         if chunk_workspace_id is _AMBIGUOUS_WORKSPACE:
             continue
-        candidate_ids = set(
-            hash_index[(chunk_workspace_id, chunk.text_hash)]
+        prepared_chunk = prepare_similarity_text(
+            chunk.text,
+            normalized_text=chunk.normalized_text,
         )
-        candidate_ids.update(
-            bash_submission_hash_index[
-                (chunk_workspace_id, chunk.text_hash)
-            ]
-        )
-        overlap_counts: dict[str, int] = defaultdict(int)
-        for shingle in make_shingles(chunk.normalized_text):
-            for fragment_id in shingle_index[(chunk_workspace_id, shingle)]:
-                overlap_counts[fragment_id] += 1
-        ranked = sorted(
-            overlap_counts,
-            key=lambda fragment_id: (
-                -overlap_counts[fragment_id],
-                fragment_id,
-            ),
-        )
-        candidate_ids.update(ranked[:MAX_SOURCE_CANDIDATES])
+        candidate_ids = set(exact_index[(chunk_workspace_id, prepared_chunk.primary_exact_key)])
+        candidate_ids.update(exact_index[(chunk_workspace_id, chunk.text_hash)])
+        candidate_ids.update(bash_submission_hash_index[(chunk_workspace_id, chunk.text_hash)])
+        if len(chunk.normalized_text) >= SOURCE_SIMILARITY_MINIMUM_LENGTH:
+            overlap_counts: dict[str, int] = defaultdict(int)
+            for feature in prepared_chunk.candidate_features:
+                for fragment_id in feature_index[(chunk_workspace_id, feature)]:
+                    overlap_counts[fragment_id] += 1
+            ranked = rank_similarity_candidate_ids(
+                query_feature_count=len(prepared_chunk.candidate_features),
+                query_normalized_length=len(chunk.normalized_text),
+                minimum_length=SOURCE_SIMILARITY_MINIMUM_LENGTH,
+                candidates=(
+                    SimilarityCandidateStats(
+                        candidate_id=fragment_id,
+                        overlap_count=overlap_count,
+                        candidate_feature_count=len(
+                            prepared_contexts[fragment_id].candidate_features
+                        ),
+                        candidate_normalized_length=len(
+                            by_id[fragment_id].fragment.normalized_text
+                        ),
+                    )
+                    for fragment_id, overlap_count in overlap_counts.items()
+                    if fragment_id not in candidate_ids
+                ),
+                limit=MAX_SOURCE_CANDIDATES,
+            )
+            candidate_ids.update(ranked)
 
         matched: dict[str, FlowEdge] = {}
         for fragment_id in candidate_ids:
@@ -224,8 +284,7 @@ def build_source_binding_edges(
                     method="bash_submission_exact",
                     score=1.0,
                     reason=(
-                        "static curl submission operand exactly matches "
-                        "protected source chunk"
+                        "static curl submission operand exactly matches protected source chunk"
                     ),
                 )
                 continue
@@ -254,7 +313,7 @@ def build_source_binding_edges(
                 right_text=context.fragment.text,
                 right_normalized=context.fragment.normalized_text,
                 right_hash=context.fragment.text_hash,
-                minimum_length=4,
+                minimum_length=SOURCE_SIMILARITY_MINIMUM_LENGTH,
             )
             if not decision.matched:
                 continue
@@ -277,10 +336,7 @@ def build_source_binding_edges(
             matching_predecessors = incoming_from_artifact[fragment_id] & matched_ids
             if matching_predecessors and edge.method != "bash_submission_exact":
                 continue
-            if (
-                target_fragment_ids is not None
-                and fragment_id not in target_fragment_ids
-            ):
+            if target_fragment_ids is not None and fragment_id not in target_fragment_ids:
                 continue
             edges.append(edge)
     return edges
@@ -328,29 +384,54 @@ def build_protected_source_resource_edges(
 
 def _candidate_ids(
     current: ArtifactContext,
-    hash_index: dict[tuple[tuple[str, str, str], str], str],
-    shingle_index: dict[tuple[tuple[str, str, str], str], set[str]],
+    primary_exact_key: str,
+    candidate_features: frozenset[str],
+    exact_index: dict[tuple[tuple[str, str, str], str], str],
+    feature_index: dict[tuple[tuple[str, str, str], str], set[str]],
+    feature_counts: dict[str, int],
+    normalized_lengths: dict[str, int],
 ) -> set[str]:
     scope = _comparison_scope(current)
+    query_normalized_length = len(current.fragment.normalized_text)
     if scope is None:
         return set()
-    exact_candidate = hash_index.get((scope, current.fragment.text_hash))
+    exact_candidate = exact_index.get((scope, primary_exact_key))
     if exact_candidate is not None:
         return {exact_candidate}
+    if query_normalized_length < ARTIFACT_SIMILARITY_MINIMUM_LENGTH:
+        return set()
 
     overlap_counts: dict[str, int] = defaultdict(int)
-    for shingle in make_shingles(current.fragment.normalized_text):
-        for fragment_id in shingle_index[(scope, shingle)]:
+    for feature in candidate_features:
+        for fragment_id in feature_index[(scope, feature)]:
             overlap_counts[fragment_id] += 1
 
-    ranked = sorted(
-        overlap_counts,
-        key=lambda fragment_id: (
-            -overlap_counts[fragment_id],
-            fragment_id,
+    ranked = rank_similarity_candidate_ids(
+        query_feature_count=len(candidate_features),
+        query_normalized_length=query_normalized_length,
+        minimum_length=ARTIFACT_SIMILARITY_MINIMUM_LENGTH,
+        candidates=(
+            SimilarityCandidateStats(
+                candidate_id=fragment_id,
+                overlap_count=overlap_count,
+                candidate_feature_count=feature_counts[fragment_id],
+                candidate_normalized_length=normalized_lengths[fragment_id],
+            )
+            for fragment_id, overlap_count in overlap_counts.items()
         ),
+        limit=MAX_LEXICAL_CANDIDATES,
     )
-    return set(ranked[:MAX_LEXICAL_CANDIDATES])
+    return set(ranked)
+
+
+def artifact_candidate_exact_key(
+    context: ArtifactContext,
+    primary_exact_key: str,
+) -> str:
+    """Keep JSON-key eligibility byte-exact while other content uses v2 canonical keys."""
+    if context.fragment.fragment_kind == "json_key":
+        return context.fragment.text_hash
+    return primary_exact_key
 
 
 def _is_similarity_context(context: ArtifactContext) -> bool:
@@ -360,21 +441,15 @@ def _is_similarity_context(context: ArtifactContext) -> bool:
         "operation_removed",
     }:
         return False
-    if (
-        context.phase == "post_tool_use"
-        and context.artifact_role == "tool_input"
-    ):
+    if context.phase == "post_tool_use" and context.artifact_role == "tool_input":
         return False
     if not context.fragment.normalized_text:
         return False
-    if (
-        context.fragment.semantic_role not in CONTENT_BEARING_ROLES
-        and not _is_mcp_argument_scalar(context)
+    if context.fragment.semantic_role not in CONTENT_BEARING_ROLES and not _is_mcp_argument_scalar(
+        context
     ):
         return False
-    if is_artifact_root_fragment(context.fragment) and _is_json_container(
-        context.fragment.text
-    ):
+    if is_artifact_root_fragment(context.fragment) and _is_json_container(context.fragment.text):
         return False
     return True
 
@@ -398,9 +473,7 @@ def _is_mcp_argument_scalar(context: ArtifactContext) -> bool:
         "mcpserver_tool_call",
     }:
         return False
-    return context.fragment.json_pointer.startswith(
-        ("/arguments/", "/args/", "/input/")
-    )
+    return context.fragment.json_pointer.startswith(("/arguments/", "/args/", "/input/"))
 
 
 def _is_json_container(text: str) -> bool:
@@ -472,6 +545,7 @@ def _compare_artifact_pair(
         right_text=current.fragment.text,
         right_normalized=current.fragment.normalized_text,
         right_hash=current.fragment.text_hash,
+        minimum_length=ARTIFACT_SIMILARITY_MINIMUM_LENGTH,
     )
     if not decision.matched:
         return None
@@ -492,6 +566,7 @@ def _evidence_level(method: str) -> str:
     return {
         "exact": "content_exact",
         "substring": "content_lexical",
+        "token_equivalent": "content_lexical",
         "shingle_jaccard": "content_lexical",
         "embedding_cosine": "content_semantic",
     }.get(method, "unknown")

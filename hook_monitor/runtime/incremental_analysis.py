@@ -12,7 +12,9 @@ from hook_monitor.analysis.adapters.registry import (
 from hook_monitor.analysis.chunking import SOURCE_CHUNKER_VERSION
 from hook_monitor.analysis.bash_submission import BASH_SUBMISSION_EXTRACTOR_VERSION
 from hook_monitor.analysis.graph import (
+    ARTIFACT_SIMILARITY_MINIMUM_LENGTH,
     MAX_LEXICAL_CANDIDATES,
+    artifact_candidate_exact_key,
     build_artifact_flow_edges,
     build_protected_source_resource_edges,
     build_source_binding_edges,
@@ -26,7 +28,10 @@ from hook_monitor.analysis.lineage import (
 from hook_monitor.analysis.adapters.mcp_profiles import (
     DEFAULT_MCP_PROFILE_REGISTRY,
 )
-from hook_monitor.analysis.similarity import make_shingles
+from hook_monitor.analysis.similarity import (
+    SIMILARITY_PROFILE_VERSION,
+    prepare_similarity_text,
+)
 from hook_monitor.analysis.source_index import load_sources_and_chunks
 from hook_monitor.runtime.models import (
     AnalysisCursor,
@@ -46,11 +51,9 @@ from hook_monitor.runtime.source_config import (
 from hook_monitor.runtime.storage import EventStore
 
 
-_MCP_PROFILE_GRAPH_VERSION = (
-    DEFAULT_MCP_PROFILE_REGISTRY.registry_version.rsplit(":", 1)[-1][:12]
-)
+_MCP_PROFILE_GRAPH_VERSION = DEFAULT_MCP_PROFILE_REGISTRY.registry_version.rsplit(":", 1)[-1][:12]
 RUNTIME_GRAPH_DETECTOR_VERSION = (
-    f"runtime-graph-v18-{SOURCE_CHUNKER_VERSION}-"
+    f"runtime-graph-v19-{SIMILARITY_PROFILE_VERSION}-{SOURCE_CHUNKER_VERSION}-"
     f"{BASH_SUBMISSION_EXTRACTOR_VERSION}-"
     f"mcp-profiles-{_MCP_PROFILE_GRAPH_VERSION}"
 )
@@ -323,9 +326,7 @@ def _update_session_delta(
             workspace_id=workspace_id,
         )
     )
-    affected_operation_ids = {
-        operation.operation_id for operation in adapter_operations
-    }
+    affected_operation_ids = {operation.operation_id for operation in adapter_operations}
     existing_operation_ids = {
         resource.operation_id
         for resource in existing_resources
@@ -380,8 +381,7 @@ def _update_session_delta(
     predecessor_fragment_ids = {
         edge.src_node_id
         for edge in similarity_edges
-        if edge.src_node_kind == "artifact_fragment"
-        and edge.dst_node_kind == "artifact_fragment"
+        if edge.src_node_kind == "artifact_fragment" and edge.dst_node_kind == "artifact_fragment"
     }
     predecessor_contexts = (
         store.list_artifact_contexts_for_scope_by_fragment_ids(
@@ -392,16 +392,12 @@ def _update_session_delta(
         if predecessor_fragment_ids
         else []
     )
-    source_binding_contexts = _deduplicate_contexts(
-        delta_contexts + predecessor_contexts
-    )
+    source_binding_contexts = _deduplicate_contexts(delta_contexts + predecessor_contexts)
     source_edges = build_source_binding_edges(
         chunks,
         source_binding_contexts,
         artifact_edges,
-        target_fragment_ids={
-            context.fragment.fragment_id for context in delta_contexts
-        },
+        target_fragment_ids={context.fragment.fragment_id for context in delta_contexts},
     )
     source_edges += build_protected_source_resource_edges(
         sources,
@@ -496,14 +492,23 @@ def _build_delta_similarity_edges(
         key=lambda context: (context.sequence_no, context.fragment.fragment_id),
     )
     for current in canonical:
-        shingles = make_shingles(current.fragment.normalized_text)
+        prepared = prepare_similarity_text(
+            current.fragment.text,
+            normalized_text=current.fragment.normalized_text,
+        )
+        exact_key = artifact_candidate_exact_key(
+            current,
+            prepared.primary_exact_key,
+        )
         candidate_ids = store.find_similarity_candidate_fragment_ids(
             session_id,
-            current.fragment.text_hash,
-            shingles,
+            exact_key,
+            prepared.candidate_features,
             current.sequence_no,
             MAX_LEXICAL_CANDIDATES,
             workspace_id=workspace_id,
+            query_normalized_length=len(current.fragment.normalized_text),
+            minimum_length=ARTIFACT_SIMILARITY_MINIMUM_LENGTH,
         )
         for previous in store.list_artifact_contexts_for_scope_by_fragment_ids(
             workspace_id,
@@ -516,8 +521,9 @@ def _build_delta_similarity_edges(
         store.upsert_fragment_shingles(
             session_id,
             [current],
-            {current.fragment.fragment_id: shingles},
+            {current.fragment.fragment_id: set(prepared.candidate_features)},
             workspace_id=workspace_id,
+            exact_keys_by_fragment={current.fragment.fragment_id: exact_key},
         )
     return list(edges.values())
 
@@ -529,16 +535,28 @@ def _index_contexts(
     contexts: list[ArtifactContext],
 ) -> None:
     canonical = select_canonical_similarity_contexts(contexts)
+    prepared_by_fragment = {
+        context.fragment.fragment_id: prepare_similarity_text(
+            context.fragment.text,
+            normalized_text=context.fragment.normalized_text,
+        )
+        for context in canonical
+    }
     store.upsert_fragment_shingles(
         session_id,
         canonical,
         {
-            context.fragment.fragment_id: make_shingles(
-                context.fragment.normalized_text
+            fragment_id: set(prepared.candidate_features)
+            for fragment_id, prepared in prepared_by_fragment.items()
+        },
+        workspace_id=workspace_id,
+        exact_keys_by_fragment={
+            context.fragment.fragment_id: artifact_candidate_exact_key(
+                context,
+                prepared_by_fragment[context.fragment.fragment_id].primary_exact_key,
             )
             for context in canonical
         },
-        workspace_id=workspace_id,
     )
 
 

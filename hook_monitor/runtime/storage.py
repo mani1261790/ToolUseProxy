@@ -21,6 +21,11 @@ from hook_monitor.analysis.adapters.mcp_profiles import (
 )
 from hook_monitor.analysis.adapters.mcp import parse_mcp_tool_name
 from hook_monitor.analysis.leak_detection import detect_leaks
+from hook_monitor.analysis.similarity import (
+    SIMILARITY_MAX_CANDIDATE_FEATURES,
+    SimilarityCandidateStats,
+    rank_similarity_candidate_ids,
+)
 from hook_monitor.policy.redaction_decision import (
     REDACTION_DECISION_DERIVATION_VERSION,
     derive_redact_decision,
@@ -128,6 +133,15 @@ RUNTIME_REQUIRED_TABLES = frozenset(
         "workspaces",
     }
 )
+
+
+def _sqlite_python_text_length(value: object) -> int:
+    """Return the runtime's text length contract, including embedded U+0000."""
+    if not isinstance(value, str):
+        raise TypeError("similarity normalized_text must be a string")
+    return len(value)
+
+
 RUNTIME_REQUIRED_COLUMNS = {
     "workspaces": frozenset(
         {"workspace_id", "canonical_root", "lexical_root", "discovered_by"}
@@ -236,7 +250,9 @@ PROTECTED_SOURCE_CANDIDATE_DECISION_CODES = frozenset(
     }
 )
 PROTECTED_SOURCE_CANDIDATE_AUTHORITIES = frozenset({"cli_explicit", "system_reconcile"})
-_PROTECTED_SOURCE_CANDIDATE_IDENTIFIER_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}\Z")
+_PROTECTED_SOURCE_CANDIDATE_IDENTIFIER_RE = re.compile(
+    r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}\Z"
+)
 _PROTECTED_SOURCE_CANDIDATE_MAX_PATH_BYTES = 4096
 _PROTECTED_SOURCE_CANDIDATE_MAX_RULES = 32
 _PROTECTED_SOURCE_CANDIDATE_FINGERPRINT_LOOKUP_MAX = 64
@@ -316,8 +332,7 @@ RUNTIME_REQUIRED_TRIGGERS = {
 }
 RUNTIME_REQUIRED_TABLE_SQL_FRAGMENTS = {
     "protected_source_candidates": (
-        "STATUS IN ( 'PROPOSED', 'APPROVING', 'APPROVED', "
-        "'REJECTED', 'IGNORED', 'STALE' )",
+        "STATUS IN ( 'PROPOSED', 'APPROVING', 'APPROVED', 'REJECTED', 'IGNORED', 'STALE' )",
         "STATUS = 'APPROVING'",
         "APPROVAL_ATTEMPT_ID IS NOT NULL",
         "APPROVAL_STARTED_AT IS NOT NULL",
@@ -328,8 +343,7 @@ RUNTIME_REQUIRED_TABLE_SQL_FRAGMENTS = {
     "protected_source_candidate_reviews": (
         "FROM_STATUS IN ( 'ABSENT', 'PROPOSED', 'APPROVING', 'APPROVED', "
         "'REJECTED', 'IGNORED', 'STALE' )",
-        "TO_STATUS IN ( 'PROPOSED', 'APPROVING', 'APPROVED', "
-        "'REJECTED', 'IGNORED', 'STALE' )",
+        "TO_STATUS IN ( 'PROPOSED', 'APPROVING', 'APPROVED', 'REJECTED', 'IGNORED', 'STALE' )",
         "'APPROVAL_STARTED'",
         "'APPROVAL_RELEASED'",
         "'RECONCILED_APPROVED'",
@@ -1494,9 +1508,10 @@ class EventStore:
                 + ", ".join(incomplete_indexes),
             )
         incomplete_triggers: list[str] = []
-        for trigger_name, (expected_table, expected_event) in (
-            RUNTIME_REQUIRED_TRIGGERS.items()
-        ):
+        for trigger_name, (
+            expected_table,
+            expected_event,
+        ) in RUNTIME_REQUIRED_TRIGGERS.items():
             trigger = triggers.get(trigger_name)
             if trigger is None:
                 incomplete_triggers.append(trigger_name)
@@ -1541,14 +1556,15 @@ class EventStore:
         if post_outcome is not None and not validated_operation_ids:
             raise ValueError("post outcome requires validated operation ids")
         if resource_snapshots and any(
-            snapshot.post_event_id != event.event_id
-            for snapshot in resource_snapshots
+            snapshot.post_event_id != event.event_id for snapshot in resource_snapshots
         ):
             raise ValueError("resource snapshot post_event_id does not match event")
         if resource_snapshots and not {
             snapshot.operation_id for snapshot in resource_snapshots
         }.issubset(validated_operation_ids):
-            raise ValueError("resource snapshot operation is not validated for PostToolUse")
+            raise ValueError(
+                "resource snapshot operation is not validated for PostToolUse"
+            )
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             self._upsert_workspace_for_event(conn, event)
@@ -1567,11 +1583,9 @@ class EventStore:
                         redaction_event_kind,
                         redaction_scope_sha256,
                         post_input_observation,
-                    ) = (
-                        _redaction_post_input_observation(
-                            event,
-                            payload_bytes=payload_bytes,
-                        )
+                    ) = _redaction_post_input_observation(
+                        event,
+                        payload_bytes=payload_bytes,
                     )
                 except Exception:
                     # Optional audit observation must never lose the core event.
@@ -1584,9 +1598,7 @@ class EventStore:
             else:
                 redaction_event_kind = "not_applicable"
                 redaction_scope_sha256 = None
-                post_input_observation = PostRedactionInputObservation(
-                    "not_applicable"
-                )
+                post_input_observation = PostRedactionInputObservation("not_applicable")
             conn.execute(
                 """
                 INSERT OR REPLACE INTO events (
@@ -1802,9 +1814,7 @@ class EventStore:
                         "resource snapshot session/tool_use does not match event"
                     )
                 for snapshot in resource_snapshots:
-                    if (
-                        snapshot.workspace_root != event.workspace_root
-                    ):
+                    if snapshot.workspace_root != event.workspace_root:
                         raise ValueError(
                             "resource snapshot execution context does not match operation owner"
                         )
@@ -2178,11 +2188,10 @@ class EventStore:
             owner_tool_name,
             post_tool_name,
         ) in outcome_rows:
-            if (
-                _normalized_tool_name(operation_tool_name)
-                != _normalized_tool_name(owner_tool_name)
-                or _normalized_tool_name(owner_tool_name)
-                != _normalized_tool_name(post_tool_name)
+            if _normalized_tool_name(operation_tool_name) != _normalized_tool_name(
+                owner_tool_name
+            ) or _normalized_tool_name(owner_tool_name) != _normalized_tool_name(
+                post_tool_name
             ):
                 continue
             latest_outcomes.setdefault(
@@ -2227,7 +2236,9 @@ class EventStore:
         if not {snapshot.operation_id for snapshot in snapshots}.issubset(
             normalized_operation_ids
         ):
-            raise ValueError("resource snapshot operation is not validated for PostToolUse")
+            raise ValueError(
+                "resource snapshot operation is not validated for PostToolUse"
+            )
         if any(
             snapshot.post_event_id != event.event_id
             or snapshot.session_id != event.session_id
@@ -2316,7 +2327,9 @@ class EventStore:
         if not {snapshot.operation_id for snapshot in snapshots}.issubset(
             normalized_operation_ids
         ):
-            raise ValueError("resource snapshot operation is not validated for PostToolUse")
+            raise ValueError(
+                "resource snapshot operation is not validated for PostToolUse"
+            )
         if any(
             snapshot.post_event_id != event.event_id
             or snapshot.session_id != event.session_id
@@ -2526,13 +2539,13 @@ class EventStore:
             and _normalized_tool_name(row[20]) == _normalized_tool_name(row[21])
         ]
 
-    def upsert_sources(self, sources: list[ProtectedSource], chunks: list[SourceChunk]) -> None:
+    def upsert_sources(
+        self, sources: list[ProtectedSource], chunks: list[SourceChunk]
+    ) -> None:
         if any(
             source.workspace_id is not None or source.source_key is not None
             for source in sources
-        ) or any(
-            chunk.workspace_id is not None for chunk in chunks
-        ):
+        ) or any(chunk.workspace_id is not None for chunk in chunks):
             raise ValueError(
                 "scoped source catalog requires replace_sources_for_workspace"
             )
@@ -2599,47 +2612,56 @@ class EventStore:
         source_ids = [source.source_id for source in sources]
         if source_ids:
             placeholders = ",".join("?" for _ in source_ids)
-            if conn.execute(
-                f"""
+            if (
+                conn.execute(
+                    f"""
                 SELECT 1
                 FROM protected_sources
                 WHERE source_id IN ({placeholders})
                   AND workspace_id IS NOT NULL
                 LIMIT 1
                 """,
-                source_ids,
-            ).fetchone() is not None:
+                    source_ids,
+                ).fetchone()
+                is not None
+            ):
                 raise ValueError("legacy source id belongs to a workspace catalog")
         chunk_ids = [chunk.chunk_id for chunk in chunks]
         chunk_source_ids = [chunk.source_id for chunk in chunks]
         if chunk_source_ids:
             placeholders = ",".join("?" for _ in chunk_source_ids)
-            if conn.execute(
-                f"""
+            if (
+                conn.execute(
+                    f"""
                 SELECT 1
                 FROM protected_sources
                 WHERE source_id IN ({placeholders})
                   AND workspace_id IS NOT NULL
                 LIMIT 1
                 """,
-                chunk_source_ids,
-            ).fetchone() is not None:
-                raise ValueError(
-                    "legacy source chunk references a workspace catalog"
-                )
+                    chunk_source_ids,
+                ).fetchone()
+                is not None
+            ):
+                raise ValueError("legacy source chunk references a workspace catalog")
         if chunk_ids:
             placeholders = ",".join("?" for _ in chunk_ids)
-            if conn.execute(
-                f"""
+            if (
+                conn.execute(
+                    f"""
                 SELECT 1
                 FROM source_chunks
                 WHERE chunk_id IN ({placeholders})
                   AND workspace_id IS NOT NULL
                 LIMIT 1
                 """,
-                chunk_ids,
-            ).fetchone() is not None:
-                raise ValueError("legacy source chunk id belongs to a workspace catalog")
+                    chunk_ids,
+                ).fetchone()
+                is not None
+            ):
+                raise ValueError(
+                    "legacy source chunk id belongs to a workspace catalog"
+                )
 
     def _reject_cross_workspace_source_catalog_collisions(
         self,
@@ -2960,16 +2982,14 @@ class EventStore:
             [(sink.node_id, sink.workspace_id) for sink in sinks]
         )
         if any(
-            assignment.analysis_run_id != analysis_run_id
-            for assignment in assignments
+            assignment.analysis_run_id != analysis_run_id for assignment in assignments
         ):
             raise ValueError("lineage assignment does not match offline analysis run")
         if (
             not expected_analysis_state
             or set(expected_analysis_state) != set(analysis_state)
             or any(
-                not isinstance(key, str) or not key
-                for key in expected_analysis_state
+                not isinstance(key, str) or not key for key in expected_analysis_state
             )
             or any(
                 value is not None and not isinstance(value, str)
@@ -3282,9 +3302,9 @@ class EventStore:
                         or snapshot_id != member_id
                         or metadata_json is None
                         or hashlib.sha256(
-                            (
-                                f"{member_kind}\0{member_id}\0{metadata_json}"
-                            ).encode("utf-8")
+                            (f"{member_kind}\0{member_id}\0{metadata_json}").encode(
+                                "utf-8"
+                            )
                         ).hexdigest()
                         != snapshot_hash
                     ):
@@ -3402,13 +3422,9 @@ class EventStore:
                 """,
                 (analysis_run_id, workspace_id, coverage),
             )
-            for (node_kind, node_id), metadata_json in sorted(
-                node_snapshots.items()
-            ):
+            for (node_kind, node_id), metadata_json in sorted(node_snapshots.items()):
                 snapshot_hash = hashlib.sha256(
-                    (
-                        f"{node_kind}\0{node_id}\0{metadata_json}"
-                    ).encode("utf-8")
+                    (f"{node_kind}\0{node_id}\0{metadata_json}").encode("utf-8")
                 ).hexdigest()
                 existing = conn.execute(
                     """
@@ -3467,8 +3483,7 @@ class EventStore:
                         node_id,
                         hashlib.sha256(
                             (
-                                f"{node_kind}\0{node_id}\0"
-                                f"{node_snapshots[(node_kind, node_id)]}"
+                                f"{node_kind}\0{node_id}\0{node_snapshots[(node_kind, node_id)]}"
                             ).encode("utf-8")
                         ).hexdigest(),
                     )
@@ -3588,7 +3603,7 @@ class EventStore:
         for node_kind, node_ids in node_ids_by_kind.items():
             ordered_ids = sorted(node_ids)
             for start in range(0, len(ordered_ids), 300):
-                current_ids = ordered_ids[start:start + 300]
+                current_ids = ordered_ids[start : start + 300]
                 placeholders = ",".join("?" for _ in current_ids)
                 query = ownership_queries[node_kind].format(
                     placeholders=placeholders,
@@ -3596,14 +3611,10 @@ class EventStore:
                 params: tuple[object, ...] = (*current_ids, workspace_id)
                 if node_kind == "source_chunk":
                     params += (workspace_id,)
-                found = {
-                    row[0]
-                    for row in conn.execute(query, params).fetchall()
-                }
+                found = {row[0] for row in conn.execute(query, params).fetchall()}
                 if found != set(current_ids):
                     raise ValueError(
-                        "analysis run graph node is missing or belongs to "
-                        "another workspace"
+                        "analysis run graph node is missing or belongs to another workspace"
                     )
                 owner_table = multi_owner_tables.get(node_kind)
                 if owner_table is not None:
@@ -3638,7 +3649,7 @@ class EventStore:
 
         source_chunk_ids = sorted(node_ids_by_kind.get("source_chunk", set()))
         for start in range(0, len(source_chunk_ids), 300):
-            current_ids = source_chunk_ids[start:start + 300]
+            current_ids = source_chunk_ids[start : start + 300]
             placeholders = ",".join("?" for _ in current_ids)
             parent_source_ids = {
                 row[0]
@@ -3660,7 +3671,7 @@ class EventStore:
         for node_kind, node_ids in node_ids_by_kind.items():
             ordered_ids = sorted(node_ids)
             for start in range(0, len(ordered_ids), 300):
-                current_ids = ordered_ids[start:start + 300]
+                current_ids = ordered_ids[start : start + 300]
                 placeholders = ",".join("?" for _ in current_ids)
                 if node_kind == "artifact_fragment":
                     rows = conn.execute(
@@ -3881,7 +3892,7 @@ class EventStore:
     ) -> None:
         edge_ids = sorted(batch)
         for start in range(0, len(edge_ids), 300):
-            current_ids = edge_ids[start:start + 300]
+            current_ids = edge_ids[start : start + 300]
             placeholders = ",".join("?" for _ in current_ids)
             rows = conn.execute(
                 f"""
@@ -3907,7 +3918,9 @@ class EventStore:
                 if row[1] != workspace_id:
                     raise ValueError("analysis run edge belongs to another workspace")
                 if tuple(row[2:]) != batch[edge_id]:
-                    raise ValueError("analysis run edge conflicts with live graph payload")
+                    raise ValueError(
+                        "analysis run edge conflicts with live graph payload"
+                    )
 
     def has_analysis_run_graph(self, analysis_run_id: str) -> bool:
         with self._connect() as conn:
@@ -4166,7 +4179,9 @@ class EventStore:
             raise RuntimeError("redaction preview audit schema is unavailable")
         _validate_stored_redaction_plan(plan)
         plan_values = _redaction_plan_values(plan)
-        target_values = tuple(_redaction_target_values(target) for target in plan.targets)
+        target_values = tuple(
+            _redaction_target_values(target) for target in plan.targets
+        )
         with self._connect_redaction_audit() as conn:
             # Hold one WAL snapshot while replaying, then upgrade only for the
             # small atomic plan/target insert. A concurrent writer may make the
@@ -4342,7 +4357,7 @@ class EventStore:
                 f"""
                 SELECT {_REDACTION_PLAN_SELECT_COLUMNS}
                 FROM redaction_plans
-                WHERE {' AND '.join(clauses)}
+                WHERE {" AND ".join(clauses)}
                 ORDER BY created_at DESC, plan_id
                 LIMIT ?
                 """,
@@ -4391,9 +4406,7 @@ class EventStore:
             # this new ownership graph before starting the atomic writer.
             conn.execute("PRAGMA foreign_keys = ON")
             if conn.execute("PRAGMA foreign_keys").fetchone()[0] != 1:
-                raise RuntimeError(
-                    "redaction enforcement foreign keys are unavailable"
-                )
+                raise RuntimeError("redaction enforcement foreign keys are unavailable")
             # Replay under one WAL snapshot. Upgrade only after the bounded
             # deterministic validation so a contended writer fails fast and a
             # caller can keep its already-computed BLOCK output.
@@ -4410,9 +4423,7 @@ class EventStore:
                 (preview_plan_id, workspace_id),
             ).fetchone()
             if preview_row is None:
-                raise ValueError(
-                    "redaction enforcement requires one eligible preview"
-                )
+                raise ValueError("redaction enforcement requires one eligible preview")
             preview_target_rows = conn.execute(
                 f"""
                 SELECT {_REDACTION_TARGET_VALUE_COLUMNS}
@@ -4428,8 +4439,7 @@ class EventStore:
             ).fetchall()
             if (
                 not preview_target_rows
-                or len(preview_target_rows)
-                > REDACTION_PREVIEW_MAX_CRITICAL_FINDINGS
+                or len(preview_target_rows) > REDACTION_PREVIEW_MAX_CRITICAL_FINDINGS
             ):
                 raise ValueError("redaction enforcement target limit exceeded")
             preview = _stored_redaction_plan_from_rows(
@@ -4450,8 +4460,7 @@ class EventStore:
 
             enforce_plan_id = _redaction_plan_id_for_mode(preview, "enforce")
             enforce_targets = tuple(
-                replace(target, plan_id=enforce_plan_id)
-                for target in preview.targets
+                replace(target, plan_id=enforce_plan_id) for target in preview.targets
             )
             enforce = replace(
                 preview,
@@ -4693,9 +4702,7 @@ class EventStore:
             or _LOWER_SHA256_RE.fullmatch(enforce_plan_id) is None
             or not _bounded_audit_identifier(workspace_id)
         ):
-            raise ValueError(
-                "redaction decision link lookup requires bounded ids"
-            )
+            raise ValueError("redaction decision link lookup requires bounded ids")
         with self._connect_redaction_audit() as conn:
             rows = conn.execute(
                 f"""
@@ -4837,10 +4844,7 @@ class EventStore:
                 ).fetchall()
                 if not coarse_rows:
                     return RedactionPostConfirmationResult("not_applicable")
-                if (
-                    len(coarse_rows)
-                    > REDACTION_CONFIRMATION_MAX_PLAN_CANDIDATES
-                ):
+                if len(coarse_rows) > REDACTION_CONFIRMATION_MAX_PLAN_CANDIDATES:
                     return RedactionPostConfirmationResult(
                         "conflict",
                         diagnostic_code="redaction_candidate_limit_exceeded",
@@ -4848,10 +4852,7 @@ class EventStore:
                 unavailable_plan_ids: list[str] = []
                 for coarse_row in coarse_rows:
                     pre_scope = _event_payload_metadata_from_row(coarse_row[1:])
-                    if (
-                        pre_scope is None
-                        or pre_scope.redaction_event_kind != "pre"
-                    ):
+                    if pre_scope is None or pre_scope.redaction_event_kind != "pre":
                         unavailable_plan_ids.append(str(coarse_row[0]))
                 if unavailable_plan_ids:
                     return RedactionPostConfirmationResult(
@@ -4888,9 +4889,7 @@ class EventStore:
                     plan_id=rows[0][0],
                     diagnostic_code="post_payload_bytes_unavailable",
                 )
-            post_metadata = _event_payload_metadata_from_row(
-                post_metadata_row
-            )
+            post_metadata = _event_payload_metadata_from_row(post_metadata_row)
             if post_metadata is None:
                 return RedactionPostConfirmationResult(
                     "unobserved",
@@ -4900,21 +4899,16 @@ class EventStore:
             if (
                 post_metadata.event_id != post_event.event_id
                 or post_metadata.redaction_event_kind != "post"
-                or post_metadata.redaction_scope_sha256
-                != expected_scope_sha256
+                or post_metadata.redaction_scope_sha256 != expected_scope_sha256
             ):
                 raise ValueError(
                     "redaction confirmation PostToolUse metadata identity mismatch"
                 )
             post_observation = post_metadata.post_input_observation
-            if (
-                post_metadata.payload_bytes
-                > REDACTION_AUDIT_EVENT_PAYLOAD_MAX_BYTES
-            ):
+            if post_metadata.payload_bytes > REDACTION_AUDIT_EVENT_PAYLOAD_MAX_BYTES:
                 if (
                     post_observation.status != "unobserved"
-                    or post_observation.diagnostic_code
-                    != "post_payload_bytes_exceeded"
+                    or post_observation.diagnostic_code != "post_payload_bytes_exceeded"
                 ):
                     return RedactionPostConfirmationResult(
                         "unobserved",
@@ -4926,10 +4920,7 @@ class EventStore:
                     plan_id=rows[0][0],
                     diagnostic_code="post_payload_bytes_exceeded",
                 )
-            if (
-                post_observation.diagnostic_code
-                == "post_payload_bytes_exceeded"
-            ):
+            if post_observation.diagnostic_code == "post_payload_bytes_exceeded":
                 return RedactionPostConfirmationResult(
                     "unobserved",
                     plan_id=rows[0][0],
@@ -4984,8 +4975,7 @@ class EventStore:
                 or not _LOWER_SHA256_RE.fullmatch(structure_sha256_after)
                 or type(critical_finding_count) is not int
                 or critical_finding_count <= 0
-                or critical_finding_count
-                > REDACTION_PREVIEW_MAX_CRITICAL_FINDINGS
+                or critical_finding_count > REDACTION_PREVIEW_MAX_CRITICAL_FINDINGS
                 or type(replacement_count) is not int
                 or not 0 < replacement_count <= critical_finding_count
                 or rejection_code is not None
@@ -5005,8 +4995,7 @@ class EventStore:
             if (
                 pre_metadata is None
                 or pre_metadata.redaction_event_kind != "pre"
-                or pre_metadata.redaction_scope_sha256
-                != expected_scope_sha256
+                or pre_metadata.redaction_scope_sha256 != expected_scope_sha256
                 or pre_metadata.sequence_no >= post_sequence_no
                 or analysis_workspace_id != post_event.workspace_id
                 or analysis_session_id != post_event.session_id
@@ -5031,14 +5020,11 @@ class EventStore:
             ).fetchone()
             if earliest_post_row is None:
                 raise ValueError("redaction confirmation PostToolUse event is missing")
-            earliest_post = _event_payload_metadata_from_row(
-                earliest_post_row
-            )
+            earliest_post = _event_payload_metadata_from_row(earliest_post_row)
             if (
                 earliest_post is None
                 or earliest_post.redaction_event_kind != "post"
-                or earliest_post.redaction_scope_sha256
-                != expected_scope_sha256
+                or earliest_post.redaction_scope_sha256 != expected_scope_sha256
             ):
                 return RedactionPostConfirmationResult(
                     "unobserved",
@@ -5147,20 +5133,13 @@ class EventStore:
             )
 
             if status in {"post_confirmed", "post_mismatch"}:
-                if (
-                    linked_post_event_id is None
-                    or (status == "post_confirmed") != (confirmed_at is not None)
+                if linked_post_event_id is None or (status == "post_confirmed") != (
+                    confirmed_at is not None
                 ):
-                    raise ValueError(
-                        "redaction confirmation terminal state is invalid"
-                    )
+                    raise ValueError("redaction confirmation terminal state is invalid")
                 if linked_post_event_id == post_event.event_id:
                     return RedactionPostConfirmationResult(
-                        (
-                            "confirmed"
-                            if status == "post_confirmed"
-                            else "mismatch"
-                        ),
+                        ("confirmed" if status == "post_confirmed" else "mismatch"),
                         plan_id=plan_id,
                         replayed=True,
                     )
@@ -5267,7 +5246,7 @@ class EventStore:
                 SELECT 1
                 FROM redaction_plans AS plan
                 JOIN events AS event ON event.event_id = plan.pre_event_id
-                WHERE {' AND '.join(filters)}
+                WHERE {" AND ".join(filters)}
                   AND (
                       event.phase != 'pre_tool_use'
                       OR event.workspace_status != 'ready'
@@ -5291,7 +5270,7 @@ class EventStore:
                     CASE WHEN event.event_id IS NULL THEN 1 ELSE 0 END
                 FROM redaction_plans AS plan
                 LEFT JOIN events AS event ON event.event_id = plan.pre_event_id
-                WHERE {' AND '.join(filters)}
+                WHERE {" AND ".join(filters)}
                   AND (
                       event.event_id IS NULL
                       OR event.recorded_at < ?
@@ -5456,9 +5435,7 @@ class EventStore:
             or analysis_row[4] is None
             or analysis_row[5:] != (plan.workspace_id, plan.session_id)
         ):
-            raise ValueError(
-                "redaction plan requires a completed runtime analysis run"
-            )
+            raise ValueError("redaction plan requires a completed runtime analysis run")
         normalized_event = NormalizedEvent(
             event_id=plan.pre_event_id,
             phase=event[0],
@@ -5522,10 +5499,7 @@ class EventStore:
             raise ValueError("redaction audit current sink limit exceeded")
         if any(
             any(size is None for size in row)
-            or any(
-                int(size) > REDACTION_AUDIT_MAX_IDENTIFIER_BYTES
-                for size in row[:4]
-            )
+            or any(int(size) > REDACTION_AUDIT_MAX_IDENTIFIER_BYTES for size in row[:4])
             or int(row[4]) > REDACTION_AUDIT_MAX_SINK_METADATA_BYTES
             for row in sink_size_rows
         ):
@@ -5649,9 +5623,7 @@ class EventStore:
             plan.workspace_id,
             source_ids,
             max_ids=REDACTION_PREVIEW_MAX_CRITICAL_FINDINGS,
-            max_bytes_per_chunk=(
-                REDACTION_PREVIEW_MAX_SOURCE_BYTES_PER_FINDING
-            ),
+            max_bytes_per_chunk=(REDACTION_PREVIEW_MAX_SOURCE_BYTES_PER_FINDING),
             max_bytes_total=REDACTION_PREVIEW_MAX_SOURCE_BYTES_TOTAL,
         )
         source_map = {
@@ -5849,10 +5821,7 @@ class EventStore:
                     score = excluded.score,
                     reason = excluded.reason
                 """,
-                [
-                    (workspace_id, *_flow_edge_values(edge))
-                    for edge in edges
-                ],
+                [(workspace_id, *_flow_edge_values(edge)) for edge in edges],
             )
             conn.executemany(
                 """
@@ -5893,7 +5862,7 @@ class EventStore:
 
         edge_ids = sorted(batch)
         for start in range(0, len(edge_ids), 400):
-            current_ids = edge_ids[start:start + 400]
+            current_ids = edge_ids[start : start + 400]
             placeholders = ",".join("?" for _ in current_ids)
             rows = conn.execute(
                 f"""
@@ -5949,7 +5918,7 @@ class EventStore:
             batch[edge.edge_id] = values
         edge_ids = sorted(batch)
         for start in range(0, len(edge_ids), 400):
-            current_ids = edge_ids[start:start + 400]
+            current_ids = edge_ids[start : start + 400]
             placeholders = ",".join("?" for _ in current_ids)
             collision = conn.execute(
                 f"""
@@ -6025,10 +5994,7 @@ class EventStore:
     ) -> None:
         if any(resource.workspace_id != workspace_id for resource in resources):
             raise ValueError("resource version workspace does not match replace scope")
-        nodes = [
-            (resource.node_id, resource.workspace_id)
-            for resource in resources
-        ]
+        nodes = [(resource.node_id, resource.workspace_id) for resource in resources]
         _validate_node_workspace_owners(nodes)
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
@@ -6083,8 +6049,7 @@ class EventStore:
         if not resources:
             return
         if any(
-            resource.workspace_id != workspace_id
-            or resource.session_id != session_id
+            resource.workspace_id != workspace_id or resource.session_id != session_id
             for resource in resources
         ):
             raise ValueError("resource version workspace does not match write scope")
@@ -6188,10 +6153,7 @@ class EventStore:
     ) -> None:
         if any(sink.workspace_id != workspace_id for sink in sinks):
             raise ValueError("sink candidate workspace does not match replace scope")
-        nodes = [
-            (sink.node_id, sink.workspace_id)
-            for sink in sinks
-        ]
+        nodes = [(sink.node_id, sink.workspace_id) for sink in sinks]
         _validate_node_workspace_owners(nodes)
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
@@ -6248,10 +6210,7 @@ class EventStore:
             for sink in sinks
         ):
             raise ValueError("sink candidate workspace does not match write scope")
-        nodes = [
-            (sink.node_id, workspace_id)
-            for sink in sinks
-        ]
+        nodes = [(sink.node_id, workspace_id) for sink in sinks]
         _validate_node_workspace_owners(nodes)
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
@@ -6361,11 +6320,7 @@ class EventStore:
             """,
             (workspace_id,),
         ).fetchone()
-        if (
-            row is None
-            or not row[0]
-            or make_workspace_id(row[0]) != workspace_id
-        ):
+        if row is None or not row[0] or make_workspace_id(row[0]) != workspace_id:
             raise ValueError("workspace analysis requires a registered workspace")
 
     def _validate_runtime_analysis_run_owner(
@@ -6445,7 +6400,7 @@ class EventStore:
             if workspace_id is not None and session_id is None and batch:
                 edge_ids = sorted(batch)
                 for start in range(0, len(edge_ids), 300):
-                    current_ids = edge_ids[start:start + 300]
+                    current_ids = edge_ids[start : start + 300]
                     placeholders = ",".join("?" for _ in current_ids)
                     rows = conn.execute(
                         f"""
@@ -6460,8 +6415,7 @@ class EventStore:
                     ).fetchall()
                     found = {row[0]: tuple(row[1:]) for row in rows}
                     if set(found) != set(current_ids) or any(
-                        found[edge_id] != batch[edge_id]
-                        for edge_id in current_ids
+                        found[edge_id] != batch[edge_id] for edge_id in current_ids
                     ):
                         raise ValueError(
                             "source binding edge is not in the immutable run graph"
@@ -6874,22 +6828,24 @@ class EventStore:
         suppression_fingerprint: str,
     ) -> ProtectedSourceCandidateCreateResult:
         """Create a value-free proposal or return its exact prior disposition."""
-        canonical_source_json, rule_ids_json = _validate_protected_source_candidate_proposal(
-            candidate_revision_sha256=candidate_revision_sha256,
-            workspace_id=workspace_id,
-            relative_path=relative_path,
-            detector_version=detector_version,
-            discovery_source=discovery_source,
-            rule_ids=rule_ids,
-            confidence=confidence,
-            proposed_source_json=proposed_source_json,
-            source_sha256=source_sha256,
-            source_size=source_size,
-            source_mtime_ns=source_mtime_ns,
-            source_device=source_device,
-            source_inode=source_inode,
-            manifest_sha256=manifest_sha256,
-            suppression_fingerprint=suppression_fingerprint,
+        canonical_source_json, rule_ids_json = (
+            _validate_protected_source_candidate_proposal(
+                candidate_revision_sha256=candidate_revision_sha256,
+                workspace_id=workspace_id,
+                relative_path=relative_path,
+                detector_version=detector_version,
+                discovery_source=discovery_source,
+                rule_ids=rule_ids,
+                confidence=confidence,
+                proposed_source_json=proposed_source_json,
+                source_sha256=source_sha256,
+                source_size=source_size,
+                source_mtime_ns=source_mtime_ns,
+                source_device=source_device,
+                source_inode=source_inode,
+                manifest_sha256=manifest_sha256,
+                suppression_fingerprint=suppression_fingerprint,
+            )
         )
         candidate_id = uuid.uuid4().hex
         with self._connect() as conn:
@@ -7061,7 +7017,9 @@ class EventStore:
                 ),
             )
             if cursor.rowcount != 1:
-                raise ValueError("protected source candidate changed before rediscovery")
+                raise ValueError(
+                    "protected source candidate changed before rediscovery"
+                )
             _append_protected_source_candidate_review(
                 conn,
                 candidate_id=existing.candidate_id,
@@ -7237,7 +7195,9 @@ class EventStore:
     ) -> ProtectedSourceCandidate:
         _validate_protected_source_candidate_id(candidate_id)
         _validate_candidate_sha256(expected_revision_sha256, "expected revision")
-        _validate_optional_candidate_sha256(expected_manifest_sha256, "expected manifest")
+        _validate_optional_candidate_sha256(
+            expected_manifest_sha256, "expected manifest"
+        )
         _validate_protected_source_candidate_authority(authority)
         approval_attempt_id = uuid.uuid4().hex
         with self._connect() as conn:
@@ -7397,9 +7357,7 @@ class EventStore:
             decision_code=decision_code,
             authority=authority,
         )
-        to_status = (
-            "proposed" if decision_code == "approval_released" else "stale"
-        )
+        to_status = "proposed" if decision_code == "approval_released" else "stale"
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             candidate = self._load_protected_source_candidate_for_transition(
@@ -7541,7 +7499,9 @@ class EventStore:
             for row in rows
             if row[8] == confirmed_source_json
         ]
-        approving = [candidate for candidate in candidates if candidate.status == "approving"]
+        approving = [
+            candidate for candidate in candidates if candidate.status == "approving"
+        ]
         if len(approving) > 1:
             raise ProtectedSourceCandidateStateError(
                 "registered_reconcile_ambiguous",
@@ -7662,9 +7622,7 @@ class EventStore:
                 expected_candidate_revision_sha256=(
                     candidate.candidate_revision_sha256
                 ),
-                result_candidate_revision_sha256=(
-                    candidate.candidate_revision_sha256
-                ),
+                result_candidate_revision_sha256=(candidate.candidate_revision_sha256),
                 expected_manifest_sha256=candidate.manifest_sha256,
                 result_manifest_sha256=result_manifest_sha256,
                 approval_attempt_id=approval_attempt_id,
@@ -8450,7 +8408,14 @@ class EventStore:
         shingles_by_fragment: dict[str, set[str]],
         *,
         workspace_id: str,
+        exact_keys_by_fragment: dict[str, str] | None = None,
     ) -> None:
+        """Persist the bounded candidate index for immutable artifact fragments.
+
+        ``shingles_by_fragment`` remains the public parameter name for compatibility,
+        but callers may store any versioned candidate feature.  Older callers that do
+        not provide ``exact_keys_by_fragment`` retain the raw-text-hash behavior.
+        """
         if any(
             context.workspace_id != workspace_id
             or context.workspace_status != "ready"
@@ -8458,6 +8423,20 @@ class EventStore:
             for context in contexts
         ):
             raise ValueError("fragment shingle context does not match write scope")
+        if any(
+            len(features) > SIMILARITY_MAX_CANDIDATE_FEATURES
+            for features in shingles_by_fragment.values()
+        ):
+            raise ValueError("similarity candidate feature bound exceeded")
+        fragment_ids = {context.fragment.fragment_id for context in contexts}
+        if exact_keys_by_fragment is not None:
+            if set(exact_keys_by_fragment) != fragment_ids:
+                raise ValueError("fragment exact keys do not match write scope")
+            if any(
+                not isinstance(exact_key, str) or not exact_key
+                for exact_key in exact_keys_by_fragment.values()
+            ):
+                raise ValueError("fragment exact keys must be non-empty strings")
         rows = [
             (
                 workspace_id,
@@ -8478,7 +8457,11 @@ class EventStore:
                 session_id,
                 context.fragment.fragment_id,
                 context.sequence_no,
-                context.fragment.text_hash,
+                (
+                    context.fragment.text_hash
+                    if exact_keys_by_fragment is None
+                    else exact_keys_by_fragment[context.fragment.fragment_id]
+                ),
             )
             for context in contexts
         ]
@@ -8518,7 +8501,17 @@ class EventStore:
         limit: int,
         *,
         workspace_id: str,
+        query_normalized_length: int,
+        minimum_length: int,
     ) -> list[str]:
+        if len(shingles) > SIMILARITY_MAX_CANDIDATE_FEATURES:
+            raise ValueError("similarity candidate feature bound exceeded")
+        if type(query_normalized_length) is not int or query_normalized_length < 0:
+            raise ValueError("query_normalized_length must be a non-negative integer")
+        if type(minimum_length) is not int or minimum_length <= 0:
+            raise ValueError("minimum_length must be a positive integer")
+        if type(limit) is not int or limit < 0:
+            raise ValueError("limit must be a non-negative integer")
         with self._connect() as conn:
             exact = [
                 row[0]
@@ -8538,32 +8531,138 @@ class EventStore:
             ]
             if exact:
                 return exact
+            if query_normalized_length < minimum_length or limit == 0:
+                return []
             overlap: list[str] = []
             if shingles:
-                values = sorted(shingles)
-                placeholders = ",".join("?" for _ in values)
-                overlap = [
-                    row[0]
-                    for row in conn.execute(
-                        f"""
-                        SELECT fragment_id, COUNT(*) AS overlap_count
-                        FROM fragment_shingles
-                        WHERE workspace_id = ? AND session_id = ?
-                          AND sequence_no < ?
-                          AND shingle IN ({placeholders})
-                        GROUP BY fragment_id
-                        ORDER BY overlap_count DESC, fragment_id
-                        LIMIT ?
-                        """,
-                        (
-                            workspace_id,
-                            session_id,
-                            before_sequence_no,
-                            *values,
-                            limit,
-                        ),
-                    ).fetchall()
-                ]
+                # A connection-local TEMP table keeps the bind count constant even
+                # on SQLite builds whose variable limit is below the 16K feature
+                # profile bound. It does not mutate the persistent schema.
+                conn.execute("PRAGMA temp_store = MEMORY")
+                conn.execute(
+                    """
+                    CREATE TEMP TABLE similarity_query_features (
+                        feature TEXT PRIMARY KEY
+                    ) WITHOUT ROWID
+                    """
+                )
+                conn.executemany(
+                    "INSERT INTO similarity_query_features (feature) VALUES (?)",
+                    ((feature,) for feature in sorted(shingles)),
+                )
+                # SQLite's built-in LENGTH(text) stops at U+0000 while Python len,
+                # normalization, and pair comparison do not. A connection-local,
+                # deterministic UDF keeps SQL top-K bounded without pre-limiting
+                # with a different eligibility contract.
+                conn.create_function(
+                    "tooluseproxy_text_length",
+                    1,
+                    _sqlite_python_text_length,
+                    deterministic=True,
+                )
+                query_feature_count = len(shingles)
+                ranked_rows = conn.execute(
+                    """
+                    WITH overlap_counts AS (
+                        SELECT
+                            indexed.fragment_id AS fragment_id,
+                            COUNT(*) AS overlap_count
+                        FROM similarity_query_features AS query
+                        JOIN fragment_shingles AS indexed
+                          INDEXED BY idx_fragment_shingles_lookup
+                          ON indexed.workspace_id = ?1
+                         AND indexed.session_id = ?2
+                         AND indexed.shingle = query.feature
+                        WHERE indexed.sequence_no < ?3
+                        GROUP BY indexed.fragment_id
+                    ),
+                    candidate_stats AS (
+                        SELECT
+                            overlap.fragment_id AS fragment_id,
+                            overlap.overlap_count AS overlap_count,
+                            (
+                                SELECT COUNT(*)
+                                FROM fragment_shingles AS candidate
+                                WHERE candidate.workspace_id = ?1
+                                  AND candidate.session_id = ?2
+                                  AND candidate.fragment_id = overlap.fragment_id
+                            ) AS candidate_feature_count
+                        FROM overlap_counts AS overlap
+                    ),
+                    eligible_stats AS (
+                        SELECT
+                            stats.fragment_id AS fragment_id,
+                            stats.overlap_count AS overlap_count,
+                            stats.candidate_feature_count AS candidate_feature_count,
+                            fragment.normalized_text AS normalized_text
+                        FROM candidate_stats AS stats
+                        JOIN artifact_fragments AS fragment
+                          ON fragment.fragment_id = stats.fragment_id
+                        WHERE tooluseproxy_text_length(fragment.normalized_text) >= ?4
+                    )
+                    SELECT *
+                    FROM (
+                        SELECT *
+                        FROM eligible_stats
+                        -- Query and candidate feature counts are capped at 16384.
+                        -- Distinct rational coverage scores are separated by more
+                        -- than binary64 ULP, so REAL selects the same bounded top-K
+                        -- set as the float-free shared comparator below.
+                        ORDER BY
+                            CAST(overlap_count AS REAL)
+                                / MIN(?5, candidate_feature_count) DESC,
+                            overlap_count DESC,
+                            fragment_id
+                        LIMIT ?6
+                    )
+                    UNION ALL
+                    SELECT *
+                    FROM (
+                        SELECT *
+                        FROM eligible_stats
+                        ORDER BY
+                            overlap_count DESC,
+                            CAST(overlap_count AS REAL)
+                                / MIN(?5, candidate_feature_count) DESC,
+                            fragment_id
+                        LIMIT ?7
+                    )
+                    """,
+                    (
+                        workspace_id,
+                        session_id,
+                        before_sequence_no,
+                        minimum_length,
+                        query_feature_count,
+                        limit,
+                        limit,
+                    ),
+                ).fetchall()
+                # Each SQL objective is bounded independently. Deduplicate their
+                # at-most 2*limit union, then let the shared helper enforce unique
+                # lane quotas and deterministic coverage backfill.
+                ranked_candidates: dict[str, SimilarityCandidateStats] = {}
+                for row in ranked_rows:
+                    candidate = SimilarityCandidateStats(
+                        candidate_id=row[0],
+                        overlap_count=row[1],
+                        candidate_feature_count=row[2],
+                        candidate_normalized_length=len(row[3]),
+                    )
+                    previous = ranked_candidates.setdefault(row[0], candidate)
+                    if previous != candidate:
+                        raise RuntimeError(
+                            "inconsistent SQLite similarity candidate stats"
+                        )
+                overlap = list(
+                    rank_similarity_candidate_ids(
+                        query_feature_count=query_feature_count,
+                        query_normalized_length=query_normalized_length,
+                        minimum_length=minimum_length,
+                        candidates=ranked_candidates.values(),
+                        limit=limit,
+                    )
+                )
         return list(dict.fromkeys(exact + overlap))
 
     def upsert_lineage_assignments(
@@ -8574,9 +8673,7 @@ class EventStore:
     ) -> None:
         if not assignments:
             return
-        analysis_run_ids = {
-            assignment.analysis_run_id for assignment in assignments
-        }
+        analysis_run_ids = {assignment.analysis_run_id for assignment in assignments}
         if len(analysis_run_ids) != 1:
             raise ValueError("lineage assignments span multiple analysis runs")
         analysis_run_id = next(iter(analysis_run_ids))
@@ -9119,9 +9216,7 @@ class EventStore:
         for (registered_root,) in rows:
             try:
                 if (
-                    os.path.commonpath(
-                        (registered_root, execution.canonical_root)
-                    )
+                    os.path.commonpath((registered_root, execution.canonical_root))
                     == registered_root
                 ):
                     return str(registered_root)
@@ -9361,8 +9456,7 @@ class EventStore:
             "RENAME TO protected_source_candidate_reviews_v3"
         )
         conn.execute(
-            "ALTER TABLE protected_source_candidates "
-            "RENAME TO protected_source_candidates_v3"
+            "ALTER TABLE protected_source_candidates RENAME TO protected_source_candidates_v3"
         )
         self._create_protected_source_candidate_tables(conn)
         candidate_attempt = (
@@ -9719,19 +9813,15 @@ class EventStore:
                 (event_id,),
             ).fetchone()
             if stored_values != values:
-                stored_metadata = _event_payload_metadata_from_row(
-                    stored_values
-                )
+                stored_metadata = _event_payload_metadata_from_row(stored_values)
                 if (
                     stored_metadata is None
                     or stored_metadata.event_id != event_id
                     or stored_metadata.payload_bytes != payload_bytes
                     or stored_metadata.payload_sha256 != payload_sha256
                     or stored_metadata.sequence_no != sequence_no
-                    or stored_metadata.redaction_event_kind
-                    != redaction_event_kind
-                    or stored_metadata.redaction_scope_sha256
-                    != redaction_scope_sha256
+                    or stored_metadata.redaction_event_kind != redaction_event_kind
+                    or stored_metadata.redaction_scope_sha256 != redaction_scope_sha256
                 ):
                     raise sqlite3.IntegrityError(
                         "event payload metadata replay mismatch"
@@ -9768,14 +9858,17 @@ class EventStore:
     ) -> None:
         """Create the immutable, hash-only redaction preview audit schema."""
         migration_key = "migration.redaction_preview_audit.v1"
-        migration_complete = conn.execute(
-            """
+        migration_complete = (
+            conn.execute(
+                """
             SELECT 1
             FROM analysis_state
             WHERE key = ? AND value = 'complete'
             """,
-            (migration_key,),
-        ).fetchone() is not None
+                (migration_key,),
+            ).fetchone()
+            is not None
+        )
         existing_tables = {
             row[0]
             for row in conn.execute(
@@ -9942,21 +10035,27 @@ class EventStore:
     ) -> None:
         """Create narrow immutable links for future REDACT decisions."""
         migration_key = "migration.redaction_decision_linkage.v1"
-        migration_complete = conn.execute(
-            """
+        migration_complete = (
+            conn.execute(
+                """
             SELECT 1
             FROM analysis_state
             WHERE key = ? AND value = 'complete'
             """,
-            (migration_key,),
-        ).fetchone() is not None
-        table_exists = conn.execute(
-            """
+                (migration_key,),
+            ).fetchone()
+            is not None
+        )
+        table_exists = (
+            conn.execute(
+                """
             SELECT 1
             FROM sqlite_master
             WHERE type = 'table' AND name = 'redaction_decision_links'
             """
-        ).fetchone() is not None
+            ).fetchone()
+            is not None
+        )
         if migration_complete:
             self._validate_redaction_decision_linkage_schema(conn)
             return
@@ -10090,28 +10189,33 @@ class EventStore:
     ) -> None:
         """Create sparse O(1) event metadata without legacy backfill."""
         migration_key = "migration.event_payload_metadata.v1"
-        migration_complete = conn.execute(
-            """
+        migration_complete = (
+            conn.execute(
+                """
             SELECT 1
             FROM analysis_state
             WHERE key = ? AND value = 'complete'
             """,
-            (migration_key,),
-        ).fetchone() is not None
-        table_exists = conn.execute(
-            """
+                (migration_key,),
+            ).fetchone()
+            is not None
+        )
+        table_exists = (
+            conn.execute(
+                """
             SELECT 1
             FROM sqlite_master
             WHERE type = 'table' AND name = 'event_payload_metadata'
             """
-        ).fetchone() is not None
+            ).fetchone()
+            is not None
+        )
         if migration_complete:
             self._validate_event_payload_metadata_schema(conn)
             return
         if not table_exists:
             diagnostic_codes = ", ".join(
-                f"'{code}'"
-                for code in sorted(REDACTION_POST_INPUT_DIAGNOSTIC_CODES)
+                f"'{code}'" for code in sorted(REDACTION_POST_INPUT_DIAGNOSTIC_CODES)
             )
             conn.execute(
                 f"""
@@ -10286,12 +10390,9 @@ class EventStore:
         self,
         conn: sqlite3.Connection,
     ) -> None:
-        rows = conn.execute(
-            "PRAGMA table_info(event_payload_metadata)"
-        ).fetchall()
+        rows = conn.execute("PRAGMA table_info(event_payload_metadata)").fetchall()
         actual = {
-            row[1]: (str(row[2]).upper(), bool(row[3]), int(row[5]))
-            for row in rows
+            row[1]: (str(row[2]).upper(), bool(row[3]), int(row[5])) for row in rows
         }
         expected = {
             "event_id": ("TEXT", True, 1),
@@ -10325,15 +10426,16 @@ class EventStore:
         ).fetchone()
         table_sql = "" if table_sql_row is None else str(table_sql_row[0])
         normalized_table_sql = "".join(table_sql.casefold().split())
-        if re.search(
-            r"CHECK\s*\(\s*typeof\s*\(\s*payload_bytes\s*\)\s*"
-            r"=\s*'integer'\s+AND\s+payload_bytes\s*>=\s*0\s*\)",
-            table_sql,
-            flags=re.IGNORECASE,
-        ) is None:
-            raise RuntimeError(
-                "redaction audit payload byte constraint mismatch"
+        if (
+            re.search(
+                r"CHECK\s*\(\s*typeof\s*\(\s*payload_bytes\s*\)\s*"
+                r"=\s*'integer'\s+AND\s+payload_bytes\s*>=\s*0\s*\)",
+                table_sql,
+                flags=re.IGNORECASE,
             )
+            is None
+        ):
+            raise RuntimeError("redaction audit payload byte constraint mismatch")
         required_sql_fragments = {
             "typeof(metadata_version)='text'",
             f"metadata_version='{_EVENT_PAYLOAD_METADATA_VERSION}'",
@@ -10349,10 +10451,7 @@ class EventStore:
             "typeof(redaction_scope_sha256)='text'",
             "typeof(post_input_status)='text'",
             "post_input_statusin('not_applicable','captured','unobserved')",
-            (
-                "post_input_observer_version="
-                f"'{REDACTION_POST_INPUT_OBSERVER_VERSION}'"
-            ),
+            (f"post_input_observer_version='{REDACTION_POST_INPUT_OBSERVER_VERSION}'"),
             "post_input_status='not_applicable'",
             "post_input_status='unobserved'",
             "post_input_status='captured'",
@@ -10371,9 +10470,7 @@ class EventStore:
             fragment.casefold() not in normalized_table_sql
             for fragment in required_sql_fragments
         ):
-            raise RuntimeError(
-                "redaction audit event metadata constraint mismatch"
-            )
+            raise RuntimeError("redaction audit event metadata constraint mismatch")
         foreign_keys = conn.execute(
             "PRAGMA foreign_key_list(event_payload_metadata)"
         ).fetchall()
@@ -10381,9 +10478,7 @@ class EventStore:
             row[2] == "events" and row[3] == "event_id" and row[4] == "event_id"
             for row in foreign_keys
         ):
-            raise RuntimeError(
-                "redaction audit payload metadata owner mismatch"
-            )
+            raise RuntimeError("redaction audit payload metadata owner mismatch")
         index_row = conn.execute(
             """
             SELECT sql
@@ -10395,27 +10490,20 @@ class EventStore:
         index_sql = "" if index_row is None else str(index_row[0])
         normalized_index_sql = "".join(index_sql.casefold().split())
         if (
-            "on event_payload_metadata (".replace(" ", "")
-            not in normalized_index_sql
+            "on event_payload_metadata (".replace(" ", "") not in normalized_index_sql
             or "(redaction_scope_sha256,redaction_event_kind,sequence_no,event_id)"
             not in normalized_index_sql
-            or "whereredaction_scope_sha256isnotnull"
-            not in normalized_index_sql
+            or "whereredaction_scope_sha256isnotnull" not in normalized_index_sql
         ):
-            raise RuntimeError(
-                "redaction audit event metadata index mismatch"
-            )
+            raise RuntimeError("redaction audit event metadata index mismatch")
 
     def _validate_redaction_decision_linkage_schema(
         self,
         conn: sqlite3.Connection,
     ) -> None:
-        rows = conn.execute(
-            "PRAGMA table_info(redaction_decision_links)"
-        ).fetchall()
+        rows = conn.execute("PRAGMA table_info(redaction_decision_links)").fetchall()
         actual = {
-            row[1]: (str(row[2]).upper(), bool(row[3]), int(row[5]))
-            for row in rows
+            row[1]: (str(row[2]).upper(), bool(row[3]), int(row[5])) for row in rows
         }
         expected = {
             "enforce_plan_id": ("TEXT", True, 1),
@@ -10437,9 +10525,7 @@ class EventStore:
             None,
         )
         if created_at_row is None or created_at_row[4] != "CURRENT_TIMESTAMP":
-            raise RuntimeError(
-                "redaction audit decision linkage default mismatch"
-            )
+            raise RuntimeError("redaction audit decision linkage default mismatch")
 
         table_sql_row = conn.execute(
             """
@@ -10455,10 +10541,7 @@ class EventStore:
             "length(enforce_plan_id)=64",
             "enforce_plan_idnotglob'*[^0-9a-f]*'",
             "typeof(target_ordinal)='integer'",
-            (
-                "target_ordinalbetween0and"
-                f"{REDACTION_PREVIEW_MAX_CRITICAL_FINDINGS - 1}"
-            ),
+            (f"target_ordinalbetween0and{REDACTION_PREVIEW_MAX_CRITICAL_FINDINGS - 1}"),
             "typeof(preview_plan_id)='text'",
             "length(preview_plan_id)=64",
             "preview_plan_idnotglob'*[^0-9a-f]*'",
@@ -10473,10 +10556,7 @@ class EventStore:
             "length(derived_redact_decision_id)=64",
             "derived_redact_decision_idnotglob'*[^0-9a-f]*'",
             "typeof(derivation_version)='text'",
-            (
-                "derivation_version="
-                f"'{REDACTION_DECISION_DERIVATION_VERSION}'"
-            ),
+            (f"derivation_version='{REDACTION_DECISION_DERIVATION_VERSION}'"),
             "typeof(metadata_sha256)='text'",
             "length(metadata_sha256)=64",
             "metadata_sha256notglob'*[^0-9a-f]*'",
@@ -10487,9 +10567,7 @@ class EventStore:
             fragment.casefold() not in normalized_table_sql
             for fragment in required_sql_fragments
         ):
-            raise RuntimeError(
-                "redaction audit decision linkage constraint mismatch"
-            )
+            raise RuntimeError("redaction audit decision linkage constraint mismatch")
 
         expected_indexes = {
             "idx_redaction_decision_links_preview_ordinal": (
@@ -10533,19 +10611,13 @@ class EventStore:
         }
         for index_name, (unique, columns) in expected_indexes.items():
             if indexes.get(index_name) != unique:
-                raise RuntimeError(
-                    "redaction audit decision linkage index mismatch"
-                )
+                raise RuntimeError("redaction audit decision linkage index mismatch")
             actual_columns = tuple(
                 row[2]
-                for row in conn.execute(
-                    f"PRAGMA index_info({index_name})"
-                ).fetchall()
+                for row in conn.execute(f"PRAGMA index_info({index_name})").fetchall()
             )
             if actual_columns != columns:
-                raise RuntimeError(
-                    "redaction audit decision linkage index mismatch"
-                )
+                raise RuntimeError("redaction audit decision linkage index mismatch")
 
         foreign_key_rows = conn.execute(
             "PRAGMA foreign_key_list(redaction_decision_links)"
@@ -10579,9 +10651,7 @@ class EventStore:
             ),
         }
         if foreign_keys != expected_foreign_keys:
-            raise RuntimeError(
-                "redaction audit decision linkage owner mismatch"
-            )
+            raise RuntimeError("redaction audit decision linkage owner mismatch")
 
     def _validate_redaction_preview_audit_schema(
         self,
@@ -10694,8 +10764,7 @@ class EventStore:
             if table_indexes.get(index) != unique:
                 raise RuntimeError(f"redaction audit index mismatch: {index}")
             actual_columns = tuple(
-                row[2]
-                for row in conn.execute(f"PRAGMA index_info({index})").fetchall()
+                row[2] for row in conn.execute(f"PRAGMA index_info({index})").fetchall()
             )
             if actual_columns != columns:
                 raise RuntimeError(f"redaction audit index mismatch: {index}")
@@ -10729,16 +10798,12 @@ class EventStore:
             )
             """
         )
-        conn.execute(
-            "DELETE FROM analysis_state WHERE key LIKE 'artifact_graph_%'"
-        )
+        conn.execute("DELETE FROM analysis_state WHERE key LIKE 'artifact_graph_%'")
 
     def _migrate_lineage_assignments(self, conn: sqlite3.Connection) -> None:
         columns = {
             row[1]
-            for row in conn.execute(
-                "PRAGMA table_info(lineage_assignments)"
-            ).fetchall()
+            for row in conn.execute("PRAGMA table_info(lineage_assignments)").fetchall()
         }
         if "source_chunk_id" not in columns:
             return
@@ -10774,10 +10839,13 @@ class EventStore:
         conn: sqlite3.Connection,
     ) -> None:
         migration_key = "migration.workspace_analysis_scope.v1"
-        migration_complete = conn.execute(
-            "SELECT 1 FROM analysis_state WHERE key = ? AND value = 'complete'",
-            (migration_key,),
-        ).fetchone() is not None
+        migration_complete = (
+            conn.execute(
+                "SELECT 1 FROM analysis_state WHERE key = ? AND value = 'complete'",
+                (migration_key,),
+            ).fetchone()
+            is not None
+        )
         if migration_complete:
             try:
                 self._validate_workspace_analysis_schema(conn)
@@ -10963,9 +11031,7 @@ class EventStore:
             )
             """
         )
-        conn.execute(
-            "DELETE FROM analysis_state WHERE key LIKE 'artifact_graph_%'"
-        )
+        conn.execute("DELETE FROM analysis_state WHERE key LIKE 'artifact_graph_%'")
         conn.execute(
             """
             INSERT INTO analysis_state (key, value)
@@ -10984,48 +11050,105 @@ class EventStore:
     ) -> None:
         required_columns = {
             "information_flow_edges": {
-                "workspace_id", "edge_id", "src_node_kind", "src_node_id",
-                "dst_node_kind", "dst_node_id", "relation", "evidence_level",
-                "method", "score", "reason", "recorded_at",
+                "workspace_id",
+                "edge_id",
+                "src_node_kind",
+                "src_node_id",
+                "dst_node_kind",
+                "dst_node_id",
+                "relation",
+                "evidence_level",
+                "method",
+                "score",
+                "reason",
+                "recorded_at",
             },
             "information_flow_edge_scopes": {
-                "workspace_id", "session_id", "edge_id", "sequence_no",
+                "workspace_id",
+                "session_id",
+                "edge_id",
+                "sequence_no",
             },
             "resource_versions": {
-                "workspace_id", "node_id", "path", "content_hash",
-                "sequence_no", "session_id", "origin_tool_use_id",
-                "operation_id", "operation_index", "snapshot_id",
-                "resource_state", "recorded_at",
+                "workspace_id",
+                "node_id",
+                "path",
+                "content_hash",
+                "sequence_no",
+                "session_id",
+                "origin_tool_use_id",
+                "operation_id",
+                "operation_index",
+                "snapshot_id",
+                "resource_state",
+                "recorded_at",
             },
             "sink_candidates": {
-                "workspace_id", "node_id", "sink_type", "label", "tool_name",
-                "tool_use_id", "session_id", "sequence_no", "metadata_json",
+                "workspace_id",
+                "node_id",
+                "sink_type",
+                "label",
+                "tool_name",
+                "tool_use_id",
+                "session_id",
+                "sequence_no",
+                "metadata_json",
                 "recorded_at",
             },
             "analysis_cursors": {
-                "workspace_id", "session_id", "detector_version",
-                "source_digest", "last_sequence_no", "status", "updated_at",
+                "workspace_id",
+                "session_id",
+                "detector_version",
+                "source_digest",
+                "last_sequence_no",
+                "status",
+                "updated_at",
             },
             "fragment_shingles": {
-                "workspace_id", "session_id", "fragment_id", "sequence_no",
+                "workspace_id",
+                "session_id",
+                "fragment_id",
+                "sequence_no",
                 "shingle",
             },
             "fragment_exact_index": {
-                "workspace_id", "session_id", "fragment_id", "sequence_no",
+                "workspace_id",
+                "session_id",
+                "fragment_id",
+                "sequence_no",
                 "text_hash",
             },
             "runtime_lineage_state": {
-                "workspace_id", "session_id", "source_node_kind",
-                "source_node_id", "node_kind", "node_id", "best_path_score",
-                "predecessor_edge_id", "hop_count", "updated_sequence_no",
+                "workspace_id",
+                "session_id",
+                "source_node_kind",
+                "source_node_id",
+                "node_kind",
+                "node_id",
+                "best_path_score",
+                "predecessor_edge_id",
+                "hop_count",
+                "updated_sequence_no",
             },
             "runtime_source_binding_edges": {
-                "workspace_id", "session_id", "edge_id", "src_node_kind",
-                "src_node_id", "dst_node_kind", "dst_node_id", "relation",
-                "evidence_level", "method", "score", "reason",
+                "workspace_id",
+                "session_id",
+                "edge_id",
+                "src_node_kind",
+                "src_node_id",
+                "dst_node_kind",
+                "dst_node_id",
+                "relation",
+                "evidence_level",
+                "method",
+                "score",
+                "reason",
             },
             "workspace_analysis_state": {
-                "workspace_id", "key", "value", "updated_at",
+                "workspace_id",
+                "key",
+                "value",
+                "updated_at",
             },
         }
         expected_primary_keys = {
@@ -11078,9 +11201,7 @@ class EventStore:
                 not required_columns[table].issubset(columns)
                 or actual_key != expected_key
             ):
-                raise RuntimeError(
-                    f"workspace analysis schema mismatch: {table}"
-                )
+                raise RuntimeError(f"workspace analysis schema mismatch: {table}")
             if columns["workspace_id"][3] != 1:
                 raise RuntimeError(
                     f"workspace analysis owner must be required: {table}"
@@ -11104,10 +11225,13 @@ class EventStore:
 
     def _backfill_event_workspaces(self, conn: sqlite3.Connection) -> None:
         migration_key = "migration.workspace_identity.v1"
-        migration_complete = conn.execute(
-            "SELECT 1 FROM analysis_state WHERE key = ?",
-            (migration_key,),
-        ).fetchone() is not None
+        migration_complete = (
+            conn.execute(
+                "SELECT 1 FROM analysis_state WHERE key = ?",
+                (migration_key,),
+            ).fetchone()
+            is not None
+        )
         if migration_complete:
             has_legacy_rows = conn.execute(
                 """
@@ -11231,10 +11355,13 @@ class EventStore:
     def _backfill_tool_operation_outcomes(self, conn: sqlite3.Connection) -> None:
         """旧DBの可変outcomeを、対応する最新Postへ保守的に移す。"""
         migration_key = "migration.tool_operation_outcomes.v1"
-        if conn.execute(
-            "SELECT 1 FROM analysis_state WHERE key = ?",
-            (migration_key,),
-        ).fetchone() is not None:
+        if (
+            conn.execute(
+                "SELECT 1 FROM analysis_state WHERE key = ?",
+                (migration_key,),
+            ).fetchone()
+            is not None
+        ):
             return
         conn.execute(
             """
@@ -11286,9 +11413,7 @@ class EventStore:
     def _connect_redaction_audit(self) -> sqlite3.Connection:
         timeout_seconds = REDACTION_AUDIT_BUSY_TIMEOUT_MS / 1000
         conn = sqlite3.connect(self.db_path, timeout=timeout_seconds)
-        conn.execute(
-            f"PRAGMA busy_timeout = {REDACTION_AUDIT_BUSY_TIMEOUT_MS}"
-        )
+        conn.execute(f"PRAGMA busy_timeout = {REDACTION_AUDIT_BUSY_TIMEOUT_MS}")
         return conn
 
 
@@ -11379,10 +11504,7 @@ def _redaction_call_scope_sha256(event: NormalizedEvent) -> str | None:
                 event.tool_name,
             )
         )
-        or (
-            event.turn_id is not None
-            and not _bounded_audit_identifier(event.turn_id)
-        )
+        or (event.turn_id is not None and not _bounded_audit_identifier(event.turn_id))
         or (
             event.workspace_namespace_id is not None
             and not _bounded_audit_identifier(event.workspace_namespace_id)
@@ -11492,18 +11614,12 @@ def _event_payload_metadata_from_row(
         or _LOWER_SHA256_RE.fullmatch(payload_sha256) is None
         or type(sequence_no) is not int
         or sequence_no < 1
-        or redaction_event_kind
-        not in {"not_applicable", "pre", "post"}
-        or post_input_status
-        not in {"not_applicable", "captured", "unobserved"}
+        or redaction_event_kind not in {"not_applicable", "pre", "post"}
+        or post_input_status not in {"not_applicable", "captured", "unobserved"}
         or any(
-            value is not None and not isinstance(value, str)
-            for value in optional_text
+            value is not None and not isinstance(value, str) for value in optional_text
         )
-        or (
-            post_input_bytes is not None
-            and type(post_input_bytes) is not int
-        )
+        or (post_input_bytes is not None and type(post_input_bytes) is not int)
     ):
         return None
     if redaction_event_kind == "not_applicable":
@@ -11544,10 +11660,8 @@ def _event_payload_metadata_from_row(
     elif observation.status == "unobserved":
         if (
             redaction_event_kind != "post"
-            or observation.observer_version
-            != REDACTION_POST_INPUT_OBSERVER_VERSION
-            or observation.diagnostic_code
-            not in REDACTION_POST_INPUT_DIAGNOSTIC_CODES
+            or observation.observer_version != REDACTION_POST_INPUT_OBSERVER_VERSION
+            or observation.diagnostic_code not in REDACTION_POST_INPUT_DIAGNOSTIC_CODES
             or any(
                 value is not None
                 for value in (
@@ -11564,18 +11678,13 @@ def _event_payload_metadata_from_row(
     elif (
         redaction_event_kind != "post"
         or payload_bytes > REDACTION_AUDIT_EVENT_PAYLOAD_MAX_BYTES
-        or observation.observer_version
-        != REDACTION_POST_INPUT_OBSERVER_VERSION
+        or observation.observer_version != REDACTION_POST_INPUT_OBSERVER_VERSION
         or observation.diagnostic_code is not None
         or not _bounded_audit_identifier(observation.profile_id)
         or not _bounded_audit_identifier(observation.profile_version)
-        or not _bounded_audit_identifier(
-            observation.profile_registry_version
-        )
+        or not _bounded_audit_identifier(observation.profile_registry_version)
         or type(observation.input_bytes) is not int
-        or not 0
-        <= observation.input_bytes
-        <= DEFAULT_MCP_INPUT_LIMITS.max_input_bytes
+        or not 0 <= observation.input_bytes <= DEFAULT_MCP_INPUT_LIMITS.max_input_bytes
         or not isinstance(observation.input_sha256, str)
         or _LOWER_SHA256_RE.fullmatch(observation.input_sha256) is None
         or not isinstance(observation.structure_sha256, str)
@@ -11693,7 +11802,9 @@ def _validate_event_workspace(event: NormalizedEvent) -> None:
             discovered_by=event.workspace_source,
         )
         if expected_workspace != stored_workspace:
-            raise ValueError("workspace context does not match current filesystem state")
+            raise ValueError(
+                "workspace context does not match current filesystem state"
+            )
         return
     if any(value is not None for value in fields):
         raise ValueError("unresolved workspace event must not carry identity fields")
@@ -11808,10 +11919,7 @@ def _validate_assignment_run_ids(
     assignments: list[LineageAssignment],
     analysis_run_id: str,
 ) -> None:
-    if any(
-        assignment.analysis_run_id != analysis_run_id
-        for assignment in assignments
-    ):
+    if any(assignment.analysis_run_id != analysis_run_id for assignment in assignments):
         raise ValueError("lineage assignment does not match analysis run")
 
 
@@ -11987,7 +12095,8 @@ def _validate_protected_source_candidate_proposal(
         not isinstance(relative_path, str)
         or not relative_path
         or "\x00" in relative_path
-        or len(relative_path.encode("utf-8")) > _PROTECTED_SOURCE_CANDIDATE_MAX_PATH_BYTES
+        or len(relative_path.encode("utf-8"))
+        > _PROTECTED_SOURCE_CANDIDATE_MAX_PATH_BYTES
     ):
         raise ValueError("candidate relative path is invalid")
     candidate_path = Path(relative_path)
@@ -12086,7 +12195,11 @@ def _canonical_proposed_source_json(
         raise ValueError("candidate proposed source has unsupported fields")
     for key in ("id", "path", "type", "sensitivity"):
         value = payload.get(key)
-        if not isinstance(value, str) or not value.strip() or len(value.encode("utf-8")) > 4096:
+        if (
+            not isinstance(value, str)
+            or not value.strip()
+            or len(value.encode("utf-8")) > 4096
+        ):
             raise ValueError("candidate proposed source is invalid")
     if payload["path"] != relative_path:
         raise ValueError("candidate proposed source path does not match")
@@ -12235,7 +12348,9 @@ def _validate_candidate_approval_release(
             result_manifest_sha256 is not None
             and result_manifest_sha256 == expected_manifest_sha256
         ):
-            raise ValueError("manifest change release cannot repeat the expected digest")
+            raise ValueError(
+                "manifest change release cannot repeat the expected digest"
+            )
     elif result_manifest_sha256 not in {None, expected_manifest_sha256}:
         raise ValueError("prewrite approval release cannot change manifest digest")
 
@@ -12282,9 +12397,10 @@ def _require_candidate_cas(cursor: sqlite3.Cursor, code: str) -> None:
 
 
 def _validate_candidate_approval_attempt_id(approval_attempt_id: str) -> None:
-    if not isinstance(approval_attempt_id, str) or re.fullmatch(
-        r"[0-9a-f]{32}", approval_attempt_id
-    ) is None:
+    if (
+        not isinstance(approval_attempt_id, str)
+        or re.fullmatch(r"[0-9a-f]{32}", approval_attempt_id) is None
+    ):
         raise ValueError("protected source approval attempt id is invalid")
 
 
@@ -12308,7 +12424,10 @@ def _validate_protected_source_candidate_authority(authority: str) -> None:
 
 
 def _validate_protected_source_candidate_id(candidate_id: str) -> None:
-    if not isinstance(candidate_id, str) or re.fullmatch(r"[0-9a-f]{32}", candidate_id) is None:
+    if (
+        not isinstance(candidate_id, str)
+        or re.fullmatch(r"[0-9a-f]{32}", candidate_id) is None
+    ):
         raise ValueError("protected source candidate id is invalid")
 
 
@@ -12683,25 +12802,18 @@ def _validate_stored_redaction_decision_link(
         link.metadata_sha256,
     )
     if any(
-        not isinstance(value, str)
-        or _LOWER_SHA256_RE.fullmatch(value) is None
+        not isinstance(value, str) or _LOWER_SHA256_RE.fullmatch(value) is None
         for value in hashes
     ):
         raise ValueError("redaction decision link hashes are invalid")
     if (
         link.enforce_plan_id == link.preview_plan_id
         or type(link.target_ordinal) is not int
-        or not 0
-        <= link.target_ordinal
-        < REDACTION_PREVIEW_MAX_CRITICAL_FINDINGS
-        or link.derivation_version
-        != REDACTION_DECISION_DERIVATION_VERSION
+        or not 0 <= link.target_ordinal < REDACTION_PREVIEW_MAX_CRITICAL_FINDINGS
+        or link.derivation_version != REDACTION_DECISION_DERIVATION_VERSION
         or (
             link.created_at is not None
-            and (
-                not isinstance(link.created_at, str)
-                or not link.created_at
-            )
+            and (not isinstance(link.created_at, str) or not link.created_at)
         )
     ):
         raise ValueError("redaction decision link fields are invalid")
@@ -12805,16 +12917,10 @@ def _prepared_redaction_enforcement_matches(
     return (
         actual.created_at is not None
         and _redaction_plan_values(actual) == _redaction_plan_values(expected)
-        and tuple(
-            _redaction_target_values(target) for target in actual.targets
-        )
+        and tuple(_redaction_target_values(target) for target in actual.targets)
         == tuple(_redaction_target_values(target) for target in expected.targets)
-        and tuple(
-            _redaction_decision_link_values(link) for link in actual_links
-        )
-        == tuple(
-            _redaction_decision_link_values(link) for link in expected_links
-        )
+        and tuple(_redaction_decision_link_values(link) for link in actual_links)
+        == tuple(_redaction_decision_link_values(link) for link in expected_links)
     )
 
 
@@ -12849,9 +12955,7 @@ def _validate_redaction_confirmation_decision_links(
 ) -> None:
     if (
         type(critical_finding_count) is not int
-        or not 0
-        < critical_finding_count
-        <= REDACTION_PREVIEW_MAX_CRITICAL_FINDINGS
+        or not 0 < critical_finding_count <= REDACTION_PREVIEW_MAX_CRITICAL_FINDINGS
         or len(enforce_target_rows) != critical_finding_count
         or len(preview_target_rows) != critical_finding_count
         or len(decision_link_rows) != critical_finding_count
@@ -12865,19 +12969,16 @@ def _validate_redaction_confirmation_decision_links(
         _stored_redaction_target_from_row(row) for row in preview_target_rows
     )
     links = tuple(
-        _stored_redaction_decision_link_from_row(row)
-        for row in decision_link_rows
+        _stored_redaction_decision_link_from_row(row) for row in decision_link_rows
     )
     expected_ordinals = tuple(range(critical_finding_count))
     if (
         tuple(target.ordinal for target in enforce_targets) != expected_ordinals
-        or tuple(target.ordinal for target in preview_targets)
-        != expected_ordinals
+        or tuple(target.ordinal for target in preview_targets) != expected_ordinals
         or tuple(link.target_ordinal for link in links) != expected_ordinals
         or len({link.finding_id for link in links}) != len(links)
         or len({link.source_block_decision_id for link in links}) != len(links)
-        or len({link.derived_redact_decision_id for link in links})
-        != len(links)
+        or len({link.derived_redact_decision_id for link in links}) != len(links)
     ):
         raise ValueError("rendered redaction decision linkage is ambiguous")
 
@@ -13068,8 +13169,7 @@ def _validate_stored_redaction_plan(plan: StoredRedactionPlan) -> None:
     if (
         type(plan.critical_finding_count) is not int
         or plan.critical_finding_count <= 0
-        or plan.critical_finding_count
-        > REDACTION_PREVIEW_MAX_CRITICAL_FINDINGS
+        or plan.critical_finding_count > REDACTION_PREVIEW_MAX_CRITICAL_FINDINGS
         or type(plan.replacement_count) is not int
         or plan.replacement_count < 0
     ):
@@ -13099,9 +13199,7 @@ def _validate_stored_redaction_plan(plan: StoredRedactionPlan) -> None:
         for value in hashes
     ):
         raise ValueError("redaction preview hashes must be lowercase SHA-256")
-    if (plan.original_input_sha256 is None) != (
-        plan.structure_sha256_before is None
-    ):
+    if (plan.original_input_sha256 is None) != (plan.structure_sha256_before is None):
         raise ValueError("redaction preview input and structure hashes must align")
 
     expected_ordinals = tuple(range(len(plan.targets)))
@@ -13123,14 +13221,11 @@ def _validate_stored_redaction_plan(plan: StoredRedactionPlan) -> None:
             target.original_value_sha256,
             target.replacement_profile,
         )
-        if any(
-            not isinstance(value, str) or not value for value in target_strings
-        ):
+        if any(not isinstance(value, str) or not value for value in target_strings):
             raise ValueError("redaction target fields must be non-empty strings")
         try:
             target_fields_are_bounded = all(
-                len(value.encode("utf-8"))
-                <= REDACTION_AUDIT_MAX_IDENTIFIER_BYTES
+                len(value.encode("utf-8")) <= REDACTION_AUDIT_MAX_IDENTIFIER_BYTES
                 for value in target_strings
             )
         except UnicodeEncodeError as exc:
@@ -13159,9 +13254,7 @@ def _validate_stored_redaction_plan(plan: StoredRedactionPlan) -> None:
             ).encode("utf-8")
         ).hexdigest()
         expected_decision_id = hashlib.sha256(
-            "\0".join((expected_finding_id, "block", "PreToolUse")).encode(
-                "utf-8"
-            )
+            "\0".join((expected_finding_id, "block", "PreToolUse")).encode("utf-8")
         ).hexdigest()
         if (
             target.finding_id != expected_finding_id
