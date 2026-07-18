@@ -303,7 +303,7 @@ Stop payload
   -> Codex Hook stdout JSON
 ```
 
-StopとPreToolUseは同じruntime graph detector versionを使います。cursorの主keyは`(workspace_id, session_id)`です。初回、detector変更、workspace単位のsource manifest変更、cursor不整合時だけ同じworkspace・sessionを`session-full`で再構築し、通常は未処理sequenceだけを`session-incremental`で追加します。source manifestが変わらない場合、protected source本文は再読込しません。duplicate Postやcursor更新前の部分保存により、delta operationが既存resource versionへ再度当たる場合も、重複versionやcycleを避けるため同じworkspace・sessionだけを`session-full`で再構築します。runtime Hookが全DB再解析へ戻ることはありません。
+StopとPreToolUseは同じruntime graph detector versionを使います。cursorの主keyは`(workspace_id, session_id)`です。初回、detector変更、workspace単位のsource manifest変更、cursor不整合時だけ同じworkspace・sessionを`session-full`で再構築し、通常は未処理sequenceだけを`session-incremental`で追加します。detectorとsource manifestがともに変わらない場合、protected source本文は再読込しません。detector変更時はchunking規則も変わり得るため、同じmanifestでもsource chunksを再生成します。duplicate Postやcursor更新前の部分保存により、delta operationが既存resource versionへ再度当たる場合も、重複versionやcycleを避けるため同じworkspace・sessionだけを`session-full`で再構築します。runtime Hookが全DB再解析へ戻ることはありません。
 
 source設定は、canonical workspace rootの`protected_sources.json`が存在する場合はその内容を優先します。空の`sources`は「保護対象なし」として扱い、DBに古いsource定義が残っていてもfallbackしません。設定fileが存在しない場合だけ、同じworkspaceのDB catalogへfallbackし、別workspaceやglobal catalogは参照しません。
 
@@ -529,6 +529,10 @@ repository内の旧`.tooluseproxy/events.db`は自動探索しません。移行
 ```
 
 ここで定義したsourceを、canonical workspace rootを基準に解決します。DB上のsource identityはworkspace namespaceを含むため、別workspaceで同じ`id`を使っても同一sourceにはなりません。ここで定義したsourceを起点にして、同じworkspace内の後続artifactにどこまで流れたかを追います。
+
+`type: secretfile`では、`.env` / `.env.*`のdecoded非空valueと、JSON object / array内の非空string valueを比較単位にします。key、comment、quoteや`export` wrapper、JSON container、非string scalarはsource chunkにしません。解釈できないdotenv構文や不正JSONはparagraph単位へ戻し、parser失敗によって保護本文を捨てません。
+
+保護指定自体は引き続きfile単位です。登録したsecretfile内の全string valueを保護対象とし、特定fieldだけをpublic扱いするselectorはまだありません。secretとpublic設定を同じJSONへ混在させる場合はpublic valueもsource lineageになり得るため、現時点ではfileを分けるか、誤警告を確認してください。
 
 ## embedding や cos 類似度はどこに入るか
 

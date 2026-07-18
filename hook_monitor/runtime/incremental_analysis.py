@@ -8,6 +8,7 @@ from hook_monitor.analysis.adapters.registry import (
     run_adapters,
     run_adapters_incremental,
 )
+from hook_monitor.analysis.chunking import SOURCE_CHUNKER_VERSION
 from hook_monitor.analysis.graph import (
     MAX_LEXICAL_CANDIDATES,
     build_artifact_flow_edges,
@@ -46,7 +47,8 @@ _MCP_PROFILE_GRAPH_VERSION = (
     DEFAULT_MCP_PROFILE_REGISTRY.registry_version.rsplit(":", 1)[-1][:12]
 )
 RUNTIME_GRAPH_DETECTOR_VERSION = (
-    f"runtime-graph-v15-mcp-profiles-{_MCP_PROFILE_GRAPH_VERSION}"
+    f"runtime-graph-v16-{SOURCE_CHUNKER_VERSION}-"
+    f"mcp-profiles-{_MCP_PROFILE_GRAPH_VERSION}"
 )
 
 
@@ -85,7 +87,11 @@ def update_runtime_analysis(
         workspace_id,
         sources,
         config_path,
-        refresh=cursor is None or cursor.source_digest != source_digest,
+        refresh=(
+            cursor is None
+            or cursor.detector_version != detector_version
+            or cursor.source_digest != source_digest
+        ),
     )
     can_increment = (
         cursor is not None
@@ -590,7 +596,9 @@ def _source_manifest_digest(
     workspace_id: str,
     sources: list[ProtectedSource],
 ) -> str:
-    digest = hashlib.sha256(b"runtime-source-manifest-v2\0")
+    digest = hashlib.sha256(b"runtime-source-manifest-v3\0")
+    digest.update(SOURCE_CHUNKER_VERSION.encode("ascii"))
+    digest.update(b"\0")
     digest.update(workspace_id.encode("utf-8"))
     digest.update(b"\0")
     digest.update(str(repo_root).encode("utf-8"))

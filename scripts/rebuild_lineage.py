@@ -22,6 +22,7 @@ from hook_monitor.analysis.adapters.mcp_profiles import (  # noqa: E402
     DEFAULT_MCP_PROFILE_REGISTRY,
 )
 from hook_monitor.analysis.lineage import propagate_lineage  # noqa: E402
+from hook_monitor.analysis.chunking import SOURCE_CHUNKER_VERSION  # noqa: E402
 from hook_monitor.analysis.query import (  # noqa: E402
     AnalysisScopeError,
     resolve_registered_workspace,
@@ -38,7 +39,10 @@ from hook_monitor.runtime.storage import (  # noqa: E402
 _MCP_PROFILE_GRAPH_VERSION = (
     DEFAULT_MCP_PROFILE_REGISTRY.registry_version.rsplit(":", 1)[-1][:12]
 )
-DETECTOR_VERSION = f"artifact-graph-v17-mcp-profiles-{_MCP_PROFILE_GRAPH_VERSION}"
+DETECTOR_VERSION = (
+    f"artifact-graph-v18-{SOURCE_CHUNKER_VERSION}-"
+    f"mcp-profiles-{_MCP_PROFILE_GRAPH_VERSION}"
+)
 GRAPH_IDENTITY_VERSION = "workspace-graph-v2"
 GRAPH_FINGERPRINT_KEY = "artifact_graph_fingerprint"
 GRAPH_VERSION_KEY = "artifact_graph_detector_version"

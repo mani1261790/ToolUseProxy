@@ -65,6 +65,7 @@ from hook_monitor.runtime.parser import (
     parse_hook_payload,
 )
 from hook_monitor.runtime.ids import make_source_chunk_id
+from hook_monitor.runtime.normalize import estimate_token_count, normalize_text
 from hook_monitor.runtime.operations import extract_tool_operations
 from hook_monitor.runtime.incremental_analysis import (
     RUNTIME_GRAPH_DETECTOR_VERSION,
@@ -4116,6 +4117,131 @@ class InformationFlowTest(unittest.TestCase):
                 "session-rebuild-a",
                 workspace_id=workspace_a_id,
             ),
+        )
+
+    def test_rebuild_lineage_replaces_legacy_secretfile_chunks_without_mutating_snapshot(
+        self,
+    ) -> None:
+        workspace = Path(self.temporary_directory.name) / "rebuild-secretfile-chunks"
+        workspace.mkdir(parents=True)
+        source_text = "PRIVATE_TOKEN=C.OFFLINE.CHUNK\nPUBLIC_MODE=demo\n"
+        (workspace / ".env").write_text(source_text, encoding="utf-8")
+        (workspace / "protected_sources.json").write_text(
+            json.dumps(
+                {
+                    "sources": [
+                        {
+                            "id": "private-env",
+                            "path": ".env",
+                            "type": "secretfile",
+                            "sensitivity": "high",
+                            "policy_tags": ["no_external"],
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        workspace_id = self._register_empty_workspace(
+            workspace,
+            "rebuild-secretfile-chunks",
+        )
+        source = ProtectedSource(
+            source_id=make_scoped_source_id(workspace_id, "private-env"),
+            source_key="private-env",
+            path=".env",
+            source_type="secretfile",
+            sensitivity="high",
+            policy_tags=("no_external",),
+            workspace_id=workspace_id,
+        )
+        legacy_chunk = self._source_chunk_fixture(source, source_text.strip())
+        _resource, sink, _edge = self._workspace_graph_fixture(
+            workspace_id,
+            "rebuild-secretfile-chunks",
+        )
+        legacy_edge = FlowEdge(
+            edge_id="edge-rebuild-secretfile-legacy",
+            src_node_kind="source_chunk",
+            src_node_id=legacy_chunk.chunk_id,
+            dst_node_kind="sink_candidate",
+            dst_node_id=sink.node_id,
+            relation="source_similarity",
+            evidence_level="exact",
+            method="legacy_paragraph_chunk",
+            score=1.0,
+            reason="legacy whole-file source chunk reached the fixture sink",
+        )
+        self.store.replace_sources_for_workspace(
+            workspace_id,
+            [source],
+            [legacy_chunk],
+        )
+        self.store.replace_sink_candidates_for_workspace(workspace_id, [sink])
+        self.store.replace_information_flow_edges_for_workspace(
+            workspace_id,
+            [legacy_edge],
+        )
+        old_run_id = self.store.start_workspace_analysis_run(
+            detector_version="legacy-source-chunker",
+            config={},
+            workspace_id=workspace_id,
+        )
+        self.store.replace_analysis_run_graph(
+            old_run_id,
+            [legacy_edge],
+            coverage="full",
+        )
+        self.store.upsert_source_binding_edges(old_run_id, [legacy_edge])
+        self.store.upsert_lineage_assignments(
+            propagate_lineage(old_run_id, [legacy_edge])
+        )
+        self.store.complete_analysis_run(old_run_id)
+        old_scope = select_analysis_run_scope(
+            self.store,
+            analysis_run_id=old_run_id,
+            workspace_root=None,
+            latest=False,
+        )
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(REPO_ROOT / "scripts" / "rebuild_lineage.py"),
+                "--db",
+                str(self.db_path),
+                "--workspace-root",
+                str(workspace),
+            ],
+            cwd=REPO_ROOT,
+            check=True,
+            text=True,
+            capture_output=True,
+        )
+        fields = dict(
+            token.split("=", 1)
+            for token in result.stdout.split()
+            if "=" in token
+        )
+        current_chunks = self.store.list_source_chunks_for_workspace(workspace_id)
+
+        self.assertEqual(
+            ["C.OFFLINE.CHUNK", "demo"],
+            [chunk.text for chunk in current_chunks],
+        )
+        self.assertNotIn(
+            legacy_chunk.chunk_id,
+            {chunk.chunk_id for chunk in current_chunks},
+        )
+        self.assertNotEqual(old_run_id, fields["analysis_run_id"])
+        self.assertEqual(rebuild_lineage.DETECTOR_VERSION, self.store.get_analysis_run(
+            fields["analysis_run_id"]
+        ).detector_version)
+        self.assertEqual([source], old_scope.list_protected_sources(self.store))
+        self.assertEqual([legacy_chunk], old_scope.list_source_chunks(self.store))
+        self.assertEqual(
+            [legacy_edge],
+            self.store.list_analysis_run_flow_edges(old_run_id),
         )
 
     def test_rebuild_lineage_rejects_removed_source_config_before_publish(
@@ -8880,6 +9006,178 @@ class InformationFlowTest(unittest.TestCase):
         }
         self.assertEqual(incremental_scores, rebuilt_scores)
 
+    def test_runtime_detector_upgrade_refreshes_configured_legacy_source_chunks(
+        self,
+    ) -> None:
+        workspace = Path(self.temporary_directory.name) / "runtime-source-chunker-upgrade"
+        workspace.mkdir(parents=True)
+        source_text = "PRIVATE_TOKEN=C.RUNTIME.CHUNK\nPUBLIC_MODE=demo\n"
+        (workspace / ".env").write_text(source_text, encoding="utf-8")
+        (workspace / "protected_sources.json").write_text(
+            json.dumps(
+                {
+                    "sources": [
+                        {
+                            "id": "private-env",
+                            "path": ".env",
+                            "type": "secretfile",
+                            "sensitivity": "high",
+                            "policy_tags": ["no_external"],
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        first_stop = self._record_stop_event(
+            final_answer="Public response before the chunker upgrade.",
+            cwd=str(workspace),
+        )
+        legacy_detector = f"{RUNTIME_GRAPH_DETECTOR_VERSION}-legacy"
+        first = update_runtime_analysis(
+            self.store,
+            current_event_id=first_stop.event_id,
+            detector_version=legacy_detector,
+            minimum_path_score=0.15,
+        )
+        assert first_stop.workspace_id is not None
+        workspace_id = first_stop.workspace_id
+        old_cursor = self.store.get_analysis_cursor(
+            "session-1",
+            workspace_id=workspace_id,
+        )
+        assert old_cursor is not None
+        sources = self.store.list_protected_sources_for_workspace(workspace_id)
+        self.assertEqual(1, len(sources))
+        legacy_chunk = self._source_chunk_fixture(sources[0], source_text.strip())
+        self.store.replace_sources_for_workspace(
+            workspace_id,
+            sources,
+            [legacy_chunk],
+        )
+
+        second_stop = self._record_stop_event(
+            final_answer="Public response after the chunker upgrade.",
+            cwd=str(workspace),
+        )
+        with patch(
+            "hook_monitor.runtime.incremental_analysis.load_sources_and_chunks",
+            wraps=load_sources_and_chunks,
+        ) as reload_sources:
+            upgraded = update_runtime_analysis(
+                self.store,
+                current_event_id=second_stop.event_id,
+                detector_version=RUNTIME_GRAPH_DETECTOR_VERSION,
+                minimum_path_score=0.15,
+            )
+
+        refreshed_chunks = self.store.list_source_chunks_for_workspace(workspace_id)
+        new_cursor = self.store.get_analysis_cursor(
+            "session-1",
+            workspace_id=workspace_id,
+        )
+        assert new_cursor is not None
+        self.assertEqual("session-full", first.mode)
+        self.assertEqual("session-full", upgraded.mode)
+        self.assertEqual(1, reload_sources.call_count)
+        self.assertEqual(
+            ["C.RUNTIME.CHUNK", "demo"],
+            [chunk.text for chunk in refreshed_chunks],
+        )
+        self.assertNotIn(
+            legacy_chunk.chunk_id,
+            {chunk.chunk_id for chunk in refreshed_chunks},
+        )
+        self.assertEqual(RUNTIME_GRAPH_DETECTOR_VERSION, new_cursor.detector_version)
+        self.assertEqual(old_cursor.source_digest, new_cursor.source_digest)
+
+        third_stop = self._record_stop_event(
+            final_answer="Public response with a warm source cache.",
+            cwd=str(workspace),
+        )
+        with patch(
+            "hook_monitor.runtime.incremental_analysis.load_sources_and_chunks",
+            side_effect=AssertionError("unchanged upgraded sources must not be reread"),
+        ):
+            incremental = update_runtime_analysis(
+                self.store,
+                current_event_id=third_stop.event_id,
+                detector_version=RUNTIME_GRAPH_DETECTOR_VERSION,
+                minimum_path_score=0.15,
+            )
+
+        self.assertEqual("session-incremental", incremental.mode)
+
+    def test_runtime_detector_upgrade_preserves_legacy_chunks_without_config(
+        self,
+    ) -> None:
+        workspace = Path(self.temporary_directory.name) / "runtime-stored-chunker-upgrade"
+        workspace.mkdir(parents=True)
+        source_text = "PRIVATE_TOKEN=C.STORED.CHUNK\nPUBLIC_MODE=demo\n"
+        (workspace / ".env").write_text(source_text, encoding="utf-8")
+        first_stop = self._record_stop_event(
+            final_answer="Public response using the stored source catalog.",
+            cwd=str(workspace),
+        )
+        assert first_stop.workspace_id is not None
+        workspace_id = first_stop.workspace_id
+        source = ProtectedSource(
+            source_id=make_scoped_source_id(workspace_id, "private-env"),
+            source_key="private-env",
+            path=".env",
+            source_type="secretfile",
+            sensitivity="high",
+            policy_tags=("no_external",),
+            workspace_id=workspace_id,
+        )
+        legacy_chunk = self._source_chunk_fixture(source, source_text.strip())
+        self.store.replace_sources_for_workspace(
+            workspace_id,
+            [source],
+            [legacy_chunk],
+        )
+        legacy_detector = f"{RUNTIME_GRAPH_DETECTOR_VERSION}-legacy"
+        first = update_runtime_analysis(
+            self.store,
+            current_event_id=first_stop.event_id,
+            detector_version=legacy_detector,
+            minimum_path_score=0.15,
+        )
+        old_cursor = self.store.get_analysis_cursor(
+            "session-1",
+            workspace_id=workspace_id,
+        )
+        assert old_cursor is not None
+
+        second_stop = self._record_stop_event(
+            final_answer="Public response after the runtime detector upgrade.",
+            cwd=str(workspace),
+        )
+        with patch(
+            "hook_monitor.runtime.incremental_analysis.load_sources_and_chunks",
+            side_effect=AssertionError("stored fallback must not reread source files"),
+        ):
+            upgraded = update_runtime_analysis(
+                self.store,
+                current_event_id=second_stop.event_id,
+                detector_version=RUNTIME_GRAPH_DETECTOR_VERSION,
+                minimum_path_score=0.15,
+            )
+
+        new_cursor = self.store.get_analysis_cursor(
+            "session-1",
+            workspace_id=workspace_id,
+        )
+        assert new_cursor is not None
+        self.assertEqual("session-full", first.mode)
+        self.assertEqual("session-full", upgraded.mode)
+        self.assertEqual(
+            [legacy_chunk],
+            self.store.list_source_chunks_for_workspace(workspace_id),
+        )
+        self.assertEqual(RUNTIME_GRAPH_DETECTOR_VERSION, new_cursor.detector_version)
+        self.assertEqual(old_cursor.source_digest, new_cursor.source_digest)
+
     def test_runtime_incremental_source_bindings_match_full_exact_chain(self) -> None:
         workspace = self._write_runtime_source_config()
         results = []
@@ -9774,6 +10072,30 @@ class InformationFlowTest(unittest.TestCase):
             workspace_id=workspace_id,
         )
         return source, chunk
+
+    @staticmethod
+    def _source_chunk_fixture(
+        source: ProtectedSource,
+        text: str,
+        *,
+        ordinal: int = 0,
+    ) -> SourceChunk:
+        normalized = normalize_text(text)
+        return SourceChunk(
+            chunk_id=make_source_chunk_id(source.source_id, ordinal, text),
+            source_id=source.source_id,
+            ordinal=ordinal,
+            text=text,
+            normalized_text=normalized,
+            text_hash=hashlib.sha256(text.encode("utf-8")).hexdigest(),
+            shingle_fingerprint=json.dumps(
+                sorted(make_shingles(normalized)),
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
+            token_count=estimate_token_count(normalized),
+            workspace_id=source.workspace_id,
+        )
 
     def _record_exact_pair(
         self,

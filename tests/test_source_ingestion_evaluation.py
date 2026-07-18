@@ -58,20 +58,30 @@ class SourceIngestionEvaluationTest(unittest.TestCase):
         self.assertEqual(6, report["dataset"]["scenario_count"])
         self.assertEqual("development", report["dataset"]["split"])
         self.assertEqual(
-            {"tp": 2, "fp": 1, "tn": 2, "fn": 1},
+            {"tp": 3, "fp": 1, "tn": 2, "fn": 0},
             {key: reach[key] for key in ("tp", "fp", "tn", "fn")},
         )
-        self.assertEqual(0.666667, reach["f1"])
-        self.assertEqual(0.333333, end_to_end["action_accuracy"])
-        self.assertEqual(0.0, chunking["exact_value_recall"])
+        self.assertEqual(0.857143, reach["f1"])
+        self.assertEqual(0.666667, end_to_end["action_accuracy"])
+        self.assertEqual(1.0, chunking["exact_value_recall"])
+        self.assertEqual(12, chunking["source_chunk_count"])
+        self.assertEqual([], reach["false_negative_ids"])
+        self.assertEqual(
+            ["dev-ingest-json-bash-02"],
+            reach["false_positive_ids"],
+        )
+        self.assertEqual(
+            ["dev-ingest-dotenv-bash-01", "dev-ingest-json-bash-02"],
+            end_to_end["action_mismatch_ids"],
+        )
         self.assertEqual(1.0, adapters["accuracy"])
         self.assertEqual(6, adapters["matched"])
         self.assertTrue(parity["passed"])
         self.assertEqual(6, parity["case_count"])
         self.assertEqual([], parity["mismatch_ids"])
-        self.assertEqual(0.666667, report["summary"]["gate_reachability_f1"])
-        self.assertEqual(0.333333, report["summary"]["gate_action_accuracy"])
-        self.assertEqual(0.0, report["summary"]["exact_value_chunk_recall"])
+        self.assertEqual(0.857143, report["summary"]["gate_reachability_f1"])
+        self.assertEqual(0.666667, report["summary"]["gate_action_accuracy"])
+        self.assertEqual(1.0, report["summary"]["exact_value_chunk_recall"])
         self.assertEqual(1.0, report["summary"]["adapter_coverage_accuracy"])
         self.assertTrue(report["summary"]["parity_passed"])
 

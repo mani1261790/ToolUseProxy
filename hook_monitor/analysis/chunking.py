@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from pathlib import Path
 
 from hook_monitor.runtime.models import ProtectedSource, SourceChunk
@@ -10,12 +11,18 @@ from hook_monitor.runtime.normalize import estimate_token_count, normalize_text
 from hook_monitor.runtime.source_config import resolve_protected_source_path
 
 
+SOURCE_CHUNKER_VERSION = "source-chunker-v2-secret-values"
+_DOTENV_ASSIGNMENT = re.compile(
+    r"^(?:export\s+)?([A-Za-z_][A-Za-z0-9_.-]*)\s*=(.*)$"
+)
+
+
 def build_source_chunks(repo_root: Path, source: ProtectedSource) -> list[SourceChunk]:
     # protected source を読み、比較単位に分解して後段の比較器へ渡す。
     source_path = resolve_protected_source_path(repo_root, source.path)
     text = source_path.read_text(encoding="utf-8")
 
-    chunks = _split_chunks(source_path, text)
+    chunks = _split_chunks(source_path, text, source.source_type)
     records: list[SourceChunk] = []
     for ordinal, chunk_text in enumerate(chunks):
         normalized = normalize_text(chunk_text)
@@ -36,12 +43,117 @@ def build_source_chunks(repo_root: Path, source: ProtectedSource) -> list[Source
     return records
 
 
-def _split_chunks(source_path: Path, text: str) -> list[str]:
+def _split_chunks(source_path: Path, text: str, source_type: str) -> list[str]:
+    # secret fileはkeyや構文wrapperをsource本文として扱わず、送信され得る
+    # decoded valueを比較単位にする。解釈できない形式は従来の段落単位へ
+    # fail-safeし、parserの不完全さによって保護対象を消さない。
+    if source_type == "secretfile" and _is_dotenv_path(source_path):
+        values = _split_dotenv_values(text)
+        return _split_paragraphs(text) if values is None else values
+    if source_type == "secretfile" and source_path.suffix.casefold() == ".json":
+        values = _split_json_string_values(text)
+        return _split_paragraphs(text) if values is None else values
+
     # コードは関数・class 単位、文章は段落単位で切る。
-    # ここは後で source type ごとに分岐を増やせるようにしている。
     if source_path.suffix == ".py":
         return _split_python_like(text)
     return _split_paragraphs(text)
+
+
+def _is_dotenv_path(source_path: Path) -> bool:
+    name = source_path.name.casefold()
+    return name == ".env" or name.startswith(".env.")
+
+
+def _split_dotenv_values(text: str) -> list[str] | None:
+    values: list[str] = []
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        match = _DOTENV_ASSIGNMENT.fullmatch(line)
+        if match is None:
+            return None
+        value = _parse_dotenv_value(match.group(2))
+        if value is None:
+            return None
+        if value.strip():
+            values.append(value)
+    return values
+
+
+def _parse_dotenv_value(raw_value: str) -> str | None:
+    value = raw_value.lstrip()
+    if not value:
+        return ""
+    if value[0] == "'":
+        closing = value.find("'", 1)
+        if closing < 0 or not _valid_dotenv_trailing(value[closing + 1 :]):
+            return None
+        return value[1:closing]
+    if value[0] == '"':
+        decoded: list[str] = []
+        escaped = False
+        closing: int | None = None
+        for index, character in enumerate(value[1:], start=1):
+            if escaped:
+                decoded.append(
+                    {
+                        "n": "\n",
+                        "r": "\r",
+                        "t": "\t",
+                        '"': '"',
+                        "\\": "\\",
+                    }.get(character, f"\\{character}")
+                )
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                closing = index
+                break
+            else:
+                decoded.append(character)
+        if escaped or closing is None:
+            return None
+        if not _valid_dotenv_trailing(value[closing + 1 :]):
+            return None
+        return "".join(decoded)
+    if "\\" in value or "'" in value or '"' in value:
+        return None
+    return _strip_dotenv_inline_comment(value).rstrip()
+
+
+def _valid_dotenv_trailing(trailing: str) -> bool:
+    stripped = trailing.strip()
+    return not stripped or stripped.startswith("#")
+
+
+def _strip_dotenv_inline_comment(value: str) -> str:
+    for index, character in enumerate(value):
+        if character == "#" and (index == 0 or value[index - 1].isspace()):
+            return value[:index]
+    return value
+
+
+def _split_json_string_values(text: str) -> list[str] | None:
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+
+    values: list[str] = []
+    stack: list[object] = [payload]
+    while stack:
+        value = stack.pop()
+        if isinstance(value, str):
+            if value.strip():
+                values.append(value)
+        elif isinstance(value, dict):
+            stack.extend(reversed(tuple(value.values())))
+        elif isinstance(value, list):
+            stack.extend(reversed(value))
+    return values
 
 
 def _split_python_like(text: str) -> list[str]:

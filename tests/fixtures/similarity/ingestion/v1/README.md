@@ -11,7 +11,7 @@
 - external sinkのpositiveは`block`、final answerのpositiveは`continue_review`
 - negativeは`allow`
 
-これは現在の「Python以外は段落単位」というchunkingを正解とみなす定義ではありません。value単位chunkingが必要かを測るための正解ラベルです。
+これはv1導入時の「Python以外は段落単位」というchunkingを正解とみなす定義ではありません。secretfile向けvalue単位chunkingと、その後のsource selector / adapter改善を同じlabelで比較します。
 
 ## Split
 

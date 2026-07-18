@@ -1105,6 +1105,51 @@ class WheelInstallationTest(unittest.TestCase):
             )
             self.assertIn("Show source lineage", trace_help.stdout)
 
+            chunk_workspace = root / "installed-chunking"
+            chunk_workspace.mkdir()
+            (chunk_workspace / ".env").write_text(
+                "PRIVATE_TOKEN=C.INSTALLED.VALUE\nPUBLIC_MODE=demo\n",
+                encoding="utf-8",
+            )
+            (chunk_workspace / "protected_sources.json").write_text(
+                json.dumps(
+                    {
+                        "sources": [
+                            {
+                                "id": "installed-env",
+                                "path": ".env",
+                                "type": "secretfile",
+                                "sensitivity": "high",
+                                "policy_tags": ["no_external"],
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            installed_chunks = subprocess.run(
+                [
+                    str(python),
+                    "-c",
+                    (
+                        "import json; from pathlib import Path; "
+                        "from hook_monitor.analysis.source_index import "
+                        "load_sources_and_chunks; "
+                        "_, chunks = load_sources_and_chunks(Path.cwd()); "
+                        "print(json.dumps([chunk.text for chunk in chunks]))"
+                    ),
+                ],
+                cwd=chunk_workspace,
+                env=clean_environment,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(
+                ["C.INSTALLED.VALUE", "demo"],
+                json.loads(installed_chunks.stdout),
+            )
+
             data_dir = root / "installed-runtime"
             initialize = subprocess.run(
                 [
