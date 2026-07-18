@@ -47,3 +47,11 @@ jobs:
           --benchmark-repeats 1
           --format text
           --check
+
+      - name: Check source-ingestion runtime parity
+        run: >-
+          python -m hook_monitor.evaluation.source_ingestion_cli
+          --dataset tests/fixtures/similarity/ingestion/v1
+          --split all
+          --format text
+          --check

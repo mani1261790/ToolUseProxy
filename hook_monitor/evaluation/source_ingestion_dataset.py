@@ -506,25 +506,42 @@ def _validate_dataset_coverage(
 
 
 def _validate_json_strings(value: Any, location: object) -> None:
-    stack: list[tuple[str, Any]] = [(str(location), value)]
+    stack: list[tuple[str, Any, int, bool]] = [
+        (str(location), value, 0, False)
+    ]
     while stack:
-        current_location, current = stack.pop()
+        current_location, current, depth, workspace_placeholder_allowed = stack.pop()
         if isinstance(current, str):
             _validate_fixture_text(current, "payload string", current_location)
             if _WORKSPACE_PLACEHOLDER in current:
                 if (
                     current != _WORKSPACE_PLACEHOLDER
-                    or not current_location.endswith(".cwd")
+                    or not workspace_placeholder_allowed
                 ):
                     raise SourceIngestionDatasetError(
                         f"{current_location}: workspace placeholder is reserved for cwd"
                     )
         elif isinstance(current, dict):
-            for key, child in current.items():
-                stack.append((f"{current_location}.{key}", child))
+            for index, (key, child) in enumerate(current.items()):
+                key_location = f"{current_location}.key[{index}]"
+                _validate_fixture_text(key, "payload key", key_location)
+                if _WORKSPACE_PLACEHOLDER in key:
+                    raise SourceIngestionDatasetError(
+                        f"{key_location}: workspace placeholder is reserved for cwd"
+                    )
+                stack.append(
+                    (
+                        f"{current_location}.value[{index}]",
+                        child,
+                        depth + 1,
+                        depth == 0 and key == "cwd",
+                    )
+                )
         elif isinstance(current, list):
             for index, child in enumerate(current):
-                stack.append((f"{current_location}[{index}]", child))
+                stack.append(
+                    (f"{current_location}[{index}]", child, depth + 1, False)
+                )
 
 
 def _validate_fixture_text(text: str, field: str, location: object) -> None:

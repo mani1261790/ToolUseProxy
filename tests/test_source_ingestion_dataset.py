@@ -152,6 +152,7 @@ class SourceIngestionDatasetTest(unittest.TestCase):
             ("relative workspace path", self._escape_source_path),
             ("resembles a real AWS access key", self._add_source_credential_shape),
             ("resembles a real GitHub token", self._add_payload_credential_shape),
+            ("resembles a real GitHub token", self._add_payload_credential_key),
         )
         for expected_message, mutate in mutations:
             with self.subTest(expected_message=expected_message):
@@ -262,6 +263,14 @@ class SourceIngestionDatasetTest(unittest.TestCase):
             lambda record: record["events"][-1]["payload"][
                 "tool_input"
             ].__setitem__("credential", "ghp_abcdefghijklmnopqrstuvwxyz"),
+        )
+
+    def _add_payload_credential_key(self, root: Path) -> None:
+        self._mutate_first_scenario(
+            root,
+            lambda record: record["events"][-1]["payload"][
+                "tool_input"
+            ].__setitem__("ghp_abcdefghijklmnopqrstuvwxyz", "synthetic"),
         )
 
 
