@@ -118,6 +118,12 @@ class ResourceSnapshot:
 
 
 @dataclass(frozen=True)
+class ProtectedSourceSelector:
+    kind: str
+    values: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class ProtectedSource:
     source_id: str
     path: str
@@ -126,6 +132,7 @@ class ProtectedSource:
     policy_tags: tuple[str, ...]
     workspace_id: str | None = None
     source_key: str | None = None
+    selector: ProtectedSourceSelector | None = None
 
 
 @dataclass(frozen=True)

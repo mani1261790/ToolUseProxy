@@ -516,13 +516,17 @@ repository内の旧`.tooluseproxy/events.db`は自動探索しません。移行
 
 ```json
 {
+  "schema_version": 2,
   "sources": [
     {
       "id": "env_main",
       "path": ".env",
       "type": "secretfile",
       "sensitivity": "high",
-      "policy_tags": ["no_external", "no_search"]
+      "policy_tags": ["no_external", "no_search"],
+      "selector": {
+        "dotenv_keys": ["SERVICE_TOKEN"]
+      }
     }
   ]
 }
@@ -530,9 +534,33 @@ repository内の旧`.tooluseproxy/events.db`は自動探索しません。移行
 
 ここで定義したsourceを、canonical workspace rootを基準に解決します。DB上のsource identityはworkspace namespaceを含むため、別workspaceで同じ`id`を使っても同一sourceにはなりません。ここで定義したsourceを起点にして、同じworkspace内の後続artifactにどこまで流れたかを追います。
 
-`type: secretfile`では、`.env` / `.env.*`のdecoded非空valueと、JSON object / array内の非空string valueを比較単位にします。key、comment、quoteや`export` wrapper、JSON container、非string scalarはsource chunkにしません。解釈できないdotenv構文や不正JSONはparagraph単位へ戻し、parser失敗によって保護本文を捨てません。
+`type: secretfile`では、`.env` / `.env.*`のdecoded非空valueと、JSON object / array内の非空string valueを比較単位にします。key、comment、quoteや`export` wrapper、JSON container、非string scalarはsource chunkにしません。selectorを省略したlegacy sourceでは、解釈できないdotenv構文や不正JSONをparagraph単位へ戻し、parser失敗によって保護本文を捨てません。
 
-保護指定自体は引き続きfile単位です。登録したsecretfile内の全string valueを保護対象とし、特定fieldだけをpublic扱いするselectorはまだありません。secretとpublic設定を同じJSONへ混在させる場合はpublic valueもsource lineageになり得るため、現時点ではfileを分けるか、誤警告を確認してください。
+manifest schema v2では、`selector`でcontent比較へ使う値を限定できます。`.env` / `.env.*`はcase-sensitiveな`dotenv_keys`、JSONはRFC 6901の`json_pointers`を使います。`selector`内はどちらか一方だけ、配列は非空・重複なしで指定します。JSON Pointerは非空string valueへexactに解決される必要があります。selectorのkey / pointerが消えた、非stringになった、またはsourceをparseできない場合はwhole-fileへ黙って戻らず設定エラーになります。`tooluseproxy doctor`はsource本文を表示せず、この解決まで検査します。
+
+selector省略時は従来どおり全decoded string valueを保護します。schema省略またはschema v1の既存manifestもselectorなしのlegacy形式として読み続けます。
+
+selectorが限定するのはdirect content-bindingです。登録pathそのものをRead、copy、`cat ... | curl`、または意味を証明できないtransformへ渡した場合、fileがselected secretを内包するためpath-based taintは保守的に維持します。public siblingのliteralを直接送るだけなら保護対象にしませんが、protected file全体を経由した操作をpublicとは推定しません。
+
+JSONの例:
+
+```json
+{
+  "schema_version": 2,
+  "sources": [
+    {
+      "id": "service_credentials",
+      "path": "config/secrets.json",
+      "type": "secretfile",
+      "sensitivity": "high",
+      "policy_tags": ["no_external"],
+      "selector": {
+        "json_pointers": ["/private/token", "/accounts/0/key"]
+      }
+    }
+  ]
+}
+```
 
 ## embedding や cos 類似度はどこに入るか
 

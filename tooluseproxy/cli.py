@@ -10,7 +10,11 @@ import tempfile
 from pathlib import Path
 from typing import Any, Sequence
 
-from hook_monitor.runtime.source_config import SourceConfigError, load_protected_sources
+from hook_monitor.analysis.source_index import load_sources_and_chunks
+from hook_monitor.runtime.source_config import (
+    CURRENT_MANIFEST_SCHEMA_VERSION,
+    SourceConfigError,
+)
 from hook_monitor.runtime.storage import (
     CURRENT_SCHEMA_VERSION,
     EventStore,
@@ -354,9 +358,12 @@ def _import_database(source: Path, destination: Path) -> None:
 
 def _create_empty_manifest(path: Path) -> bool:
     if path.exists():
-        load_protected_sources(path)
+        load_sources_and_chunks(path.parent, path)
         return False
-    payload = {"schema_version": 1, "sources": []}
+    payload = {
+        "schema_version": CURRENT_MANIFEST_SCHEMA_VERSION,
+        "sources": [],
+    }
     encoded = (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
     fd, temporary_name = tempfile.mkstemp(
         prefix=f".{path.name}.",
@@ -374,7 +381,7 @@ def _create_empty_manifest(path: Path) -> bool:
         try:
             os.link(temporary_path, path)
         except FileExistsError:
-            load_protected_sources(path)
+            load_sources_and_chunks(path.parent, path)
             return False
     finally:
         temporary_path.unlink(missing_ok=True)
@@ -423,10 +430,14 @@ def _inspect_manifest(path: Path) -> tuple[bool, str]:
     if not path.is_file():
         return False, f"manifest not found: {path}"
     try:
-        sources = load_protected_sources(path)
-    except (OSError, json.JSONDecodeError, SourceConfigError) as exc:
+        sources, chunks = load_sources_and_chunks(path.parent, path)
+    except (OSError, ValueError) as exc:
         return False, f"manifest invalid: {type(exc).__name__}"
-    return True, f"manifest valid; protected sources={len(sources)}"
+    return (
+        True,
+        f"manifest valid; protected sources={len(sources)} "
+        f"source chunks={len(chunks)}",
+    )
 
 
 def _inspect_data_directory_permissions(path: Path) -> tuple[bool, str]:

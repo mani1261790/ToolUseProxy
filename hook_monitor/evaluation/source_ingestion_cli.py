@@ -20,7 +20,7 @@ from hook_monitor.evaluation.source_ingestion_dataset import (
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DATASET_ROOT = (
-    REPO_ROOT / "tests" / "fixtures" / "similarity" / "ingestion" / "v1"
+    REPO_ROOT / "tests" / "fixtures" / "similarity" / "ingestion" / "v2"
 )
 
 

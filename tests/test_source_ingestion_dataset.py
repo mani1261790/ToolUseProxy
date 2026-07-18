@@ -20,6 +20,9 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 DATASET_ROOT = (
     REPO_ROOT / "tests" / "fixtures" / "similarity" / "ingestion" / "v1"
 )
+DATASET_V2_ROOT = (
+    REPO_ROOT / "tests" / "fixtures" / "similarity" / "ingestion" / "v2"
+)
 SYNTHETIC_VALUE_PATTERN = re.compile(r"^C\.[A-Z0-9][A-Za-z0-9._/-]+$")
 
 
@@ -103,6 +106,32 @@ class SourceIngestionDatasetTest(unittest.TestCase):
         ):
             dataset.select_scenarios("holdout")
 
+    def test_version_two_corpus_adds_only_canonical_source_selectors(self) -> None:
+        legacy = load_source_ingestion_dataset(DATASET_ROOT)
+        selected = load_source_ingestion_dataset(DATASET_V2_ROOT)
+
+        self.assertEqual("2.0.0", selected.dataset_version)
+        self.assertEqual(
+            "573fd04d7757929752aa654d2277011238a895e068002fdb325251ab42d99373",
+            selected.digest_sha256,
+        )
+        self.assertEqual(
+            [scenario.scenario_id for scenario in legacy.scenarios],
+            [scenario.scenario_id for scenario in selected.scenarios],
+        )
+        for old, new in zip(legacy.scenarios, selected.scenarios, strict=True):
+            with self.subTest(scenario=new.scenario_id):
+                self.assertIsNone(old.source.selector)
+                self.assertIsNotNone(new.source.selector)
+                self.assertEqual(old.events, new.events)
+                self.assertEqual(old.should_reach_sink, new.should_reach_sink)
+                self.assertEqual(old.expected_action, new.expected_action)
+                self.assertEqual(old.source.content, new.source.content)
+                self.assertEqual(
+                    old.source.protected_values,
+                    new.source.protected_values,
+                )
+
     def test_scored_fixture_text_uses_neutral_synthetic_values(self) -> None:
         dataset = load_source_ingestion_dataset(DATASET_ROOT)
 
@@ -147,7 +176,7 @@ class SourceIngestionDatasetTest(unittest.TestCase):
             ("unknown=unknown", self._add_unknown_scenario_field),
             ("missing=sensitivity", self._remove_source_field),
             ("unknown=unknown", self._add_unknown_event_field),
-            ("dataset_version must be 1.0.0", self._change_dataset_version),
+            ("dataset_version is not supported", self._change_dataset_version),
             ("dataset case ids must be unique", self._duplicate_scenario_id),
             ("relative workspace path", self._escape_source_path),
             ("resembles a real AWS access key", self._add_source_credential_shape),

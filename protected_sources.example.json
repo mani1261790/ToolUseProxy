@@ -1,11 +1,15 @@
 {
+  "schema_version": 2,
   "sources": [
     {
       "id": "env_main",
       "path": ".env",
       "type": "secretfile",
       "sensitivity": "high",
-      "policy_tags": ["no_external", "no_search"]
+      "policy_tags": ["no_external", "no_search"],
+      "selector": {
+        "dotenv_keys": ["SERVICE_TOKEN"]
+      }
     },
     {
       "id": "private_impl",

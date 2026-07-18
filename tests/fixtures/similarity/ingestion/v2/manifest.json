@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "dataset_id": "tooluseproxy-source-ingestion",
+  "dataset_version": "2.0.0",
+  "description": "Selector-aware v2 source-ingestion corpus: unlike v1, selected values narrow content-derived taint while whole-file path taint remains conservative; labels and expected actions remain aligned with v1.",
+  "files": {
+    "scenarios": "scenarios.jsonl"
+  }
+}

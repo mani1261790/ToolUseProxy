@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -38,6 +39,7 @@ from hook_monitor.runtime.models import (
 from hook_monitor.runtime.source_config import (
     DEFAULT_CONFIG_PATH,
     load_protected_sources,
+    protected_source_selector_payload,
     resolve_protected_source_path,
 )
 from hook_monitor.runtime.storage import EventStore
@@ -47,7 +49,7 @@ _MCP_PROFILE_GRAPH_VERSION = (
     DEFAULT_MCP_PROFILE_REGISTRY.registry_version.rsplit(":", 1)[-1][:12]
 )
 RUNTIME_GRAPH_DETECTOR_VERSION = (
-    f"runtime-graph-v16-{SOURCE_CHUNKER_VERSION}-"
+    f"runtime-graph-v17-{SOURCE_CHUNKER_VERSION}-"
     f"mcp-profiles-{_MCP_PROFILE_GRAPH_VERSION}"
 )
 
@@ -596,7 +598,7 @@ def _source_manifest_digest(
     workspace_id: str,
     sources: list[ProtectedSource],
 ) -> str:
-    digest = hashlib.sha256(b"runtime-source-manifest-v3\0")
+    digest = hashlib.sha256(b"runtime-source-manifest-v4\0")
     digest.update(SOURCE_CHUNKER_VERSION.encode("ascii"))
     digest.update(b"\0")
     digest.update(workspace_id.encode("utf-8"))
@@ -614,6 +616,12 @@ def _source_manifest_digest(
             source.source_type,
             source.sensitivity,
             *source.policy_tags,
+            json.dumps(
+                protected_source_selector_payload(source.selector),
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
             str(source_path),
             str(stat.st_size),
             str(stat.st_mtime_ns),
@@ -631,7 +639,7 @@ def _stored_source_digest(
     sources: list[ProtectedSource],
     chunks: list[SourceChunk],
 ) -> str:
-    digest = hashlib.sha256(b"runtime-stored-sources-v2\0")
+    digest = hashlib.sha256(b"runtime-stored-sources-v3\0")
     digest.update(workspace_id.encode("utf-8"))
     digest.update(b"\0")
     for source in sorted(sources, key=lambda item: item.source_id):
@@ -642,6 +650,12 @@ def _stored_source_digest(
             source.source_type,
             source.sensitivity,
             *source.policy_tags,
+            json.dumps(
+                protected_source_selector_payload(source.selector),
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
         ):
             digest.update(value.encode("utf-8"))
             digest.update(b"\0")

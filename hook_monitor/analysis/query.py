@@ -14,6 +14,7 @@ from hook_monitor.runtime.models import (
     SourceChunk,
 )
 from hook_monitor.runtime.storage import EventStore
+from hook_monitor.runtime.source_config import parse_protected_source_selector
 from hook_monitor.runtime.workspace import WorkspaceContext, make_workspace_id, resolve_workspace
 
 
@@ -299,4 +300,9 @@ def _protected_source_from_snapshot(
         policy_tags=tuple(policy_tags),
         workspace_id=payload["workspace_id"],
         source_key=payload["source_key"],
+        selector=parse_protected_source_selector(
+            payload.get("selector"),
+            source_path=payload["path"],
+            source_type=payload["source_type"],
+        ),
     )

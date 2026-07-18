@@ -3,15 +3,16 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Iterator
 from pathlib import Path
 
-from hook_monitor.runtime.models import ProtectedSource, SourceChunk
+from hook_monitor.runtime.models import ProtectedSource, ProtectedSourceSelector, SourceChunk
 from hook_monitor.runtime.ids import make_source_chunk_id
 from hook_monitor.runtime.normalize import estimate_token_count, normalize_text
-from hook_monitor.runtime.source_config import resolve_protected_source_path
+from hook_monitor.runtime.source_config import SourceConfigError, resolve_protected_source_path
 
 
-SOURCE_CHUNKER_VERSION = "source-chunker-v2-secret-values"
+SOURCE_CHUNKER_VERSION = "source-chunker-v3-secret-selectors"
 _DOTENV_ASSIGNMENT = re.compile(
     r"^(?:export\s+)?([A-Za-z_][A-Za-z0-9_.-]*)\s*=(.*)$"
 )
@@ -22,7 +23,7 @@ def build_source_chunks(repo_root: Path, source: ProtectedSource) -> list[Source
     source_path = resolve_protected_source_path(repo_root, source.path)
     text = source_path.read_text(encoding="utf-8")
 
-    chunks = _split_chunks(source_path, text, source.source_type)
+    chunks = _split_chunks(source_path, text, source)
     records: list[SourceChunk] = []
     for ordinal, chunk_text in enumerate(chunks):
         normalized = normalize_text(chunk_text)
@@ -43,16 +44,37 @@ def build_source_chunks(repo_root: Path, source: ProtectedSource) -> list[Source
     return records
 
 
-def _split_chunks(source_path: Path, text: str, source_type: str) -> list[str]:
+def _split_chunks(
+    source_path: Path,
+    text: str,
+    source: ProtectedSource,
+) -> list[str]:
     # secret fileはkeyや構文wrapperをsource本文として扱わず、送信され得る
     # decoded valueを比較単位にする。解釈できない形式は従来の段落単位へ
     # fail-safeし、parserの不完全さによって保護対象を消さない。
-    if source_type == "secretfile" and _is_dotenv_path(source_path):
-        values = _split_dotenv_values(text)
-        return _split_paragraphs(text) if values is None else values
-    if source_type == "secretfile" and source_path.suffix.casefold() == ".json":
-        values = _split_json_string_values(text)
-        return _split_paragraphs(text) if values is None else values
+    if source.source_type == "secretfile" and _is_dotenv_path(source_path):
+        values = _split_dotenv_values(text, source.selector)
+        if values is None:
+            if source.selector is not None:
+                raise SourceConfigError(
+                    "selected dotenv source is not statically parseable"
+                )
+            return _split_paragraphs(text)
+        return values
+    if (
+        source.source_type == "secretfile"
+        and source_path.suffix.casefold() == ".json"
+    ):
+        values = _split_json_string_values(text, source.selector)
+        if values is None:
+            if source.selector is not None:
+                raise SourceConfigError("selected JSON source is not valid JSON")
+            return _split_paragraphs(text)
+        return values
+    if source.selector is not None:
+        raise SourceConfigError(
+            "source selector does not match a supported secretfile format"
+        )
 
     # コードは関数・class 単位、文章は段落単位で切る。
     if source_path.suffix == ".py":
@@ -65,7 +87,14 @@ def _is_dotenv_path(source_path: Path) -> bool:
     return name == ".env" or name.startswith(".env.")
 
 
-def _split_dotenv_values(text: str) -> list[str] | None:
+def _split_dotenv_values(
+    text: str,
+    selector: ProtectedSourceSelector | None,
+) -> list[str] | None:
+    if selector is not None and selector.kind != "dotenv_keys":
+        raise SourceConfigError("dotenv source requires selector.dotenv_keys")
+    selected = None if selector is None else frozenset(selector.values)
+    resolved: set[str] = set()
     values: list[str] = []
     for raw_line in text.splitlines():
         line = raw_line.strip()
@@ -74,11 +103,17 @@ def _split_dotenv_values(text: str) -> list[str] | None:
         match = _DOTENV_ASSIGNMENT.fullmatch(line)
         if match is None:
             return None
+        key = match.group(1)
         value = _parse_dotenv_value(match.group(2))
         if value is None:
             return None
-        if value.strip():
+        if value.strip() and (selected is None or key in selected):
             values.append(value)
+            resolved.add(key)
+    if selected is not None and resolved != selected:
+        raise SourceConfigError(
+            "selector.dotenv_keys contains a missing or empty key"
+        )
     return values
 
 
@@ -136,24 +171,54 @@ def _strip_dotenv_inline_comment(value: str) -> str:
     return value
 
 
-def _split_json_string_values(text: str) -> list[str] | None:
+def _split_json_string_values(
+    text: str,
+    selector: ProtectedSourceSelector | None,
+) -> list[str] | None:
+    if selector is not None and selector.kind != "json_pointers":
+        raise SourceConfigError("JSON source requires selector.json_pointers")
     try:
         payload = json.loads(text)
     except json.JSONDecodeError:
         return None
 
+    selected = None if selector is None else frozenset(selector.values)
     values: list[str] = []
-    stack: list[object] = [payload]
-    while stack:
-        value = stack.pop()
-        if isinstance(value, str):
-            if value.strip():
+    resolved: set[str] = set()
+    for pointer, value in _walk_json_nodes(payload):
+        if selected is None:
+            if isinstance(value, str) and value.strip():
                 values.append(value)
-        elif isinstance(value, dict):
-            stack.extend(reversed(tuple(value.values())))
-        elif isinstance(value, list):
-            stack.extend(reversed(value))
+            continue
+        if pointer not in selected:
+            continue
+        if not isinstance(value, str) or not value.strip():
+            raise SourceConfigError(
+                "selector.json_pointers must resolve to non-empty string values"
+            )
+        values.append(value)
+        resolved.add(pointer)
+    if selected is not None and resolved != selected:
+        raise SourceConfigError("selector.json_pointers contains a missing pointer")
     return values
+
+
+def _walk_json_nodes(
+    value: object,
+    pointer: str = "",
+) -> Iterator[tuple[str, object]]:
+    yield pointer, value
+    if isinstance(value, dict):
+        for key, child in value.items():
+            child_pointer = f"{pointer}/{_escape_json_pointer_segment(str(key))}"
+            yield from _walk_json_nodes(child, child_pointer)
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            yield from _walk_json_nodes(child, f"{pointer}/{index}")
+
+
+def _escape_json_pointer_segment(value: str) -> str:
+    return value.replace("~", "~0").replace("/", "~1")
 
 
 def _split_python_like(text: str) -> list[str]:

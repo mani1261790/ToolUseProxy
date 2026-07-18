@@ -40,7 +40,7 @@ _MCP_PROFILE_GRAPH_VERSION = (
     DEFAULT_MCP_PROFILE_REGISTRY.registry_version.rsplit(":", 1)[-1][:12]
 )
 DETECTOR_VERSION = (
-    f"artifact-graph-v18-{SOURCE_CHUNKER_VERSION}-"
+    f"artifact-graph-v19-{SOURCE_CHUNKER_VERSION}-"
     f"mcp-profiles-{_MCP_PROFILE_GRAPH_VERSION}"
 )
 GRAPH_IDENTITY_VERSION = "workspace-graph-v2"
@@ -324,7 +324,7 @@ def _graph_fingerprint(contexts, operations=(), snapshots=()) -> str:
 
 def _source_catalog_fingerprint(sources, chunks) -> str:
     digest = hashlib.sha256()
-    digest.update(b"workspace-source-catalog-v1\n")
+    digest.update(b"workspace-source-catalog-v2\n")
     for source in sorted(sources, key=lambda item: item.source_id):
         digest.update(
             json.dumps(
@@ -336,6 +336,11 @@ def _source_catalog_fingerprint(sources, chunks) -> str:
                     source.policy_tags,
                     source.workspace_id,
                     source.source_key,
+                    (
+                        None
+                        if source.selector is None
+                        else (source.selector.kind, source.selector.values)
+                    ),
                 ),
                 ensure_ascii=False,
                 separators=(",", ":"),

@@ -7,9 +7,16 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from hook_monitor.runtime.models import ProtectedSourceSelector
+from hook_monitor.runtime.source_config import (
+    CURRENT_MANIFEST_SCHEMA_VERSION,
+    SourceConfigError,
+    parse_protected_source_selector,
+)
+
 
 DATASET_SCHEMA_VERSION = 1
-SUPPORTED_DATASET_VERSION = "1.0.0"
+SUPPORTED_DATASET_VERSIONS = frozenset({"1.0.0", "2.0.0"})
 SUPPORTED_SPLITS = frozenset({"development", "validation"})
 SUPPORTED_PHASES = frozenset({"pre_tool_use", "post_tool_use", "stop"})
 SUPPORTED_ACTIONS = frozenset({"allow", "warn", "block", "continue_review"})
@@ -42,7 +49,7 @@ _SCENARIO_KEYS = frozenset(
         "rationale",
     }
 )
-_SOURCE_KEYS = frozenset(
+_SOURCE_KEYS_V1 = frozenset(
     {
         "id",
         "path",
@@ -53,6 +60,7 @@ _SOURCE_KEYS = frozenset(
         "protected_values",
     }
 )
+_SOURCE_KEYS_V2 = _SOURCE_KEYS_V1 | {"selector"}
 _EVENT_KEYS = frozenset({"phase", "payload"})
 _FORBIDDEN_SECRET_PATTERNS = (
     ("AWS access key", re.compile(r"\bAKIA[0-9A-Z]{16}\b")),
@@ -83,6 +91,7 @@ class SourceFixture:
     policy_tags: tuple[str, ...]
     content: str
     protected_values: tuple[str, ...]
+    selector: ProtectedSourceSelector | None
 
 
 @dataclass(frozen=True)
@@ -130,7 +139,7 @@ def load_source_ingestion_dataset(root: Path) -> SourceIngestionDataset:
     manifest_path = root / "manifest.json"
     manifest = _load_json_object(manifest_path)
     _require_exact_keys(manifest, _MANIFEST_KEYS, manifest_path)
-    _require_version(manifest, manifest_path)
+    dataset_version = _require_version(manifest, manifest_path)
     dataset_id = _require_identifier(
         manifest["dataset_id"],
         "dataset_id",
@@ -154,7 +163,12 @@ def load_source_ingestion_dataset(root: Path) -> SourceIngestionDataset:
     )
     records = _load_jsonl(scenario_path)
     scenarios = tuple(
-        _parse_scenario(record, scenario_path, line_no)
+        _parse_scenario(
+            record,
+            scenario_path,
+            line_no,
+            dataset_version=dataset_version,
+        )
         for line_no, record in records
     )
     if not scenarios:
@@ -170,7 +184,7 @@ def load_source_ingestion_dataset(root: Path) -> SourceIngestionDataset:
     _validate_dataset_coverage(scenarios)
     return SourceIngestionDataset(
         dataset_id=dataset_id,
-        dataset_version=SUPPORTED_DATASET_VERSION,
+        dataset_version=dataset_version,
         description=description,
         digest_sha256=_dataset_digest((manifest_path, scenario_path)),
         scenarios=scenarios,
@@ -192,17 +206,23 @@ def _parse_scenario(
     record: dict[str, Any],
     path: Path,
     line_no: int,
+    *,
+    dataset_version: str,
 ) -> SourceIngestionScenario:
     location = f"{path}:{line_no}"
     _require_exact_keys(record, _SCENARIO_KEYS, location)
-    _require_version(record, location)
+    _require_version(record, location, expected_dataset_version=dataset_version)
     if record["provenance"] != "synthetic":
         raise SourceIngestionDatasetError(
             f"{location}: provenance must be synthetic"
         )
     scenario_id = _require_identifier(record["id"], "id", location)
     split = _require_choice(record["split"], "split", SUPPORTED_SPLITS, location)
-    source = _parse_source(record["source"], location)
+    source = _parse_source(
+        record["source"],
+        location,
+        dataset_version=dataset_version,
+    )
     events = _parse_events(record["events"], location)
     expected_sink_type = _require_choice(
         record["expected_sink_type"],
@@ -288,10 +308,16 @@ def _parse_scenario(
     )
 
 
-def _parse_source(value: Any, location: object) -> SourceFixture:
+def _parse_source(
+    value: Any,
+    location: object,
+    *,
+    dataset_version: str,
+) -> SourceFixture:
     if not isinstance(value, dict):
         raise SourceIngestionDatasetError(f"{location}: source must be an object")
-    _require_exact_keys(value, _SOURCE_KEYS, f"{location}.source")
+    source_keys = _SOURCE_KEYS_V2 if dataset_version == "2.0.0" else _SOURCE_KEYS_V1
+    _require_exact_keys(value, source_keys, f"{location}.source")
     source_path = _require_relative_source_path(value["path"], location)
     source_type = _require_nonempty_string(
         value["type"],
@@ -348,6 +374,23 @@ def _parse_source(value: Any, location: object) -> SourceFixture:
         _require_tag(tag, "source.policy_tags", location)
         for tag in raw_policy_tags
     )
+    selector = None
+    if dataset_version == "2.0.0":
+        try:
+            selector = parse_protected_source_selector(
+                value["selector"],
+                source_path=source_path,
+                source_type=source_type,
+                manifest_schema_version=CURRENT_MANIFEST_SCHEMA_VERSION,
+            )
+        except SourceConfigError:
+            raise SourceIngestionDatasetError(
+                f"{location}: source.selector is invalid"
+            ) from None
+        if selector is None:
+            raise SourceIngestionDatasetError(
+                f"{location}: source.selector is required for dataset v2"
+            )
     return SourceFixture(
         source_key=_require_identifier(
             value["id"],
@@ -364,6 +407,7 @@ def _parse_source(value: Any, location: object) -> SourceFixture:
         policy_tags=policy_tags,
         content=content,
         protected_values=protected_values,
+        selector=selector,
     )
 
 
@@ -614,15 +658,29 @@ def _resolve_fixture_file(
     return root / candidate
 
 
-def _require_version(record: dict[str, Any], location: object) -> None:
+def _require_version(
+    record: dict[str, Any],
+    location: object,
+    *,
+    expected_dataset_version: str | None = None,
+) -> str:
     if record.get("schema_version") != DATASET_SCHEMA_VERSION:
         raise SourceIngestionDatasetError(
             f"{location}: schema_version must be {DATASET_SCHEMA_VERSION}"
         )
-    if record.get("dataset_version") != SUPPORTED_DATASET_VERSION:
+    dataset_version = record.get("dataset_version")
+    if dataset_version not in SUPPORTED_DATASET_VERSIONS:
         raise SourceIngestionDatasetError(
-            f"{location}: dataset_version must be {SUPPORTED_DATASET_VERSION}"
+            f"{location}: dataset_version is not supported"
         )
+    if (
+        expected_dataset_version is not None
+        and dataset_version != expected_dataset_version
+    ):
+        raise SourceIngestionDatasetError(
+            f"{location}: dataset_version must match the manifest"
+        )
+    return dataset_version
 
 
 def _require_exact_keys(

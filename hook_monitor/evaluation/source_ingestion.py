@@ -47,10 +47,15 @@ from hook_monitor.runtime.runner import (
     PRE_TOOL_RAW_JSON_MAX_DEPTH,
     PRE_TOOL_RAW_JSON_MAX_NUMBER_CHARS,
 )
+from hook_monitor.runtime.source_config import (
+    CURRENT_MANIFEST_SCHEMA_VERSION,
+    LEGACY_MANIFEST_SCHEMA_VERSION,
+    protected_source_selector_payload,
+)
 from hook_monitor.runtime.storage import EventStore
 
 
-RUNNER_VERSION = "source-ingestion-evaluation-v1"
+RUNNER_VERSION = "source-ingestion-evaluation-v2"
 DEFAULT_MINIMUM_PATH_SCORE = 0.15
 DEFAULT_FINDING_MIN_SCORE = 0.30
 _ACTION_PRIORITY = {
@@ -296,6 +301,11 @@ def _materialize_source(
     source_path.parent.mkdir(parents=True, exist_ok=True)
     source_path.write_text(scenario.source.content, encoding="utf-8")
     manifest = {
+        "schema_version": (
+            CURRENT_MANIFEST_SCHEMA_VERSION
+            if scenario.source.selector is not None
+            else LEGACY_MANIFEST_SCHEMA_VERSION
+        ),
         "sources": [
             {
                 "id": scenario.source.source_key,
@@ -303,6 +313,15 @@ def _materialize_source(
                 "type": scenario.source.source_type,
                 "sensitivity": scenario.source.sensitivity,
                 "policy_tags": list(scenario.source.policy_tags),
+                **(
+                    {}
+                    if scenario.source.selector is None
+                    else {
+                        "selector": protected_source_selector_payload(
+                            scenario.source.selector
+                        )
+                    }
+                ),
             }
         ]
     }
@@ -552,6 +571,11 @@ def _source_signatures(
                 source.policy_tags,
                 source.workspace_id,
                 source.source_key,
+                (
+                    None
+                    if source.selector is None
+                    else (source.selector.kind, source.selector.values)
+                ),
             )
             for source in sources
         )

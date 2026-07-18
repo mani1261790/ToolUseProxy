@@ -36,7 +36,7 @@ sh "<PLUGIN_ROOT>/hooks/run_cli.sh" init --codex --data-dir "<PLUGIN_DATA>"
 - `PLUGIN_DATA/events.db`を初期化または明示的にmigrationする
 - 古いschemaをmigrationする前にSQLite backupを作る
 - canonical workspace rootをDBへ登録する
-- `protected_sources.json`がない場合だけ、空のmanifestをatomicに作る
+- `protected_sources.json`がない場合だけ、schema v2の空manifestをatomicに作る
 - 既存の有効なmanifestは変更しない
 
 続けて、同じworkspaceとdata directoryを指定して診断します。
@@ -51,7 +51,7 @@ sh "<PLUGIN_ROOT>/hooks/run_cli.sh" status \
   --data-dir "<PLUGIN_DATA>"
 ```
 
-`status: active`になるには、DB schema、canonical workspace登録、`protected_sources.json`の3つが同じworkspaceについて有効である必要があります。
+`status: active`になるには、DB schema、canonical workspace登録、`protected_sources.json`の3つが同じworkspaceについて有効である必要があります。schema v2 selectorを使うmanifestでは、`doctor` / `status`が宣言だけでなく現在fileのkey / JSON Pointer解決まで検証します。SQLite schema upgradeが必要な場合はHook内でmigrationせず、再度`init --codex`を実行します。
 
 ## safe default
 

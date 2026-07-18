@@ -16,7 +16,8 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
-from hook_monitor.runtime.storage import EventStore
+from hook_monitor.runtime.source_config import CURRENT_MANIFEST_SCHEMA_VERSION
+from hook_monitor.runtime.storage import CURRENT_SCHEMA_VERSION, EventStore
 from tooluseproxy import __version__
 from tooluseproxy.cli import main as cli_main
 from tooluseproxy.paths import (
@@ -144,7 +145,10 @@ class ProductCliTest(unittest.TestCase):
             self.assertEqual(str(data_dir / "events.db"), initialized["db_path"])
             self.assertTrue(initialized["manifest_created"])
             self.assertEqual(
-                {"schema_version": 1, "sources": []},
+                {
+                    "schema_version": CURRENT_MANIFEST_SCHEMA_VERSION,
+                    "sources": [],
+                },
                 json.loads((workspace / "protected_sources.json").read_text()),
             )
             if os.name == "posix":
@@ -183,7 +187,7 @@ class ProductCliTest(unittest.TestCase):
                 ).fetchall()
                 schema_version = conn.execute("PRAGMA user_version").fetchone()[0]
             self.assertEqual([(str(workspace.resolve()),)], registered)
-            self.assertEqual(1, schema_version)
+            self.assertEqual(CURRENT_SCHEMA_VERSION, schema_version)
 
             nested = workspace / "nested" / "directory"
             nested.mkdir(parents=True)
@@ -227,6 +231,77 @@ class ProductCliTest(unittest.TestCase):
             self.assertEqual(0, exit_code)
             self.assertFalse(json.loads(stdout.getvalue())["manifest_created"])
             self.assertEqual(original, json.loads(manifest.read_text()))
+
+    def test_doctor_validates_selector_resolution_without_exposing_values(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            workspace = root / "workspace"
+            data_dir = root / "data"
+            workspace.mkdir()
+            secret = "C.DOCTOR.SELECTOR.VALUE"
+            (workspace / ".env").write_text(
+                f"PRIVATE_TOKEN={secret}\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(
+                0,
+                cli_main(
+                    [
+                        "init",
+                        "--workspace",
+                        str(workspace),
+                        "--data-dir",
+                        str(data_dir),
+                        "--json",
+                    ]
+                ),
+            )
+            (workspace / "protected_sources.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": CURRENT_MANIFEST_SCHEMA_VERSION,
+                        "sources": [
+                            {
+                                "id": "private-env",
+                                "path": ".env",
+                                "type": "secretfile",
+                                "sensitivity": "high",
+                                "policy_tags": ["no_external"],
+                                "selector": {
+                                    "dotenv_keys": ["MISSING_TOKEN"]
+                                },
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                exit_code = cli_main(
+                    [
+                        "doctor",
+                        "--workspace",
+                        str(workspace),
+                        "--data-dir",
+                        str(data_dir),
+                        "--json",
+                    ]
+                )
+
+            report = json.loads(stdout.getvalue())
+            protected = next(
+                check
+                for check in report["checks"]
+                if check["name"] == "protected_sources"
+            )
+            self.assertEqual(1, exit_code)
+            self.assertEqual("needs_attention", report["status"])
+            self.assertFalse(protected["ok"])
+            self.assertIn("SourceConfigError", protected["detail"])
+            self.assertNotIn(secret, stdout.getvalue())
 
     def test_init_does_not_replace_a_manifest_created_concurrently(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -416,7 +491,10 @@ class ProductCliTest(unittest.TestCase):
                     conn.execute("SELECT value FROM migration_marker").fetchone(),
                 )
             with sqlite3.connect(store.db_path) as conn:
-                self.assertEqual(1, conn.execute("PRAGMA user_version").fetchone()[0])
+                self.assertEqual(
+                    CURRENT_SCHEMA_VERSION,
+                    conn.execute("PRAGMA user_version").fetchone()[0],
+                )
 
     def test_init_backs_up_an_incomplete_current_schema_before_repair(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -429,7 +507,7 @@ class ProductCliTest(unittest.TestCase):
             with sqlite3.connect(db_path) as conn:
                 conn.execute("CREATE TABLE preserved (value TEXT NOT NULL)")
                 conn.execute("INSERT INTO preserved VALUES ('before-repair')")
-                conn.execute("PRAGMA user_version = 1")
+                conn.execute(f"PRAGMA user_version = {CURRENT_SCHEMA_VERSION}")
 
             stdout = io.StringIO()
             with redirect_stdout(stdout):
@@ -531,7 +609,7 @@ class ProductCliTest(unittest.TestCase):
                 conn.execute("CREATE TABLE workspaces (workspace_id TEXT PRIMARY KEY)")
                 conn.execute("CREATE TABLE events (event_id TEXT PRIMARY KEY)")
                 conn.execute("CREATE TABLE analysis_state (key TEXT PRIMARY KEY)")
-                conn.execute("PRAGMA user_version = 1")
+                conn.execute(f"PRAGMA user_version = {CURRENT_SCHEMA_VERSION}")
             before = db_path.read_bytes()
             payload = {
                 "hook_event_name": "PreToolUse",
@@ -1114,6 +1192,7 @@ class WheelInstallationTest(unittest.TestCase):
             (chunk_workspace / "protected_sources.json").write_text(
                 json.dumps(
                     {
+                        "schema_version": CURRENT_MANIFEST_SCHEMA_VERSION,
                         "sources": [
                             {
                                 "id": "installed-env",
@@ -1121,6 +1200,9 @@ class WheelInstallationTest(unittest.TestCase):
                                 "type": "secretfile",
                                 "sensitivity": "high",
                                 "policy_tags": ["no_external"],
+                                "selector": {
+                                    "dotenv_keys": ["PRIVATE_TOKEN"]
+                                },
                             }
                         ]
                     }
@@ -1146,7 +1228,7 @@ class WheelInstallationTest(unittest.TestCase):
                 text=True,
             )
             self.assertEqual(
-                ["C.INSTALLED.VALUE", "demo"],
+                ["C.INSTALLED.VALUE"],
                 json.loads(installed_chunks.stdout),
             )
 

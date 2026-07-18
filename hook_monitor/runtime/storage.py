@@ -74,6 +74,8 @@ from hook_monitor.runtime.workspace import (
 )
 from hook_monitor.runtime.source_config import (
     make_scoped_source_id,
+    parse_protected_source_selector,
+    protected_source_selector_payload,
     resolve_protected_source_path,
 )
 
@@ -82,7 +84,7 @@ if TYPE_CHECKING:
 
 
 DEFAULT_DB_PATH = Path(".tooluseproxy/events.db")
-CURRENT_SCHEMA_VERSION = 1
+CURRENT_SCHEMA_VERSION = 2
 RUNTIME_REQUIRED_TABLES = frozenset(
     {
         "analysis_cursors",
@@ -144,9 +146,21 @@ RUNTIME_REQUIRED_COLUMNS = {
             "workspace_namespace_id",
         }
     ),
+    "protected_sources": frozenset(
+        {
+            "source_id",
+            "path",
+            "source_type",
+            "sensitivity",
+            "policy_tags_json",
+            "workspace_id",
+            "source_key",
+            "selector_json",
+        }
+    ),
 }
 LEGACY_DERIVED_WORKSPACE_ID = "legacy_unscoped"
-WORKSPACE_ANALYSIS_INPUT_REVISION_VERSION = "workspace-analysis-input-v1"
+WORKSPACE_ANALYSIS_INPUT_REVISION_VERSION = "workspace-analysis-input-v2"
 REDACTION_AUDIT_BUSY_TIMEOUT_MS = 10
 REDACTION_AUDIT_EVENT_PAYLOAD_MAX_BYTES = 1024 * 1024
 REDACTION_AUDIT_MAX_CURRENT_SINKS = 2 * DEFAULT_MCP_INPUT_LIMITS.max_fields
@@ -471,12 +485,19 @@ class EventStore:
                     source_type TEXT NOT NULL,
                     sensitivity TEXT NOT NULL,
                     policy_tags_json TEXT NOT NULL,
+                    selector_json TEXT NOT NULL DEFAULT 'null',
                     recorded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 )
                 """
             )
             self._ensure_column(conn, "protected_sources", "workspace_id", "TEXT")
             self._ensure_column(conn, "protected_sources", "source_key", "TEXT")
+            self._ensure_column(
+                conn,
+                "protected_sources",
+                "selector_json",
+                "TEXT NOT NULL DEFAULT 'null'",
+            )
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS resource_snapshots (
@@ -2366,8 +2387,9 @@ class EventStore:
                 path,
                 source_type,
                 sensitivity,
-                policy_tags_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                policy_tags_json,
+                selector_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 (
@@ -2378,6 +2400,12 @@ class EventStore:
                     source.source_type,
                     source.sensitivity,
                     json.dumps(source.policy_tags, ensure_ascii=False),
+                    json.dumps(
+                        protected_source_selector_payload(source.selector),
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ),
                 )
                 for source in sources
             ],
@@ -3364,7 +3392,8 @@ class EventStore:
                     rows = conn.execute(
                         f"""
                         SELECT source_id, path, source_type, sensitivity,
-                               policy_tags_json, workspace_id, source_key
+                               policy_tags_json, workspace_id, source_key,
+                               selector_json
                         FROM protected_sources
                         WHERE source_id IN ({placeholders})
                           AND workspace_id = ?
@@ -3382,6 +3411,7 @@ class EventStore:
                                 "policy_tags": json.loads(row[4]),
                                 "workspace_id": row[5],
                                 "source_key": row[6],
+                                "selector": json.loads(row[7]),
                             },
                         )
                         for row in rows
@@ -6469,7 +6499,8 @@ class EventStore:
                     sensitivity,
                     policy_tags_json,
                     workspace_id,
-                    source_key
+                    source_key,
+                    selector_json
                 FROM protected_sources
                 ORDER BY source_id
                 """
@@ -6510,7 +6541,8 @@ class EventStore:
                     sensitivity,
                     policy_tags_json,
                     workspace_id,
-                    source_key
+                    source_key,
+                    selector_json
                 FROM protected_sources
                 WHERE workspace_id = ?
                 ORDER BY source_key, source_id
@@ -7672,7 +7704,7 @@ class EventStore:
                 "protected_sources",
                 """
                 SELECT source_id, workspace_id, source_key, path, source_type,
-                       sensitivity, policy_tags_json
+                       sensitivity, policy_tags_json, selector_json
                 FROM protected_sources
                 WHERE workspace_id = ?
                 ORDER BY source_id
@@ -10076,6 +10108,7 @@ def _validate_workspace_source_catalog(
     source_ids: set[str] = set()
     source_keys: set[str] = set()
     for source in sources:
+        _validate_model_source_selector(source)
         if source.workspace_id != workspace_id or not source.source_key:
             raise ValueError("protected source workspace does not match catalog")
         if source.source_id != make_scoped_source_id(
@@ -10118,6 +10151,7 @@ def _validate_legacy_source_catalog(
 ) -> None:
     source_ids: set[str] = set()
     for source in sources:
+        _validate_model_source_selector(source)
         if source.workspace_id is not None or source.source_key is not None:
             raise ValueError("legacy source catalog cannot contain workspace metadata")
         if source.source_id in source_ids:
@@ -10135,6 +10169,16 @@ def _validate_legacy_source_catalog(
             raise ValueError("duplicate legacy source chunk ordinal")
         chunk_ids.add(chunk.chunk_id)
         source_ordinals.add(source_ordinal)
+
+
+def _validate_model_source_selector(source: ProtectedSource) -> None:
+    canonical = parse_protected_source_selector(
+        protected_source_selector_payload(source.selector),
+        source_path=source.path,
+        source_type=source.source_type,
+    )
+    if canonical != source.selector:
+        raise ValueError("protected source selector is not canonical")
 
 
 def _validate_node_workspace_owners(
@@ -10188,6 +10232,11 @@ def _protected_source_from_row(row: tuple) -> ProtectedSource:
         policy_tags=tuple(json.loads(row[4])),
         workspace_id=row[5],
         source_key=row[6],
+        selector=parse_protected_source_selector(
+            json.loads(row[7]),
+            source_path=row[1],
+            source_type=row[2],
+        ),
     )
 
 
