@@ -1,6 +1,6 @@
 # Codex Plugin 導入
 
-ToolUseProxyのCodex Pluginは、repository rootを自己完結したPlugin bundleとして配布します。`.codex-plugin/plugin.json`、`hooks/hooks.json`、setup skill、pure Python runtimeが同じversionに含まれます。Hook commandにcheckout先の絶対pathは書かず、Codexが渡す`PLUGIN_ROOT`からcodeを起動し、mutableなSQLite stateは`PLUGIN_DATA`へ保存します。
+ToolUseProxyのCodex Pluginは、repository全体ではなく、生成時にallowlist化した自己完結Plugin bundleとして配布します。`.codex-plugin/plugin.json`、`hooks/hooks.json`、setup skill、pure Python runtimeが同じversionに含まれます。Hook commandにcheckout先の絶対pathは書かず、Codexが渡す`PLUGIN_ROOT`からcodeを起動し、mutableなSQLite stateは`PLUGIN_DATA`へ保存します。
 
 ## 現在のsupport範囲
 
@@ -20,7 +20,7 @@ SQLite schemaはv4のままなので、alpha.3への更新だけを理由にDB m
 
 ## install
 
-現在のalpha開発版は、可変なremote `main`を実行元にしないため、checkoutをrepository-local marketplaceとして追加します。
+現在のalpha開発版は、可変なremote `main`を実行元にしないため、checkoutをrepository-local marketplaceとして追加できます。
 
 ```bash
 codex plugin marketplace add /absolute/path/to/ToolUseProxy
@@ -28,6 +28,35 @@ codex plugin add tooluseproxy@tooluseproxy
 ```
 
 この絶対pathはmarketplaceを登録する開発時の1回だけに使い、Hook definitionには保存されません。公開配布はimmutableなrelease tagまたはcommitへpinし、Plugin version、checksum、release notes、変更後のHook再review方針を揃えてから有効にします。remote `main`を直接実行元にはしません。
+
+### clean marketplace bundleの作成
+
+配布候補を検証するときはrepository rootをそのまま渡さず、専用builderで再現可能なZIPを作ります。
+
+```bash
+python3.11 scripts/build_plugin_bundle.py --outdir dist
+```
+
+出力は`dist/tooluseproxy-plugin-<version>.zip`です。同じsource treeから作ったZIPは同じSHA-256になります。展開後のrootにはmarketplace definitionがあり、その内側の`tooluseproxy/`だけがPlugin sourceです。
+
+```text
+extracted/
+├── .agents/plugins/marketplace.json
+└── tooluseproxy/
+    ├── .codex-plugin/plugin.json
+    ├── hooks/
+    ├── skills/
+    ├── hook_monitor/
+    ├── tooluseproxy/
+    └── tooluseproxy_plugin.py
+```
+
+```bash
+codex plugin marketplace add /absolute/path/to/extracted
+codex plugin add tooluseproxy@tooluseproxy
+```
+
+builderはruntime fileを明示的に選び、`.git`、`.github`、tests、docs、scripts、cache、virtual environment、local DB、legacy Hook entrypointをZIPへ含めません。marketplace metadata自体もinstall済みPluginには入りません。ZIPはまだ署名済みpublic releaseではないため、checksum公開、SBOM、release notes、license / privacy gateを満たすまでは開発・dogfood用途として扱います。
 
 installまたはHook定義の更新後は、Codexが示すHook definitionを確認してtrustします。ToolUseProxyはこのreviewを迂回しません。新しいPlugin componentとskillを確実に読み込むため、trust後は新しいtaskを開始します。
 
