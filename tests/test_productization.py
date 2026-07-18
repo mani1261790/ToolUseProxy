@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import os
@@ -783,6 +784,34 @@ class PluginBundleTest(unittest.TestCase):
             )
             workspace = root / "workspace with space"
             workspace.mkdir()
+            legacy_secret = "RELOCATED.LEGACY.SECRET.6c42"
+            legacy_metadata = "RELOCATED.MIGRATION.METADATA.31ad"
+            legacy_source = {
+                "id": "legacy-env",
+                "path": ".env.legacy",
+                "type": "secretfile",
+                "sensitivity": "high",
+                "policy_tags": ["no_external"],
+                "future_source_field": {"preserved": True},
+            }
+            (workspace / ".env.legacy").write_text(
+                f"LEGACY_TOKEN={legacy_secret}\n",
+                encoding="utf-8",
+            )
+            legacy_manifest = workspace / "protected_sources.json"
+            legacy_manifest_before = (
+                json.dumps(
+                    {
+                        "sources": [legacy_source],
+                        "future_top_field": {"value": legacy_metadata},
+                    },
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+                + "\n"
+            ).encode("utf-8")
+            legacy_manifest.write_bytes(legacy_manifest_before)
+            legacy_manifest.chmod(0o600)
             data_dir = root / "plugin data"
             environment = dict(os.environ)
             environment.update(
@@ -840,7 +869,135 @@ class PluginBundleTest(unittest.TestCase):
                 text=True,
                 check=True,
             )
-            self.assertEqual("initialized", json.loads(initialized.stdout)["status"])
+            initialized_payload = json.loads(initialized.stdout)
+            self.assertEqual("initialized", initialized_payload["status"])
+            self.assertFalse(initialized_payload["manifest_created"])
+
+            legacy_status = subprocess.run(
+                [
+                    "sh",
+                    str(cli_launcher),
+                    "status",
+                    "--workspace",
+                    str(workspace),
+                    "--data-dir",
+                    str(data_dir),
+                    "--json",
+                ],
+                cwd=workspace,
+                env=environment,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            legacy_status_payload = json.loads(legacy_status.stdout)
+            self.assertEqual("active", legacy_status_payload["status"])
+            self.assertTrue(
+                legacy_status_payload["protected_sources"]["runtime_readable"]
+            )
+            self.assertFalse(
+                legacy_status_payload["protected_sources"]["registration_writable"]
+            )
+            self.assertTrue(
+                legacy_status_payload["protected_sources"]["migration_required"]
+            )
+
+            migration_plan = subprocess.run(
+                [
+                    "sh",
+                    str(cli_launcher),
+                    "protect",
+                    "migrate",
+                    "plan",
+                    "--workspace",
+                    str(workspace),
+                    "--data-dir",
+                    str(data_dir),
+                    "--json",
+                ],
+                cwd=workspace,
+                env=environment,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            migration_plan_payload = json.loads(migration_plan.stdout)
+            self.assertEqual("review_required", migration_plan_payload["status"])
+            self.assertEqual(1, migration_plan_payload["source_count"])
+            self.assertTrue(migration_plan_payload["schema_version_was_omitted"])
+            self.assertFalse(
+                migration_plan_payload["sources_field_will_be_added"]
+            )
+            self.assertEqual(0, migration_plan_payload["selector_changes"])
+            self.assertEqual(
+                hashlib.sha256(legacy_manifest_before).hexdigest(),
+                migration_plan_payload["manifest_sha256"],
+            )
+            self.assertEqual(legacy_manifest_before, legacy_manifest.read_bytes())
+            self.assertNotIn(
+                legacy_secret,
+                migration_plan.stdout + migration_plan.stderr,
+            )
+            self.assertNotIn(
+                legacy_metadata,
+                migration_plan.stdout + migration_plan.stderr,
+            )
+            migration_backup = (
+                data_dir / migration_plan_payload["backup_relative_path"]
+            )
+            self.assertFalse(migration_backup.exists())
+
+            migration_apply = subprocess.run(
+                [
+                    "sh",
+                    str(cli_launcher),
+                    "protect",
+                    "migrate",
+                    "apply",
+                    "--migration-revision",
+                    migration_plan_payload["migration_revision"],
+                    "--expected-manifest-sha256",
+                    migration_plan_payload["manifest_sha256"],
+                    "--workspace",
+                    str(workspace),
+                    "--data-dir",
+                    str(data_dir),
+                    "--json",
+                ],
+                cwd=workspace,
+                env=environment,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            migration_apply_payload = json.loads(migration_apply.stdout)
+            self.assertEqual("migrated", migration_apply_payload["status"])
+            self.assertEqual(
+                migration_plan_payload["result_manifest_sha256"],
+                migration_apply_payload["manifest_sha256"],
+            )
+            self.assertNotIn(
+                legacy_secret,
+                migration_apply.stdout + migration_apply.stderr,
+            )
+            self.assertNotIn(
+                legacy_metadata,
+                migration_apply.stdout + migration_apply.stderr,
+            )
+            self.assertEqual(legacy_manifest_before, migration_backup.read_bytes())
+            self.assertEqual(
+                0o600,
+                stat.S_IMODE(migration_backup.stat().st_mode),
+            )
+            migrated_manifest = json.loads(
+                legacy_manifest.read_text(encoding="utf-8")
+            )
+            self.assertEqual(2, migrated_manifest["schema_version"])
+            self.assertEqual([legacy_source], migrated_manifest["sources"])
+            self.assertEqual(
+                {"value": legacy_metadata},
+                migrated_manifest["future_top_field"],
+            )
 
             registration_secret = "RELOCATED.PLUGIN.SECRET.9d31"
             (workspace / ".env.agent").write_text(
@@ -914,6 +1071,11 @@ class PluginBundleTest(unittest.TestCase):
             )
             protected_manifest = json.loads(
                 (workspace / "protected_sources.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(legacy_source, protected_manifest["sources"][0])
+            self.assertEqual(
+                {"value": legacy_metadata},
+                protected_manifest["future_top_field"],
             )
             registered_source = next(
                 source
@@ -1034,6 +1196,13 @@ class PluginBundleTest(unittest.TestCase):
                     WHERE path = '.env.agent'
                     """
                 ).fetchone()
+                legacy_runtime_source = conn.execute(
+                    """
+                    SELECT source_id, selector_json
+                    FROM protected_sources
+                    WHERE path = '.env.legacy'
+                    """
+                ).fetchone()
                 source_chunk_count = conn.execute(
                     """
                     SELECT COUNT(*)
@@ -1041,6 +1210,14 @@ class PluginBundleTest(unittest.TestCase):
                     WHERE source_id = ?
                     """,
                     (runtime_source[0],),
+                ).fetchone()[0]
+                legacy_chunk_count = conn.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM source_chunks
+                    WHERE source_id = ?
+                    """,
+                    (legacy_runtime_source[0],),
                 ).fetchone()[0]
                 runtime_analysis = conn.execute(
                     """
@@ -1061,6 +1238,8 @@ class PluginBundleTest(unittest.TestCase):
                 json.loads(runtime_source[1]),
             )
             self.assertEqual(1, source_chunk_count)
+            self.assertIsNone(json.loads(legacy_runtime_source[1]))
+            self.assertEqual(1, legacy_chunk_count)
             self.assertEqual(
                 "session-full",
                 json.loads(runtime_analysis[0])["runtime_reanalysis"],
@@ -1255,6 +1434,7 @@ class PluginBundleTest(unittest.TestCase):
 
 @unittest.skipUnless(sys.version_info >= (3, 11), "package metadata requires Python 3.11+")
 class WheelInstallationTest(unittest.TestCase):
+    @unittest.skipIf(os.name == "nt", "protected-source migration is POSIX-only")
     def test_wheel_runs_outside_checkout_without_pythonpath(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -1373,6 +1553,34 @@ class WheelInstallationTest(unittest.TestCase):
                 json.loads(installed_chunks.stdout),
             )
 
+            legacy_secret = "WHEEL.LEGACY.SECRET.8a51"
+            legacy_metadata = "WHEEL.MIGRATION.METADATA.54ce"
+            legacy_source = {
+                "id": "wheel-legacy-env",
+                "path": ".env.legacy",
+                "type": "secretfile",
+                "sensitivity": "high",
+                "policy_tags": ["no_external"],
+                "future_source_field": {"preserved": True},
+            }
+            (outside / ".env.legacy").write_text(
+                f"LEGACY_TOKEN={legacy_secret}\n",
+                encoding="utf-8",
+            )
+            legacy_manifest = outside / "protected_sources.json"
+            legacy_manifest_before = (
+                json.dumps(
+                    {
+                        "sources": [legacy_source],
+                        "future_top_field": {"value": legacy_metadata},
+                    },
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+                + "\n"
+            ).encode("utf-8")
+            legacy_manifest.write_bytes(legacy_manifest_before)
+            legacy_manifest.chmod(0o600)
             data_dir = root / "installed-runtime"
             initialize = subprocess.run(
                 [
@@ -1393,8 +1601,110 @@ class WheelInstallationTest(unittest.TestCase):
                 capture_output=True,
                 text=True,
             )
-            self.assertEqual("initialized", json.loads(initialize.stdout)["status"])
+            initialize_payload = json.loads(initialize.stdout)
+            self.assertEqual("initialized", initialize_payload["status"])
+            self.assertFalse(initialize_payload["manifest_created"])
             db_path = data_dir / "events.db"
+
+            migration_plan = subprocess.run(
+                [
+                    str(python),
+                    "-m",
+                    "tooluseproxy",
+                    "protect",
+                    "migrate",
+                    "plan",
+                    "--workspace",
+                    str(outside),
+                    "--data-dir",
+                    str(data_dir),
+                    "--json",
+                ],
+                cwd=outside,
+                env=clean_environment,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            migration_plan_payload = json.loads(migration_plan.stdout)
+            self.assertEqual("review_required", migration_plan_payload["status"])
+            self.assertEqual(1, migration_plan_payload["source_count"])
+            self.assertTrue(migration_plan_payload["schema_version_was_omitted"])
+            self.assertFalse(
+                migration_plan_payload["sources_field_will_be_added"]
+            )
+            self.assertEqual(0, migration_plan_payload["selector_changes"])
+            self.assertEqual(
+                hashlib.sha256(legacy_manifest_before).hexdigest(),
+                migration_plan_payload["manifest_sha256"],
+            )
+            self.assertEqual(legacy_manifest_before, legacy_manifest.read_bytes())
+            self.assertNotIn(
+                legacy_secret,
+                migration_plan.stdout + migration_plan.stderr,
+            )
+            self.assertNotIn(
+                legacy_metadata,
+                migration_plan.stdout + migration_plan.stderr,
+            )
+            migration_backup = (
+                data_dir / migration_plan_payload["backup_relative_path"]
+            )
+            self.assertFalse(migration_backup.exists())
+
+            migration_apply = subprocess.run(
+                [
+                    str(python),
+                    "-m",
+                    "tooluseproxy",
+                    "protect",
+                    "migrate",
+                    "apply",
+                    "--migration-revision",
+                    migration_plan_payload["migration_revision"],
+                    "--expected-manifest-sha256",
+                    migration_plan_payload["manifest_sha256"],
+                    "--workspace",
+                    str(outside),
+                    "--data-dir",
+                    str(data_dir),
+                    "--json",
+                ],
+                cwd=outside,
+                env=clean_environment,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            migration_apply_payload = json.loads(migration_apply.stdout)
+            self.assertEqual("migrated", migration_apply_payload["status"])
+            self.assertEqual(
+                migration_plan_payload["result_manifest_sha256"],
+                migration_apply_payload["manifest_sha256"],
+            )
+            self.assertNotIn(
+                legacy_secret,
+                migration_apply.stdout + migration_apply.stderr,
+            )
+            self.assertNotIn(
+                legacy_metadata,
+                migration_apply.stdout + migration_apply.stderr,
+            )
+            self.assertEqual(legacy_manifest_before, migration_backup.read_bytes())
+            self.assertEqual(
+                0o600,
+                stat.S_IMODE(migration_backup.stat().st_mode),
+            )
+            migrated_manifest = json.loads(
+                legacy_manifest.read_text(encoding="utf-8")
+            )
+            self.assertEqual(2, migrated_manifest["schema_version"])
+            self.assertEqual([legacy_source], migrated_manifest["sources"])
+            self.assertEqual(
+                {"value": legacy_metadata},
+                migrated_manifest["future_top_field"],
+            )
+
             installed_secret = "INSTALLED.REGISTRATION.SECRET.7b2e"
             (outside / ".env.agent").write_text(
                 f"PRIVATE_TOKEN={installed_secret}\nPUBLIC_MODE=demo\n",
@@ -1451,6 +1761,14 @@ class WheelInstallationTest(unittest.TestCase):
             )
             self.assertEqual("approved", json.loads(approval.stdout)["status"])
             self.assertNotIn(installed_secret, approval.stdout + approval.stderr)
+            registered_manifest = json.loads(
+                legacy_manifest.read_text(encoding="utf-8")
+            )
+            self.assertEqual(legacy_source, registered_manifest["sources"][0])
+            self.assertEqual(
+                {"value": legacy_metadata},
+                registered_manifest["future_top_field"],
+            )
             payload = {
                 "hook_event_name": "PreToolUse",
                 "session_id": "installed-session",
@@ -1478,9 +1796,103 @@ class WheelInstallationTest(unittest.TestCase):
                 text=True,
             )
             self.assertEqual("", hook.stdout)
+            post = subprocess.run(
+                [
+                    str(python),
+                    "-m",
+                    "tooluseproxy",
+                    "hook",
+                    "post-tool-use",
+                    "--data-dir",
+                    str(data_dir),
+                ],
+                cwd=outside,
+                env=clean_environment,
+                input=json.dumps(
+                    {
+                        **payload,
+                        "hook_event_name": "PostToolUse",
+                        "tool_response": {"output": "public"},
+                    }
+                ),
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual("", post.stdout)
+            stop = subprocess.run(
+                [
+                    str(python),
+                    "-m",
+                    "tooluseproxy",
+                    "hook",
+                    "stop",
+                    "--data-dir",
+                    str(data_dir),
+                ],
+                cwd=outside,
+                env=clean_environment,
+                input=json.dumps(
+                    {
+                        "hook_event_name": "Stop",
+                        "session_id": "installed-session",
+                        "turn_id": "installed-turn",
+                        "stop_hook_active": False,
+                        "cwd": str(outside),
+                        "last_assistant_message": "Public final answer.",
+                    }
+                ),
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual("", stop.stdout)
             with sqlite3.connect(db_path) as conn:
                 count = conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
-            self.assertEqual(1, count)
+                runtime_sources = conn.execute(
+                    """
+                    SELECT path, source_id, selector_json
+                    FROM protected_sources
+                    WHERE path IN ('.env.legacy', '.env.agent')
+                    ORDER BY path
+                    """
+                ).fetchall()
+                chunk_counts = {
+                    path: conn.execute(
+                        "SELECT COUNT(*) FROM source_chunks WHERE source_id = ?",
+                        (source_id,),
+                    ).fetchone()[0]
+                    for path, source_id, _ in runtime_sources
+                }
+                runtime_analysis = conn.execute(
+                    """
+                    SELECT config_json, completed_at
+                    FROM analysis_runs
+                    WHERE session_id = 'installed-session'
+                    ORDER BY started_at DESC, rowid DESC
+                    LIMIT 1
+                    """
+                ).fetchone()
+            self.assertEqual(3, count)
+            self.assertEqual(
+                [".env.agent", ".env.legacy"],
+                [path for path, _, _ in runtime_sources],
+            )
+            selectors = {
+                path: json.loads(selector_json)
+                for path, _, selector_json in runtime_sources
+            }
+            self.assertEqual(
+                {"dotenv_keys": ["PRIVATE_TOKEN"]},
+                selectors[".env.agent"],
+            )
+            self.assertIsNone(selectors[".env.legacy"])
+            self.assertEqual({".env.agent": 1, ".env.legacy": 1}, chunk_counts)
+            self.assertEqual(
+                "session-full",
+                json.loads(runtime_analysis[0])["runtime_reanalysis"],
+            )
+            self.assertIsNotNone(runtime_analysis[1])
 
 
 if __name__ == "__main__":

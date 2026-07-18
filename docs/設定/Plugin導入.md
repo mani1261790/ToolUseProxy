@@ -51,7 +51,7 @@ sh "<PLUGIN_ROOT>/hooks/run_cli.sh" status \
   --data-dir "<PLUGIN_DATA>"
 ```
 
-`status: active`になるには、DB schema、canonical workspace登録、`protected_sources.json`の3つが同じworkspaceについて有効である必要があります。schema v2 selectorを使うmanifestでは、`doctor` / `status`が宣言だけでなく現在fileのkey / JSON Pointer解決まで検証します。SQLite schema upgradeが必要な場合はHook内でmigrationせず、再度`init --codex`を実行します。
+`status: active`になるには、DB schema、canonical workspace登録、`protected_sources.json`の3つが同じworkspaceについて有効である必要があります。schema v2 selectorを使うmanifestでは、`doctor` / `status`が宣言だけでなく現在fileのkey / JSON Pointer解決まで検証します。schema省略またはschema v1のlegacy manifestはruntime互換として有効なため`active`を維持しますが、`runtime_readable: true`、`registration_writable: false`、`migration_required: true`として、新しいsourceを登録する前に明示migrationが必要であることを区別します。SQLite schema upgradeが必要な場合はHook内でmigrationせず、再度`init --codex`を実行します。
 
 ## safe default
 
@@ -61,7 +61,41 @@ sh "<PLUGIN_ROOT>/hooks/run_cli.sh" status \
 - MCP PreToolUse block: 既定では無効
 - runtime redact / `updatedInput`: 無効
 
-protected sourceは初期化時やHook実行中には自動登録しません。初期化が作るのは空のmanifestだけです。coding agentはユーザーが指定したworkspace内の`.env` / `.env.*` / JSON pathについて、次の2段階CLIを使えます。
+protected sourceは初期化時やHook実行中には自動登録しません。初期化が作るのは空のmanifestだけです。
+
+### legacy manifestの明示migration
+
+schema省略またはschema v1のlegacy manifestは、selectorなしの従来形式としてruntimeで読み続けます。`init`、通常のHook、`doctor`、`status`はこのmanifestを暗黙に書き換えません。新しいsourceを登録する前に、coding agentは次のvalue-freeなplanを取得します。
+
+```bash
+sh "<PLUGIN_ROOT>/hooks/run_cli.sh" protect migrate plan \
+  --workspace "$PWD" \
+  --data-dir "<PLUGIN_DATA>" \
+  --json
+```
+
+planはmanifestを変更せず、旧schemaが明示されていたか省略されていたか、移行先schema、source数、`sources`追加の要否、formatting policy、backup名、入力・結果manifest SHA-256、opaque migration revisionだけを返します。manifest本文、unknown fieldの値、source本文、selector候補は表示しません。移行は既存source entry、source配列と既存keyの相対順序、unknown top-level / source fieldを意味的に保持し、schema宣言だけをv2へ変更します。legacy manifestに`sources`がない場合だけ、従来の既定値と意味的に等価な空配列を補います。selectorは推測・追加しないため、既存sourceの保護範囲は移行前と同じです。
+
+coding agentはこの変更、selectorを追加しないこと、format正規化、backup作成をユーザーへ説明し、表示したexact planへの明示承認を待ちます。setupや別fileの編集許可、source登録依頼だけではmigration承認になりません。承認後だけ、planが返したrevisionと入力manifest SHA-256を変更せず渡します。
+
+```bash
+sh "<PLUGIN_ROOT>/hooks/run_cli.sh" protect migrate apply \
+  --migration-revision <MIGRATION_REVISION> \
+  --expected-manifest-sha256 <MANIFEST_SHA256> \
+  --workspace "$PWD" \
+  --data-dir "<PLUGIN_DATA>" \
+  --json
+```
+
+applyは任意の置換JSONを受け取らず、revisionに結び付いたplanだけをworkspace lock下で再検証します。元manifestのexact bytesは`PLUGIN_DATA`または明示`--data-dir`配下へ別inode・private modeのbackupとして保存し、v2 manifestはUTF-8、2-space indent、LF、末尾newlineへ正規化します。JSON comment、duplicate key、NaN / Infinityはstrict JSONとして受け入れません。manifestがplan後に変わった場合は適用せず、新しいplanを提示して再承認を得ます。途中停止やdurability不明時は同じrevisionとmanifest SHA-256でapplyを再実行します。
+
+workspace lockが直列化するのはToolUseProxyの協調writer同士です。同一UIDの非協調的な外部editorはlockに従わないため、filesystemの最終再検証からatomic replaceまで、またはdurability再確認から完了確定までの競合を含む直列化は保証外です。このmigration workflowはPOSIX（macOS/Linux）のみ対応し、Windowsでは未対応です。
+
+migration applyの承認はprotected source候補の承認を兼ねません。移行後に`doctor` / `status`でschema v2と`registration_writable: true`を確認し、対象sourceについて改めて次の提案・承認を行います。
+
+### protected sourceの提案と承認
+
+coding agentはユーザーが指定したworkspace内の`.env` / `.env.*` / JSON pathについて、次の2段階CLIを使えます。
 
 ```bash
 sh "<PLUGIN_ROOT>/hooks/run_cli.sh" protect suggest \
@@ -84,7 +118,7 @@ sh "<PLUGIN_ROOT>/hooks/run_cli.sh" protect approve <CANDIDATE_ID> \
 
 承認時はworkspace lockを取得してから候補を`proposed`から`approving`へ予約し、sourceのidentity・内容・selector解決とexpected manifest hashによる楽観的な事前条件を再検証します。lockは同一directoryの一時file、file fsync、atomic replace、directory fsync、DB確定または安全なreleaseまで保持し、その間の`reject` / `ignore`と別の承認試行を防ぎます。途中停止や一時的なstate errorでは、同じcandidate ID、opaque revision、manifest SHA-256のapprove入力を再実行します。exact登録の回復はdirectory fsyncと再検証に成功した後だけDBをapprovedへ進めます。workspace lockが直列化するのはToolUseProxyの協調writer同士です。同一UIDの非協調的な外部editorはlockに従わないため、filesystemの最終再検証からatomic replaceまで、またはdurability再確認からDB確定までの競合を含むfilesystem / DB横断の直列化は保証外です。sourceまたはmanifestが提案後に変わっていれば登録せず、再提案を要求します。`reject` / `ignore`は同じ内容・検出versionの再提示を抑止します。CLIは任意entryを承認時に受け取らないため、agentが提案JSONを書き換えて登録することはできません。この登録workflowは現在POSIX（macOS/Linux）のみ対応し、Windowsでは`protect suggest / approve / reject / ignore`を未対応とします。
 
-この段階の候補検出は明示pathだけです。workspace全体の探索、Hook中の探索、一括承認、無承認の自動登録は行いません。またschema v1またはschema省略のlegacy manifestは読み取り互換のままですが、このwriterでは暗黙にv2へ変更しません。v1→v2の自動migration CLIは未実装なため、明示的にreviewしたv2 migrationが完了するまでこの登録workflowは使えません。coding agentはlegacy manifestを独断で書き換えません。
+この段階の候補検出は明示pathだけです。workspace全体の探索、Hook中の探索、一括承認、無承認の自動登録は行いません。legacy manifestはruntime読み取り互換を維持し、coding agentは`protect migrate plan`を提示せずに独断でv2へ変更しません。
 
 ## package CLIの開発install
 
@@ -121,5 +155,5 @@ codex plugin marketplace remove tooluseproxy
 - 未trustのPlugin HookはCodex側でskipされます
 - Python 3.11が見つからない場合、launcherは理由をstderrへ出してfail-openします
 - DBがない、古い、新しすぎる、不完全な場合、runtime HookはDBを変更せずfail-openします
-- migrationは`init`だけが行い、通常のPlugin HookはDDLやbackfillを実行しません
+- SQLite migrationは`init`だけ、protected source manifestのv1→v2 migrationは明示承認後の`protect migrate apply`だけが行い、通常のPlugin HookはDDL、backfill、manifest migrationを実行しません
 - 壊れたmanifestや未登録workspaceは`doctor/status`でactive扱いにしません

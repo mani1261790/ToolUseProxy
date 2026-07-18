@@ -9,11 +9,15 @@ import secrets
 import stat
 from collections.abc import Mapping, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePath
 from typing import Iterator, Literal, NoReturn
 
 from hook_monitor.analysis.source_index import load_sources_and_chunks
+from hook_monitor.runtime.source_config import (
+    CURRENT_MANIFEST_SCHEMA_VERSION,
+    LEGACY_MANIFEST_SCHEMA_VERSION,
+)
 
 try:  # pragma: no cover - exercised on the supported POSIX runtime
     import fcntl
@@ -30,6 +34,10 @@ MAX_JSON_ITEMS = 4096
 MAX_SELECTOR_VALUES = 256
 MAX_SELECTOR_VALUE_BYTES = 4096
 MAX_MANIFEST_SOURCES = 256
+MANIFEST_MIGRATION_KIND = "protected_sources_manifest_v1_to_v2"
+MANIFEST_MIGRATION_WRITER_VERSION = "protected-source-manifest-migration-v1"
+MANIFEST_MIGRATION_FORMATTING_POLICY = "utf8_2_space_lf"
+MANIFEST_BACKUP_DIRECTORY = "manifest-backups"
 
 _DOTENV_ASSIGNMENT = re.compile(
     r"^(?:export\s+)?([A-Za-z_][A-Za-z0-9_.-]*)\s*=(.*)$"
@@ -102,6 +110,13 @@ _ERROR_MESSAGES = {
     "workspace_lock_unavailable": "exclusive workspace locking is unavailable",
     "manifest_durability_unknown": "protected_sources.json was replaced but durability is unknown",
     "manifest_postcondition_failed": "protected_sources.json update could not be verified",
+    "manifest_migration_not_required": "protected_sources.json is already schema version 2",
+    "manifest_migration_revision_invalid": "manifest migration revision does not match the reviewed plan",
+    "manifest_migration_conflict": "protected_sources.json changed after the migration plan was created",
+    "manifest_migration_validation_failed": "the migrated protected source manifest is invalid",
+    "manifest_backup_unavailable": "the private manifest backup directory is unavailable",
+    "manifest_backup_missing": "the original manifest backup required for recovery is missing",
+    "manifest_backup_conflict": "the original manifest backup does not match the reviewed migration",
 }
 
 
@@ -356,6 +371,72 @@ class CandidateReview:
         return self.to_public_payload()
 
 
+@dataclass(frozen=True)
+class ProtectedSourceManifestMigrationPlan:
+    status: Literal["review_required", "up_to_date"]
+    migration_id: str | None
+    migration_revision: str | None
+    from_schema_version: int
+    schema_version_was_omitted: bool
+    to_schema_version: int
+    source_count: int
+    sources_field_will_be_added: bool
+    manifest_sha256: str
+    result_manifest_sha256: str
+    backup_relative_path: str | None
+    encoded_manifest: bytes | None = field(default=None, repr=False, compare=False)
+
+    def to_public_payload(self) -> dict[str, object]:
+        return {
+            "schema_version": REGISTRATION_SCHEMA_VERSION,
+            "status": self.status,
+            "migration_kind": MANIFEST_MIGRATION_KIND,
+            "migration_id": self.migration_id,
+            "migration_revision": self.migration_revision,
+            "from_schema_version": self.from_schema_version,
+            "schema_version_was_omitted": self.schema_version_was_omitted,
+            "to_schema_version": self.to_schema_version,
+            "source_count": self.source_count,
+            "sources_field_will_be_added": self.sources_field_will_be_added,
+            "selector_changes": 0,
+            "manifest_sha256": self.manifest_sha256,
+            "result_manifest_sha256": self.result_manifest_sha256,
+            "backup_relative_path": self.backup_relative_path,
+            "formatting_policy": MANIFEST_MIGRATION_FORMATTING_POLICY,
+            "changes": (
+                []
+                if self.status == "up_to_date"
+                else [
+                    "set_schema_version_to_2",
+                    "preserve_source_semantics",
+                    "normalize_json_utf8_2_space_lf",
+                    "create_private_exact_byte_backup",
+                ]
+            ),
+            "review_required": self.status == "review_required",
+        }
+
+
+@dataclass(frozen=True)
+class ProtectedSourceManifestMigrationResult:
+    status: Literal["migrated", "already_migrated"]
+    migration_id: str
+    manifest_sha256: str
+    backup_relative_path: str
+
+    def to_public_payload(self) -> dict[str, object]:
+        return {
+            "schema_version": REGISTRATION_SCHEMA_VERSION,
+            "status": self.status,
+            "migration_kind": MANIFEST_MIGRATION_KIND,
+            "migration_id": self.migration_id,
+            "from_schema_version": LEGACY_MANIFEST_SCHEMA_VERSION,
+            "to_schema_version": CURRENT_MANIFEST_SCHEMA_VERSION,
+            "manifest_sha256": self.manifest_sha256,
+            "backup_relative_path": self.backup_relative_path,
+        }
+
+
 def suggest_protected_source(
     workspace_root: Path,
     relative_path: str,
@@ -430,6 +511,148 @@ def lock_protected_source_workspace(
     finally:
         workspace_lock._active = False
         os.close(root_fd)
+
+
+def plan_protected_source_manifest_migration(
+    workspace_root: Path,
+    *,
+    workspace_id: str,
+    backup_root: Path,
+) -> ProtectedSourceManifestMigrationPlan:
+    """Build a value-free, deterministic v1-to-v2 migration commitment."""
+
+    _validate_migration_workspace_id(workspace_id)
+    _validate_private_backup_root(backup_root)
+    with lock_protected_source_workspace(workspace_root) as workspace_lock:
+        root_fd, root_path, root_stat = _require_workspace_lock(
+            workspace_root,
+            workspace_lock,
+        )
+        manifest_text, manifest_binding = _read_manifest_text(
+            root_fd,
+            root_stat.st_dev,
+        )
+        payload, effective_schema, schema_was_omitted = (
+            _parse_manifest_for_migration(manifest_text, root_path)
+        )
+        _validate_runtime_manifest(root_path, workspace_id)
+        _verify_workspace_path(root_path, root_stat)
+        _, confirmed_binding = _read_manifest_text(root_fd, root_stat.st_dev)
+        if confirmed_binding != manifest_binding:
+            _raise("manifest_migration_conflict")
+        raw_sources = payload.get("sources", [])
+        assert isinstance(raw_sources, list)
+        if effective_schema == CURRENT_MANIFEST_SCHEMA_VERSION:
+            _parse_and_validate_manifest(manifest_text, root_path)
+            return ProtectedSourceManifestMigrationPlan(
+                status="up_to_date",
+                migration_id=None,
+                migration_revision=None,
+                from_schema_version=CURRENT_MANIFEST_SCHEMA_VERSION,
+                schema_version_was_omitted=False,
+                to_schema_version=CURRENT_MANIFEST_SCHEMA_VERSION,
+                source_count=len(raw_sources),
+                sources_field_will_be_added=False,
+                manifest_sha256=manifest_binding.sha256,
+                result_manifest_sha256=manifest_binding.sha256,
+                backup_relative_path=None,
+            )
+        plan = _build_manifest_migration_plan(
+            root_fd,
+            root_path,
+            root_stat.st_dev,
+            workspace_id=workspace_id,
+            manifest=payload,
+            manifest_binding=manifest_binding,
+            schema_version_was_omitted=schema_was_omitted,
+        )
+        # The public plan is a value-free commitment.  The canonical target
+        # bytes are recomputed from the bound original during apply and must
+        # not escape through an otherwise convenient dataclass attribute.
+        return replace(plan, encoded_manifest=None)
+
+
+def apply_protected_source_manifest_migration(
+    workspace_root: Path,
+    *,
+    workspace_id: str,
+    migration_revision: str,
+    expected_manifest_sha256: str,
+    backup_root: Path,
+) -> ProtectedSourceManifestMigrationResult:
+    """Apply or durably recover one exactly reviewed schema-only migration."""
+
+    _validate_migration_workspace_id(workspace_id)
+    _validate_migration_revision(migration_revision)
+    if (
+        not isinstance(expected_manifest_sha256, str)
+        or _HEX_SHA256.fullmatch(expected_manifest_sha256) is None
+    ):
+        _raise("manifest_migration_conflict")
+    _validate_private_backup_root(backup_root)
+    with lock_protected_source_workspace(workspace_root) as workspace_lock:
+        root_fd, root_path, root_stat = _require_workspace_lock(
+            workspace_root,
+            workspace_lock,
+        )
+        manifest_text, manifest_binding = _read_manifest_text(
+            root_fd,
+            root_stat.st_dev,
+        )
+        if hmac.compare_digest(
+            manifest_binding.sha256,
+            expected_manifest_sha256,
+        ):
+            payload, effective_schema, schema_was_omitted = (
+                _parse_manifest_for_migration(manifest_text, root_path)
+            )
+            if effective_schema != LEGACY_MANIFEST_SCHEMA_VERSION:
+                _raise("manifest_migration_conflict")
+            _validate_runtime_manifest(root_path, workspace_id)
+            plan = _build_manifest_migration_plan(
+                root_fd,
+                root_path,
+                root_stat.st_dev,
+                workspace_id=workspace_id,
+                manifest=payload,
+                manifest_binding=manifest_binding,
+                schema_version_was_omitted=schema_was_omitted,
+            )
+            _verify_reviewed_migration(plan, migration_revision)
+            assert plan.encoded_manifest is not None
+            assert plan.backup_relative_path is not None
+            assert plan.migration_id is not None
+            _ensure_manifest_backup(
+                backup_root,
+                plan.backup_relative_path,
+                manifest_text.encode("utf-8"),
+            )
+            installed_sha256 = _install_migrated_manifest(
+                root_fd,
+                root_path,
+                root_stat,
+                workspace_id=workspace_id,
+                initial_binding=manifest_binding,
+                encoded=plan.encoded_manifest,
+            )
+            return ProtectedSourceManifestMigrationResult(
+                status="migrated",
+                migration_id=plan.migration_id,
+                manifest_sha256=installed_sha256,
+                backup_relative_path=plan.backup_relative_path,
+            )
+
+        return _recover_applied_manifest_migration(
+            root_fd,
+            root_path,
+            root_stat,
+            workspace_id=workspace_id,
+            migration_revision=migration_revision,
+            expected_manifest_sha256=expected_manifest_sha256,
+            current_manifest_text=manifest_text,
+            current_manifest_binding=manifest_binding,
+            backup_root=backup_root,
+        )
 
 
 def approve_protected_source(
@@ -1232,6 +1455,423 @@ def _optional_binding_integer(value: object) -> object:
     return 0 if value is None else value
 
 
+def _validate_migration_workspace_id(workspace_id: str) -> None:
+    if (
+        not isinstance(workspace_id, str)
+        or not workspace_id
+        or len(workspace_id.encode("utf-8")) > 4096
+        or "\x00" in workspace_id
+    ):
+        _raise("candidate_invalid")
+
+
+def _validate_private_backup_root(backup_root: Path) -> None:
+    descriptor: int | None = None
+    try:
+        path = Path(os.path.abspath(os.fspath(backup_root)))
+        metadata = os.lstat(path)
+        if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+            _raise("manifest_backup_unavailable")
+        flags = os.O_RDONLY
+        flags |= getattr(os, "O_DIRECTORY", 0)
+        flags |= getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(path, flags)
+        opened = os.fstat(descriptor)
+        if (
+            not stat.S_ISDIR(opened.st_mode)
+            or opened.st_dev != metadata.st_dev
+            or opened.st_ino != metadata.st_ino
+            or stat.S_IMODE(opened.st_mode) & 0o077
+            or (hasattr(os, "geteuid") and opened.st_uid != os.geteuid())
+        ):
+            _raise("manifest_backup_unavailable")
+    except ProtectedSourceRegistrationError:
+        raise
+    except (OSError, TypeError, ValueError):
+        _raise("manifest_backup_unavailable")
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def _parse_manifest_for_migration(
+    text: str,
+    root_path: Path,
+    *,
+    validate_source_paths: bool = True,
+) -> tuple[dict[str, object], int, bool]:
+    try:
+        payload = _strict_json_loads(text, duplicate_code="manifest_invalid_json")
+    except ProtectedSourceRegistrationError:
+        _raise("manifest_invalid_json")
+    if not isinstance(payload, dict):
+        _raise("manifest_invalid_json")
+    schema_was_omitted = "schema_version" not in payload
+    schema_version = payload.get(
+        "schema_version",
+        LEGACY_MANIFEST_SCHEMA_VERSION,
+    )
+    if type(schema_version) is not int:
+        _raise("manifest_schema_invalid")
+    if schema_version > CURRENT_MANIFEST_SCHEMA_VERSION:
+        _raise("manifest_schema_future")
+    if schema_version not in {
+        LEGACY_MANIFEST_SCHEMA_VERSION,
+        CURRENT_MANIFEST_SCHEMA_VERSION,
+    }:
+        _raise("manifest_schema_invalid")
+    sources = payload.get("sources", [])
+    if not isinstance(sources, list):
+        _raise("manifest_sources_invalid")
+    if len(sources) > MAX_MANIFEST_SOURCES:
+        _raise("manifest_too_many_sources")
+
+    source_ids: set[str] = set()
+    canonical_paths: set[str] = set()
+    for source in sources:
+        if not isinstance(source, dict):
+            _raise("manifest_source_invalid")
+        source_id = source.get("id")
+        source_path = source.get("path")
+        source_type = source.get("type")
+        sensitivity = source.get("sensitivity")
+        policy_tags = source.get("policy_tags", [])
+        if (
+            not isinstance(source_id, str)
+            or not source_id.strip()
+            or not isinstance(source_path, str)
+            or not source_path.strip()
+            or not isinstance(source_type, str)
+            or not source_type.strip()
+            or not isinstance(sensitivity, str)
+            or not sensitivity.strip()
+            or not isinstance(policy_tags, list)
+            or not all(isinstance(tag, str) for tag in policy_tags)
+            or (
+                schema_version == LEGACY_MANIFEST_SCHEMA_VERSION
+                and "selector" in source
+            )
+        ):
+            _raise("manifest_source_invalid")
+        if source_id in source_ids:
+            _raise("manifest_duplicate_id")
+        source_ids.add(source_id)
+        if validate_source_paths:
+            canonical_path = _canonical_manifest_source_path(root_path, source_path)
+            if canonical_path in canonical_paths:
+                _raise("manifest_duplicate_path")
+            canonical_paths.add(canonical_path)
+    return payload, schema_version, schema_was_omitted
+
+
+def _validate_runtime_manifest(root_path: Path, workspace_id: str) -> None:
+    try:
+        load_sources_and_chunks(
+            root_path,
+            root_path / MANIFEST_FILENAME,
+            workspace_id=workspace_id,
+        )
+    except Exception:
+        _raise("manifest_migration_validation_failed")
+
+
+def _build_manifest_migration_plan(
+    root_fd: int,
+    root_path: Path,
+    root_device: int,
+    *,
+    workspace_id: str,
+    manifest: dict[str, object],
+    manifest_binding: FileBinding,
+    schema_version_was_omitted: bool,
+) -> ProtectedSourceManifestMigrationPlan:
+    schema_version = manifest.get(
+        "schema_version",
+        LEGACY_MANIFEST_SCHEMA_VERSION,
+    )
+    if schema_version != LEGACY_MANIFEST_SCHEMA_VERSION:
+        _raise("manifest_migration_not_required")
+    sources_field_will_be_added = "sources" not in manifest
+    raw_sources = manifest.get("sources", [])
+    if not isinstance(raw_sources, list):
+        _raise("manifest_sources_invalid")
+    validation_manifest = dict(manifest)
+    validation_manifest.setdefault("sources", [])
+    _preflight_manifest_sources(
+        root_fd,
+        root_path,
+        root_device,
+        validation_manifest,
+    )
+
+    encoded = _encode_migrated_manifest(
+        manifest,
+        schema_version_was_omitted=schema_version_was_omitted,
+    )
+    migrated = _strict_json_loads(encoded.decode("utf-8"), duplicate_code="manifest_invalid_json")
+    if not isinstance(migrated, dict):
+        _raise("manifest_migration_validation_failed")
+    validated = _parse_and_validate_manifest(encoded.decode("utf-8"), root_path)
+    if validated != migrated:
+        _raise("manifest_migration_validation_failed")
+    result_sha256 = hashlib.sha256(encoded).hexdigest()
+    backup_relative_path = _manifest_backup_relative_path(
+        workspace_id,
+        manifest_binding.sha256,
+    )
+    migration_id, migration_revision = _manifest_migration_commitment(
+        workspace_id=workspace_id,
+        manifest_sha256=manifest_binding.sha256,
+        result_manifest_sha256=result_sha256,
+        backup_relative_path=backup_relative_path,
+    )
+    return ProtectedSourceManifestMigrationPlan(
+        status="review_required",
+        migration_id=migration_id,
+        migration_revision=migration_revision,
+        from_schema_version=LEGACY_MANIFEST_SCHEMA_VERSION,
+        schema_version_was_omitted=schema_version_was_omitted,
+        to_schema_version=CURRENT_MANIFEST_SCHEMA_VERSION,
+        source_count=len(raw_sources),
+        sources_field_will_be_added=sources_field_will_be_added,
+        manifest_sha256=manifest_binding.sha256,
+        result_manifest_sha256=result_sha256,
+        backup_relative_path=backup_relative_path,
+        encoded_manifest=encoded,
+    )
+
+
+def _encode_migrated_manifest(
+    manifest: Mapping[str, object],
+    *,
+    schema_version_was_omitted: bool,
+) -> bytes:
+    if manifest.get(
+        "schema_version",
+        LEGACY_MANIFEST_SCHEMA_VERSION,
+    ) != LEGACY_MANIFEST_SCHEMA_VERSION:
+        _raise("manifest_migration_not_required")
+    if schema_version_was_omitted:
+        migrated: dict[str, object] = {
+            "schema_version": CURRENT_MANIFEST_SCHEMA_VERSION
+        }
+        migrated.update(manifest)
+    else:
+        migrated = dict(manifest)
+        migrated["schema_version"] = CURRENT_MANIFEST_SCHEMA_VERSION
+    migrated.setdefault("sources", [])
+    return _encode_manifest(migrated)
+
+
+def _manifest_backup_relative_path(
+    workspace_id: str,
+    manifest_sha256: str,
+) -> str:
+    namespace = hashlib.sha256(
+        (MANIFEST_MIGRATION_WRITER_VERSION + "\0" + workspace_id).encode("utf-8")
+    ).hexdigest()
+    return (
+        f"{MANIFEST_BACKUP_DIRECTORY}/{namespace}/"
+        f"protected_sources.schema-v1.{manifest_sha256}.json"
+    )
+
+
+def _manifest_migration_commitment(
+    *,
+    workspace_id: str,
+    manifest_sha256: str,
+    result_manifest_sha256: str,
+    backup_relative_path: str,
+) -> tuple[str, str]:
+    digest = hashlib.sha256(
+        _canonical_json_bytes(
+            {
+                "operation": MANIFEST_MIGRATION_KIND,
+                "writer_version": MANIFEST_MIGRATION_WRITER_VERSION,
+                "workspace_id": workspace_id,
+                "from_schema_version": LEGACY_MANIFEST_SCHEMA_VERSION,
+                "to_schema_version": CURRENT_MANIFEST_SCHEMA_VERSION,
+                "manifest_sha256": manifest_sha256,
+                "result_manifest_sha256": result_manifest_sha256,
+                "backup_relative_path": backup_relative_path,
+                "formatting_policy": MANIFEST_MIGRATION_FORMATTING_POLICY,
+            }
+        )
+    ).hexdigest()
+    return digest[:32], f"m1_{digest}"
+
+
+def _validate_migration_revision(migration_revision: str) -> None:
+    if (
+        not isinstance(migration_revision, str)
+        or re.fullmatch(r"m1_[0-9a-f]{64}", migration_revision) is None
+    ):
+        _raise("manifest_migration_revision_invalid")
+
+
+def _verify_reviewed_migration(
+    plan: ProtectedSourceManifestMigrationPlan,
+    migration_revision: str,
+) -> None:
+    if (
+        plan.status != "review_required"
+        or plan.migration_revision is None
+        or not hmac.compare_digest(plan.migration_revision, migration_revision)
+    ):
+        _raise("manifest_migration_revision_invalid")
+
+
+def _install_migrated_manifest(
+    root_fd: int,
+    root_path: Path,
+    root_stat: os.stat_result,
+    *,
+    workspace_id: str,
+    initial_binding: FileBinding,
+    encoded: bytes,
+) -> str:
+    temporary_name: str | None = None
+    try:
+        temporary_name = _write_temporary_manifest(root_fd, encoded)
+        temporary_path = root_path / temporary_name
+        _verify_workspace_path(root_path, root_stat)
+        try:
+            load_sources_and_chunks(
+                root_path,
+                temporary_path,
+                workspace_id=workspace_id,
+            )
+        except Exception:
+            _raise("manifest_migration_validation_failed")
+        _verify_temporary_file(root_fd, temporary_name, root_stat.st_dev, encoded)
+        _, final_binding = _read_manifest_text(root_fd, root_stat.st_dev)
+        if final_binding != initial_binding:
+            _raise("manifest_migration_conflict")
+        _verify_workspace_path(root_path, root_stat)
+        try:
+            os.replace(
+                temporary_name,
+                MANIFEST_FILENAME,
+                src_dir_fd=root_fd,
+                dst_dir_fd=root_fd,
+            )
+        except OSError:
+            _raise("manifest_write_failed")
+        temporary_name = None
+        try:
+            os.fsync(root_fd)
+        except OSError:
+            _raise("manifest_durability_unknown")
+        expected_sha256 = hashlib.sha256(encoded).hexdigest()
+        try:
+            _verify_workspace_path(root_path, root_stat)
+            installed_text, installed_binding = _read_manifest_text(
+                root_fd,
+                root_stat.st_dev,
+            )
+            if (
+                not hmac.compare_digest(installed_binding.sha256, expected_sha256)
+                or installed_text.encode("utf-8") != encoded
+            ):
+                _raise("manifest_postcondition_failed")
+            _parse_and_validate_manifest(installed_text, root_path)
+        except ProtectedSourceRegistrationError as exc:
+            if exc.code == "manifest_postcondition_failed":
+                raise
+            _raise("manifest_postcondition_failed")
+        return expected_sha256
+    finally:
+        if temporary_name is not None:
+            try:
+                os.unlink(temporary_name, dir_fd=root_fd)
+            except FileNotFoundError:
+                pass
+
+
+def _recover_applied_manifest_migration(
+    root_fd: int,
+    root_path: Path,
+    root_stat: os.stat_result,
+    *,
+    workspace_id: str,
+    migration_revision: str,
+    expected_manifest_sha256: str,
+    current_manifest_text: str,
+    current_manifest_binding: FileBinding,
+    backup_root: Path,
+) -> ProtectedSourceManifestMigrationResult:
+    backup_relative_path = _manifest_backup_relative_path(
+        workspace_id,
+        expected_manifest_sha256,
+    )
+    try:
+        _, effective_schema, _ = _parse_manifest_for_migration(
+            current_manifest_text,
+            root_path,
+            validate_source_paths=False,
+        )
+    except ProtectedSourceRegistrationError:
+        _raise("manifest_migration_conflict")
+    if effective_schema != CURRENT_MANIFEST_SCHEMA_VERSION:
+        _raise("manifest_migration_conflict")
+    migration_id, expected_revision = _manifest_migration_commitment(
+        workspace_id=workspace_id,
+        manifest_sha256=expected_manifest_sha256,
+        result_manifest_sha256=current_manifest_binding.sha256,
+        backup_relative_path=backup_relative_path,
+    )
+    if not hmac.compare_digest(expected_revision, migration_revision):
+        _raise("manifest_migration_revision_invalid")
+    backup_text, backup_binding = _read_manifest_backup(
+        backup_root,
+        backup_relative_path,
+        missing_code="manifest_backup_missing",
+    )
+    if not hmac.compare_digest(
+        backup_binding.sha256,
+        expected_manifest_sha256,
+    ):
+        _raise("manifest_backup_conflict")
+    backup_payload, backup_schema, schema_was_omitted = (
+        _parse_manifest_for_migration(
+            backup_text,
+            root_path,
+            validate_source_paths=False,
+        )
+    )
+    if backup_schema != LEGACY_MANIFEST_SCHEMA_VERSION:
+        _raise("manifest_backup_conflict")
+    expected_manifest = _encode_migrated_manifest(
+        backup_payload,
+        schema_version_was_omitted=schema_was_omitted,
+    )
+    if not hmac.compare_digest(
+        hashlib.sha256(expected_manifest).hexdigest(),
+        current_manifest_binding.sha256,
+    ) or current_manifest_text.encode("utf-8") != expected_manifest:
+        _raise("manifest_migration_conflict")
+    try:
+        os.fsync(root_fd)
+    except OSError:
+        _raise("manifest_durability_unknown")
+    _verify_workspace_path(root_path, root_stat)
+    confirmed_text, confirmed_binding = _read_manifest_text(
+        root_fd,
+        root_stat.st_dev,
+    )
+    if (
+        confirmed_binding != current_manifest_binding
+        or confirmed_text != current_manifest_text
+    ):
+        _raise("manifest_postcondition_failed")
+    return ProtectedSourceManifestMigrationResult(
+        status="already_migrated",
+        migration_id=migration_id,
+        manifest_sha256=confirmed_binding.sha256,
+        backup_relative_path=backup_relative_path,
+    )
+
+
 def _parse_and_validate_manifest(text: str, root_path: Path) -> dict[str, object]:
     try:
         payload = _strict_json_loads(text, duplicate_code="manifest_invalid_json")
@@ -1405,6 +2045,312 @@ def _encode_manifest(manifest: dict[str, object]) -> bytes:
     if len(encoded) > MAX_PROTECTED_FILE_BYTES:
         _raise("manifest_too_large")
     return encoded
+
+
+def _ensure_manifest_backup(
+    backup_root: Path,
+    backup_relative_path: str,
+    original_bytes: bytes,
+) -> FileBinding:
+    root_fd, backup_parent_fd, namespace_fd, filename = (
+        _open_private_backup_namespace(
+            backup_root,
+            backup_relative_path,
+            create=True,
+        )
+    )
+    temporary_name = f".{filename}.tmp"
+    temporary_fd: int | None = None
+    try:
+        _remove_recoverable_backup_temporary(namespace_fd, temporary_name)
+        existing = _read_private_backup_file(
+            namespace_fd,
+            filename,
+            missing_code=None,
+        )
+        if existing is not None:
+            existing_text, existing_binding = existing
+            if existing_text.encode("utf-8") != original_bytes:
+                _raise("manifest_backup_conflict")
+            try:
+                os.fsync(namespace_fd)
+            except OSError:
+                _raise("manifest_backup_unavailable")
+            return existing_binding
+
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        flags |= getattr(os, "O_NOFOLLOW", 0)
+        temporary_fd = os.open(
+            temporary_name,
+            flags,
+            0o600,
+            dir_fd=namespace_fd,
+        )
+        if os.name == "posix":
+            os.fchmod(temporary_fd, 0o600)
+        view = memoryview(original_bytes)
+        while view:
+            written = os.write(temporary_fd, view)
+            if written <= 0:
+                _raise("manifest_backup_unavailable")
+            view = view[written:]
+        os.fsync(temporary_fd)
+        temporary_stat = os.fstat(temporary_fd)
+        if (
+            not stat.S_ISREG(temporary_stat.st_mode)
+            or temporary_stat.st_nlink != 1
+            or stat.S_IMODE(temporary_stat.st_mode) != 0o600
+            or (
+                hasattr(os, "geteuid")
+                and temporary_stat.st_uid != os.geteuid()
+            )
+        ):
+            _raise("manifest_backup_unavailable")
+        os.close(temporary_fd)
+        temporary_fd = None
+        try:
+            os.link(
+                temporary_name,
+                filename,
+                src_dir_fd=namespace_fd,
+                dst_dir_fd=namespace_fd,
+                follow_symlinks=False,
+            )
+        except FileExistsError:
+            pass
+        os.unlink(temporary_name, dir_fd=namespace_fd)
+        try:
+            os.fsync(namespace_fd)
+        except OSError:
+            _raise("manifest_backup_unavailable")
+        installed = _read_private_backup_file(
+            namespace_fd,
+            filename,
+            missing_code="manifest_backup_missing",
+        )
+        assert installed is not None
+        installed_text, installed_binding = installed
+        if installed_text.encode("utf-8") != original_bytes:
+            _raise("manifest_backup_conflict")
+        return installed_binding
+    except ProtectedSourceRegistrationError:
+        raise
+    except (OSError, TypeError, ValueError):
+        _raise("manifest_backup_unavailable")
+    finally:
+        if temporary_fd is not None:
+            os.close(temporary_fd)
+        try:
+            os.unlink(temporary_name, dir_fd=namespace_fd)
+        except FileNotFoundError:
+            pass
+        os.close(namespace_fd)
+        os.close(backup_parent_fd)
+        os.close(root_fd)
+
+
+def _read_manifest_backup(
+    backup_root: Path,
+    backup_relative_path: str,
+    *,
+    missing_code: str,
+) -> tuple[str, FileBinding]:
+    root_fd, backup_parent_fd, namespace_fd, filename = (
+        _open_private_backup_namespace(
+            backup_root,
+            backup_relative_path,
+            create=False,
+        )
+    )
+    try:
+        result = _read_private_backup_file(
+            namespace_fd,
+            filename,
+            missing_code=missing_code,
+        )
+        assert result is not None
+        try:
+            os.fsync(namespace_fd)
+        except OSError:
+            _raise("manifest_backup_unavailable")
+        return result
+    finally:
+        os.close(namespace_fd)
+        os.close(backup_parent_fd)
+        os.close(root_fd)
+
+
+def _open_private_backup_namespace(
+    backup_root: Path,
+    backup_relative_path: str,
+    *,
+    create: bool,
+) -> tuple[int, int, int, str]:
+    parts = PurePath(backup_relative_path).parts
+    if (
+        len(parts) != 3
+        or parts[0] != MANIFEST_BACKUP_DIRECTORY
+        or _HEX_SHA256.fullmatch(parts[1]) is None
+        or re.fullmatch(
+            r"protected_sources\.schema-v1\.[0-9a-f]{64}\.json",
+            parts[2],
+        )
+        is None
+    ):
+        _raise("manifest_backup_unavailable")
+    root_fd = _open_private_backup_root(backup_root)
+    backup_parent_fd: int | None = None
+    namespace_fd: int | None = None
+    try:
+        backup_parent_fd = _open_or_create_private_directory(
+            root_fd,
+            parts[0],
+            create=create,
+        )
+        namespace_fd = _open_or_create_private_directory(
+            backup_parent_fd,
+            parts[1],
+            create=create,
+        )
+        return root_fd, backup_parent_fd, namespace_fd, parts[2]
+    except Exception:
+        if namespace_fd is not None:
+            os.close(namespace_fd)
+        if backup_parent_fd is not None:
+            os.close(backup_parent_fd)
+        os.close(root_fd)
+        raise
+
+
+def _open_private_backup_root(backup_root: Path) -> int:
+    descriptor: int | None = None
+    try:
+        path = Path(os.path.abspath(os.fspath(backup_root)))
+        metadata = os.lstat(path)
+        if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+            _raise("manifest_backup_unavailable")
+        flags = os.O_RDONLY
+        flags |= getattr(os, "O_DIRECTORY", 0)
+        flags |= getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(path, flags)
+        opened = os.fstat(descriptor)
+        if (
+            not stat.S_ISDIR(opened.st_mode)
+            or opened.st_dev != metadata.st_dev
+            or opened.st_ino != metadata.st_ino
+            or stat.S_IMODE(opened.st_mode) & 0o077
+            or (hasattr(os, "geteuid") and opened.st_uid != os.geteuid())
+        ):
+            _raise("manifest_backup_unavailable")
+        return descriptor
+    except ProtectedSourceRegistrationError:
+        if descriptor is not None:
+            os.close(descriptor)
+        raise
+    except (OSError, TypeError, ValueError):
+        if descriptor is not None:
+            os.close(descriptor)
+        _raise("manifest_backup_unavailable")
+
+
+def _open_or_create_private_directory(
+    parent_fd: int,
+    name: str,
+    *,
+    create: bool,
+) -> int:
+    if create:
+        try:
+            os.mkdir(name, 0o700, dir_fd=parent_fd)
+        except FileExistsError:
+            pass
+        except OSError:
+            _raise("manifest_backup_unavailable")
+        try:
+            os.fsync(parent_fd)
+        except OSError:
+            _raise("manifest_backup_unavailable")
+    flags = os.O_RDONLY
+    flags |= getattr(os, "O_DIRECTORY", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(name, flags, dir_fd=parent_fd)
+    except FileNotFoundError:
+        _raise("manifest_backup_missing")
+    except OSError:
+        _raise("manifest_backup_unavailable")
+    metadata = os.fstat(descriptor)
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or stat.S_IMODE(metadata.st_mode) != 0o700
+        or (hasattr(os, "geteuid") and metadata.st_uid != os.geteuid())
+    ):
+        os.close(descriptor)
+        _raise("manifest_backup_unavailable")
+    return descriptor
+
+
+def _read_private_backup_file(
+    namespace_fd: int,
+    filename: str,
+    *,
+    missing_code: str | None,
+) -> tuple[str, FileBinding] | None:
+    try:
+        before = os.stat(filename, dir_fd=namespace_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        if missing_code is None:
+            return None
+        _raise(missing_code)
+    except OSError:
+        _raise("manifest_backup_conflict")
+    if (
+        not stat.S_ISREG(before.st_mode)
+        or before.st_nlink != 1
+        or stat.S_IMODE(before.st_mode) != 0o600
+        or (hasattr(os, "geteuid") and before.st_uid != os.geteuid())
+    ):
+        _raise("manifest_backup_conflict")
+    text, binding = _read_relative_text(
+        namespace_fd,
+        filename,
+        root_device=os.fstat(namespace_fd).st_dev,
+        maximum_bytes=MAX_PROTECTED_FILE_BYTES,
+        unsafe_code="manifest_backup_conflict",
+        too_large_code="manifest_backup_conflict",
+        not_utf8_code="manifest_backup_conflict",
+    )
+    if before.st_dev != binding.device or before.st_ino != binding.inode:
+        _raise("manifest_backup_conflict")
+    return text, binding
+
+
+def _remove_recoverable_backup_temporary(
+    namespace_fd: int,
+    temporary_name: str,
+) -> None:
+    try:
+        metadata = os.stat(
+            temporary_name,
+            dir_fd=namespace_fd,
+            follow_symlinks=False,
+        )
+    except FileNotFoundError:
+        return
+    except OSError:
+        _raise("manifest_backup_conflict")
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_nlink not in {1, 2}
+        or stat.S_IMODE(metadata.st_mode) != 0o600
+        or (hasattr(os, "geteuid") and metadata.st_uid != os.geteuid())
+    ):
+        _raise("manifest_backup_conflict")
+    try:
+        os.unlink(temporary_name, dir_fd=namespace_fd)
+        os.fsync(namespace_fd)
+    except OSError:
+        _raise("manifest_backup_unavailable")
 
 
 def _write_temporary_manifest(root_fd: int, encoded: bytes) -> str:

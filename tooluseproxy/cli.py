@@ -16,6 +16,7 @@ from typing import Any, Sequence
 from hook_monitor.analysis.source_index import load_sources_and_chunks
 from hook_monitor.runtime.source_config import (
     CURRENT_MANIFEST_SCHEMA_VERSION,
+    LEGACY_MANIFEST_SCHEMA_VERSION,
     SourceConfigError,
 )
 from hook_monitor.runtime.storage import (
@@ -29,16 +30,21 @@ from tooluseproxy import __version__
 from tooluseproxy.integrations.codex import CODEX_HOOK_PHASES, run_codex_hook
 from tooluseproxy.paths import (
     PathConfigurationError,
+    RuntimePaths,
     prepare_data_directory,
     resolve_runtime_paths,
     secure_database_permissions,
 )
 from tooluseproxy.protected_sources import (
+    MAX_MANIFEST_SOURCES,
+    MAX_PROTECTED_FILE_BYTES,
     ProtectedSourceWorkspaceLock,
     ProtectedSourceRegistrationError,
     approve_protected_source,
+    apply_protected_source_manifest_migration,
     ignore_protected_source_candidate,
     lock_protected_source_workspace,
+    plan_protected_source_manifest_migration,
     reject_protected_source_candidate,
     suggest_protected_source,
 )
@@ -144,7 +150,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     protect = subparsers.add_parser(
         "protect",
-        help="Propose and explicitly approve protected source registrations.",
+        help="Plan and explicitly approve protected source manifest changes.",
     )
     protect_subparsers = protect.add_subparsers(dest="protect_command", required=True)
 
@@ -189,6 +195,40 @@ def _build_parser() -> argparse.ArgumentParser:
             help="Print machine-readable output.",
         )
         _add_runtime_path_arguments(decision_parser)
+
+    migrate = protect_subparsers.add_parser(
+        "migrate",
+        help="Plan or explicitly apply a protected source manifest migration.",
+    )
+    migrate_subparsers = migrate.add_subparsers(
+        dest="migration_command",
+        required=True,
+    )
+    migration_plan = migrate_subparsers.add_parser(
+        "plan",
+        help="Create a value-free schema v1 to v2 migration plan.",
+    )
+    migration_plan.add_argument("--workspace", type=Path, default=Path.cwd())
+    migration_plan.add_argument(
+        "--json",
+        action="store_true",
+        help="Print machine-readable output.",
+    )
+    _add_runtime_path_arguments(migration_plan)
+
+    migration_apply = migrate_subparsers.add_parser(
+        "apply",
+        help="Apply one explicitly reviewed manifest migration plan.",
+    )
+    migration_apply.add_argument("--migration-revision", required=True)
+    migration_apply.add_argument("--expected-manifest-sha256", required=True)
+    migration_apply.add_argument("--workspace", type=Path, default=Path.cwd())
+    migration_apply.add_argument(
+        "--json",
+        action="store_true",
+        help="Print machine-readable output.",
+    )
+    _add_runtime_path_arguments(migration_apply)
 
     trace = subparsers.add_parser("trace", help="Show source lineage for a stored analysis run.")
     trace.add_argument("arguments", nargs=argparse.REMAINDER)
@@ -308,8 +348,14 @@ def _run_doctor(args: argparse.Namespace) -> int:
     )
 
     manifest_path = workspace_path / MANIFEST_FILENAME
-    manifest_ok, manifest_detail = _inspect_manifest(manifest_path)
-    checks.append(_check("protected_sources", manifest_ok, manifest_detail))
+    protected_sources = _inspect_manifest(manifest_path)
+    checks.append(
+        _check(
+            "protected_sources",
+            bool(protected_sources["runtime_readable"]),
+            str(protected_sources["detail"]),
+        )
+    )
 
     plugin_root = os.environ.get("PLUGIN_ROOT")
     plugin_data = os.environ.get("PLUGIN_DATA")
@@ -344,6 +390,7 @@ def _run_doctor(args: argparse.Namespace) -> int:
         "workspace_id": workspace.workspace_id,
         "workspace_root": str(workspace_path),
         "checks": checks,
+        "protected_sources": protected_sources,
     }
     _render(payload, as_json=args.json)
     return 0 if ok else 1
@@ -357,11 +404,16 @@ def _run_status(args: argparse.Namespace) -> int:
         paths.db_path,
         workspace,
     )
-    manifest_ok, manifest_detail = _inspect_manifest(workspace_path / MANIFEST_FILENAME)
+    protected_sources = _inspect_manifest(workspace_path / MANIFEST_FILENAME)
     payload = {
         "status": (
             "active"
-            if workspace.ready and summary["ok"] and registration_ok and manifest_ok
+            if (
+                workspace.ready
+                and summary["ok"]
+                and registration_ok
+                and protected_sources["runtime_readable"]
+            )
             else "inactive"
         ),
         "version": __version__,
@@ -374,10 +426,7 @@ def _run_status(args: argparse.Namespace) -> int:
             "ok": registration_ok,
             "detail": registration_detail,
         },
-        "protected_sources": {
-            "ok": manifest_ok,
-            "detail": manifest_detail,
-        },
+        "protected_sources": protected_sources,
     }
     _render(payload, as_json=args.json)
     return 0 if payload["status"] == "active" else 1
@@ -385,7 +434,7 @@ def _run_status(args: argparse.Namespace) -> int:
 
 def _run_protect(args: argparse.Namespace) -> int:
     try:
-        store, workspace, workspace_path = _resolve_protect_context(args)
+        store, workspace, workspace_path, paths = _resolve_protect_context(args)
         if args.protect_command == "suggest":
             payload = _suggest_protected_sources(
                 store,
@@ -410,6 +459,23 @@ def _run_protect(args: argparse.Namespace) -> int:
                 candidate_revision=args.candidate_revision,
                 decision=args.protect_command,
             )
+        elif args.protect_command == "migrate":
+            assert workspace.workspace_id is not None
+            if args.migration_command == "plan":
+                migration = plan_protected_source_manifest_migration(
+                    workspace_path,
+                    workspace_id=workspace.workspace_id,
+                    backup_root=paths.data_dir,
+                )
+            else:
+                migration = apply_protected_source_manifest_migration(
+                    workspace_path,
+                    workspace_id=workspace.workspace_id,
+                    migration_revision=args.migration_revision,
+                    expected_manifest_sha256=args.expected_manifest_sha256,
+                    backup_root=paths.data_dir,
+                )
+            payload = migration.to_public_payload()
         else:  # pragma: no cover - argparse constrains this branch
             raise _ProtectCliError(
                 "unsupported_protect_command",
@@ -430,9 +496,18 @@ def _run_protect(args: argparse.Namespace) -> int:
         )
         return 1
     except ValueError:
+        migration_command = args.protect_command == "migrate"
         _render_protect_error(
-            "candidate_state_conflict",
-            "protected source candidate state changed; run suggest again",
+            (
+                "migration_state_conflict"
+                if migration_command
+                else "candidate_state_conflict"
+            ),
+            (
+                "protected source manifest changed; create a new migration plan"
+                if migration_command
+                else "protected source candidate state changed; run suggest again"
+            ),
             as_json=args.json,
         )
         return 1
@@ -443,7 +518,7 @@ def _run_protect(args: argparse.Namespace) -> int:
 
 def _resolve_protect_context(
     args: argparse.Namespace,
-) -> tuple[EventStore, WorkspaceContext, Path]:
+) -> tuple[EventStore, WorkspaceContext, Path, RuntimePaths]:
     paths = resolve_runtime_paths(db_path=args.db, data_dir=args.data_dir)
     workspace, workspace_path = _resolve_cli_workspace(args.workspace)
     if (
@@ -469,7 +544,7 @@ def _resolve_protect_context(
             "workspace_not_registered",
             "workspace is not registered; run tooluseproxy init first",
         )
-    return store, workspace, workspace_path
+    return store, workspace, workspace_path, paths
 
 
 def _suggest_protected_sources(
@@ -813,6 +888,28 @@ def _render_protect_payload(payload: dict[str, Any], *, as_json: bool) -> None:
         print(f"candidate_id: {payload['candidate_id']}")
     if "source_id" in payload:
         print(f"source_id: {payload['source_id']}")
+    for key in (
+        "migration_kind",
+        "migration_id",
+        "migration_revision",
+        "result_manifest_sha256",
+        "from_schema_version",
+        "to_schema_version",
+        "schema_version_was_omitted",
+        "source_count",
+        "sources_field_will_be_added",
+        "selector_changes",
+        "formatting_policy",
+        "backup_relative_path",
+        "changes",
+        "review_required",
+    ):
+        if key not in payload:
+            continue
+        value = payload[key]
+        if isinstance(value, (dict, list)):
+            value = json.dumps(value, ensure_ascii=False, sort_keys=True)
+        print(f"{key}: {value}")
 
 
 def _render_protect_error(code: str, message: str, *, as_json: bool) -> None:
@@ -946,18 +1043,166 @@ def _read_database_summary(db_path: Path) -> dict[str, Any]:
     }
 
 
-def _inspect_manifest(path: Path) -> tuple[bool, str]:
+def _inspect_manifest(path: Path) -> dict[str, object]:
     if not path.is_file():
-        return False, f"manifest not found: {path}"
+        return _manifest_inspection(
+            schema_version=None,
+            runtime_readable=False,
+            detail=f"manifest not found: {path}",
+        )
+    schema_version: int | None = None
+    manifest_text: str | None = None
+    try:
+        manifest_text = path.read_text(encoding="utf-8")
+        raw_payload = json.loads(manifest_text)
+        if isinstance(raw_payload, dict):
+            raw_schema_version = raw_payload.get(
+                "schema_version",
+                LEGACY_MANIFEST_SCHEMA_VERSION,
+            )
+            if type(raw_schema_version) is int:
+                schema_version = raw_schema_version
+    except (OSError, UnicodeError, json.JSONDecodeError, RecursionError):
+        pass
     try:
         sources, chunks = load_sources_and_chunks(path.parent, path)
     except (OSError, ValueError) as exc:
-        return False, f"manifest invalid: {type(exc).__name__}"
-    return (
-        True,
-        f"manifest valid; protected sources={len(sources)} "
-        f"source chunks={len(chunks)}",
+        return _manifest_inspection(
+            schema_version=schema_version,
+            runtime_readable=False,
+            detail=f"manifest invalid: {type(exc).__name__}",
+        )
+    try:
+        if manifest_text is None or path.read_text(encoding="utf-8") != manifest_text:
+            return _manifest_inspection(
+                schema_version=None,
+                runtime_readable=False,
+                detail="manifest changed during inspection",
+            )
+    except (OSError, UnicodeError):
+        return _manifest_inspection(
+            schema_version=None,
+            runtime_readable=False,
+            detail="manifest changed during inspection",
+        )
+    migration_required = schema_version == LEGACY_MANIFEST_SCHEMA_VERSION
+    registration_compatible = _registration_manifest_compatible(
+        path,
+        manifest_text,
     )
+    migration_detail = (
+        "; schema migration required before protected source registration"
+        if migration_required
+        else ""
+    )
+    registration_detail = (
+        "; registration writer requires a strict, safely replaceable manifest"
+        if (
+            schema_version == CURRENT_MANIFEST_SCHEMA_VERSION
+            and not registration_compatible
+        )
+        else ""
+    )
+    return _manifest_inspection(
+        schema_version=schema_version,
+        runtime_readable=True,
+        detail=(
+            f"manifest valid; protected sources={len(sources)} "
+            f"source chunks={len(chunks)}{migration_detail}{registration_detail}"
+        ),
+        registration_compatible=registration_compatible,
+    )
+
+
+def _manifest_inspection(
+    *,
+    schema_version: int | None,
+    runtime_readable: bool,
+    detail: str,
+    registration_compatible: bool = False,
+) -> dict[str, object]:
+    migration_required = bool(
+        runtime_readable
+        and schema_version == LEGACY_MANIFEST_SCHEMA_VERSION
+    )
+    return {
+        "ok": runtime_readable,
+        "detail": detail,
+        "schema_version": schema_version,
+        "runtime_readable": runtime_readable,
+        "registration_writable": bool(
+            runtime_readable
+            and schema_version == CURRENT_MANIFEST_SCHEMA_VERSION
+            and registration_compatible
+        ),
+        "migration_required": migration_required,
+    }
+
+
+def _registration_manifest_compatible(path: Path, text: str) -> bool:
+    """Match the registration writer's non-mutating manifest preconditions."""
+
+    try:
+        metadata = os.lstat(path)
+        workspace_metadata = os.stat(path.parent)
+    except OSError:
+        return False
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_nlink != 1
+        or metadata.st_dev != workspace_metadata.st_dev
+        or metadata.st_size > MAX_PROTECTED_FILE_BYTES
+    ):
+        return False
+
+    def reject_duplicate_pairs(
+        pairs: list[tuple[str, object]],
+    ) -> dict[str, object]:
+        result: dict[str, object] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("duplicate key")
+            result[key] = value
+        return result
+
+    def reject_non_finite(_: str) -> None:
+        raise ValueError("non-finite number")
+
+    try:
+        payload = json.loads(
+            text,
+            object_pairs_hook=reject_duplicate_pairs,
+            parse_constant=reject_non_finite,
+        )
+    except (json.JSONDecodeError, RecursionError, ValueError):
+        return False
+    if not isinstance(payload, dict):
+        return False
+    sources = payload.get("sources")
+    if not isinstance(sources, list) or len(sources) > MAX_MANIFEST_SOURCES:
+        return False
+
+    canonical_paths: set[str] = set()
+    root = os.path.abspath(path.parent)
+    for source in sources:
+        if not isinstance(source, dict):
+            return False
+        source_path = source.get("path")
+        if not isinstance(source_path, str) or not source_path.strip():
+            return False
+        try:
+            candidate = Path(source_path).expanduser()
+            if not candidate.is_absolute():
+                candidate = path.parent / candidate
+            canonical = os.path.abspath(os.path.normpath(candidate))
+            if os.path.commonpath((root, canonical)) != root:
+                return False
+        except (OSError, RuntimeError, TypeError, ValueError):
+            return False
+        if canonical in canonical_paths:
+            return False
+        canonical_paths.add(canonical)
+    return True
 
 
 def _inspect_data_directory_permissions(path: Path) -> tuple[bool, str]:
@@ -1042,8 +1287,19 @@ def _render(payload: dict[str, Any], *, as_json: bool) -> None:
             print(f"{name}: {count}")
     protected_sources = payload.get("protected_sources")
     if isinstance(protected_sources, dict):
-        marker = "ok" if protected_sources.get("ok") else "error"
-        print(f"[{marker}] protected_sources: {protected_sources.get('detail')}")
+        if not any(
+            item.get("name") == "protected_sources"
+            for item in payload.get("checks", [])
+        ):
+            marker = "ok" if protected_sources.get("ok") else "error"
+            print(f"[{marker}] protected_sources: {protected_sources.get('detail')}")
+        for key in (
+            "schema_version",
+            "runtime_readable",
+            "registration_writable",
+            "migration_required",
+        ):
+            print(f"protected_sources.{key}: {protected_sources.get(key)}")
     workspace_registration = payload.get("workspace_registration")
     if isinstance(workspace_registration, dict):
         marker = "ok" if workspace_registration.get("ok") else "error"
