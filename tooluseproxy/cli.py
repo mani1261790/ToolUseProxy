@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import hmac
 import json
 import os
 import sqlite3
 import stat
 import sys
 import tempfile
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -18,6 +21,7 @@ from hook_monitor.runtime.source_config import (
 from hook_monitor.runtime.storage import (
     CURRENT_SCHEMA_VERSION,
     EventStore,
+    ProtectedSourceCandidateStateError,
     SchemaCompatibilityError,
 )
 from hook_monitor.runtime.workspace import WorkspaceContext, resolve_workspace
@@ -29,9 +33,25 @@ from tooluseproxy.paths import (
     resolve_runtime_paths,
     secure_database_permissions,
 )
+from tooluseproxy.protected_sources import (
+    ProtectedSourceWorkspaceLock,
+    ProtectedSourceRegistrationError,
+    approve_protected_source,
+    ignore_protected_source_candidate,
+    lock_protected_source_workspace,
+    reject_protected_source_candidate,
+    suggest_protected_source,
+)
 
 
 MANIFEST_FILENAME = "protected_sources.json"
+PROTECT_OUTPUT_SCHEMA_VERSION = 1
+
+
+class _ProtectCliError(ValueError):
+    def __init__(self, code: str, message: str) -> None:
+        self.code = code
+        super().__init__(message)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -66,6 +86,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _run_doctor(args)
         if args.command == "status":
             return _run_status(args)
+        if args.command == "protect":
+            return _run_protect(args)
         if args.command == "trace":
             return _run_trace(args.arguments)
     except (
@@ -119,6 +141,54 @@ def _build_parser() -> argparse.ArgumentParser:
     status.add_argument("--workspace", type=Path, default=Path.cwd())
     status.add_argument("--json", action="store_true", help="Print machine-readable output.")
     _add_runtime_path_arguments(status)
+
+    protect = subparsers.add_parser(
+        "protect",
+        help="Propose and explicitly approve protected source registrations.",
+    )
+    protect_subparsers = protect.add_subparsers(dest="protect_command", required=True)
+
+    suggest = protect_subparsers.add_parser(
+        "suggest",
+        help="Inspect explicit local paths and create value-free proposals.",
+    )
+    suggest.add_argument(
+        "--path",
+        required=True,
+        help="One workspace-relative .env or JSON path.",
+    )
+    suggest.add_argument("--workspace", type=Path, default=Path.cwd())
+    suggest.add_argument("--json", action="store_true", help="Print machine-readable output.")
+    _add_runtime_path_arguments(suggest)
+
+    approve = protect_subparsers.add_parser(
+        "approve",
+        help=(
+            "Approve one saved proposal with revision and expected-manifest "
+            "precondition checks."
+        ),
+    )
+    approve.add_argument("candidate_id")
+    approve.add_argument("--candidate-revision", required=True)
+    approve.add_argument("--expected-manifest-sha256", required=True)
+    approve.add_argument("--workspace", type=Path, default=Path.cwd())
+    approve.add_argument("--json", action="store_true", help="Print machine-readable output.")
+    _add_runtime_path_arguments(approve)
+
+    for decision in ("reject", "ignore"):
+        decision_parser = protect_subparsers.add_parser(
+            decision,
+            help=f"{decision.capitalize()} one saved proposal without changing the manifest.",
+        )
+        decision_parser.add_argument("candidate_id")
+        decision_parser.add_argument("--candidate-revision", required=True)
+        decision_parser.add_argument("--workspace", type=Path, default=Path.cwd())
+        decision_parser.add_argument(
+            "--json",
+            action="store_true",
+            help="Print machine-readable output.",
+        )
+        _add_runtime_path_arguments(decision_parser)
 
     trace = subparsers.add_parser("trace", help="Show source lineage for a stored analysis run.")
     trace.add_argument("arguments", nargs=argparse.REMAINDER)
@@ -311,6 +381,456 @@ def _run_status(args: argparse.Namespace) -> int:
     }
     _render(payload, as_json=args.json)
     return 0 if payload["status"] == "active" else 1
+
+
+def _run_protect(args: argparse.Namespace) -> int:
+    try:
+        store, workspace, workspace_path = _resolve_protect_context(args)
+        if args.protect_command == "suggest":
+            payload = _suggest_protected_sources(
+                store,
+                workspace,
+                workspace_path,
+                (args.path,),
+            )
+        elif args.protect_command == "approve":
+            payload = _approve_protected_source_candidate(
+                store,
+                workspace,
+                workspace_path,
+                candidate_id=args.candidate_id,
+                candidate_revision=args.candidate_revision,
+                expected_manifest_sha256=args.expected_manifest_sha256,
+            )
+        elif args.protect_command in {"reject", "ignore"}:
+            payload = _review_protected_source_candidate(
+                store,
+                workspace,
+                candidate_id=args.candidate_id,
+                candidate_revision=args.candidate_revision,
+                decision=args.protect_command,
+            )
+        else:  # pragma: no cover - argparse constrains this branch
+            raise _ProtectCliError(
+                "unsupported_protect_command",
+                "protected source command is not supported",
+            )
+    except (
+        ProtectedSourceCandidateStateError,
+        ProtectedSourceRegistrationError,
+        _ProtectCliError,
+    ) as exc:
+        _render_protect_error(exc.code, str(exc), as_json=args.json)
+        return 1
+    except (OSError, PathConfigurationError, SchemaCompatibilityError, sqlite3.Error):
+        _render_protect_error(
+            "state_unavailable",
+            "protected source state is unavailable",
+            as_json=args.json,
+        )
+        return 1
+    except ValueError:
+        _render_protect_error(
+            "candidate_state_conflict",
+            "protected source candidate state changed; run suggest again",
+            as_json=args.json,
+        )
+        return 1
+
+    _render_protect_payload(payload, as_json=args.json)
+    return 0
+
+
+def _resolve_protect_context(
+    args: argparse.Namespace,
+) -> tuple[EventStore, WorkspaceContext, Path]:
+    paths = resolve_runtime_paths(db_path=args.db, data_dir=args.data_dir)
+    workspace, workspace_path = _resolve_cli_workspace(args.workspace)
+    if (
+        not workspace.ready
+        or workspace.workspace_id is None
+        or workspace.canonical_root is None
+    ):
+        raise _ProtectCliError(
+            "workspace_unavailable",
+            "workspace is not usable for protected source registration",
+        )
+    store = EventStore(paths.db_path)
+    try:
+        store.require_runtime_schema()
+    except SchemaCompatibilityError as exc:
+        raise _ProtectCliError(
+            exc.code,
+            "database requires tooluseproxy init before protected source registration",
+        ) from None
+    registration_ok, _ = _inspect_workspace_registration(paths.db_path, workspace)
+    if not registration_ok:
+        raise _ProtectCliError(
+            "workspace_not_registered",
+            "workspace is not registered; run tooluseproxy init first",
+        )
+    return store, workspace, workspace_path
+
+
+def _suggest_protected_sources(
+    store: EventStore,
+    workspace: WorkspaceContext,
+    workspace_path: Path,
+    relative_paths: tuple[str, ...],
+) -> dict[str, Any]:
+    with lock_protected_source_workspace(workspace_path) as workspace_lock:
+        return _suggest_protected_sources_under_lock(
+            store,
+            workspace,
+            workspace_path,
+            relative_paths,
+            workspace_lock=workspace_lock,
+        )
+
+
+def _suggest_protected_sources_under_lock(
+    store: EventStore,
+    workspace: WorkspaceContext,
+    workspace_path: Path,
+    relative_paths: tuple[str, ...],
+    *,
+    workspace_lock: ProtectedSourceWorkspaceLock,
+) -> dict[str, Any]:
+    assert workspace.workspace_id is not None
+    candidates: list[dict[str, object]] = []
+    manifest_sha256: str | None = None
+    suppressed_count = 0
+    already_registered_count = 0
+    approval_in_progress_count = 0
+    for relative_path in relative_paths:
+        try:
+            candidate = suggest_protected_source(
+                workspace_path,
+                relative_path,
+                workspace_id=workspace.workspace_id,
+            )
+        except ProtectedSourceRegistrationError as exc:
+            if exc.code == "no_secret_selector":
+                continue
+            raise
+        if manifest_sha256 is None:
+            manifest_sha256 = candidate.manifest_sha256
+        elif manifest_sha256 != candidate.manifest_sha256:
+            raise _ProtectCliError(
+                "manifest_changed",
+                "protected_sources.json changed during suggestion",
+            )
+        candidate_storage_record = candidate.to_storage_record(
+            discovery_source="explicit_path"
+        )
+        if candidate.already_registered:
+            confirmed = approve_protected_source(
+                workspace_path,
+                candidate,
+                candidate_revision=candidate.candidate_revision,
+                expected_manifest_sha256=candidate.manifest_sha256,
+                workspace_lock=workspace_lock,
+            )
+            manifest_sha256 = confirmed.manifest_sha256
+            reconcilable = (
+                store.select_registered_protected_source_candidate_for_reconcile(
+                    workspace.workspace_id,
+                    candidate.suppression_fingerprint,
+                    proposed_source_json=str(
+                        candidate_storage_record["proposed_source_json"]
+                    ),
+                    approved_source_id=confirmed.source_id,
+                )
+            )
+            if reconcilable is not None:
+                store.reconcile_registered_protected_source_candidate(
+                    reconcilable.candidate_id,
+                    workspace.workspace_id,
+                    candidate.suppression_fingerprint,
+                    approval_attempt_id=reconcilable.approval_attempt_id,
+                    proposed_source_json=str(
+                        candidate_storage_record["proposed_source_json"]
+                    ),
+                    result_manifest_sha256=confirmed.manifest_sha256,
+                    approved_source_id=confirmed.source_id,
+                )
+            already_registered_count += 1
+            continue
+        created = store.create_or_get_protected_source_candidate(
+            **candidate_storage_record
+        )
+        if created.suppressed:
+            suppressed_count += 1
+            continue
+        if created.already_approved:
+            already_registered_count += 1
+            continue
+        if created.approval_in_progress:
+            approval_in_progress_count += 1
+            continue
+        if (
+            created.candidate.candidate_revision_sha256
+            != candidate.candidate_revision_sha256
+        ):
+            raise _ProtectCliError(
+                "candidate_state_conflict",
+                "protected source candidate changed during suggestion",
+            )
+        candidate = candidate.with_candidate_id(created.candidate.candidate_id)
+        candidates.append(candidate.to_public_payload())
+
+    if candidates:
+        status = "review_required"
+    elif approval_in_progress_count:
+        status = "approval_in_progress"
+    elif suppressed_count:
+        status = "suppressed"
+    else:
+        status = "no_candidate"
+    return {
+        "schema_version": PROTECT_OUTPUT_SCHEMA_VERSION,
+        "status": status,
+        "scan_complete": True,
+        "manifest_sha256": manifest_sha256,
+        "candidates": candidates,
+        "suppressed_count": suppressed_count,
+        "already_registered_count": already_registered_count,
+        "approval_in_progress_count": approval_in_progress_count,
+    }
+
+
+def _approve_protected_source_candidate(
+    store: EventStore,
+    workspace: WorkspaceContext,
+    workspace_path: Path,
+    *,
+    candidate_id: str,
+    candidate_revision: str,
+    expected_manifest_sha256: str,
+) -> dict[str, object]:
+    with lock_protected_source_workspace(workspace_path) as workspace_lock:
+        return _approve_protected_source_candidate_under_lock(
+            store,
+            workspace,
+            workspace_path,
+            candidate_id=candidate_id,
+            candidate_revision=candidate_revision,
+            expected_manifest_sha256=expected_manifest_sha256,
+            workspace_lock=workspace_lock,
+        )
+
+
+def _approve_protected_source_candidate_under_lock(
+    store: EventStore,
+    workspace: WorkspaceContext,
+    workspace_path: Path,
+    *,
+    candidate_id: str,
+    candidate_revision: str,
+    expected_manifest_sha256: str,
+    workspace_lock: ProtectedSourceWorkspaceLock,
+) -> dict[str, object]:
+    stored = _load_workspace_candidate(store, workspace, candidate_id)
+    _verify_stored_candidate_revision(stored.candidate_revision_sha256, candidate_revision)
+    if stored.status not in {"proposed", "approving", "approved"}:
+        raise _ProtectCliError(
+            "candidate_not_proposed",
+            "candidate is not awaiting approval",
+        )
+    record = asdict(stored)
+    if stored.status == "approved":
+        result = approve_protected_source(
+            workspace_path,
+            record,
+            candidate_revision=candidate_revision,
+            expected_manifest_sha256=expected_manifest_sha256,
+            workspace_lock=workspace_lock,
+        )
+        return result.to_public_payload()
+
+    if stored.status == "approving":
+        if (
+            stored.manifest_sha256 is None
+            or not hmac.compare_digest(
+                stored.manifest_sha256,
+                expected_manifest_sha256,
+            )
+        ):
+            raise ProtectedSourceRegistrationError("manifest_conflict")
+        claimed = stored
+    else:
+        claimed = store.claim_protected_source_candidate_approval(
+            stored.candidate_id,
+            expected_revision_sha256=stored.candidate_revision_sha256,
+            expected_manifest_sha256=expected_manifest_sha256,
+        )
+    approval_attempt_id = claimed.approval_attempt_id
+    if approval_attempt_id is None:
+        raise _ProtectCliError(
+            "candidate_state_conflict",
+            "candidate approval reservation is invalid",
+        )
+    record = asdict(claimed)
+    try:
+        result = approve_protected_source(
+            workspace_path,
+            record,
+            candidate_revision=candidate_revision,
+            expected_manifest_sha256=expected_manifest_sha256,
+            workspace_lock=workspace_lock,
+        )
+    except ProtectedSourceRegistrationError as exc:
+        if exc.code not in {
+            "manifest_durability_unknown",
+            "manifest_postcondition_failed",
+        }:
+            decision_code = {
+                "source_changed": "source_changed",
+                "manifest_conflict": "manifest_changed",
+            }.get(exc.code, "approval_released")
+            store.release_protected_source_candidate_approval(
+                claimed.candidate_id,
+                approval_attempt_id=approval_attempt_id,
+                expected_revision_sha256=claimed.candidate_revision_sha256,
+                expected_manifest_sha256=claimed.manifest_sha256,
+                result_manifest_sha256=None,
+                decision_code=decision_code,
+            )
+        raise
+
+    try:
+        store.finalize_protected_source_candidate_approval(
+            claimed.candidate_id,
+            approval_attempt_id=approval_attempt_id,
+            expected_revision_sha256=claimed.candidate_revision_sha256,
+            expected_manifest_sha256=claimed.manifest_sha256,
+            result_manifest_sha256=result.manifest_sha256,
+            approved_source_id=result.source_id,
+            decision_code=(
+                "approved" if result.status == "approved" else "already_registered"
+            ),
+        )
+    except ProtectedSourceCandidateStateError:
+        current = _load_workspace_candidate(store, workspace, claimed.candidate_id)
+        if not (
+            current.status == "approved"
+            and current.approved_source_id == result.source_id
+            and current.manifest_sha256 == result.manifest_sha256
+        ):
+            raise
+    return result.to_public_payload()
+
+
+def _review_protected_source_candidate(
+    store: EventStore,
+    workspace: WorkspaceContext,
+    *,
+    candidate_id: str,
+    candidate_revision: str,
+    decision: str,
+) -> dict[str, object]:
+    stored = _load_workspace_candidate(store, workspace, candidate_id)
+    if stored.status != "proposed":
+        raise _ProtectCliError(
+            "candidate_not_proposed",
+            "candidate is not awaiting review",
+        )
+    record = asdict(stored)
+    if decision == "reject":
+        review = reject_protected_source_candidate(
+            record,
+            candidate_revision=candidate_revision,
+        )
+        next_status = "rejected"
+    else:
+        review = ignore_protected_source_candidate(
+            record,
+            candidate_revision=candidate_revision,
+        )
+        next_status = "ignored"
+    store.transition_protected_source_candidate(
+        stored.candidate_id,
+        expected_status="proposed",
+        expected_revision_sha256=stored.candidate_revision_sha256,
+        to_status=next_status,
+        decision_code=next_status,
+        authority="cli_explicit",
+        expected_manifest_sha256=stored.manifest_sha256,
+        result_manifest_sha256=None,
+    )
+    return review.to_public_payload()
+
+
+def _load_workspace_candidate(
+    store: EventStore,
+    workspace: WorkspaceContext,
+    candidate_id: str,
+):
+    try:
+        candidate = store.get_protected_source_candidate(candidate_id)
+    except ValueError:
+        raise _ProtectCliError(
+            "candidate_not_found",
+            "protected source candidate was not found",
+        ) from None
+    if candidate is None or candidate.workspace_id != workspace.workspace_id:
+        raise _ProtectCliError(
+            "candidate_not_found",
+            "protected source candidate was not found",
+        )
+    return candidate
+
+
+def _verify_stored_candidate_revision(
+    expected_revision_sha256: str,
+    candidate_revision: str,
+) -> None:
+    if (
+        not isinstance(candidate_revision, str)
+        or not candidate_revision
+        or len(candidate_revision) > 256
+    ):
+        raise ProtectedSourceRegistrationError("candidate_revision_invalid")
+    try:
+        encoded = candidate_revision.encode("ascii")
+    except UnicodeEncodeError:
+        raise ProtectedSourceRegistrationError("candidate_revision_invalid") from None
+    supplied_sha256 = hashlib.sha256(encoded).hexdigest()
+    if not hmac.compare_digest(supplied_sha256, expected_revision_sha256):
+        raise ProtectedSourceRegistrationError("candidate_revision_invalid")
+
+
+def _render_protect_payload(payload: dict[str, Any], *, as_json: bool) -> None:
+    if as_json:
+        print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+        return
+    print(f"status: {payload['status']}")
+    if payload.get("manifest_sha256") is not None:
+        print(f"manifest_sha256: {payload['manifest_sha256']}")
+    for candidate in payload.get("candidates", []):
+        print(json.dumps(candidate, ensure_ascii=False, sort_keys=True))
+    if "candidate_id" in payload:
+        print(f"candidate_id: {payload['candidate_id']}")
+    if "source_id" in payload:
+        print(f"source_id: {payload['source_id']}")
+
+
+def _render_protect_error(code: str, message: str, *, as_json: bool) -> None:
+    if as_json:
+        print(
+            json.dumps(
+                {
+                    "schema_version": PROTECT_OUTPUT_SCHEMA_VERSION,
+                    "status": "error",
+                    "error": {"code": code, "message": message},
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
+            file=sys.stderr,
+        )
+        return
+    print(f"tooluseproxy: {code}: {message}", file=sys.stderr)
 
 
 def _run_trace(arguments: list[str]) -> int:

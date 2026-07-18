@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import sqlite3
@@ -53,6 +54,9 @@ from hook_monitor.runtime.models import (
     LineageAssignment,
     NormalizedEvent,
     ProtectedSource,
+    ProtectedSourceCandidate,
+    ProtectedSourceCandidateCreateResult,
+    ProtectedSourceCandidateReview,
     RedactionAuditCleanupResult,
     ResourceVersion,
     ResourceSnapshot,
@@ -84,7 +88,7 @@ if TYPE_CHECKING:
 
 
 DEFAULT_DB_PATH = Path(".tooluseproxy/events.db")
-CURRENT_SCHEMA_VERSION = 2
+CURRENT_SCHEMA_VERSION = 4
 RUNTIME_REQUIRED_TABLES = frozenset(
     {
         "analysis_cursors",
@@ -105,6 +109,8 @@ RUNTIME_REQUIRED_TABLES = frozenset(
         "information_flow_edges",
         "lineage_assignments",
         "policy_decisions",
+        "protected_source_candidate_reviews",
+        "protected_source_candidates",
         "protected_sources",
         "redaction_decision_links",
         "redaction_plans",
@@ -158,6 +164,49 @@ RUNTIME_REQUIRED_COLUMNS = {
             "selector_json",
         }
     ),
+    "protected_source_candidates": frozenset(
+        {
+            "candidate_id",
+            "candidate_revision_sha256",
+            "workspace_id",
+            "relative_path",
+            "detector_version",
+            "discovery_source",
+            "rule_ids_json",
+            "confidence",
+            "proposed_source_json",
+            "source_sha256",
+            "source_size",
+            "source_mtime_ns",
+            "source_device",
+            "source_inode",
+            "manifest_sha256",
+            "suppression_fingerprint",
+            "status",
+            "approved_source_id",
+            "approval_attempt_id",
+            "approval_started_at",
+            "created_at",
+            "updated_at",
+            "reviewed_at",
+        }
+    ),
+    "protected_source_candidate_reviews": frozenset(
+        {
+            "review_id",
+            "candidate_id",
+            "from_status",
+            "to_status",
+            "decision_code",
+            "authority",
+            "expected_candidate_revision_sha256",
+            "result_candidate_revision_sha256",
+            "expected_manifest_sha256",
+            "result_manifest_sha256",
+            "approval_attempt_id",
+            "recorded_at",
+        }
+    ),
 }
 LEGACY_DERIVED_WORKSPACE_ID = "legacy_unscoped"
 WORKSPACE_ANALYSIS_INPUT_REVISION_VERSION = "workspace-analysis-input-v2"
@@ -169,6 +218,123 @@ REDACTION_AUDIT_MAX_SINK_METADATA_BYTES = 64 * 1024
 REDACTION_AUDIT_MAX_SINK_BYTES_TOTAL = 512 * 1024
 _EVENT_PAYLOAD_METADATA_VERSION = "event-payload-metadata-v1"
 _LOWER_SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
+PROTECTED_SOURCE_CANDIDATE_STATUSES = frozenset(
+    {"proposed", "approving", "approved", "rejected", "ignored", "stale"}
+)
+PROTECTED_SOURCE_CANDIDATE_DECISION_CODES = frozenset(
+    {
+        "proposed",
+        "approved",
+        "rejected",
+        "ignored",
+        "source_changed",
+        "manifest_changed",
+        "already_registered",
+        "reconciled_approved",
+        "approval_started",
+        "approval_released",
+    }
+)
+PROTECTED_SOURCE_CANDIDATE_AUTHORITIES = frozenset({"cli_explicit", "system_reconcile"})
+_PROTECTED_SOURCE_CANDIDATE_IDENTIFIER_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}\Z")
+_PROTECTED_SOURCE_CANDIDATE_MAX_PATH_BYTES = 4096
+_PROTECTED_SOURCE_CANDIDATE_MAX_RULES = 32
+_PROTECTED_SOURCE_CANDIDATE_SOURCE_KEYS = frozenset(
+    {"id", "path", "type", "sensitivity", "policy_tags", "selector"}
+)
+_PROTECTED_SOURCE_CANDIDATE_SELECT_COLUMNS = """
+    candidate_id,
+    candidate_revision_sha256,
+    workspace_id,
+    relative_path,
+    detector_version,
+    discovery_source,
+    rule_ids_json,
+    confidence,
+    proposed_source_json,
+    source_sha256,
+    source_size,
+    source_mtime_ns,
+    source_device,
+    source_inode,
+    manifest_sha256,
+    suppression_fingerprint,
+    status,
+    approved_source_id,
+    approval_attempt_id,
+    approval_started_at,
+    created_at,
+    updated_at,
+    reviewed_at
+"""
+_PROTECTED_SOURCE_CANDIDATE_REVIEW_SELECT_COLUMNS = """
+    review_id,
+    candidate_id,
+    from_status,
+    to_status,
+    decision_code,
+    authority,
+    expected_candidate_revision_sha256,
+    result_candidate_revision_sha256,
+    expected_manifest_sha256,
+    result_manifest_sha256,
+    approval_attempt_id,
+    recorded_at
+"""
+RUNTIME_REQUIRED_INDEXES = {
+    "idx_protected_source_candidates_workspace_suppression": (
+        "protected_source_candidates",
+        True,
+        ("workspace_id", "suppression_fingerprint"),
+    ),
+    "idx_protected_source_candidates_status": (
+        "protected_source_candidates",
+        False,
+        ("workspace_id", "status", "created_at", "candidate_id"),
+    ),
+    "idx_protected_source_candidates_path": (
+        "protected_source_candidates",
+        False,
+        ("workspace_id", "relative_path", "created_at", "candidate_id"),
+    ),
+    "idx_protected_source_candidate_reviews": (
+        "protected_source_candidate_reviews",
+        False,
+        ("candidate_id", "recorded_at", "review_id"),
+    ),
+}
+RUNTIME_REQUIRED_TRIGGERS = {
+    "protected_source_candidate_reviews_no_update": (
+        "protected_source_candidate_reviews",
+        "BEFORE UPDATE",
+    ),
+    "protected_source_candidate_reviews_no_delete": (
+        "protected_source_candidate_reviews",
+        "BEFORE DELETE",
+    ),
+}
+RUNTIME_REQUIRED_TABLE_SQL_FRAGMENTS = {
+    "protected_source_candidates": (
+        "STATUS IN ( 'PROPOSED', 'APPROVING', 'APPROVED', "
+        "'REJECTED', 'IGNORED', 'STALE' )",
+        "STATUS = 'APPROVING'",
+        "APPROVAL_ATTEMPT_ID IS NOT NULL",
+        "APPROVAL_STARTED_AT IS NOT NULL",
+        "STATUS != 'APPROVING'",
+        "APPROVAL_ATTEMPT_ID IS NULL",
+        "APPROVAL_STARTED_AT IS NULL",
+    ),
+    "protected_source_candidate_reviews": (
+        "FROM_STATUS IN ( 'ABSENT', 'PROPOSED', 'APPROVING', 'APPROVED', "
+        "'REJECTED', 'IGNORED', 'STALE' )",
+        "TO_STATUS IN ( 'PROPOSED', 'APPROVING', 'APPROVED', "
+        "'REJECTED', 'IGNORED', 'STALE' )",
+        "'APPROVAL_STARTED'",
+        "'APPROVAL_RELEASED'",
+        "'RECONCILED_APPROVED'",
+        "AUTHORITY IN ('CLI_EXPLICIT', 'SYSTEM_RECONCILE')",
+    ),
+}
 _EVENT_PAYLOAD_METADATA_COLUMNS = """
     event_id,
     metadata_version,
@@ -192,6 +358,14 @@ _EVENT_PAYLOAD_METADATA_COLUMNS = """
 
 class SchemaCompatibilityError(RuntimeError):
     """Raised when a Hook runtime cannot safely use the current database."""
+
+    def __init__(self, code: str, detail: str) -> None:
+        super().__init__(detail)
+        self.code = code
+
+
+class ProtectedSourceCandidateStateError(ValueError):
+    """Raised when a protected-source candidate CAS cannot be completed."""
 
     def __init__(self, code: str, detail: str) -> None:
         super().__init__(detail)
@@ -498,6 +672,7 @@ class EventStore:
                 "selector_json",
                 "TEXT NOT NULL DEFAULT 'null'",
             )
+            self._initialize_protected_source_candidate_state(conn)
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS resource_snapshots (
@@ -908,6 +1083,48 @@ class EventStore:
             )
             conn.execute(
                 """
+                CREATE UNIQUE INDEX IF NOT EXISTS
+                    idx_protected_source_candidates_workspace_suppression
+                ON protected_source_candidates (
+                    workspace_id,
+                    suppression_fingerprint
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_protected_source_candidates_status
+                ON protected_source_candidates (
+                    workspace_id,
+                    status,
+                    created_at,
+                    candidate_id
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_protected_source_candidates_path
+                ON protected_source_candidates (
+                    workspace_id,
+                    relative_path,
+                    created_at,
+                    candidate_id
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_protected_source_candidate_reviews
+                ON protected_source_candidate_reviews (
+                    candidate_id,
+                    recorded_at,
+                    review_id
+                )
+                """
+            )
+            conn.execute(
+                """
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_source_chunks_workspace_ordinal
                 ON source_chunks (workspace_id, source_id, ordinal)
                 WHERE workspace_id IS NOT NULL
@@ -1158,12 +1375,13 @@ class EventStore:
             with sqlite3.connect(uri, uri=True, timeout=0.05) as conn:
                 row = conn.execute("PRAGMA user_version").fetchone()
                 version = 0 if row is None else int(row[0])
-                tables = {
-                    item[0]
+                table_definitions = {
+                    item[0]: str(item[1] or "")
                     for item in conn.execute(
-                        "SELECT name FROM sqlite_master WHERE type = 'table'"
+                        "SELECT name, sql FROM sqlite_master WHERE type = 'table'"
                     ).fetchall()
                 }
+                tables = set(table_definitions)
                 columns = {
                     table: {
                         item[1]
@@ -1173,6 +1391,43 @@ class EventStore:
                     }
                     for table in RUNTIME_REQUIRED_COLUMNS
                     if table in tables
+                }
+                indexes: dict[str, tuple[str, bool, tuple[str, ...]]] = {}
+                for index_name, (table, _, _) in RUNTIME_REQUIRED_INDEXES.items():
+                    if table not in tables:
+                        continue
+                    index_row = next(
+                        (
+                            item
+                            for item in conn.execute(
+                                f"PRAGMA index_list({table})"
+                            ).fetchall()
+                            if item[1] == index_name
+                        ),
+                        None,
+                    )
+                    if index_row is None:
+                        continue
+                    index_columns = tuple(
+                        item[2]
+                        for item in conn.execute(
+                            f"PRAGMA index_info({index_name})"
+                        ).fetchall()
+                    )
+                    indexes[index_name] = (
+                        table,
+                        bool(index_row[2]),
+                        index_columns,
+                    )
+                triggers = {
+                    item[0]: (item[1], str(item[2] or ""))
+                    for item in conn.execute(
+                        """
+                        SELECT name, tbl_name, sql
+                        FROM sqlite_master
+                        WHERE type = 'trigger'
+                        """
+                    ).fetchall()
                 }
         except sqlite3.Error as exc:
             raise SchemaCompatibilityError(
@@ -1208,6 +1463,57 @@ class EventStore:
             raise SchemaCompatibilityError(
                 "schema_incomplete",
                 f"database schema is incomplete: {detail}",
+            )
+        incomplete_constraints = sorted(
+            table
+            for table, required_fragments in (
+                RUNTIME_REQUIRED_TABLE_SQL_FRAGMENTS.items()
+            )
+            if any(
+                fragment
+                not in " ".join(table_definitions.get(table, "").upper().split())
+                for fragment in required_fragments
+            )
+        )
+        if incomplete_constraints:
+            raise SchemaCompatibilityError(
+                "schema_incomplete",
+                "database schema is incomplete: constraints "
+                + ", ".join(incomplete_constraints),
+            )
+        incomplete_indexes = sorted(
+            index_name
+            for index_name, expected in RUNTIME_REQUIRED_INDEXES.items()
+            if indexes.get(index_name) != expected
+        )
+        if incomplete_indexes:
+            raise SchemaCompatibilityError(
+                "schema_incomplete",
+                "database schema is incomplete: indexes "
+                + ", ".join(incomplete_indexes),
+            )
+        incomplete_triggers: list[str] = []
+        for trigger_name, (expected_table, expected_event) in (
+            RUNTIME_REQUIRED_TRIGGERS.items()
+        ):
+            trigger = triggers.get(trigger_name)
+            if trigger is None:
+                incomplete_triggers.append(trigger_name)
+                continue
+            actual_table, trigger_sql = trigger
+            normalized_sql = " ".join(trigger_sql.upper().split())
+            if (
+                actual_table != expected_table
+                or expected_event not in normalized_sql
+                or "RAISE" not in normalized_sql
+                or "ABORT" not in normalized_sql
+            ):
+                incomplete_triggers.append(trigger_name)
+        if incomplete_triggers:
+            raise SchemaCompatibilityError(
+                "schema_incomplete",
+                "database schema is incomplete: triggers "
+                + ", ".join(sorted(incomplete_triggers)),
             )
 
     def record(
@@ -6547,6 +6853,907 @@ class EventStore:
             ).fetchall()
         return [_protected_source_from_row(row) for row in rows]
 
+    def create_or_get_protected_source_candidate(
+        self,
+        *,
+        candidate_revision_sha256: str,
+        workspace_id: str,
+        relative_path: str,
+        detector_version: str,
+        discovery_source: str,
+        rule_ids: tuple[str, ...],
+        confidence: float,
+        proposed_source_json: str,
+        source_sha256: str,
+        source_size: int,
+        source_mtime_ns: int,
+        source_device: int | None,
+        source_inode: int | None,
+        manifest_sha256: str | None,
+        suppression_fingerprint: str,
+    ) -> ProtectedSourceCandidateCreateResult:
+        """Create a value-free proposal or return its exact prior disposition."""
+        canonical_source_json, rule_ids_json = _validate_protected_source_candidate_proposal(
+            candidate_revision_sha256=candidate_revision_sha256,
+            workspace_id=workspace_id,
+            relative_path=relative_path,
+            detector_version=detector_version,
+            discovery_source=discovery_source,
+            rule_ids=rule_ids,
+            confidence=confidence,
+            proposed_source_json=proposed_source_json,
+            source_sha256=source_sha256,
+            source_size=source_size,
+            source_mtime_ns=source_mtime_ns,
+            source_device=source_device,
+            source_inode=source_inode,
+            manifest_sha256=manifest_sha256,
+            suppression_fingerprint=suppression_fingerprint,
+        )
+        candidate_id = uuid.uuid4().hex
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            self._validate_registered_workspace(conn, workspace_id)
+            row = conn.execute(
+                f"""
+                SELECT {_PROTECTED_SOURCE_CANDIDATE_SELECT_COLUMNS}
+                FROM protected_source_candidates
+                WHERE workspace_id = ? AND suppression_fingerprint = ?
+                """,
+                (workspace_id, suppression_fingerprint),
+            ).fetchone()
+            if row is None:
+                conn.execute(
+                    """
+                    INSERT INTO protected_source_candidates (
+                        candidate_id,
+                        candidate_revision_sha256,
+                        workspace_id,
+                        relative_path,
+                        detector_version,
+                        discovery_source,
+                        rule_ids_json,
+                        confidence,
+                        proposed_source_json,
+                        source_sha256,
+                        source_size,
+                        source_mtime_ns,
+                        source_device,
+                        source_inode,
+                        manifest_sha256,
+                        suppression_fingerprint,
+                        status
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'proposed')
+                    """,
+                    (
+                        candidate_id,
+                        candidate_revision_sha256,
+                        workspace_id,
+                        relative_path,
+                        detector_version,
+                        discovery_source,
+                        rule_ids_json,
+                        confidence,
+                        canonical_source_json,
+                        source_sha256,
+                        source_size,
+                        source_mtime_ns,
+                        source_device,
+                        source_inode,
+                        manifest_sha256,
+                        suppression_fingerprint,
+                    ),
+                )
+                _append_protected_source_candidate_review(
+                    conn,
+                    candidate_id=candidate_id,
+                    from_status="absent",
+                    to_status="proposed",
+                    decision_code="proposed",
+                    authority="cli_explicit",
+                    expected_candidate_revision_sha256=None,
+                    result_candidate_revision_sha256=candidate_revision_sha256,
+                    expected_manifest_sha256=manifest_sha256,
+                    result_manifest_sha256=manifest_sha256,
+                )
+                row = conn.execute(
+                    f"""
+                    SELECT {_PROTECTED_SOURCE_CANDIDATE_SELECT_COLUMNS}
+                    FROM protected_source_candidates
+                    WHERE candidate_id = ?
+                    """,
+                    (candidate_id,),
+                ).fetchone()
+                assert row is not None
+                return ProtectedSourceCandidateCreateResult(
+                    candidate=_protected_source_candidate_from_row(row),
+                    created=True,
+                    suppressed=False,
+                    already_approved=False,
+                    approval_in_progress=False,
+                )
+
+            existing = _protected_source_candidate_from_row(row)
+            if existing.status in {"rejected", "ignored"}:
+                return ProtectedSourceCandidateCreateResult(
+                    candidate=existing,
+                    created=False,
+                    suppressed=True,
+                    already_approved=False,
+                    approval_in_progress=False,
+                )
+            if existing.status == "approving":
+                return ProtectedSourceCandidateCreateResult(
+                    candidate=existing,
+                    created=False,
+                    suppressed=False,
+                    already_approved=False,
+                    approval_in_progress=True,
+                )
+            if (
+                existing.status == "approved"
+                and existing.manifest_sha256 == manifest_sha256
+            ):
+                return ProtectedSourceCandidateCreateResult(
+                    candidate=existing,
+                    created=False,
+                    suppressed=False,
+                    already_approved=True,
+                    approval_in_progress=False,
+                )
+            if existing.status not in {"proposed", "approved", "stale"}:
+                return ProtectedSourceCandidateCreateResult(
+                    candidate=existing,
+                    created=False,
+                    suppressed=False,
+                    already_approved=False,
+                    approval_in_progress=False,
+                )
+            if candidate_revision_sha256 == existing.candidate_revision_sha256:
+                raise ValueError("candidate revision must rotate on rediscovery")
+            cursor = conn.execute(
+                """
+                UPDATE protected_source_candidates
+                SET
+                    candidate_revision_sha256 = ?,
+                    relative_path = ?,
+                    detector_version = ?,
+                    discovery_source = ?,
+                    rule_ids_json = ?,
+                    confidence = ?,
+                    proposed_source_json = ?,
+                    source_sha256 = ?,
+                    source_size = ?,
+                    source_mtime_ns = ?,
+                    source_device = ?,
+                    source_inode = ?,
+                    manifest_sha256 = ?,
+                    status = 'proposed',
+                    approved_source_id = NULL,
+                    approval_attempt_id = NULL,
+                    approval_started_at = NULL,
+                    updated_at = CURRENT_TIMESTAMP,
+                    reviewed_at = NULL
+                WHERE candidate_id = ?
+                  AND status = ?
+                  AND candidate_revision_sha256 = ?
+                  AND manifest_sha256 IS ?
+                """,
+                (
+                    candidate_revision_sha256,
+                    relative_path,
+                    detector_version,
+                    discovery_source,
+                    rule_ids_json,
+                    confidence,
+                    canonical_source_json,
+                    source_sha256,
+                    source_size,
+                    source_mtime_ns,
+                    source_device,
+                    source_inode,
+                    manifest_sha256,
+                    existing.candidate_id,
+                    existing.status,
+                    existing.candidate_revision_sha256,
+                    existing.manifest_sha256,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("protected source candidate changed before rediscovery")
+            _append_protected_source_candidate_review(
+                conn,
+                candidate_id=existing.candidate_id,
+                from_status=existing.status,
+                to_status="proposed",
+                decision_code="proposed",
+                authority="cli_explicit",
+                expected_candidate_revision_sha256=(existing.candidate_revision_sha256),
+                result_candidate_revision_sha256=candidate_revision_sha256,
+                expected_manifest_sha256=existing.manifest_sha256,
+                result_manifest_sha256=manifest_sha256,
+            )
+            row = conn.execute(
+                f"""
+                SELECT {_PROTECTED_SOURCE_CANDIDATE_SELECT_COLUMNS}
+                FROM protected_source_candidates
+                WHERE candidate_id = ?
+                """,
+                (existing.candidate_id,),
+            ).fetchone()
+            assert row is not None
+            return ProtectedSourceCandidateCreateResult(
+                candidate=_protected_source_candidate_from_row(row),
+                created=False,
+                suppressed=False,
+                already_approved=False,
+                approval_in_progress=False,
+            )
+
+    def get_protected_source_candidate(
+        self,
+        candidate_id: str,
+    ) -> ProtectedSourceCandidate | None:
+        _validate_protected_source_candidate_id(candidate_id)
+        with self._connect() as conn:
+            row = conn.execute(
+                f"""
+                SELECT {_PROTECTED_SOURCE_CANDIDATE_SELECT_COLUMNS}
+                FROM protected_source_candidates
+                WHERE candidate_id = ?
+                """,
+                (candidate_id,),
+            ).fetchone()
+        return None if row is None else _protected_source_candidate_from_row(row)
+
+    def list_protected_source_candidates(
+        self,
+        workspace_id: str,
+        *,
+        statuses: tuple[str, ...] | None = None,
+        limit: int = 256,
+    ) -> list[ProtectedSourceCandidate]:
+        _validate_protected_source_candidate_workspace_id(workspace_id)
+        if type(limit) is not int or not 1 <= limit <= 1024:
+            raise ValueError("candidate list limit must be between 1 and 1024")
+        if statuses is not None:
+            if (
+                not isinstance(statuses, tuple)
+                or not statuses
+                or any(
+                    not isinstance(status, str)
+                    or status not in PROTECTED_SOURCE_CANDIDATE_STATUSES
+                    for status in statuses
+                )
+                or len(set(statuses)) != len(statuses)
+            ):
+                raise ValueError("candidate statuses are invalid")
+            placeholders = ",".join("?" for _ in statuses)
+            status_filter = f"AND status IN ({placeholders})"
+            parameters: tuple[object, ...] = (workspace_id, *statuses, limit)
+        else:
+            status_filter = ""
+            parameters = (workspace_id, limit)
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT {_PROTECTED_SOURCE_CANDIDATE_SELECT_COLUMNS}
+                FROM protected_source_candidates
+                WHERE workspace_id = ? {status_filter}
+                ORDER BY created_at DESC, candidate_id DESC
+                LIMIT ?
+                """,
+                parameters,
+            ).fetchall()
+        return [_protected_source_candidate_from_row(row) for row in rows]
+
+    def list_protected_source_candidate_reviews(
+        self,
+        candidate_id: str,
+    ) -> list[ProtectedSourceCandidateReview]:
+        _validate_protected_source_candidate_id(candidate_id)
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT {_PROTECTED_SOURCE_CANDIDATE_REVIEW_SELECT_COLUMNS}
+                FROM protected_source_candidate_reviews
+                WHERE candidate_id = ?
+                ORDER BY rowid
+                """,
+                (candidate_id,),
+            ).fetchall()
+        return [_protected_source_candidate_review_from_row(row) for row in rows]
+
+    def transition_protected_source_candidate(
+        self,
+        candidate_id: str,
+        *,
+        expected_status: str,
+        expected_revision_sha256: str,
+        to_status: str,
+        decision_code: str,
+        authority: str,
+        expected_manifest_sha256: str | None,
+        result_manifest_sha256: str | None,
+        approved_source_id: str | None = None,
+    ) -> ProtectedSourceCandidate:
+        return self._transition_protected_source_candidate(
+            candidate_id,
+            expected_status=expected_status,
+            expected_revision_sha256=expected_revision_sha256,
+            to_status=to_status,
+            decision_code=decision_code,
+            authority=authority,
+            expected_manifest_sha256=expected_manifest_sha256,
+            result_manifest_sha256=result_manifest_sha256,
+            approved_source_id=approved_source_id,
+        )
+
+    def claim_protected_source_candidate_approval(
+        self,
+        candidate_id: str,
+        *,
+        expected_revision_sha256: str,
+        expected_manifest_sha256: str | None,
+        authority: str = "cli_explicit",
+    ) -> ProtectedSourceCandidate:
+        _validate_protected_source_candidate_id(candidate_id)
+        _validate_candidate_sha256(expected_revision_sha256, "expected revision")
+        _validate_optional_candidate_sha256(expected_manifest_sha256, "expected manifest")
+        _validate_protected_source_candidate_authority(authority)
+        approval_attempt_id = uuid.uuid4().hex
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            candidate = self._load_protected_source_candidate_for_transition(
+                conn,
+                candidate_id,
+            )
+            if candidate.status == "approving":
+                raise ProtectedSourceCandidateStateError(
+                    "approval_in_progress",
+                    "protected source candidate approval is already in progress",
+                )
+            _validate_candidate_transition_cas(
+                candidate,
+                expected_status="proposed",
+                expected_revision_sha256=expected_revision_sha256,
+                expected_manifest_sha256=expected_manifest_sha256,
+            )
+            cursor = conn.execute(
+                """
+                UPDATE protected_source_candidates
+                SET
+                    status = 'approving',
+                    approval_attempt_id = ?,
+                    approval_started_at = CURRENT_TIMESTAMP,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE candidate_id = ?
+                  AND status = 'proposed'
+                  AND candidate_revision_sha256 = ?
+                  AND manifest_sha256 IS ?
+                  AND approval_attempt_id IS NULL
+                """,
+                (
+                    approval_attempt_id,
+                    candidate_id,
+                    expected_revision_sha256,
+                    expected_manifest_sha256,
+                ),
+            )
+            _require_candidate_cas(cursor, "approval_claim_conflict")
+            _append_protected_source_candidate_review(
+                conn,
+                candidate_id=candidate_id,
+                from_status="proposed",
+                to_status="approving",
+                decision_code="approval_started",
+                authority=authority,
+                expected_candidate_revision_sha256=expected_revision_sha256,
+                result_candidate_revision_sha256=expected_revision_sha256,
+                expected_manifest_sha256=expected_manifest_sha256,
+                result_manifest_sha256=expected_manifest_sha256,
+                approval_attempt_id=approval_attempt_id,
+            )
+            return self._load_protected_source_candidate_for_transition(
+                conn,
+                candidate_id,
+            )
+
+    def finalize_protected_source_candidate_approval(
+        self,
+        candidate_id: str,
+        *,
+        approval_attempt_id: str,
+        expected_revision_sha256: str,
+        expected_manifest_sha256: str | None,
+        result_manifest_sha256: str,
+        approved_source_id: str,
+        decision_code: str,
+        authority: str = "cli_explicit",
+    ) -> ProtectedSourceCandidate:
+        _validate_candidate_approval_result(
+            candidate_id=candidate_id,
+            approval_attempt_id=approval_attempt_id,
+            expected_revision_sha256=expected_revision_sha256,
+            expected_manifest_sha256=expected_manifest_sha256,
+            result_manifest_sha256=result_manifest_sha256,
+            approved_source_id=approved_source_id,
+            decision_code=decision_code,
+            authority=authority,
+        )
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            candidate = self._load_protected_source_candidate_for_transition(
+                conn,
+                candidate_id,
+            )
+            _validate_candidate_transition_cas(
+                candidate,
+                expected_status="approving",
+                expected_revision_sha256=expected_revision_sha256,
+                expected_manifest_sha256=expected_manifest_sha256,
+                approval_attempt_id=approval_attempt_id,
+            )
+            cursor = conn.execute(
+                """
+                UPDATE protected_source_candidates
+                SET
+                    manifest_sha256 = ?,
+                    status = 'approved',
+                    approved_source_id = ?,
+                    approval_attempt_id = NULL,
+                    approval_started_at = NULL,
+                    updated_at = CURRENT_TIMESTAMP,
+                    reviewed_at = CURRENT_TIMESTAMP
+                WHERE candidate_id = ?
+                  AND status = 'approving'
+                  AND candidate_revision_sha256 = ?
+                  AND manifest_sha256 IS ?
+                  AND approval_attempt_id = ?
+                """,
+                (
+                    result_manifest_sha256,
+                    approved_source_id,
+                    candidate_id,
+                    expected_revision_sha256,
+                    expected_manifest_sha256,
+                    approval_attempt_id,
+                ),
+            )
+            _require_candidate_cas(cursor, "approval_finalize_conflict")
+            _append_protected_source_candidate_review(
+                conn,
+                candidate_id=candidate_id,
+                from_status="approving",
+                to_status="approved",
+                decision_code=decision_code,
+                authority=authority,
+                expected_candidate_revision_sha256=expected_revision_sha256,
+                result_candidate_revision_sha256=expected_revision_sha256,
+                expected_manifest_sha256=expected_manifest_sha256,
+                result_manifest_sha256=result_manifest_sha256,
+                approval_attempt_id=approval_attempt_id,
+            )
+            return self._load_protected_source_candidate_for_transition(
+                conn,
+                candidate_id,
+            )
+
+    def release_protected_source_candidate_approval(
+        self,
+        candidate_id: str,
+        *,
+        approval_attempt_id: str,
+        expected_revision_sha256: str,
+        expected_manifest_sha256: str | None,
+        result_manifest_sha256: str | None,
+        decision_code: str,
+        authority: str = "cli_explicit",
+    ) -> ProtectedSourceCandidate:
+        _validate_candidate_approval_release(
+            candidate_id=candidate_id,
+            approval_attempt_id=approval_attempt_id,
+            expected_revision_sha256=expected_revision_sha256,
+            expected_manifest_sha256=expected_manifest_sha256,
+            result_manifest_sha256=result_manifest_sha256,
+            decision_code=decision_code,
+            authority=authority,
+        )
+        to_status = (
+            "proposed" if decision_code == "approval_released" else "stale"
+        )
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            candidate = self._load_protected_source_candidate_for_transition(
+                conn,
+                candidate_id,
+            )
+            _validate_candidate_transition_cas(
+                candidate,
+                expected_status="approving",
+                expected_revision_sha256=expected_revision_sha256,
+                expected_manifest_sha256=expected_manifest_sha256,
+                approval_attempt_id=approval_attempt_id,
+            )
+            next_manifest_sha256 = (
+                expected_manifest_sha256
+                if result_manifest_sha256 is None
+                else result_manifest_sha256
+            )
+            cursor = conn.execute(
+                """
+                UPDATE protected_source_candidates
+                SET
+                    manifest_sha256 = ?,
+                    status = ?,
+                    approved_source_id = NULL,
+                    approval_attempt_id = NULL,
+                    approval_started_at = NULL,
+                    updated_at = CURRENT_TIMESTAMP,
+                    reviewed_at = CASE
+                        WHEN ? = 'proposed' THEN NULL
+                        ELSE CURRENT_TIMESTAMP
+                    END
+                WHERE candidate_id = ?
+                  AND status = 'approving'
+                  AND candidate_revision_sha256 = ?
+                  AND manifest_sha256 IS ?
+                  AND approval_attempt_id = ?
+                """,
+                (
+                    next_manifest_sha256,
+                    to_status,
+                    to_status,
+                    candidate_id,
+                    expected_revision_sha256,
+                    expected_manifest_sha256,
+                    approval_attempt_id,
+                ),
+            )
+            _require_candidate_cas(cursor, "approval_release_conflict")
+            _append_protected_source_candidate_review(
+                conn,
+                candidate_id=candidate_id,
+                from_status="approving",
+                to_status=to_status,
+                decision_code=decision_code,
+                authority=authority,
+                expected_candidate_revision_sha256=expected_revision_sha256,
+                result_candidate_revision_sha256=expected_revision_sha256,
+                expected_manifest_sha256=expected_manifest_sha256,
+                result_manifest_sha256=result_manifest_sha256,
+                approval_attempt_id=approval_attempt_id,
+            )
+            return self._load_protected_source_candidate_for_transition(
+                conn,
+                candidate_id,
+            )
+
+    def reconcile_protected_source_candidate(
+        self,
+        candidate_id: str,
+        *,
+        expected_status: str,
+        approval_attempt_id: str,
+        expected_revision_sha256: str,
+        decision_code: str,
+        authority: str,
+        expected_manifest_sha256: str | None,
+        result_manifest_sha256: str,
+        approved_source_id: str,
+    ) -> ProtectedSourceCandidate:
+        if expected_status != "approving":
+            raise ProtectedSourceCandidateStateError(
+                "candidate_state_conflict",
+                "protected source candidate is not in approval",
+            )
+        return self.finalize_protected_source_candidate_approval(
+            candidate_id,
+            approval_attempt_id=approval_attempt_id,
+            expected_revision_sha256=expected_revision_sha256,
+            decision_code=decision_code,
+            authority=authority,
+            expected_manifest_sha256=expected_manifest_sha256,
+            result_manifest_sha256=result_manifest_sha256,
+            approved_source_id=approved_source_id,
+        )
+
+    def select_registered_protected_source_candidate_for_reconcile(
+        self,
+        workspace_id: str,
+        suppression_fingerprint: str,
+        *,
+        proposed_source_json: str,
+        approved_source_id: str,
+    ) -> ProtectedSourceCandidate | None:
+        _validate_protected_source_candidate_workspace_id(workspace_id)
+        _validate_candidate_sha256(suppression_fingerprint, "suppression fingerprint")
+        _validate_approved_source_id(approved_source_id)
+        confirmed_source_json = _canonical_reconciled_proposed_source_json(
+            proposed_source_json,
+            approved_source_id=approved_source_id,
+        )
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT {_PROTECTED_SOURCE_CANDIDATE_SELECT_COLUMNS}
+                FROM protected_source_candidates
+                WHERE workspace_id = ?
+                  AND (
+                      suppression_fingerprint = ?
+                      OR (
+                          status = 'approving'
+                          AND proposed_source_json = ?
+                      )
+                  )
+                ORDER BY
+                    CASE WHEN suppression_fingerprint = ? THEN 0 ELSE 1 END,
+                    created_at,
+                    candidate_id
+                """,
+                (
+                    workspace_id,
+                    suppression_fingerprint,
+                    confirmed_source_json,
+                    suppression_fingerprint,
+                ),
+            ).fetchall()
+        candidates = [
+            _protected_source_candidate_from_row(row)
+            for row in rows
+            if row[8] == confirmed_source_json
+        ]
+        approving = [candidate for candidate in candidates if candidate.status == "approving"]
+        if len(approving) > 1:
+            raise ProtectedSourceCandidateStateError(
+                "registered_reconcile_ambiguous",
+                "multiple protected source approval attempts match the registered source",
+            )
+        if approving:
+            return approving[0]
+        return next(
+            (
+                candidate
+                for candidate in candidates
+                if candidate.suppression_fingerprint == suppression_fingerprint
+            ),
+            None,
+        )
+
+    def reconcile_registered_protected_source_candidate(
+        self,
+        candidate_id: str,
+        workspace_id: str,
+        suppression_fingerprint: str,
+        *,
+        approval_attempt_id: str | None,
+        proposed_source_json: str,
+        result_manifest_sha256: str,
+        approved_source_id: str,
+        authority: str = "system_reconcile",
+    ) -> ProtectedSourceCandidate:
+        _validate_protected_source_candidate_id(candidate_id)
+        _validate_protected_source_candidate_workspace_id(workspace_id)
+        _validate_candidate_sha256(suppression_fingerprint, "suppression fingerprint")
+        _validate_candidate_sha256(result_manifest_sha256, "result manifest")
+        _validate_approved_source_id(approved_source_id)
+        if approval_attempt_id is not None:
+            _validate_candidate_approval_attempt_id(approval_attempt_id)
+        confirmed_source_json = _canonical_reconciled_proposed_source_json(
+            proposed_source_json,
+            approved_source_id=approved_source_id,
+        )
+        if authority != "system_reconcile":
+            raise ValueError("registered candidate reconciliation authority is invalid")
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            candidate = self._load_protected_source_candidate_for_transition(
+                conn,
+                candidate_id,
+            )
+            if candidate.workspace_id != workspace_id:
+                raise ProtectedSourceCandidateStateError(
+                    "registered_reconcile_workspace_conflict",
+                    "registered source does not match the candidate workspace",
+                )
+            if candidate.proposed_source_json != confirmed_source_json:
+                raise ProtectedSourceCandidateStateError(
+                    "registered_reconcile_identity_conflict",
+                    "registered source does not match the candidate proposal",
+                )
+            if candidate.status == "approving":
+                if (
+                    approval_attempt_id is None
+                    or candidate.approval_attempt_id != approval_attempt_id
+                ):
+                    raise ProtectedSourceCandidateStateError(
+                        "approval_attempt_conflict",
+                        "registered source does not match the approval attempt",
+                    )
+            elif candidate.status == "proposed":
+                if (
+                    approval_attempt_id is not None
+                    or candidate.suppression_fingerprint != suppression_fingerprint
+                ):
+                    raise ProtectedSourceCandidateStateError(
+                        "registered_reconcile_candidate_conflict",
+                        "registered source does not match the proposed candidate",
+                    )
+            else:
+                return candidate
+
+            cursor = conn.execute(
+                """
+                UPDATE protected_source_candidates
+                SET
+                    manifest_sha256 = ?,
+                    status = 'approved',
+                    approved_source_id = ?,
+                    approval_attempt_id = NULL,
+                    approval_started_at = NULL,
+                    updated_at = CURRENT_TIMESTAMP,
+                    reviewed_at = CURRENT_TIMESTAMP
+                WHERE candidate_id = ?
+                  AND workspace_id = ?
+                  AND status = ?
+                  AND candidate_revision_sha256 = ?
+                  AND manifest_sha256 IS ?
+                  AND approval_attempt_id IS ?
+                  AND proposed_source_json = ?
+                """,
+                (
+                    result_manifest_sha256,
+                    approved_source_id,
+                    candidate.candidate_id,
+                    workspace_id,
+                    candidate.status,
+                    candidate.candidate_revision_sha256,
+                    candidate.manifest_sha256,
+                    approval_attempt_id,
+                    confirmed_source_json,
+                ),
+            )
+            _require_candidate_cas(cursor, "registered_reconcile_conflict")
+            _append_protected_source_candidate_review(
+                conn,
+                candidate_id=candidate.candidate_id,
+                from_status=candidate.status,
+                to_status="approved",
+                decision_code="reconciled_approved",
+                authority=authority,
+                expected_candidate_revision_sha256=(
+                    candidate.candidate_revision_sha256
+                ),
+                result_candidate_revision_sha256=(
+                    candidate.candidate_revision_sha256
+                ),
+                expected_manifest_sha256=candidate.manifest_sha256,
+                result_manifest_sha256=result_manifest_sha256,
+                approval_attempt_id=approval_attempt_id,
+            )
+            return self._load_protected_source_candidate_for_transition(
+                conn,
+                candidate.candidate_id,
+            )
+
+    def _transition_protected_source_candidate(
+        self,
+        candidate_id: str,
+        *,
+        expected_status: str,
+        expected_revision_sha256: str,
+        to_status: str,
+        decision_code: str,
+        authority: str,
+        expected_manifest_sha256: str | None,
+        result_manifest_sha256: str | None,
+        approved_source_id: str | None,
+    ) -> ProtectedSourceCandidate:
+        _validate_protected_source_candidate_transition(
+            candidate_id=candidate_id,
+            expected_status=expected_status,
+            expected_revision_sha256=expected_revision_sha256,
+            to_status=to_status,
+            decision_code=decision_code,
+            authority=authority,
+            expected_manifest_sha256=expected_manifest_sha256,
+            result_manifest_sha256=result_manifest_sha256,
+            approved_source_id=approved_source_id,
+        )
+        result_revision_sha256 = expected_revision_sha256
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            candidate = self._load_protected_source_candidate_for_transition(
+                conn,
+                candidate_id,
+            )
+            _validate_candidate_transition_cas(
+                candidate,
+                expected_status=expected_status,
+                expected_revision_sha256=expected_revision_sha256,
+                expected_manifest_sha256=expected_manifest_sha256,
+            )
+            next_manifest_sha256 = (
+                candidate.manifest_sha256
+                if result_manifest_sha256 is None
+                else result_manifest_sha256
+            )
+            cursor = conn.execute(
+                """
+                UPDATE protected_source_candidates
+                SET
+                    candidate_revision_sha256 = ?,
+                    manifest_sha256 = ?,
+                    status = ?,
+                    approved_source_id = ?,
+                    approval_attempt_id = NULL,
+                    approval_started_at = NULL,
+                    updated_at = CURRENT_TIMESTAMP,
+                    reviewed_at = CURRENT_TIMESTAMP
+                WHERE candidate_id = ?
+                  AND status = ?
+                  AND candidate_revision_sha256 = ?
+                  AND manifest_sha256 IS ?
+                """,
+                (
+                    result_revision_sha256,
+                    next_manifest_sha256,
+                    to_status,
+                    approved_source_id,
+                    candidate_id,
+                    expected_status,
+                    expected_revision_sha256,
+                    expected_manifest_sha256,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise ProtectedSourceCandidateStateError(
+                    "candidate_state_conflict",
+                    "protected source candidate changed before transition",
+                )
+            _append_protected_source_candidate_review(
+                conn,
+                candidate_id=candidate_id,
+                from_status=expected_status,
+                to_status=to_status,
+                decision_code=decision_code,
+                authority=authority,
+                expected_candidate_revision_sha256=expected_revision_sha256,
+                result_candidate_revision_sha256=result_revision_sha256,
+                expected_manifest_sha256=expected_manifest_sha256,
+                result_manifest_sha256=result_manifest_sha256,
+            )
+            row = conn.execute(
+                f"""
+                SELECT {_PROTECTED_SOURCE_CANDIDATE_SELECT_COLUMNS}
+                FROM protected_source_candidates
+                WHERE candidate_id = ?
+                """,
+                (candidate_id,),
+            ).fetchone()
+            assert row is not None
+            return _protected_source_candidate_from_row(row)
+
+    def _load_protected_source_candidate_for_transition(
+        self,
+        conn: sqlite3.Connection,
+        candidate_id: str,
+    ) -> ProtectedSourceCandidate:
+        row = conn.execute(
+            f"""
+            SELECT {_PROTECTED_SOURCE_CANDIDATE_SELECT_COLUMNS}
+            FROM protected_source_candidates
+            WHERE candidate_id = ?
+            """,
+            (candidate_id,),
+        ).fetchone()
+        if row is None:
+            raise ProtectedSourceCandidateStateError(
+                "candidate_not_found",
+                "protected source candidate does not exist",
+            )
+        return _protected_source_candidate_from_row(row)
+
     def list_source_chunks(self) -> list[SourceChunk]:
         with self._connect() as conn:
             rows = conn.execute(
@@ -8034,6 +9241,334 @@ class EventStore:
             )
             for row in rows
         ]
+
+    def _initialize_protected_source_candidate_state(
+        self,
+        conn: sqlite3.Connection,
+    ) -> None:
+        candidate_row = conn.execute(
+            """
+            SELECT sql
+            FROM sqlite_master
+            WHERE type = 'table' AND name = 'protected_source_candidates'
+            """
+        ).fetchone()
+        review_row = conn.execute(
+            """
+            SELECT sql
+            FROM sqlite_master
+            WHERE type = 'table'
+              AND name = 'protected_source_candidate_reviews'
+            """
+        ).fetchone()
+        if (candidate_row is None) != (review_row is None):
+            raise RuntimeError("protected source candidate schema is incomplete")
+        if candidate_row is not None and review_row is not None:
+            candidate_columns = {
+                row[1]
+                for row in conn.execute(
+                    "PRAGMA table_info(protected_source_candidates)"
+                ).fetchall()
+            }
+            review_columns = {
+                row[1]
+                for row in conn.execute(
+                    "PRAGMA table_info(protected_source_candidate_reviews)"
+                ).fetchall()
+            }
+            table_sql = {
+                "protected_source_candidates": " ".join(
+                    str(candidate_row[0] or "").upper().split()
+                ),
+                "protected_source_candidate_reviews": " ".join(
+                    str(review_row[0] or "").upper().split()
+                ),
+            }
+            incomplete_constraints = any(
+                fragment not in table_sql[table]
+                for table, required_fragments in (
+                    RUNTIME_REQUIRED_TABLE_SQL_FRAGMENTS.items()
+                )
+                for fragment in required_fragments
+            )
+            if (
+                "approval_attempt_id" not in candidate_columns
+                or "approval_started_at" not in candidate_columns
+                or "approval_attempt_id" not in review_columns
+                or incomplete_constraints
+            ):
+                self._migrate_protected_source_candidate_state(
+                    conn,
+                    candidate_columns=candidate_columns,
+                    review_columns=review_columns,
+                )
+                return
+        self._create_protected_source_candidate_tables(conn)
+
+    def _migrate_protected_source_candidate_state(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        candidate_columns: set[str],
+        review_columns: set[str],
+    ) -> None:
+        conn.execute(
+            "DROP TRIGGER IF EXISTS protected_source_candidate_reviews_no_update"
+        )
+        conn.execute(
+            "DROP TRIGGER IF EXISTS protected_source_candidate_reviews_no_delete"
+        )
+        conn.execute(
+            "ALTER TABLE protected_source_candidate_reviews "
+            "RENAME TO protected_source_candidate_reviews_v3"
+        )
+        conn.execute(
+            "ALTER TABLE protected_source_candidates "
+            "RENAME TO protected_source_candidates_v3"
+        )
+        self._create_protected_source_candidate_tables(conn)
+        candidate_attempt = (
+            "approval_attempt_id"
+            if "approval_attempt_id" in candidate_columns
+            else "NULL"
+        )
+        candidate_started = (
+            "approval_started_at"
+            if "approval_started_at" in candidate_columns
+            else "NULL"
+        )
+        review_attempt = (
+            "approval_attempt_id" if "approval_attempt_id" in review_columns else "NULL"
+        )
+        conn.execute(
+            f"""
+            INSERT INTO protected_source_candidates (
+                candidate_id,
+                candidate_revision_sha256,
+                workspace_id,
+                relative_path,
+                detector_version,
+                discovery_source,
+                rule_ids_json,
+                confidence,
+                proposed_source_json,
+                source_sha256,
+                source_size,
+                source_mtime_ns,
+                source_device,
+                source_inode,
+                manifest_sha256,
+                suppression_fingerprint,
+                status,
+                approved_source_id,
+                approval_attempt_id,
+                approval_started_at,
+                created_at,
+                updated_at,
+                reviewed_at
+            )
+            SELECT
+                candidate_id,
+                candidate_revision_sha256,
+                workspace_id,
+                relative_path,
+                detector_version,
+                discovery_source,
+                rule_ids_json,
+                confidence,
+                proposed_source_json,
+                source_sha256,
+                source_size,
+                source_mtime_ns,
+                source_device,
+                source_inode,
+                manifest_sha256,
+                suppression_fingerprint,
+                status,
+                approved_source_id,
+                {candidate_attempt},
+                {candidate_started},
+                created_at,
+                updated_at,
+                reviewed_at
+            FROM protected_source_candidates_v3
+            """
+        )
+        conn.execute(
+            f"""
+            INSERT INTO protected_source_candidate_reviews (
+                review_id,
+                candidate_id,
+                from_status,
+                to_status,
+                decision_code,
+                authority,
+                expected_candidate_revision_sha256,
+                result_candidate_revision_sha256,
+                expected_manifest_sha256,
+                result_manifest_sha256,
+                approval_attempt_id,
+                recorded_at
+            )
+            SELECT
+                review_id,
+                candidate_id,
+                from_status,
+                to_status,
+                decision_code,
+                authority,
+                expected_candidate_revision_sha256,
+                result_candidate_revision_sha256,
+                expected_manifest_sha256,
+                result_manifest_sha256,
+                {review_attempt},
+                recorded_at
+            FROM protected_source_candidate_reviews_v3
+            """
+        )
+        conn.execute("DROP TABLE protected_source_candidate_reviews_v3")
+        conn.execute("DROP TABLE protected_source_candidates_v3")
+
+    @staticmethod
+    def _create_protected_source_candidate_tables(
+        conn: sqlite3.Connection,
+    ) -> None:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS protected_source_candidates (
+                candidate_id TEXT PRIMARY KEY,
+                candidate_revision_sha256 TEXT NOT NULL,
+                workspace_id TEXT NOT NULL,
+                relative_path TEXT NOT NULL,
+                detector_version TEXT NOT NULL,
+                discovery_source TEXT NOT NULL,
+                rule_ids_json TEXT NOT NULL,
+                confidence REAL NOT NULL CHECK (
+                    confidence >= 0.0 AND confidence <= 1.0
+                ),
+                proposed_source_json TEXT NOT NULL,
+                source_sha256 TEXT NOT NULL,
+                source_size INTEGER NOT NULL CHECK (source_size >= 0),
+                source_mtime_ns INTEGER NOT NULL CHECK (source_mtime_ns >= 0),
+                source_device INTEGER CHECK (
+                    source_device IS NULL OR source_device >= 0
+                ),
+                source_inode INTEGER CHECK (
+                    source_inode IS NULL OR source_inode >= 0
+                ),
+                manifest_sha256 TEXT,
+                suppression_fingerprint TEXT NOT NULL,
+                status TEXT NOT NULL CHECK (
+                    status IN (
+                        'proposed',
+                        'approving',
+                        'approved',
+                        'rejected',
+                        'ignored',
+                        'stale'
+                    )
+                ),
+                approved_source_id TEXT,
+                approval_attempt_id TEXT,
+                approval_started_at TEXT,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                reviewed_at TEXT,
+                CHECK (
+                    (
+                        status = 'approving'
+                        AND approval_attempt_id IS NOT NULL
+                        AND approval_started_at IS NOT NULL
+                    ) OR (
+                        status != 'approving'
+                        AND approval_attempt_id IS NULL
+                        AND approval_started_at IS NULL
+                    )
+                ),
+                FOREIGN KEY (workspace_id) REFERENCES workspaces (workspace_id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS protected_source_candidate_reviews (
+                review_id TEXT PRIMARY KEY,
+                candidate_id TEXT NOT NULL,
+                from_status TEXT NOT NULL CHECK (
+                    from_status IN (
+                        'absent',
+                        'proposed',
+                        'approving',
+                        'approved',
+                        'rejected',
+                        'ignored',
+                        'stale'
+                    )
+                ),
+                to_status TEXT NOT NULL CHECK (
+                    to_status IN (
+                        'proposed',
+                        'approving',
+                        'approved',
+                        'rejected',
+                        'ignored',
+                        'stale'
+                    )
+                ),
+                decision_code TEXT NOT NULL CHECK (
+                    decision_code IN (
+                        'proposed',
+                        'approval_started',
+                        'approval_released',
+                        'approved',
+                        'rejected',
+                        'ignored',
+                        'source_changed',
+                        'manifest_changed',
+                        'already_registered',
+                        'reconciled_approved'
+                    )
+                ),
+                authority TEXT NOT NULL CHECK (
+                    authority IN ('cli_explicit', 'system_reconcile')
+                ),
+                expected_candidate_revision_sha256 TEXT,
+                result_candidate_revision_sha256 TEXT NOT NULL,
+                expected_manifest_sha256 TEXT,
+                result_manifest_sha256 TEXT,
+                approval_attempt_id TEXT,
+                recorded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (candidate_id)
+                    REFERENCES protected_source_candidates (candidate_id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS
+                protected_source_candidate_reviews_no_update
+            BEFORE UPDATE ON protected_source_candidate_reviews
+            BEGIN
+                SELECT RAISE(
+                    ABORT,
+                    'protected source candidate reviews are append-only'
+                );
+            END
+            """
+        )
+        conn.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS
+                protected_source_candidate_reviews_no_delete
+            BEFORE DELETE ON protected_source_candidate_reviews
+            BEGIN
+                SELECT RAISE(
+                    ABORT,
+                    'protected source candidate reviews are append-only'
+                );
+            END
+            """
+        )
 
     def _ensure_column(
         self,
@@ -10278,6 +11813,480 @@ def _protected_source_from_row(row: tuple) -> ProtectedSource:
             source_type=row[2],
         ),
     )
+
+
+def _protected_source_candidate_from_row(row: tuple) -> ProtectedSourceCandidate:
+    return ProtectedSourceCandidate(
+        candidate_id=row[0],
+        candidate_revision_sha256=row[1],
+        workspace_id=row[2],
+        relative_path=row[3],
+        detector_version=row[4],
+        discovery_source=row[5],
+        rule_ids=tuple(json.loads(row[6])),
+        confidence=row[7],
+        proposed_source_json=row[8],
+        source_sha256=row[9],
+        source_size=row[10],
+        source_mtime_ns=row[11],
+        source_device=row[12],
+        source_inode=row[13],
+        manifest_sha256=row[14],
+        suppression_fingerprint=row[15],
+        status=row[16],
+        approved_source_id=row[17],
+        approval_attempt_id=row[18],
+        approval_started_at=row[19],
+        created_at=row[20],
+        updated_at=row[21],
+        reviewed_at=row[22],
+    )
+
+
+def _protected_source_candidate_review_from_row(
+    row: tuple,
+) -> ProtectedSourceCandidateReview:
+    return ProtectedSourceCandidateReview(
+        review_id=row[0],
+        candidate_id=row[1],
+        from_status=row[2],
+        to_status=row[3],
+        decision_code=row[4],
+        authority=row[5],
+        expected_candidate_revision_sha256=row[6],
+        result_candidate_revision_sha256=row[7],
+        expected_manifest_sha256=row[8],
+        result_manifest_sha256=row[9],
+        approval_attempt_id=row[10],
+        recorded_at=row[11],
+    )
+
+
+def _append_protected_source_candidate_review(
+    conn: sqlite3.Connection,
+    *,
+    candidate_id: str,
+    from_status: str,
+    to_status: str,
+    decision_code: str,
+    authority: str,
+    expected_candidate_revision_sha256: str | None,
+    result_candidate_revision_sha256: str,
+    expected_manifest_sha256: str | None,
+    result_manifest_sha256: str | None,
+    approval_attempt_id: str | None = None,
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO protected_source_candidate_reviews (
+            review_id,
+            candidate_id,
+            from_status,
+            to_status,
+            decision_code,
+            authority,
+            expected_candidate_revision_sha256,
+            result_candidate_revision_sha256,
+            expected_manifest_sha256,
+            result_manifest_sha256,
+            approval_attempt_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            uuid.uuid4().hex,
+            candidate_id,
+            from_status,
+            to_status,
+            decision_code,
+            authority,
+            expected_candidate_revision_sha256,
+            result_candidate_revision_sha256,
+            expected_manifest_sha256,
+            result_manifest_sha256,
+            approval_attempt_id,
+        ),
+    )
+
+
+def _validate_protected_source_candidate_proposal(
+    *,
+    candidate_revision_sha256: str,
+    workspace_id: str,
+    relative_path: str,
+    detector_version: str,
+    discovery_source: str,
+    rule_ids: tuple[str, ...],
+    confidence: float,
+    proposed_source_json: str,
+    source_sha256: str,
+    source_size: int,
+    source_mtime_ns: int,
+    source_device: int | None,
+    source_inode: int | None,
+    manifest_sha256: str | None,
+    suppression_fingerprint: str,
+) -> tuple[str, str]:
+    _validate_protected_source_candidate_workspace_id(workspace_id)
+    if (
+        not isinstance(candidate_revision_sha256, str)
+        or _LOWER_SHA256_RE.fullmatch(candidate_revision_sha256) is None
+    ):
+        raise ValueError("candidate revision digest is invalid")
+    if (
+        not isinstance(source_sha256, str)
+        or _LOWER_SHA256_RE.fullmatch(source_sha256) is None
+    ):
+        raise ValueError("candidate source digest is invalid")
+    if candidate_revision_sha256 == source_sha256:
+        raise ValueError("candidate revision must not reuse the source digest")
+    if (
+        not isinstance(suppression_fingerprint, str)
+        or _LOWER_SHA256_RE.fullmatch(suppression_fingerprint) is None
+    ):
+        raise ValueError("candidate suppression fingerprint is invalid")
+    _validate_optional_candidate_sha256(manifest_sha256, "manifest")
+    if (
+        not isinstance(relative_path, str)
+        or not relative_path
+        or "\x00" in relative_path
+        or len(relative_path.encode("utf-8")) > _PROTECTED_SOURCE_CANDIDATE_MAX_PATH_BYTES
+    ):
+        raise ValueError("candidate relative path is invalid")
+    candidate_path = Path(relative_path)
+    if (
+        candidate_path.is_absolute()
+        or candidate_path == Path(".")
+        or any(part in {"", ".", ".."} for part in candidate_path.parts)
+    ):
+        raise ValueError("candidate relative path is invalid")
+    for label, value in (
+        ("detector version", detector_version),
+        ("discovery source", discovery_source),
+    ):
+        if (
+            not isinstance(value, str)
+            or _PROTECTED_SOURCE_CANDIDATE_IDENTIFIER_RE.fullmatch(value) is None
+        ):
+            raise ValueError(f"candidate {label} is invalid")
+    if (
+        not isinstance(rule_ids, tuple)
+        or not rule_ids
+        or len(rule_ids) > _PROTECTED_SOURCE_CANDIDATE_MAX_RULES
+        or any(
+            not isinstance(rule_id, str)
+            or _PROTECTED_SOURCE_CANDIDATE_IDENTIFIER_RE.fullmatch(rule_id) is None
+            for rule_id in rule_ids
+        )
+        or len(set(rule_ids)) != len(rule_ids)
+    ):
+        raise ValueError("candidate rule ids are invalid")
+    if (
+        isinstance(confidence, bool)
+        or not isinstance(confidence, (int, float))
+        or not math.isfinite(confidence)
+        or not 0.0 <= confidence <= 1.0
+    ):
+        raise ValueError("candidate confidence is invalid")
+    for label, value in (
+        ("source size", source_size),
+        ("source mtime", source_mtime_ns),
+    ):
+        if type(value) is not int or value < 0:
+            raise ValueError(f"candidate {label} is invalid")
+    for label, value in (
+        ("source device", source_device),
+        ("source inode", source_inode),
+    ):
+        if value is not None and (type(value) is not int or value < 0):
+            raise ValueError(f"candidate {label} is invalid")
+
+    canonical_source_json = _canonical_proposed_source_json(
+        proposed_source_json,
+        relative_path=relative_path,
+    )
+    expected_suppression_fingerprint = hashlib.sha256(
+        json.dumps(
+            {
+                "detector_version": detector_version,
+                "workspace_id": workspace_id,
+                "path": relative_path,
+                "source_sha256": source_sha256,
+                "proposed_source": json.loads(canonical_source_json),
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+    ).hexdigest()
+    if suppression_fingerprint != expected_suppression_fingerprint:
+        raise ValueError("candidate suppression fingerprint does not match proposal")
+    rule_ids_json = json.dumps(
+        rule_ids,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    return canonical_source_json, rule_ids_json
+
+
+def _canonical_proposed_source_json(
+    proposed_source_json: str,
+    *,
+    relative_path: str,
+) -> str:
+    if not isinstance(proposed_source_json, str):
+        raise ValueError("candidate proposed source must be JSON")
+    try:
+        payload = json.loads(proposed_source_json)
+    except (json.JSONDecodeError, RecursionError):
+        raise ValueError("candidate proposed source must be valid JSON") from None
+    if (
+        not isinstance(payload, dict)
+        or not payload
+        or not set(payload).issubset(_PROTECTED_SOURCE_CANDIDATE_SOURCE_KEYS)
+    ):
+        raise ValueError("candidate proposed source has unsupported fields")
+    for key in ("id", "path", "type", "sensitivity"):
+        value = payload.get(key)
+        if not isinstance(value, str) or not value.strip() or len(value.encode("utf-8")) > 4096:
+            raise ValueError("candidate proposed source is invalid")
+    if payload["path"] != relative_path:
+        raise ValueError("candidate proposed source path does not match")
+    if payload["type"] != "secretfile":
+        raise ValueError("candidate proposed source type is invalid")
+    policy_tags = payload.get("policy_tags", [])
+    if (
+        not isinstance(policy_tags, list)
+        or len(policy_tags) > 32
+        or any(
+            not isinstance(tag, str) or not tag or len(tag.encode("utf-8")) > 128
+            for tag in policy_tags
+        )
+        or len(set(policy_tags)) != len(policy_tags)
+    ):
+        raise ValueError("candidate proposed source policy tags are invalid")
+    selector = parse_protected_source_selector(
+        payload.get("selector"),
+        source_path=relative_path,
+        source_type=payload["type"],
+    )
+    if selector is None:
+        raise ValueError("candidate proposed source requires a selector")
+    canonical_payload = {
+        "id": payload["id"],
+        "path": relative_path,
+        "type": payload["type"],
+        "sensitivity": payload["sensitivity"],
+        "policy_tags": policy_tags,
+        "selector": protected_source_selector_payload(selector),
+    }
+    return json.dumps(
+        canonical_payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def _canonical_reconciled_proposed_source_json(
+    proposed_source_json: str,
+    *,
+    approved_source_id: str,
+) -> str:
+    if not isinstance(proposed_source_json, str):
+        raise ValueError("reconciled proposed source must be JSON")
+    try:
+        payload = json.loads(proposed_source_json)
+    except (json.JSONDecodeError, RecursionError):
+        raise ValueError("reconciled proposed source must be valid JSON") from None
+    if not isinstance(payload, dict) or not isinstance(payload.get("path"), str):
+        raise ValueError("reconciled proposed source path is invalid")
+    canonical = _canonical_proposed_source_json(
+        proposed_source_json,
+        relative_path=payload["path"],
+    )
+    canonical_payload = json.loads(canonical)
+    if canonical_payload.get("id") != approved_source_id:
+        raise ValueError("reconciled proposed source id does not match")
+    return canonical
+
+
+def _validate_protected_source_candidate_transition(
+    *,
+    candidate_id: str,
+    expected_status: str,
+    expected_revision_sha256: str,
+    to_status: str,
+    decision_code: str,
+    authority: str,
+    expected_manifest_sha256: str | None,
+    result_manifest_sha256: str | None,
+    approved_source_id: str | None,
+) -> None:
+    _validate_protected_source_candidate_id(candidate_id)
+    _validate_candidate_sha256(expected_revision_sha256, "expected revision")
+    if decision_code not in PROTECTED_SOURCE_CANDIDATE_DECISION_CODES:
+        raise ValueError("candidate decision code is invalid")
+    _validate_protected_source_candidate_authority(authority)
+    _validate_optional_candidate_sha256(expected_manifest_sha256, "expected manifest")
+    _validate_optional_candidate_sha256(result_manifest_sha256, "result manifest")
+    target_for_decision = {
+        "rejected": "rejected",
+        "ignored": "ignored",
+        "source_changed": "stale",
+        "manifest_changed": "stale",
+    }.get(decision_code)
+    if target_for_decision != to_status:
+        raise ValueError("candidate decision does not match target status")
+    if expected_status != "proposed" or to_status not in {
+        "rejected",
+        "ignored",
+        "stale",
+    }:
+        raise ValueError("candidate state transition is invalid")
+    if approved_source_id is not None:
+        raise ValueError("non-approved candidate cannot have an approved source id")
+
+
+def _validate_candidate_approval_result(
+    *,
+    candidate_id: str,
+    approval_attempt_id: str,
+    expected_revision_sha256: str,
+    expected_manifest_sha256: str | None,
+    result_manifest_sha256: str,
+    approved_source_id: str,
+    decision_code: str,
+    authority: str,
+) -> None:
+    _validate_protected_source_candidate_id(candidate_id)
+    _validate_candidate_approval_attempt_id(approval_attempt_id)
+    _validate_candidate_sha256(expected_revision_sha256, "expected revision")
+    _validate_optional_candidate_sha256(expected_manifest_sha256, "expected manifest")
+    _validate_candidate_sha256(result_manifest_sha256, "result manifest")
+    _validate_approved_source_id(approved_source_id)
+    _validate_protected_source_candidate_authority(authority)
+    if decision_code not in {"approved", "already_registered"}:
+        raise ValueError("candidate approval decision code is invalid")
+
+
+def _validate_candidate_approval_release(
+    *,
+    candidate_id: str,
+    approval_attempt_id: str,
+    expected_revision_sha256: str,
+    expected_manifest_sha256: str | None,
+    result_manifest_sha256: str | None,
+    decision_code: str,
+    authority: str,
+) -> None:
+    _validate_protected_source_candidate_id(candidate_id)
+    _validate_candidate_approval_attempt_id(approval_attempt_id)
+    _validate_candidate_sha256(expected_revision_sha256, "expected revision")
+    _validate_optional_candidate_sha256(expected_manifest_sha256, "expected manifest")
+    _validate_optional_candidate_sha256(result_manifest_sha256, "result manifest")
+    _validate_protected_source_candidate_authority(authority)
+    if decision_code not in {
+        "approval_released",
+        "source_changed",
+        "manifest_changed",
+    }:
+        raise ValueError("candidate approval release code is invalid")
+    if decision_code == "manifest_changed":
+        if (
+            result_manifest_sha256 is not None
+            and result_manifest_sha256 == expected_manifest_sha256
+        ):
+            raise ValueError("manifest change release cannot repeat the expected digest")
+    elif result_manifest_sha256 not in {None, expected_manifest_sha256}:
+        raise ValueError("prewrite approval release cannot change manifest digest")
+
+
+def _validate_candidate_transition_cas(
+    candidate: ProtectedSourceCandidate,
+    *,
+    expected_status: str,
+    expected_revision_sha256: str,
+    expected_manifest_sha256: str | None,
+    approval_attempt_id: str | None = None,
+) -> None:
+    if candidate.status != expected_status:
+        raise ProtectedSourceCandidateStateError(
+            "candidate_state_conflict",
+            "protected source candidate state changed",
+        )
+    if candidate.candidate_revision_sha256 != expected_revision_sha256:
+        raise ProtectedSourceCandidateStateError(
+            "candidate_revision_conflict",
+            "protected source candidate revision changed",
+        )
+    if candidate.manifest_sha256 != expected_manifest_sha256:
+        raise ProtectedSourceCandidateStateError(
+            "candidate_manifest_conflict",
+            "protected source candidate manifest revision changed",
+        )
+    if (
+        approval_attempt_id is not None
+        and candidate.approval_attempt_id != approval_attempt_id
+    ):
+        raise ProtectedSourceCandidateStateError(
+            "approval_attempt_conflict",
+            "protected source approval attempt changed",
+        )
+
+
+def _require_candidate_cas(cursor: sqlite3.Cursor, code: str) -> None:
+    if cursor.rowcount != 1:
+        raise ProtectedSourceCandidateStateError(
+            code,
+            "protected source candidate changed during compare-and-swap",
+        )
+
+
+def _validate_candidate_approval_attempt_id(approval_attempt_id: str) -> None:
+    if not isinstance(approval_attempt_id, str) or re.fullmatch(
+        r"[0-9a-f]{32}", approval_attempt_id
+    ) is None:
+        raise ValueError("protected source approval attempt id is invalid")
+
+
+def _validate_candidate_sha256(value: str, label: str) -> None:
+    if not isinstance(value, str) or _LOWER_SHA256_RE.fullmatch(value) is None:
+        raise ValueError(f"candidate {label} digest is invalid")
+
+
+def _validate_approved_source_id(approved_source_id: str) -> None:
+    if (
+        not isinstance(approved_source_id, str)
+        or not approved_source_id
+        or len(approved_source_id.encode("utf-8")) > 4096
+    ):
+        raise ValueError("approved candidate source id is invalid")
+
+
+def _validate_protected_source_candidate_authority(authority: str) -> None:
+    if authority not in PROTECTED_SOURCE_CANDIDATE_AUTHORITIES:
+        raise ValueError("candidate review authority is invalid")
+
+
+def _validate_protected_source_candidate_id(candidate_id: str) -> None:
+    if not isinstance(candidate_id, str) or re.fullmatch(r"[0-9a-f]{32}", candidate_id) is None:
+        raise ValueError("protected source candidate id is invalid")
+
+
+def _validate_protected_source_candidate_workspace_id(workspace_id: str) -> None:
+    if (
+        not isinstance(workspace_id, str)
+        or re.fullmatch(r"ws_v1_[0-9a-f]{64}", workspace_id) is None
+    ):
+        raise ValueError("protected source candidate workspace id is invalid")
+
+
+def _validate_optional_candidate_sha256(value: str | None, label: str) -> None:
+    if value is not None and (
+        not isinstance(value, str) or _LOWER_SHA256_RE.fullmatch(value) is None
+    ):
+        raise ValueError(f"candidate {label} digest is invalid")
 
 
 def _source_chunk_from_row(row: tuple) -> SourceChunk:

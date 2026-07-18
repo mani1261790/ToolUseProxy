@@ -795,6 +795,9 @@ class PluginBundleTest(unittest.TestCase):
             environment.pop("PYTHONPATH", None)
             hook_launcher = plugin_root / "hooks" / "run_hook.sh"
             cli_launcher = plugin_root / "hooks" / "run_cli.sh"
+            self.assertNotIn("PYTHONPATH", environment)
+            self.assertTrue(cli_launcher.is_absolute())
+            self.assertFalse(plugin_root.is_relative_to(REPO_ROOT))
             payload = {
                 "hook_event_name": "PreToolUse",
                 "session_id": "plugin-session",
@@ -838,6 +841,110 @@ class PluginBundleTest(unittest.TestCase):
                 check=True,
             )
             self.assertEqual("initialized", json.loads(initialized.stdout)["status"])
+
+            registration_secret = "RELOCATED.PLUGIN.SECRET.9d31"
+            (workspace / ".env.agent").write_text(
+                f"PRIVATE_TOKEN={registration_secret}\nPUBLIC_MODE=demo\n",
+                encoding="utf-8",
+            )
+            suggestion = subprocess.run(
+                [
+                    "sh",
+                    str(cli_launcher),
+                    "protect",
+                    "suggest",
+                    "--path",
+                    ".env.agent",
+                    "--workspace",
+                    str(workspace),
+                    "--data-dir",
+                    str(data_dir),
+                    "--json",
+                ],
+                cwd=workspace,
+                env=environment,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            suggestion_payload = json.loads(suggestion.stdout)
+            self.assertEqual("review_required", suggestion_payload["status"])
+            self.assertEqual(1, len(suggestion_payload["candidates"]))
+            candidate = suggestion_payload["candidates"][0]
+            self.assertIs(candidate["review_required"], True)
+            self.assertEqual(".env.agent", candidate["path"])
+            self.assertEqual(
+                {"dotenv_keys": ["PRIVATE_TOKEN"]},
+                candidate["proposed_source"]["selector"],
+            )
+            self.assertNotIn(
+                registration_secret,
+                suggestion.stdout + suggestion.stderr,
+            )
+
+            approval = subprocess.run(
+                [
+                    "sh",
+                    str(cli_launcher),
+                    "protect",
+                    "approve",
+                    candidate["candidate_id"],
+                    "--candidate-revision",
+                    candidate["candidate_revision"],
+                    "--expected-manifest-sha256",
+                    suggestion_payload["manifest_sha256"],
+                    "--workspace",
+                    str(workspace),
+                    "--data-dir",
+                    str(data_dir),
+                    "--json",
+                ],
+                cwd=workspace,
+                env=environment,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(0, approval.returncode, approval.stderr)
+            approval_payload = json.loads(approval.stdout)
+            self.assertEqual("approved", approval_payload["status"])
+            self.assertNotIn(
+                registration_secret,
+                approval.stdout + approval.stderr,
+            )
+            protected_manifest = json.loads(
+                (workspace / "protected_sources.json").read_text(encoding="utf-8")
+            )
+            registered_source = next(
+                source
+                for source in protected_manifest["sources"]
+                if source["path"] == ".env.agent"
+            )
+            self.assertEqual("secretfile", registered_source["type"])
+            self.assertEqual(
+                {"dotenv_keys": ["PRIVATE_TOKEN"]},
+                registered_source["selector"],
+            )
+            candidate_database_check = subprocess.run(
+                [
+                    sys.executable,
+                    "-c",
+                    (
+                        "import sqlite3,sys; "
+                        "connection=sqlite3.connect(sys.argv[1]); "
+                        "dump='\\n'.join(connection.iterdump()); "
+                        "connection.close(); "
+                        "print('present' if sys.argv[2] in dump else 'absent')"
+                    ),
+                    str(data_dir / "events.db"),
+                    registration_secret,
+                ],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            self.assertEqual("absent", candidate_database_check.stdout.strip())
+
             doctor = subprocess.run(
                 [
                     "sh",
@@ -920,11 +1027,45 @@ class PluginBundleTest(unittest.TestCase):
                 phases = conn.execute(
                     "SELECT phase FROM events ORDER BY sequence_no"
                 ).fetchall()
+                runtime_source = conn.execute(
+                    """
+                    SELECT source_id, selector_json
+                    FROM protected_sources
+                    WHERE path = '.env.agent'
+                    """
+                ).fetchone()
+                source_chunk_count = conn.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM source_chunks
+                    WHERE source_id = ?
+                    """,
+                    (runtime_source[0],),
+                ).fetchone()[0]
+                runtime_analysis = conn.execute(
+                    """
+                    SELECT config_json, completed_at
+                    FROM analysis_runs
+                    WHERE session_id = 'plugin-session'
+                    ORDER BY started_at DESC, rowid DESC
+                    LIMIT 1
+                    """
+                ).fetchone()
             self.assertEqual((str(workspace.resolve()), "hook_cwd"), row)
             self.assertEqual(
                 [("pre_tool_use",), ("post_tool_use",), ("stop",)],
                 phases,
             )
+            self.assertEqual(
+                {"dotenv_keys": ["PRIVATE_TOKEN"]},
+                json.loads(runtime_source[1]),
+            )
+            self.assertEqual(1, source_chunk_count)
+            self.assertEqual(
+                "session-full",
+                json.loads(runtime_analysis[0])["runtime_reanalysis"],
+            )
+            self.assertIsNotNone(runtime_analysis[1])
 
     @unittest.skipIf(os.name == "nt", "POSIX launcher test")
     def test_plugin_hook_fails_open_when_python_is_unavailable(self) -> None:
@@ -1254,6 +1395,62 @@ class WheelInstallationTest(unittest.TestCase):
             )
             self.assertEqual("initialized", json.loads(initialize.stdout)["status"])
             db_path = data_dir / "events.db"
+            installed_secret = "INSTALLED.REGISTRATION.SECRET.7b2e"
+            (outside / ".env.agent").write_text(
+                f"PRIVATE_TOKEN={installed_secret}\nPUBLIC_MODE=demo\n",
+                encoding="utf-8",
+            )
+            suggestion = subprocess.run(
+                [
+                    str(python),
+                    "-m",
+                    "tooluseproxy",
+                    "protect",
+                    "suggest",
+                    "--path",
+                    ".env.agent",
+                    "--workspace",
+                    str(outside),
+                    "--data-dir",
+                    str(data_dir),
+                    "--json",
+                ],
+                cwd=outside,
+                env=clean_environment,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            suggestion_payload = json.loads(suggestion.stdout)
+            self.assertEqual("review_required", suggestion_payload["status"])
+            self.assertNotIn(installed_secret, suggestion.stdout + suggestion.stderr)
+            installed_candidate = suggestion_payload["candidates"][0]
+            approval = subprocess.run(
+                [
+                    str(python),
+                    "-m",
+                    "tooluseproxy",
+                    "protect",
+                    "approve",
+                    installed_candidate["candidate_id"],
+                    "--candidate-revision",
+                    installed_candidate["candidate_revision"],
+                    "--expected-manifest-sha256",
+                    suggestion_payload["manifest_sha256"],
+                    "--workspace",
+                    str(outside),
+                    "--data-dir",
+                    str(data_dir),
+                    "--json",
+                ],
+                cwd=outside,
+                env=clean_environment,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual("approved", json.loads(approval.stdout)["status"])
+            self.assertNotIn(installed_secret, approval.stdout + approval.stderr)
             payload = {
                 "hook_event_name": "PreToolUse",
                 "session_id": "installed-session",

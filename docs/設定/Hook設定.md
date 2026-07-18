@@ -496,6 +496,10 @@ repository内の旧`.tooluseproxy/events.db`は自動探索しません。移行
   - operation ID/index、snapshot ID、resource stateにより実行証拠と接続します
 - `source_binding_edges`
   - protected sourceとartifactグラフの接続点を解析runごとに保存します
+- `protected_source_candidates`
+  - agentが明示pathから作ったvalue-freeなsource提案、内部再検証用hash/stat、`approving`を含む現在statusを保存します
+- `protected_source_candidate_reviews`
+  - proposed / approving / approved / rejected / ignored / staleの遷移とapproval started / releasedを本文なしのappend-only監査として保存します
 - `lineage_assignments`
   - sourceから各nodeへ到達する最良経路を保存します
 - `analysis_cursors`
@@ -549,6 +553,12 @@ manifest schema v2では、`selector`でcontent比較へ使う値を限定でき
 selector省略時は従来どおり全decoded string valueを保護します。schema省略またはschema v1の既存manifestもselectorなしのlegacy形式として読み続けます。
 
 selectorが限定するのはdirect content-bindingです。登録pathそのものをRead、copy、`cat ... | curl`、または意味を証明できないtransformへ渡した場合、fileがselected secretを内包するためpath-based taintは保守的に維持します。public siblingのliteralを直接送るだけなら保護対象にしませんが、protected file全体を経由した操作をpublicとは推定しません。
+
+coding agentがmanifestを直接編集する代わりに、Pluginでは`sh "<PLUGIN_ROOT>/hooks/run_cli.sh" protect suggest --path <relative-path> --json`で値を含まない候補を作れます。対象はユーザーまたはagentが明示した`.env` / `.env.*` / JSON pathだけで、workspace走査はしません。secretらしいfield名に一致した非空stringだけをdotenv key / JSON Pointerとして提案します。sourceとmanifestは変更しませんが、local runtime DBにはvalue-freeな候補・review監査と内部再検証用のsource hash/statを保存します。raw valueと本文previewはstdout、stderr、候補row、review rowのいずれにも残さず、source hashは外向きoutputやreviewには出しません。
+
+`suggest`はmanifestを変更しません。agentは提案entryをユーザーへ示し、明示承認後にだけ`protect approve`へ保存済みcandidate ID、opaque revision、提案時manifest SHA-256を渡します。approveはworkspace lockを取得してからDB上の候補を`proposed`から`approving`へ予約し、sourceのstat・content hash・selector解決とexpected manifest hashの楽観的な事前条件を再検証します。lockはmanifest更新後のDB確定または安全なreleaseまで保持するため、同時のreject / ignore / approveが異なる状態を確定しません。途中停止や一時的なstate errorでは、同じcandidate ID、opaque revision、manifest SHA-256のapprove入力を再実行します。exact登録の回復はdirectory fsyncと再検証に成功した後だけDBをapprovedへ進めます。workspace lockで直列化するのはToolUseProxyの協調writer同士です。POSIX filesystemには同一UIDの非協調editorも含めたportableなcontent compare-and-swapがないため、filesystemの最終再検証からatomic replaceまで、またはdurability再確認からDB確定までの競合を含むfilesystem / DB横断の直列化は保証外です。この登録workflowは現在POSIX（macOS/Linux）対応で、Windowsでは`protect suggest / approve / reject / ignore`を未対応とします。候補作成と再検証で検出したsourceまたはmanifestの変更は登録せず、新しいsuggestを要求します。
+
+候補のSQLite rowにはpath、selector、固定rule、confidence、内部再検証用hash/statだけを保持し、secret本文は保持しません。`reject` / `ignore`は同一file内容・detector versionの候補を再提示しないためのvalue-free監査です。schema省略またはschema v1のlegacy manifestはv1→v2自動migration CLIが未実装のため、明示的にv2へ移行するまでこのwriterでは登録できません。登録済みmanifestは次のanalysisでsource digest差分として検出され、そのworkspace / sessionをfull rebuildします。
 
 直接実行される`curl`の静的body optionでは、送信operandとselected secret valueが完全一致した場合だけ、command全体の長さに影響されないcritical bindingを作ります。shell変数やcommand substitutionは展開せず、unknown option、`@file` / `@-`、上限超過を含むsegmentは値単位の証明をせず従来のsegment-level evidenceへ戻します。抽出値は追加の永続rowや評価reportへ保存しません。
 

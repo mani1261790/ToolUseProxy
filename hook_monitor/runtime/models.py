@@ -136,6 +136,58 @@ class ProtectedSource:
 
 
 @dataclass(frozen=True)
+class ProtectedSourceCandidate:
+    candidate_id: str
+    candidate_revision_sha256: str
+    workspace_id: str
+    relative_path: str
+    detector_version: str
+    discovery_source: str
+    rule_ids: tuple[str, ...]
+    confidence: float
+    proposed_source_json: str
+    source_sha256: str
+    source_size: int
+    source_mtime_ns: int
+    source_device: int | None
+    source_inode: int | None
+    manifest_sha256: str | None
+    suppression_fingerprint: str
+    status: str
+    approved_source_id: str | None
+    approval_attempt_id: str | None
+    approval_started_at: str | None
+    created_at: str
+    updated_at: str
+    reviewed_at: str | None
+
+
+@dataclass(frozen=True)
+class ProtectedSourceCandidateCreateResult:
+    candidate: ProtectedSourceCandidate
+    created: bool
+    suppressed: bool
+    already_approved: bool
+    approval_in_progress: bool
+
+
+@dataclass(frozen=True)
+class ProtectedSourceCandidateReview:
+    review_id: str
+    candidate_id: str
+    from_status: str
+    to_status: str
+    decision_code: str
+    authority: str
+    expected_candidate_revision_sha256: str | None
+    result_candidate_revision_sha256: str
+    expected_manifest_sha256: str | None
+    result_manifest_sha256: str | None
+    approval_attempt_id: str | None
+    recorded_at: str
+
+
+@dataclass(frozen=True)
 class SourceChunk:
     chunk_id: str
     source_id: str
