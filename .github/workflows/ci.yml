@@ -40,13 +40,32 @@ jobs:
       - name: Compile Python sources
         run: python -m compileall -q hook_monitor tooluseproxy scripts tests
 
-      - name: Check full and incremental similarity parity
+      - name: Check similarity development contract
+        run: >-
+          python -m hook_monitor.evaluation.cli
+          --split development
+          --benchmark-repeats 1
+          --format text
+          --check
+          --require-go
+
+      - name: Check similarity validation contract
+        run: >-
+          python -m hook_monitor.evaluation.cli
+          --split validation
+          --benchmark-repeats 1
+          --format text
+          --check
+          --require-go
+
+      - name: Check complete similarity contract
         run: >-
           python -m hook_monitor.evaluation.cli
           --split all
           --benchmark-repeats 1
           --format text
           --check
+          --require-go
 
       - name: Check source-ingestion runtime parity
         run: >-

@@ -103,23 +103,20 @@ class SimilarityEvaluationTest(unittest.TestCase):
                 self.assertTrue(parity_case["findings_equal"])
                 self.assertTrue(parity_case["decisions_equal"])
 
-    def test_version_one_development_baseline_is_explicit(self) -> None:
+    def test_version_one_runner_measures_current_production_outcome(self) -> None:
         pair = self.report["metrics"]["pair_classification"]["gate"]
         reach = self.report["metrics"]["end_to_end"]["gate"]["reachability"]
 
         self.assertEqual(
-            {"tp": 8, "fp": 10, "tn": 2, "fn": 2},
+            {"tp": 10, "fp": 0, "tn": 12, "fn": 0},
             {key: pair[key] for key in ("tp", "fp", "tn", "fn")},
         )
-        self.assertEqual(0.571428, pair["f1"])
+        self.assertEqual(1.0, pair["f1"])
         self.assertEqual(
-            {"tp": 5, "fp": 2, "tn": 1, "fn": 1},
+            {"tp": 6, "fp": 0, "tn": 3, "fn": 0},
             {key: reach[key] for key in ("tp", "fp", "tn", "fn")},
         )
-        self.assertEqual(
-            ["dev-af-separator-05", "dev-sb-separator-17"],
-            pair["false_negative_ids"],
-        )
+        self.assertEqual([], pair["false_negative_ids"])
 
     def test_artifact_retrieval_prefers_latest_exact_candidate(self) -> None:
         candidates = (
@@ -180,9 +177,9 @@ class SimilarityEvaluationTest(unittest.TestCase):
 
         self.assertIn("exact-old", retrieved)
         self.assertIn("exact-new", retrieved)
-        self.assertEqual(200, len(retrieved))
+        self.assertEqual(202, len(retrieved))
         self.assertEqual(
-            198,
+            200,
             sum(candidate_id.startswith("candidate-") for candidate_id in retrieved),
         )
 

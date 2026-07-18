@@ -114,7 +114,7 @@ Plugin更新でprotected-source detector versionが変わると、更新前の`p
 
 reject / ignoreの抑止は同じfile内容とdetector versionの組に限定されるため、旧versionのnegative reviewは新versionの候補を抑止しません。一方、すでに`approved`となりmanifestへ登録されたsourceはuser-owned manifestをauthorityとして維持し、detector更新だけを理由に削除・再登録・selector変更しません。更新前に開始済みの`approving`または完了済み`approved`候補へ同じexact approve入力を再送する操作は、途中停止からのdurability recoveryに限って許可されます。新しい提案の承認には流用しません。
 
-`PLUGIN_DATA`のcandidate / review監査はPlugin code更新後も保持します。通常のHookは候補scan、candidate migration、manifest変更を行いません。Plugin更新後は新しいHook definitionをreview・trustして新しいtaskを開始し、`doctor` / `status`を実行してからpending候補を再scanしてください。`0.1.0-alpha.2`のdetector更新はSQLite schema v4を変更しないため、この更新だけを理由にDB migrationや`init`を再実行する必要はありません。将来SQLite schema更新を伴うreleaseで`doctor` / `status`がupgrade必要と報告した場合だけ、Hook外で明示的な`init --codex`を実行します。
+`PLUGIN_DATA`のcandidate / review監査はPlugin code更新後も保持します。通常のHookは候補scan、candidate migration、manifest変更を行いません。Plugin更新後は新しいHook definitionをreview・trustして新しいtaskを開始し、`doctor` / `status`を実行してからpending候補を再scanしてください。`0.1.0-alpha.3`は類似度profile v2とruntime graph v19を導入します。既存sessionを次に解析する際は古いcandidate indexを使い続けず、そのsessionのgraphとindexを一度全再構築します。SQLite schemaはv4のままなので、この更新だけを理由にDB migrationや`init`を再実行する必要はありません。将来SQLite schema更新を伴うreleaseで`doctor` / `status`がupgrade必要と報告した場合だけ、Hook外で明示的な`init --codex`を実行します。
 
 ### 明示pathのfallbackと候補承認
 

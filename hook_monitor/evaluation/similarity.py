@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
 import tempfile
 import time
 from collections import Counter, defaultdict
@@ -20,10 +21,21 @@ from hook_monitor.analysis.graph import (
 from hook_monitor.analysis.leak_detection import LeakFinding, detect_leaks
 from hook_monitor.analysis.lineage import propagate_lineage
 from hook_monitor.analysis.lineage import propagate_lineage_incremental
-from hook_monitor.analysis.similarity import SimilarityDecision, compare_text, make_shingles
+from hook_monitor.analysis.similarity import (
+    SIMILARITY_PROFILE_VERSION,
+    SIMILARITY_SHINGLE_SIZE,
+    SIMILARITY_SHINGLE_THRESHOLD,
+    SimilarityCandidateStats,
+    SimilarityDecision,
+    compare_text,
+    make_shingles,
+    prepare_similarity_text,
+    rank_similarity_candidate_ids,
+)
 from hook_monitor.evaluation.dataset import (
     LineageScenario,
     PairExample,
+    RetrievalPool,
     SimilarityDataset,
     SUPPORTED_PAIR_SCOPES,
 )
@@ -47,7 +59,8 @@ from hook_monitor.runtime.storage import EventStore
 from hook_monitor.runtime.workspace import resolve_workspace
 
 
-RUNNER_VERSION = "similarity-evaluation-v1"
+REPORT_SCHEMA_VERSION = 2
+RUNNER_VERSION = "similarity-evaluation-v2"
 DEFAULT_MINIMUM_PATH_SCORE = 0.15
 DEFAULT_FINDING_MIN_SCORE = 0.30
 _ACTION_PRIORITY = {
@@ -56,6 +69,8 @@ _ACTION_PRIORITY = {
     "warn": 2,
     "allow": 3,
 }
+_PRIVACY_CANARY_PATTERN = re.compile(r"\bC\.[A-Z0-9][A-Z0-9._-]{7,}\b")
+_MIN_PRIVACY_BODY_PROBE_LENGTH = 16
 
 
 @dataclass(frozen=True)
@@ -109,7 +124,12 @@ def evaluate_similarity(
     pairs = dataset.select_pairs(split)
     scenarios = dataset.select_scenarios(split)
     pair_cases = [_evaluate_pair(pair) for pair in pairs]
-    retrieval_cases = _evaluate_retrieval(pairs)
+    explicit_retrieval_pools = dataset.select_retrieval_pools(split)
+    retrieval_cases = (
+        _evaluate_retrieval_pools(explicit_retrieval_pools)
+        if explicit_retrieval_pools
+        else _evaluate_retrieval(pairs)
+    )
 
     scenario_results: list[dict[str, Any]] = []
     parity_cases: list[dict[str, Any]] = []
@@ -131,6 +151,8 @@ def evaluate_similarity(
                 "id": scenario.scenario_id,
                 "split": scenario.split,
                 "tags": list(scenario.tags),
+                "family": scenario.family,
+                "counterfactual_group": scenario.counterfactual_group,
                 "observe_only": scenario.observe_only,
                 "expected_reach": scenario.should_reach_sink,
                 "actual_reach": full.outcome["reached"],
@@ -147,33 +169,44 @@ def evaluate_similarity(
     latency = _benchmark(
         pairs,
         scenarios,
+        retrieval_pools=explicit_retrieval_pools,
         benchmark_repeats=benchmark_repeats,
         minimum_path_score=minimum_path_score,
         finding_min_score=finding_min_score,
     )
     split_name = split or "all"
     pair_metrics = _pair_metrics(pair_cases)
-    retrieval_metrics = _retrieval_metrics(retrieval_cases)
+    retrieval_metrics = _retrieval_metrics(
+        retrieval_cases,
+        dataset_schema_version=dataset.schema_version,
+    )
     end_to_end_metrics = _end_to_end_metrics(scenario_results)
     parity_metrics = _parity_metrics(parity_cases)
-    return {
-        "schema_version": 1,
+    report = {
+        "schema_version": REPORT_SCHEMA_VERSION,
         "runner_version": RUNNER_VERSION,
         "dataset": {
             "id": dataset.dataset_id,
+            "schema_version": dataset.schema_version,
             "version": dataset.dataset_version,
             "sha256": dataset.digest_sha256,
+            "digest_matches_pinned": (
+                dataset.digest_sha256 == dataset.pinned_digest_sha256
+            ),
             "split": split_name,
             "pair_count": len(pairs),
             "scenario_count": len(scenarios),
+            "retrieval_pool_count": len(explicit_retrieval_pools),
+            "split_contract": dataset.split_contract,
         },
         "configuration": {
             "artifact_candidate_limit": MAX_LEXICAL_CANDIDATES,
             "source_candidate_limit": MAX_SOURCE_CANDIDATES,
             "artifact_minimum_length": 8,
             "source_minimum_length": 4,
-            "shingle_size": 5,
-            "shingle_jaccard_threshold": 0.30,
+            "similarity_profile": SIMILARITY_PROFILE_VERSION,
+            "shingle_size": SIMILARITY_SHINGLE_SIZE,
+            "shingle_jaccard_threshold": SIMILARITY_SHINGLE_THRESHOLD,
             "embedding_backend": None,
             "minimum_path_score": minimum_path_score,
             "finding_min_score": finding_min_score,
@@ -210,6 +243,16 @@ def evaluate_similarity(
             "parity": parity_cases,
         },
     }
+    _finish_evaluation_contract(
+        report,
+        dataset,
+        split=split,
+        pair_cases=pair_cases,
+        retrieval_cases=retrieval_cases,
+        scenario_cases=scenario_results,
+        parity_metrics=parity_metrics,
+    )
+    return report
 
 
 def render_similarity_report(report: dict[str, Any]) -> str:
@@ -221,10 +264,14 @@ def render_similarity_report(report: dict[str, Any]) -> str:
     latency = report["metrics"]["latency_ms"]
     lines = [
         (
-            f"similarity baseline dataset={dataset['id']} version={dataset['version']} "
+            f"similarity evaluation runner={report['runner_version']} "
+            f"dataset={dataset['id']} version={dataset['version']} "
             f"split={dataset['split']} sha256={dataset['sha256'][:12]}"
         ),
-        f"pairs={dataset['pair_count']} scenarios={dataset['scenario_count']}",
+        (
+            f"pairs={dataset['pair_count']} scenarios={dataset['scenario_count']} "
+            f"retrieval_pools={dataset['retrieval_pool_count']}"
+        ),
     ]
     for scope in ("artifact_flow", "source_binding"):
         item = retrieval[scope]["gate"]
@@ -260,6 +307,22 @@ def render_similarity_report(report: dict[str, Any]) -> str:
         f"full/incremental parity={'PASS' if parity['passed'] else 'FAIL'} "
         f"cases={parity['case_count']} mismatches={len(parity['mismatch_ids'])}"
     )
+    summary = report["summary"]
+    lines.append(
+        f"contract check={'PASS' if summary['check_passed'] else 'FAIL'} "
+        f"digest={'PASS' if dataset['digest_matches_pinned'] else 'FAIL'} "
+        f"baseline={'PASS' if summary['baseline_reproduced'] else 'FAIL'} "
+        f"privacy={'PASS' if summary['privacy_passed'] else 'FAIL'}"
+    )
+    quality = report["quality"]
+    if quality["available"]:
+        failed_checks = [
+            name for name, passed in quality["checks"].items() if not passed
+        ]
+        lines.append(
+            f"quality require-go={'PASS' if quality['passed'] else 'FAIL'} "
+            f"failed={','.join(failed_checks) if failed_checks else 'none'}"
+        )
     lines.append(
         "latency p95 ms "
         f"pair={latency['pair']['p95']:.3f} "
@@ -297,39 +360,78 @@ def simulate_candidate_retrieval(
     query_text: str,
     candidates: Sequence[RetrievalCandidate],
 ) -> tuple[str, ...]:
+    """Reproduce production exact-key and candidate-feature eligibility."""
+
     if scope not in SUPPORTED_PAIR_SCOPES:
         raise ValueError(f"unsupported retrieval scope: {scope}")
     candidate_ids = [item.candidate_id for item in candidates]
     if len(candidate_ids) != len(set(candidate_ids)):
         raise ValueError("retrieval candidate ids must be unique")
 
-    query_hash = _text_hash(query_text)
+    query_normalized = normalize_text(query_text)
+    prepared_query = prepare_similarity_text(
+        query_text,
+        normalized_text=query_normalized,
+    )
+    normalized_candidates = {
+        item.candidate_id: normalize_text(item.text) for item in candidates
+    }
+    prepared_candidates = {
+        item.candidate_id: prepare_similarity_text(
+            item.text,
+            normalized_text=normalized_candidates[item.candidate_id],
+        )
+        for item in candidates
+    }
     exact = [
         item
         for item in candidates
-        if _text_hash(item.text) == query_hash
+        if prepared_candidates[item.candidate_id].primary_exact_key
+        == prepared_query.primary_exact_key
     ]
     if scope == "artifact_flow" and exact:
         latest = max(exact, key=lambda item: (item.sequence_no, item.candidate_id))
         return (latest.candidate_id,)
 
-    query_shingles = make_shingles(normalize_text(query_text))
-    ranked: list[tuple[int, str]] = []
-    for item in candidates:
-        overlap = len(query_shingles & make_shingles(normalize_text(item.text)))
-        if overlap:
-            ranked.append((overlap, item.candidate_id))
-    ranked.sort(key=lambda item: (-item[0], item[1]))
+    exact_ids = sorted(item.candidate_id for item in exact)
+    exact_id_set = set(exact_ids)
     limit = (
         MAX_LEXICAL_CANDIDATES
         if scope == "artifact_flow"
         else MAX_SOURCE_CANDIDATES
     )
-    lexical_ids = [candidate_id for _overlap, candidate_id in ranked[:limit]]
+    candidate_stats: list[SimilarityCandidateStats] = []
+    for item in candidates:
+        if scope == "source_binding" and item.candidate_id in exact_id_set:
+            continue
+        prepared_candidate = prepared_candidates[item.candidate_id]
+        overlap = len(
+            prepared_query.candidate_features
+            & prepared_candidate.candidate_features
+        )
+        if overlap:
+            candidate_stats.append(
+                SimilarityCandidateStats(
+                    candidate_id=item.candidate_id,
+                    overlap_count=overlap,
+                    candidate_feature_count=len(
+                        prepared_candidate.candidate_features
+                    ),
+                    candidate_normalized_length=len(
+                        normalized_candidates[item.candidate_id]
+                    ),
+                )
+            )
+    lexical_ids = rank_similarity_candidate_ids(
+        query_feature_count=len(prepared_query.candidate_features),
+        query_normalized_length=len(query_normalized),
+        minimum_length=4 if scope == "source_binding" else 8,
+        candidates=candidate_stats,
+        limit=limit,
+    )
     if scope == "artifact_flow":
         return tuple(lexical_ids)
-    exact_ids = sorted(item.candidate_id for item in exact)
-    return tuple(dict.fromkeys(exact_ids + lexical_ids))
+    return tuple(dict.fromkeys((*exact_ids, *lexical_ids)))
 
 
 def nearest_rank_percentile(values: Sequence[float], percentile: float) -> float:
@@ -349,6 +451,8 @@ def _evaluate_pair(pair: PairExample) -> dict[str, Any]:
         "split": pair.split,
         "scope": pair.scope,
         "tags": list(pair.tags),
+        "family": pair.family,
+        "counterfactual_group": pair.counterfactual_group,
         "observe_only": pair.observe_only,
         "expected": pair.should_link,
         "actual": decision.matched,
@@ -404,13 +508,76 @@ def _evaluate_retrieval(pairs: Sequence[PairExample]) -> list[dict[str, Any]]:
                     "id": pair.example_id,
                     "split": pair.split,
                     "scope": scope,
+                    "family": pair.family,
+                    "counterfactual_group": pair.counterfactual_group,
                     "observe_only": pair.observe_only,
                     "relevant": pair.should_link,
                     "retrieved_relevant": pair.example_id in retrieved,
                     "candidate_count": len(retrieved),
+                    "pool_size": len(candidates),
+                    "cap_saturated": len(candidates)
+                    > (
+                        MAX_LEXICAL_CANDIDATES
+                        if scope == "artifact_flow"
+                        else MAX_SOURCE_CANDIDATES
+                    ),
                 }
             )
     return results
+
+
+def _evaluate_retrieval_pools(
+    pools: Sequence[RetrievalPool],
+) -> list[dict[str, Any]]:
+    results: list[dict[str, Any]] = []
+    for pool in pools:
+        candidates = tuple(
+            RetrievalCandidate(
+                candidate_id=item.candidate_id,
+                text=item.text,
+                sequence_no=item.sequence_no,
+            )
+            for item in pool.candidates
+        )
+        retrieved = _simulate_production_candidate_retrieval(
+            scope=pool.scope,
+            query_text=pool.query_text,
+            candidates=candidates,
+        )
+        limit = (
+            MAX_LEXICAL_CANDIDATES
+            if pool.scope == "artifact_flow"
+            else MAX_SOURCE_CANDIDATES
+        )
+        results.append(
+            {
+                "id": pool.pool_id,
+                "split": pool.split,
+                "scope": pool.scope,
+                "family": pool.family,
+                "counterfactual_group": pool.counterfactual_group,
+                "observe_only": pool.observe_only,
+                "relevant": True,
+                "retrieved_relevant": pool.relevant_candidate_id in retrieved,
+                "candidate_count": len(retrieved),
+                "pool_size": len(candidates),
+                "cap_saturated": len(candidates) > limit,
+            }
+        )
+    return results
+
+
+def _simulate_production_candidate_retrieval(
+    *,
+    scope: str,
+    query_text: str,
+    candidates: Sequence[RetrievalCandidate],
+) -> tuple[str, ...]:
+    return simulate_candidate_retrieval(
+        scope=scope,
+        query_text=query_text,
+        candidates=candidates,
+    )
 
 
 def _make_scenario_material(
@@ -946,6 +1113,16 @@ def _pair_metrics(cases: list[dict[str, Any]]) -> dict[str, Any]:
         scope: _binary_summary([item for item in cases if item["scope"] == scope])
         for scope in sorted({item["scope"] for item in cases})
     }
+    by_family = {
+        family: _binary_summary(
+            [
+                item
+                for item in gate_cases
+                if item["family"] == family
+            ]
+        )
+        for family in sorted({item["family"] for item in gate_cases})
+    }
     tags = sorted({tag for item in cases for tag in item["tags"]})
     by_tag = {
         tag: _binary_summary([item for item in cases if tag in item["tags"]])
@@ -966,7 +1143,9 @@ def _pair_metrics(cases: list[dict[str, Any]]) -> dict[str, Any]:
         "all": all_metrics,
         "gate": _binary_summary(gate_cases),
         "by_scope": by_scope,
+        "by_family": by_family,
         "by_tag": by_tag,
+        "counterfactuals": _counterfactual_metrics(gate_cases),
         "method_counts": dict(sorted(methods.items())),
         "score_by_method": scores_by_method,
         "score_semantics": (
@@ -976,26 +1155,58 @@ def _pair_metrics(cases: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def _retrieval_metrics(cases: list[dict[str, Any]]) -> dict[str, Any]:
+def _retrieval_metrics(
+    cases: list[dict[str, Any]],
+    *,
+    dataset_schema_version: int,
+) -> dict[str, Any]:
     metrics: dict[str, Any] = {}
     for scope, limit in (
         ("artifact_flow", MAX_LEXICAL_CANDIDATES),
         ("source_binding", MAX_SOURCE_CANDIDATES),
     ):
         scoped = [item for item in cases if item["scope"] == scope]
+        gate_scoped = [item for item in scoped if not item["observe_only"]]
+        pool_size = max((int(item["pool_size"]) for item in scoped), default=0)
         metrics[scope] = {
             "limit": limit,
-            "pool_size": len(scoped),
-            "pool_exceeds_limit": len(scoped) > limit,
-            "metric_name": f"paired lexical eligibility recall@{limit}",
-            "implementation": "evaluation_simulation_v1",
+            "pool_size": pool_size,
+            "pool_exceeds_limit": pool_size > limit,
+            "saturated_case_count": sum(
+                bool(item["cap_saturated"]) for item in scoped
+            ),
+            "metric_name": f"candidate eligibility recall@{limit}",
+            "implementation": "production_preparation_adapter_v2",
             "production_equivalence": (
-                "Reproduces current raw-hash priority and shared 5-gram ranking "
-                "without mutating Hook runtime code."
+                "Uses production primary exact keys and candidate features, then "
+                "applies the shared coverage, overlap, candidate-ID rank with the "
+                "same artifact exact priority and source exact-plus-lexical cap "
+                "semantics."
+            ),
+            "corpus_scope": (
+                "versioned_saturated_pool"
+                if dataset_schema_version >= 2
+                else "historical_pair_derived_pool"
             ),
             "all": _retrieval_summary(scoped),
-            "gate": _retrieval_summary(
-                [item for item in scoped if not item["observe_only"]]
+            "gate": _retrieval_summary(gate_scoped),
+            "by_family": {
+                family: _retrieval_summary(
+                    [item for item in gate_scoped if item["family"] == family]
+                )
+                for family in sorted(
+                    {item["family"] for item in gate_scoped}
+                )
+            },
+            "counterfactuals": _counterfactual_metrics(
+                [
+                    {
+                        **item,
+                        "expected": True,
+                        "actual": item["retrieved_relevant"],
+                    }
+                    for item in gate_scoped
+                ]
             ),
         }
     return metrics
@@ -1022,11 +1233,17 @@ def _retrieval_summary(cases: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _end_to_end_metrics(cases: list[dict[str, Any]]) -> dict[str, Any]:
+    gate_cases = [item for item in cases if not item["observe_only"]]
     return {
         "all": _scenario_summary(cases),
-        "gate": _scenario_summary(
-            [item for item in cases if not item["observe_only"]]
-        ),
+        "gate": _scenario_summary(gate_cases),
+        "by_family": {
+            family: _scenario_summary(
+                [item for item in gate_cases if item["family"] == family]
+            )
+            for family in sorted({item["family"] for item in gate_cases})
+        },
+        "counterfactuals": _scenario_counterfactual_metrics(gate_cases),
     }
 
 
@@ -1082,6 +1299,52 @@ def _scenario_summary(cases: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _counterfactual_metrics(cases: Sequence[dict[str, Any]]) -> dict[str, Any]:
+    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for item in cases:
+        group = item.get("counterfactual_group")
+        if isinstance(group, str):
+            grouped[group].append(item)
+    failed: list[str] = []
+    for group, items in grouped.items():
+        if len(items) != 2 or not all(
+            item["expected"] == item["actual"] for item in items
+        ):
+            failed.append(group)
+    return {
+        "group_count": len(grouped),
+        "passed_groups": len(grouped) - len(failed),
+        "accuracy": _safe_ratio(len(grouped) - len(failed), len(grouped)),
+        "failed_group_ids": sorted(failed),
+    }
+
+
+def _scenario_counterfactual_metrics(
+    cases: Sequence[dict[str, Any]],
+) -> dict[str, Any]:
+    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for item in cases:
+        group = item.get("counterfactual_group")
+        if isinstance(group, str):
+            grouped[group].append(item)
+    failed = sorted(
+        group
+        for group, items in grouped.items()
+        if len(items) != 2
+        or not all(
+            item["expected_reach"] == item["actual_reach"]
+            and item["expected_action"] == item["actual_action"]
+            for item in items
+        )
+    )
+    return {
+        "group_count": len(grouped),
+        "passed_groups": len(grouped) - len(failed),
+        "accuracy": _safe_ratio(len(grouped) - len(failed), len(grouped)),
+        "failed_group_ids": failed,
+    }
+
+
 def _parity_metrics(cases: list[dict[str, Any]]) -> dict[str, Any]:
     mismatches = sorted(item["id"] for item in cases if not item["passed"])
     return {
@@ -1134,10 +1397,304 @@ def _binary_summary(cases: Sequence[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _finish_evaluation_contract(
+    report: dict[str, Any],
+    dataset: SimilarityDataset,
+    *,
+    split: str | None,
+    pair_cases: Sequence[dict[str, Any]],
+    retrieval_cases: Sequence[dict[str, Any]],
+    scenario_cases: Sequence[dict[str, Any]],
+    parity_metrics: dict[str, Any],
+) -> None:
+    pair_gate = report["metrics"]["pair_classification"]["gate"]
+    retrieval = report["metrics"]["candidate_retrieval"]
+    e2e_gate = report["metrics"]["end_to_end"]["gate"]
+    action_correct = sum(
+        int(item["expected_action"] == item["actual_action"])
+        for item in scenario_cases
+        if not item["observe_only"]
+    )
+    observed_baseline: dict[str, object] = {
+        "pair_tp": pair_gate["tp"],
+        "pair_fp": pair_gate["fp"],
+        "pair_tn": pair_gate["tn"],
+        "pair_fn": pair_gate["fn"],
+        "artifact_candidate_positive_cases": retrieval["artifact_flow"]["gate"][
+            "positive_cases"
+        ],
+        "artifact_candidate_retrieved": retrieval["artifact_flow"]["gate"][
+            "retrieved"
+        ],
+        "source_candidate_positive_cases": retrieval["source_binding"]["gate"][
+            "positive_cases"
+        ],
+        "source_candidate_retrieved": retrieval["source_binding"]["gate"][
+            "retrieved"
+        ],
+        "e2e_tp": e2e_gate["reachability"]["tp"],
+        "e2e_fp": e2e_gate["reachability"]["fp"],
+        "e2e_tn": e2e_gate["reachability"]["tn"],
+        "e2e_fn": e2e_gate["reachability"]["fn"],
+        "e2e_action_correct": action_correct,
+        "e2e_action_cases": e2e_gate["case_count"],
+        "parity_mismatches": len(parity_metrics["mismatch_ids"]),
+        "pair_outcomes_sha256": _outcomes_digest(
+            b"tooluseproxy-similarity-pair-outcomes-v2\0",
+            [
+                {
+                    "id": item["id"],
+                    "expected": item["expected"],
+                    "actual": item["actual"],
+                    "method": item["method"],
+                    "score": item["score"],
+                }
+                for item in pair_cases
+            ],
+        ),
+        "candidate_outcomes_sha256": _outcomes_digest(
+            b"tooluseproxy-similarity-candidate-outcomes-v2\0",
+            [
+                {
+                    "id": item["id"],
+                    "retrieved_relevant": item["retrieved_relevant"],
+                    "candidate_count": item["candidate_count"],
+                    "pool_size": item["pool_size"],
+                }
+                for item in retrieval_cases
+            ],
+        ),
+        "scenario_outcomes_sha256": _outcomes_digest(
+            b"tooluseproxy-similarity-scenario-outcomes-v2\0",
+            [
+                {
+                    "id": item["id"],
+                    "actual_reach": item["actual_reach"],
+                    "actual_action": item["actual_action"],
+                    "path_score": item["path_score"],
+                    "hop_count": item["hop_count"],
+                }
+                for item in scenario_cases
+            ],
+        ),
+        "privacy_exposures": 0,
+    }
+    expected_baseline = dataset.select_baseline(split)
+    privacy = _privacy_metrics(
+        dataset,
+        report,
+        extra_surface={
+            "expected_baseline": expected_baseline,
+            "observed_baseline": observed_baseline,
+        },
+    )
+    observed_baseline["privacy_exposures"] = privacy["total_exposure_count"]
+    baseline_reproduced = (
+        observed_baseline == expected_baseline
+        if expected_baseline is not None
+        else report["dataset"]["digest_matches_pinned"]
+    )
+    caps_exercised = all(
+        retrieval[scope]["saturated_case_count"] > 0
+        for scope in ("artifact_flow", "source_binding")
+    )
+    v2_contract = dataset.schema_version >= 2
+    invariants = {
+        "dataset_digest_matches_pinned": report["dataset"][
+            "digest_matches_pinned"
+        ],
+        "baseline_reproduced": baseline_reproduced,
+        "privacy_passed": privacy["total_exposure_count"] == 0,
+        "full_incremental_parity": parity_metrics["passed"],
+        "artifact_and_source_caps_exercised": (
+            caps_exercised if v2_contract else True
+        ),
+        "versioned_family_contract_loaded": (
+            dataset.family_contract is not None if v2_contract else True
+        ),
+        "split_vocabulary_and_shape_contract_loaded": (
+            dataset.split_contract is not None if v2_contract else True
+        ),
+    }
+    report["metrics"]["privacy"] = privacy
+    report["metrics"]["invariants"] = {
+        **invariants,
+        "passed": all(invariants.values()),
+    }
+    report["baseline"] = {
+        "expected": expected_baseline,
+        "observed": observed_baseline,
+        "reproduced": baseline_reproduced,
+    }
+    quality = _go_no_go_assessment(report, dataset.go_no_go)
+    report["quality"] = quality
+    report["summary"].update(
+        {
+            "baseline_reproduced": baseline_reproduced,
+            "privacy_passed": privacy["total_exposure_count"] == 0,
+            "invariants_passed": all(invariants.values()),
+            "check_passed": all(invariants.values()),
+            "go_no_go_available": dataset.go_no_go is not None,
+            "go_no_go_passed": quality["passed"],
+            "status": "go" if quality["passed"] else "no_go",
+        }
+    )
+
+
+def _privacy_metrics(
+    dataset: SimilarityDataset,
+    report: dict[str, Any],
+    *,
+    extra_surface: object | None = None,
+) -> dict[str, int]:
+    serialized = json.dumps(
+        {"report": report, "extra_surface": extra_surface},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    fixture_texts = _fixture_texts(dataset)
+    body_probe_texts = tuple(
+        text
+        for text in fixture_texts
+        if _is_privacy_body_probe(text)
+    )
+    body_exposures = sum(text in serialized for text in body_probe_texts)
+    body_hash_exposures = sum(
+        hashlib.sha256(text.encode("utf-8")).hexdigest() in serialized
+        for text in fixture_texts
+    )
+    return {
+        "fixture_body_probe_count": len(body_probe_texts),
+        "fixture_hash_probe_count": len(fixture_texts),
+        "fixture_body_exposure_count": body_exposures,
+        "fixture_body_hash_exposure_count": body_hash_exposures,
+        "total_exposure_count": body_exposures + body_hash_exposures,
+    }
+
+
+def _is_privacy_body_probe(text: str) -> bool:
+    if len(text) >= _MIN_PRIVACY_BODY_PROBE_LENGTH:
+        return True
+    if _PRIVACY_CANARY_PATTERN.search(text) is not None:
+        return True
+    stripped = text.strip()
+    return (
+        len(stripped) >= 8
+        and any(character.isalpha() for character in stripped)
+        and any(character.isdigit() for character in stripped)
+        and len(set(stripped.casefold())) >= 6
+    )
+
+
+def _fixture_texts(dataset: SimilarityDataset) -> tuple[str, ...]:
+    texts = {
+        text
+        for pair in dataset.pairs
+        for text in (pair.left_text, pair.right_text)
+    }
+    texts.update(scenario.source_text for scenario in dataset.scenarios)
+    texts.update(
+        text
+        for scenario in dataset.scenarios
+        for text in scenario.artifact_texts
+    )
+    texts.update(pool.query_text for pool in dataset.retrieval_pools)
+    texts.update(
+        candidate.text
+        for pool in dataset.retrieval_pools
+        for candidate in pool.candidates
+    )
+    return tuple(sorted(texts))
+
+
+def _go_no_go_assessment(
+    report: dict[str, Any],
+    thresholds: dict[str, float] | None,
+) -> dict[str, Any]:
+    if thresholds is None:
+        return {
+            "available": False,
+            "passed": False,
+            "checks": {},
+            "minimum_family_accuracy": 0.0,
+        }
+    pair = report["metrics"]["pair_classification"]
+    retrieval = report["metrics"]["candidate_retrieval"]
+    e2e = report["metrics"]["end_to_end"]
+    family_scores: list[float] = []
+    for metrics in pair["by_family"].values():
+        family_scores.append(float(metrics["accuracy"]))
+    for scope in ("artifact_flow", "source_binding"):
+        for metrics in retrieval[scope]["by_family"].values():
+            family_scores.append(float(metrics["recall"]))
+    for metrics in e2e["by_family"].values():
+        family_scores.extend(
+            (
+                float(metrics["reachability"]["accuracy"]),
+                float(metrics["action_accuracy"]),
+            )
+        )
+    minimum_family_accuracy = min(family_scores, default=0.0)
+    pair_gate = pair["gate"]
+    e2e_gate = e2e["gate"]
+    values = {
+        "minimum_pair_precision": float(pair_gate["precision"] or 0.0),
+        "minimum_pair_recall": float(pair_gate["recall"] or 0.0),
+        "minimum_pair_f1": float(pair_gate["f1"] or 0.0),
+        "minimum_artifact_candidate_recall": float(
+            retrieval["artifact_flow"]["gate"]["recall"]
+        ),
+        "minimum_source_candidate_recall": float(
+            retrieval["source_binding"]["gate"]["recall"]
+        ),
+        "minimum_e2e_reachability_f1": float(
+            e2e_gate["reachability"]["f1"] or 0.0
+        ),
+        "minimum_e2e_action_accuracy": float(e2e_gate["action_accuracy"]),
+        "minimum_family_accuracy": minimum_family_accuracy,
+        "maximum_false_blocks": float(len(e2e_gate["false_blocks"])),
+        "maximum_privacy_exposures": float(
+            report["metrics"]["privacy"]["total_exposure_count"]
+        ),
+    }
+    checks = {
+        key: (
+            values[key] <= threshold
+            if key.startswith("maximum_")
+            else values[key] >= threshold
+        )
+        for key, threshold in thresholds.items()
+    }
+    return {
+        "available": True,
+        "passed": all(checks.values()),
+        "checks": dict(sorted(checks.items())),
+        "observed": values,
+        "thresholds": dict(sorted(thresholds.items())),
+        "minimum_family_accuracy": minimum_family_accuracy,
+    }
+
+
+def _outcomes_digest(domain: bytes, payload: object) -> str:
+    digest = hashlib.sha256(domain)
+    digest.update(
+        json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+    )
+    return digest.hexdigest()
+
+
 def _benchmark(
     pairs: Sequence[PairExample],
     scenarios: Sequence[LineageScenario],
     *,
+    retrieval_pools: Sequence[RetrievalPool],
     benchmark_repeats: int,
     minimum_path_score: float,
     finding_min_score: float,
@@ -1160,16 +1717,37 @@ def _benchmark(
     for _repeat in range(benchmark_repeats):
         for pair in pairs:
             samples["pair"].append(_timed_ns(lambda pair=pair: _compare_pair(pair)))
-            samples[f"{pair.scope.split('_')[0]}_retrieval"].append(
+            if not retrieval_pools:
+                samples[f"{pair.scope.split('_')[0]}_retrieval"].append(
+                    _timed_ns(
+                        lambda pair=pair: simulate_candidate_retrieval(
+                            scope=pair.scope,
+                            query_text=(
+                                pair.right_text
+                                if pair.scope == "artifact_flow"
+                                else pair.left_text
+                            ),
+                            candidates=candidates_by_scope[pair.scope],
+                        )
+                    )
+                )
+        for pool in retrieval_pools:
+            candidates = tuple(
+                RetrievalCandidate(
+                    item.candidate_id,
+                    item.text,
+                    item.sequence_no,
+                )
+                for item in pool.candidates
+            )
+            samples[f"{pool.scope.split('_')[0]}_retrieval"].append(
                 _timed_ns(
-                    lambda pair=pair: simulate_candidate_retrieval(
-                        scope=pair.scope,
-                        query_text=(
-                            pair.right_text
-                            if pair.scope == "artifact_flow"
-                            else pair.left_text
-                        ),
-                        candidates=candidates_by_scope[pair.scope],
+                    lambda pool=pool, candidates=candidates: (
+                        simulate_candidate_retrieval(
+                            scope=pool.scope,
+                            query_text=pool.query_text,
+                            candidates=candidates,
+                        )
                     )
                 )
             )

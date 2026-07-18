@@ -19,7 +19,7 @@ from hook_monitor.evaluation.similarity import (
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_DATASET_ROOT = REPO_ROOT / "tests" / "fixtures" / "similarity" / "v1"
+DEFAULT_DATASET_ROOT = REPO_ROOT / "tests" / "fixtures" / "similarity" / "v2"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -43,7 +43,9 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
     else:
         print(render_similarity_report(report))
-    if args.check and not report["summary"]["parity_passed"]:
+    if args.check and not report["summary"]["check_passed"]:
+        return 1
+    if args.require_go and not report["summary"]["go_no_go_passed"]:
         return 1
     return 0
 
@@ -99,7 +101,15 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument(
         "--check",
         action="store_true",
-        help="Return exit code 1 if full/incremental graph parity fails.",
+        help=(
+            "Return exit code 1 if digest, exact baseline, privacy, parity, or "
+            "versioned corpus invariants fail."
+        ),
+    )
+    parser.add_argument(
+        "--require-go",
+        action="store_true",
+        help="Return exit code 1 unless all versioned quality thresholds pass.",
     )
     return parser.parse_args(argv)
 if __name__ == "__main__":

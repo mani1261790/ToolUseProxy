@@ -1,0 +1,174 @@
+{
+  "schema_version": 2,
+  "dataset_id": "tooluseproxy-similarity",
+  "dataset_version": "2.0.0",
+  "description": "Synthetic non-mirror similarity families with counterfactuals and saturated candidate pools.",
+  "files": {
+    "pairs": "pairs.jsonl",
+    "scenarios": "scenarios.jsonl",
+    "retrieval_pools": "retrieval_pools.jsonl"
+  },
+  "expected_counts": {
+    "pairs": 38,
+    "scenarios": 9,
+    "retrieval_pools": 16,
+    "development_pairs": 20,
+    "validation_pairs": 18,
+    "development_scenarios": 5,
+    "validation_scenarios": 4,
+    "development_retrieval_pools": 8,
+    "validation_retrieval_pools": 8,
+    "development_gate_pairs": 19,
+    "validation_gate_pairs": 17,
+    "development_gate_scenarios": 5,
+    "validation_gate_scenarios": 4,
+    "development_gate_retrieval_pools": 8,
+    "validation_gate_retrieval_pools": 8
+  },
+  "go_no_go": {
+    "minimum_pair_precision": 0.9,
+    "minimum_pair_recall": 0.9,
+    "minimum_pair_f1": 0.9,
+    "minimum_artifact_candidate_recall": 0.95,
+    "minimum_source_candidate_recall": 0.95,
+    "minimum_e2e_reachability_f1": 0.9,
+    "minimum_e2e_action_accuracy": 0.9,
+    "minimum_family_accuracy": 0.8,
+    "maximum_false_blocks": 0,
+    "maximum_privacy_exposures": 0
+  },
+  "baselines": {
+    "all": {
+      "pair_tp": 14,
+      "pair_fp": 0,
+      "pair_tn": 22,
+      "pair_fn": 0,
+      "artifact_candidate_positive_cases": 8,
+      "artifact_candidate_retrieved": 8,
+      "source_candidate_positive_cases": 8,
+      "source_candidate_retrieved": 8,
+      "e2e_tp": 5,
+      "e2e_fp": 0,
+      "e2e_tn": 4,
+      "e2e_fn": 0,
+      "e2e_action_correct": 9,
+      "e2e_action_cases": 9,
+      "parity_mismatches": 0,
+      "pair_outcomes_sha256": "e9277eb962f131e5bc6d079fd5d20ae70647993ceecf4a6d2cb4b018acaccc03",
+      "candidate_outcomes_sha256": "fec878c97c223093ea349b3086f0b63bc8795f7f38f4e6538dce967932aea1d5",
+      "scenario_outcomes_sha256": "7d6d354e98a19119f5bd080414eb8870c5312eaa23d8fe750480fb884e24b3d1",
+      "privacy_exposures": 0
+    },
+    "development": {
+      "pair_tp": 7,
+      "pair_fp": 0,
+      "pair_tn": 12,
+      "pair_fn": 0,
+      "artifact_candidate_positive_cases": 4,
+      "artifact_candidate_retrieved": 4,
+      "source_candidate_positive_cases": 4,
+      "source_candidate_retrieved": 4,
+      "e2e_tp": 3,
+      "e2e_fp": 0,
+      "e2e_tn": 2,
+      "e2e_fn": 0,
+      "e2e_action_correct": 5,
+      "e2e_action_cases": 5,
+      "parity_mismatches": 0,
+      "pair_outcomes_sha256": "ca6a748efc4ea12dc3b1338127a8098ab1c74f8897107c02552f3d34e8cc7a75",
+      "candidate_outcomes_sha256": "eaef4a7dacfbdeb16a2607654dd094017222c3407a14341238f5f22f318c9f2b",
+      "scenario_outcomes_sha256": "1c67d8bf673ca6c6e95e7b4f6afecd87731d3bd9e0405390480d58c387944296",
+      "privacy_exposures": 0
+    },
+    "validation": {
+      "pair_tp": 7,
+      "pair_fp": 0,
+      "pair_tn": 10,
+      "pair_fn": 0,
+      "artifact_candidate_positive_cases": 4,
+      "artifact_candidate_retrieved": 4,
+      "source_candidate_positive_cases": 4,
+      "source_candidate_retrieved": 4,
+      "e2e_tp": 2,
+      "e2e_fp": 0,
+      "e2e_tn": 2,
+      "e2e_fn": 0,
+      "e2e_action_correct": 4,
+      "e2e_action_cases": 4,
+      "parity_mismatches": 0,
+      "pair_outcomes_sha256": "160f1b6c16b7bc987f20f3729c25c30f488d76a3112e56d0ef944bdda51d7555",
+      "candidate_outcomes_sha256": "b248cfbaba35003c54c7a1a2e3fc2067237419fa0fc079259f50a22e0488581a",
+      "scenario_outcomes_sha256": "9047a25e5dd790c9ccc4d333db6124de24fc25bd74763367ba1ed96a0cc9dc06",
+      "privacy_exposures": 0
+    }
+  },
+  "family_contract": {
+    "pair_families": {
+      "development": [
+        "alpha_secret_containment_counterfactual",
+        "approval_state_counterfactual",
+        "bounded_middle_change",
+        "case_whitespace_transport",
+        "common_access_phrase_guard",
+        "common_security_phrase_guard",
+        "identifier_separator_transport",
+        "namespace_prefix_collision",
+        "plural_edit_transport",
+        "polarity_exception_guard",
+        "prefixed_template_collision",
+        "semantic_paraphrase_research",
+        "separator_boundary_guard",
+        "unrelated_content_isolation"
+      ],
+      "validation": [
+        "alpha_credential_containment_holdout",
+        "api_year_phrase_guard",
+        "credential_field_phrase_guard",
+        "fullwidth_compatibility_transport",
+        "number_alias_transport",
+        "percent_transport",
+        "polarity_except_guard",
+        "public_api_phrase_guard",
+        "record_template_collision",
+        "revocation_state_guard",
+        "semantic_paraphrase_holdout",
+        "unicode_composition_counterfactual",
+        "unicode_composition_transport"
+      ]
+    },
+    "candidate_families": {
+      "development": [
+        "artifact_shared_prefix_pressure",
+        "artifact_short_noise_pressure",
+        "source_dense_lexical_pressure",
+        "source_low_signal_quota_pressure"
+      ],
+      "validation": [
+        "artifact_minimum_length_pressure",
+        "artifact_template_density",
+        "source_long_tail_density",
+        "source_low_signal_holdout_pressure"
+      ]
+    },
+    "scenario_families": {
+      "development": [
+        "alpha_secret_external_lineage",
+        "approval_state_lineage",
+        "exact_external_lineage",
+        "unrelated_content_isolation"
+      ],
+      "validation": [
+        "percent_transport_lineage",
+        "record_template_isolation",
+        "unicode_lineage_counterfactual"
+      ]
+    },
+    "counterfactual_groups_per_split": 7,
+    "minimum_artifact_pool_size": 51,
+    "minimum_source_pool_size": 201,
+    "maximum_split_vocabulary_jaccard": 0.2,
+    "maximum_split_feature_jaccard": 0.2,
+    "development_shape_sha256": "e82dca52a645dd7065afaecd61f40aecb0b8aa350789e01e5bd5d82aa049f533",
+    "validation_shape_sha256": "4b25fc159d2042c6f3383c74153dca4957f91fa67791797c891f0a57176de0a8"
+  }
+}
