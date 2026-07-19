@@ -9,11 +9,11 @@ ToolUseProxy `0.1.0-alpha.3`は研究用public alpha候補です。本番環境�
 | Python 3.11 / Ubuntu | 対応 | full tests、evaluation gate、wheel / sdist、checkout外CLI / Hook |
 | Python 3.12 / Ubuntu | 対応 | Python 3.11と同じfull matrix |
 | Python 3.11 / macOS | 対応 | local package、relocated Plugin、isolated Codex marketplace install |
-| Python 3.12 / macOS | 対応候補 | GitHub macOS runnerでartifact build、venv install、CLI / relocated Plugin smoke |
+| Python 3.12 / macOS | 対応 | GitHub macOS runnerでartifact build、venv install、CLI / relocated Plugin smoke |
 | Python 3.13以降 | 未対応 | package metadataで`<3.13`に制限 |
 | Windows | experimental | `.cmd` launcherは同梱するが、実機CIとPlugin lifecycle E2Eは未完了 |
 
-macOS Python 3.12の正式な対応判定はGitHub CIのgreenを条件とします。localのuv-managed Python 3.12では`venv`内`ensurepip`が`SIGABRT`する環境事例があり、ToolUseProxy codeより前のPython配布環境問題として追跡します。
+macOS Python 3.12はGitHub CI run `29672165132`でartifact build、nested venv、wheel install、CLI / relocated Plugin smokeを検証しました。localのuv-managed Python 3.12では`venv`内`ensurepip`が`SIGABRT`する環境事例があり、ToolUseProxy codeより前のPython配布環境問題として区別します。
 
 Windowsでは既存manifestのruntime読み取りとlauncherを将来互換のため維持しますが、`protect scan / suggest / approve / reject / ignore`とmanifest migration applyはalphaでは未対応です。成功したように見せず、CLIの明示エラーとして扱います。
 
