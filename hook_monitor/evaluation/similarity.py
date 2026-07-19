@@ -283,7 +283,10 @@ def render_similarity_report(report: dict[str, Any]) -> str:
         lines.append(
             f"candidate {scope} recall@{retrieval[scope]['limit']}="
             f"{_format_ratio(item['recall'])} ({item['retrieved']}/{item['positive_cases']}) "
-            f"pool={retrieval[scope]['pool_size']} {pool_status}"
+            f"pool={retrieval[scope]['pool_size']} {pool_status} "
+            f"saturation_rate={_format_ratio(retrieval[scope]['saturation_rate'])} "
+            f"saturated_recall={_format_ratio(retrieval[scope]['gate_saturated']['recall'])} "
+            f"candidate_sets_sha256={item['candidate_sets_sha256'][:12]}"
         )
     gate_pairs = pairs["gate"]
     lines.append(
@@ -514,6 +517,7 @@ def _evaluate_retrieval(pairs: Sequence[PairExample]) -> list[dict[str, Any]]:
                     "relevant": pair.should_link,
                     "retrieved_relevant": pair.example_id in retrieved,
                     "candidate_count": len(retrieved),
+                    "candidate_set_sha256": _candidate_set_digest(retrieved),
                     "pool_size": len(candidates),
                     "cap_saturated": len(candidates)
                     > (
@@ -560,6 +564,7 @@ def _evaluate_retrieval_pools(
                 "relevant": True,
                 "retrieved_relevant": pool.relevant_candidate_id in retrieved,
                 "candidate_count": len(retrieved),
+                "candidate_set_sha256": _candidate_set_digest(retrieved),
                 "pool_size": len(candidates),
                 "cap_saturated": len(candidates) > limit,
             }
@@ -578,6 +583,19 @@ def _simulate_production_candidate_retrieval(
         query_text=query_text,
         candidates=candidates,
     )
+
+
+def _candidate_set_digest(candidate_ids: Sequence[str]) -> str:
+    """Hash public candidate IDs without exposing fixture or candidate text."""
+    digest = hashlib.sha256(b"tooluseproxy-similarity-candidate-set-v1\0")
+    digest.update(
+        json.dumps(
+            sorted(candidate_ids),
+            ensure_ascii=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    )
+    return digest.hexdigest()
 
 
 def _make_scenario_material(
@@ -1168,6 +1186,8 @@ def _retrieval_metrics(
         scoped = [item for item in cases if item["scope"] == scope]
         gate_scoped = [item for item in scoped if not item["observe_only"]]
         pool_size = max((int(item["pool_size"]) for item in scoped), default=0)
+        saturated = [item for item in scoped if item["cap_saturated"]]
+        gate_saturated = [item for item in gate_scoped if item["cap_saturated"]]
         metrics[scope] = {
             "limit": limit,
             "pool_size": pool_size,
@@ -1175,6 +1195,9 @@ def _retrieval_metrics(
             "saturated_case_count": sum(
                 bool(item["cap_saturated"]) for item in scoped
             ),
+            "saturation_rate": _safe_ratio(len(saturated), len(scoped)),
+            "saturated": _retrieval_summary(saturated),
+            "gate_saturated": _retrieval_summary(gate_saturated),
             "metric_name": f"candidate eligibility recall@{limit}",
             "implementation": "production_preparation_adapter_v2",
             "production_equivalence": (
@@ -1222,6 +1245,16 @@ def _retrieval_summary(cases: list[dict[str, Any]]) -> dict[str, Any]:
         "recall": _safe_ratio(len(retrieved), len(positives)),
         "miss_ids": sorted(
             item["id"] for item in positives if not item["retrieved_relevant"]
+        ),
+        "candidate_sets_sha256": _outcomes_digest(
+            b"tooluseproxy-similarity-candidate-sets-v1\0",
+            [
+                {
+                    "id": item["id"],
+                    "candidate_set_sha256": item["candidate_set_sha256"],
+                }
+                for item in cases
+            ],
         ),
         "candidate_count_p50": (
             nearest_rank_percentile(counts, 0.50) if counts else 0.0
