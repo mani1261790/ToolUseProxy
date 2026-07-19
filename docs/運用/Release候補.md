@@ -40,4 +40,6 @@ verifierは次を確認します。
 
 GitHub Actionsの`Reproducible release candidate` jobでも、clean checkoutに対して同じbuildとoffline検証を行います。local候補を公開判断へ進める場合は、そのsource commitに対応するgreen jobを外部CI evidenceとして確認します。
 
+候補directoryは[Pluginライフサイクル](Pluginライフサイクル.md)の`--candidate`へ渡し、immutable baselineからのupgrade / rollback / disable / removeにも同じ検証済みartifactを使えます。
+
 SBOMはCycloneDX 1.7 JSONを使い、ToolUseProxy applicationと3つの配布artifactをSHA-256付きcomponentとして記録します。runtime third-party dependencyは現在ありません。build / test dependencyはrelease artifactへ同梱されないため、release SBOMのruntime componentには含めません。

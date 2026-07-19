@@ -5,12 +5,12 @@ ToolUseProxyのCodex Pluginは、repository全体ではなく、生成時にallo
 ## 現在のsupport範囲
 
 - Python 3.11 / 3.12。3.13以降は現在未対応
-- macOS: local package、relocated Plugin bundle、Codex CLIのisolated local marketplace installを検証。Python 3.12 package smokeはCI run `29672165132`で成功
+- macOS: local package、relocated Plugin bundle、Codex CLIのisolated local marketplace install、alpha.1→alpha.3 upgrade / safe rollbackを検証。Python 3.12 package smokeはCIで継続確認
 - Linux: Ubuntu CIでPython 3.11 / 3.12のfull suite、package、relocated Plugin bundle、wheelのcheckout外実行を検証。Codex CLI marketplace installの実環境E2Eは未検証
 - Windows: `py -3.11`を使うlauncherを同梱するexperimental範囲。実機検証は未完了で、protected-source登録workflow全体は現在未対応
 - Hook内network access、remote embedding、telemetry: なし
 
-詳細は[サポート範囲と既知の制限](../../SUPPORT.md)と[プライバシーとデータ保持](../../PRIVACY.md)を参照してください。Windows実機、install / update / removeのcross-platform E2Eはpublic alphaまでの残作業です。最新の優先順位は[実装タスク計画](../運用/実装タスク.md)を参照してください。
+詳細は[サポート範囲と既知の制限](../../SUPPORT.md)と[プライバシーとデータ保持](../../PRIVACY.md)を参照してください。Windows実機とLinux実Codex CLIのcross-platform E2Eはpublic alphaまでの残作業です。最新の優先順位は[実装タスク計画](../運用/実装タスク.md)を参照してください。
 
 ## 現在versionと更新
 
@@ -199,7 +199,7 @@ release artifactは、古い`build/`や`.DS_Store`を混入させないclean sta
 python3.11 scripts/build_package.py --outdir dist --sdist
 ```
 
-現行sdistはruntimeに不要な一部testを含む一方、そのfixtureを含まないため、public alphaのartifact契約としては未確定です。公開前にruntime allowlistへ固定し、Python 3.11 / 3.12でcheckout外installをCI検証します。immutable tag、checksum、SBOM、release notes、LICENSE / privacyを含むrelease gateは[実装タスク計画](../運用/実装タスク.md)と[#19](https://github.com/mani1261790/ToolUseProxy/issues/19)で管理します。
+wheel / sdist / Plugin ZIPはruntime allowlistへ固定し、Python 3.11 / 3.12でcheckout外installをCI検証します。release candidate builderはmanifest、SHA256SUMS、CycloneDX 1.7 SBOM、release notes候補を一括生成します。immutable tag、GitHub pre-release、LICENSE gateは[実装タスク計画](../運用/実装タスク.md)と[#19](https://github.com/mani1261790/ToolUseProxy/issues/19)で管理します。
 
 ## disable / uninstall
 
@@ -229,7 +229,7 @@ sh "<PLUGIN_ROOT>/hooks/run_cli.sh" uninstall apply \
 
 削除対象はSQLite database / sidecar、migration backup、manifest backupだけです。管理外fileは残し、plan後に内容が変わった場合はstale tokenを拒否します。workspace manifestやprotected source本体、symlink先、package codeは削除しません。secure eraseやfilesystem snapshotの削除は保証しません。
 
-upgrade / rollbackを含む反復lifecycle E2Eは引き続きpublic alphaのrelease gateです。
+alpha.1からalpha.3候補へのupgrade / safe rollback手順と検証結果は[Pluginライフサイクル](../運用/Pluginライフサイクル.md)を参照してください。将来versionとcross-platformでの反復は引き続きpublic alphaのrelease gateです。
 
 ## trustとfailure時の挙動
 

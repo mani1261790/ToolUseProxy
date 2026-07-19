@@ -46,3 +46,5 @@ python3.11 scripts/dogfood_plugin.py --installation-mode extracted
 8. uninstall planのfile数 / byte数 / 管理外entry数をreviewし、明示apply後だけ管理dataが消えることを確認する
 
 manual結果には実secretやSQLiteを使わず、synthetic case ID、version、artifact SHA-256、所要時間、判定、failure codeだけを記録します。
+
+immutable alpha.1と現在release候補のupgrade / rollback / disable / removeは[Pluginライフサイクル](Pluginライフサイクル.md)の独立runnerで検証します。

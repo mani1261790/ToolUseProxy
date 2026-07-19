@@ -8,6 +8,7 @@ Codexのtool useをローカルで観測し、protected sourceから外部tool�
 - [対応環境と既知の制限](SUPPORT.md)
 - [プライバシーとデータ保持](PRIVACY.md)
 - [Pluginドッグフード](docs/運用/Pluginドッグフード.md)
+- [Plugin upgrade / rollback rehearsal](docs/運用/Pluginライフサイクル.md)
 - [Release候補の作成と検証](docs/運用/Release候補.md)
 - [現在地と実装ロードマップ](docs/運用/実装タスク.md)
 - [ドキュメント索引](docs/索引.md)
@@ -86,7 +87,7 @@ dataset digestは`241a4f536ea53694b8172accc5a528961673a843983f99702651357cff3619
 2. [#19](https://github.com/mani1261790/ToolUseProxy/issues/19): 自動Phase A済みのalpha.3 dogfoodを、manual trustと実tool side effect 0を含むPhase Bで閉じる
 3. [#20](https://github.com/mani1261790/ToolUseProxy/issues/20): 長い英字の公開compound誤検知と有限candidate capをadversarial corpusで改善・検証する
 4. [#18](https://github.com/mani1261790/ToolUseProxy/issues/18): protected source onboardingを実Plugin E2Eで閉じ、runtime observed-pathやauto-enrollは別の研究判断として扱う
-5. [#19](https://github.com/mani1261790/ToolUseProxy/issues/19): 検証可能なrelease候補と明示uninstallを使い、upgrade / rollback rehearsalを閉じる
+5. [#19](https://github.com/mani1261790/ToolUseProxy/issues/19): 検証済みlifecycleを30秒demo、5分quickstart、最小限の英語導入へ落とし込む
 
 ## 研究の考え方
 
