@@ -17,6 +17,8 @@ macOS Python 3.12はGitHub CI run `29672165132`でartifact build、nested venv�
 
 Windowsでは既存manifestのruntime読み取りとlauncherを将来互換のため維持しますが、`protect scan / suggest / approve / reject / ignore`とmanifest migration applyはalphaでは未対応です。成功したように見せず、CLIの明示エラーとして扱います。
 
+POSIX launcherもpackage metadataと同じPython 3.11 / 3.12だけを選びます。`TOOLUSEPROXY_PYTHON`や`python3`が3.13以降または3.10以前を指す場合は実行せず、別の対応runtimeを探した後に明示エラーまたはHook fail-openとします。
+
 ## Codex Plugin
 
 - localでCodex CLI `0.142.5`のmarketplace add / Plugin installを検証済み
