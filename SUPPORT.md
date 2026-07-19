@@ -23,7 +23,8 @@ Windowsでは既存manifestのruntime読み取りとlauncherを将来互換の�
 - Hook definitionのreview / trustを迂回しない
 - install後のcodeは`PLUGIN_ROOT`、mutable dataは`PLUGIN_DATA`へ分離
 - remote `main`を実行元にせず、releaseではimmutable artifactを使う
-- Linux上の実Codex CLI install、Windows、upgrade / rollback / remove反復E2Eは未完了
+- isolated Codex CLIではinstall / protect / Hook payload allow-deny / trace / removeとdata保持を自動検証
+- manual trust、実tool invocation、Linux上の実Codex task、Windows、upgrade / rollback反復E2Eは未完了
 
 Codex Plugin APIやHook payloadはToolUseProxyとは別に変更され得ます。未検証のCodex CLI versionで異常が出た場合は、`doctor --json`、Codex version、synthetic payloadで再現し、protected dataを報告へ含めないでください。
 
@@ -50,7 +51,7 @@ Codex Plugin APIやHook payloadはToolUseProxyとは別に変更され得ます�
 - candidate retrievalはartifact 50 / source 200の有限上限を持つ
 - local SQLiteにはraw Hook payloadやprotected source由来textが平文で残り得る
 - database、backup、trace exportの自動retention / secure eraseはない
-- Plugin upgrade / rollback / disable / remove後のcross-platform lifecycleはpublic alpha gateとして未完了
+- Plugin remove後のcode残留0とdata保持はisolated local Codex CLIで検証済み。upgrade / rollbackとcross-platform lifecycleは未完了
 - runtime policyは他のHookやtool自体をexclusiveに制御できず、ToolUseProxy単独で完全な外部送信防止を保証しない
 
 dataの詳細は[プライバシーとデータ保持](PRIVACY.md)、導入手順は[Codex Plugin導入](docs/設定/Plugin導入.md)、実装の優先順位は[実装タスク](docs/運用/実装タスク.md)を参照してください。
