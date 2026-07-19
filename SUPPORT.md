@@ -26,6 +26,7 @@ POSIX launcherもpackage metadataと同じPython 3.11 / 3.12だけを選びま�
 - install後のcodeは`PLUGIN_ROOT`、mutable dataは`PLUGIN_DATA`へ分離
 - remote `main`を実行元にせず、releaseではimmutable artifactを使う
 - isolated Codex CLIではinstall / protect / Hook payload allow-deny / trace / removeとdata保持を自動検証
+- release candidate verifierはwheel / sdist / Plugin ZIP内部のunsafe path、重複entry、symlink等の非regular type、危険mode、想定外の実行file、過大展開をfail-closedで拒否
 - manual trust、実tool invocation、Linux上の実Codex task、Windows、upgrade / rollback反復E2Eは未完了
 
 Codex Plugin APIやHook payloadはToolUseProxyとは別に変更され得ます。未検証のCodex CLI versionで異常が出た場合は、`doctor --json`、Codex version、synthetic payloadで再現し、protected dataを報告へ含めないでください。

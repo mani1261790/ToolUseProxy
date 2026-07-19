@@ -6,6 +6,7 @@ import email.parser
 import hashlib
 import json
 import re
+import stat
 import subprocess
 import sys
 import tarfile
@@ -25,6 +26,8 @@ CHECKSUM_FILENAME = "SHA256SUMS"
 SBOM_SPEC_VERSION = "1.7"
 COMMIT_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+MAX_ARCHIVE_MEMBERS = 10_000
+MAX_ARCHIVE_UNCOMPRESSED_BYTES = 128 * 1024 * 1024
 
 
 class ReleaseCandidateError(RuntimeError):
@@ -167,7 +170,7 @@ def verify_candidate(directory: Path) -> dict[str, Any]:
         if path.stat().st_size != artifact["size"] or _sha256(path) != artifact["sha256"]:
             raise ReleaseCandidateError(f"artifact metadata mismatch: {filename}")
 
-    python_version, plugin_version = _validate_distribution_versions(
+    python_version, plugin_version, archive_member_count = _validate_distribution_versions(
         directory,
         artifact_entries,
     )
@@ -183,6 +186,7 @@ def verify_candidate(directory: Path) -> dict[str, Any]:
         "source_commit": manifest["source"]["commit"],
         "artifact_count": len(artifact_entries),
         "checked_file_count": len(checksums),
+        "checked_archive_member_count": archive_member_count,
         "artifact_set_eligible": manifest["gates"]["artifact_set_eligible"],
     }
 
@@ -265,19 +269,21 @@ def _inspect_distribution_artifacts(
         }
         for path in paths
     ]
-    python_version, plugin_version = _validate_distribution_versions(directory, artifacts)
+    python_version, plugin_version, _ = _validate_distribution_versions(directory, artifacts)
     return artifacts, python_version, plugin_version
 
 
 def _validate_distribution_versions(
     directory: Path,
     artifacts: list[dict[str, Any]],
-) -> tuple[str, str]:
+) -> tuple[str, str, int]:
     python_versions: set[str] = set()
     plugin_versions: set[str] = set()
+    archive_member_count = 0
     for artifact in artifacts:
         path = directory / str(artifact["filename"])
-        role = artifact["role"]
+        role = str(artifact["role"])
+        archive_member_count += _validate_archive_members(path, role)
         if role == "python-wheel":
             with zipfile.ZipFile(path) as archive:
                 metadata_names = [
@@ -327,7 +333,93 @@ def _validate_distribution_versions(
     plugin_version = plugin_versions.pop()
     if plugin_version.replace("-alpha.", "a") != python_version:
         raise ReleaseCandidateError("Python and Plugin versions are inconsistent")
-    return python_version, plugin_version
+    return python_version, plugin_version, archive_member_count
+
+
+def _validate_archive_members(path: Path, role: str) -> int:
+    try:
+        if role in {"python-wheel", "codex-plugin"}:
+            with zipfile.ZipFile(path) as archive:
+                members = archive.infolist()
+                _validate_archive_budget(
+                    member_count=len(members),
+                    uncompressed_bytes=sum(info.file_size for info in members),
+                )
+                seen: set[str] = set()
+                for info in members:
+                    name = _validated_archive_path(info.filename, directory=info.is_dir())
+                    if name in seen:
+                        raise ReleaseCandidateError("archive contains duplicate member paths")
+                    seen.add(name)
+                    if info.flag_bits & 0x1:
+                        raise ReleaseCandidateError("archive contains an encrypted member")
+                    mode = info.external_attr >> 16
+                    _validate_archive_mode(
+                        name=name,
+                        mode=mode,
+                        directory=info.is_dir(),
+                        role=role,
+                    )
+                return len(members)
+        if role == "python-sdist":
+            with tarfile.open(path, mode="r:gz") as archive:
+                members = archive.getmembers()
+                _validate_archive_budget(
+                    member_count=len(members),
+                    uncompressed_bytes=sum(member.size for member in members),
+                )
+                seen = set()
+                for member in members:
+                    name = _validated_archive_path(member.name, directory=member.isdir())
+                    if name in seen:
+                        raise ReleaseCandidateError("archive contains duplicate member paths")
+                    seen.add(name)
+                    if not member.isdir() and not member.isfile():
+                        raise ReleaseCandidateError("archive contains a non-regular member")
+                    _validate_archive_mode(
+                        name=name,
+                        mode=member.mode,
+                        directory=member.isdir(),
+                        role=role,
+                    )
+                return len(members)
+    except (OSError, tarfile.TarError, zipfile.BadZipFile) as error:
+        raise ReleaseCandidateError(f"invalid {role} archive") from error
+    raise ReleaseCandidateError("unknown artifact role")
+
+
+def _validated_archive_path(value: str, *, directory: bool) -> str:
+    if not value or "\\" in value or "\x00" in value or value.startswith("/"):
+        raise ReleaseCandidateError("archive contains an unsafe member path")
+    normalized = value[:-1] if directory and value.endswith("/") else value
+    parts = normalized.split("/")
+    if (
+        not normalized
+        or any(part in {"", ".", ".."} for part in parts)
+        or parts[0].endswith(":")
+    ):
+        raise ReleaseCandidateError("archive contains an unsafe member path")
+    return "/".join(parts)
+
+
+def _validate_archive_budget(*, member_count: int, uncompressed_bytes: int) -> None:
+    if member_count > MAX_ARCHIVE_MEMBERS:
+        raise ReleaseCandidateError("archive member count exceeds the release limit")
+    if uncompressed_bytes > MAX_ARCHIVE_UNCOMPRESSED_BYTES:
+        raise ReleaseCandidateError("archive expansion exceeds the release limit")
+
+
+def _validate_archive_mode(*, name: str, mode: int, directory: bool, role: str) -> None:
+    file_type = stat.S_IFMT(mode)
+    expected_type = stat.S_IFDIR if directory else stat.S_IFREG
+    if file_type not in {0, expected_type}:
+        raise ReleaseCandidateError("archive contains a non-regular member")
+    permissions = stat.S_IMODE(mode)
+    if permissions & 0o7022:
+        raise ReleaseCandidateError("archive contains dangerous member permissions")
+    if not directory and permissions & 0o111:
+        if role != "codex-plugin" or not name.endswith(".sh"):
+            raise ReleaseCandidateError("archive contains an unexpected executable member")
 
 
 def _cyclonedx_sbom(
@@ -436,6 +528,8 @@ def _release_notes(manifest: dict[str, Any]) -> str:
             f"- Verify all files with `{CHECKSUM_FILENAME}`.",
             f"- Inspect `{MANIFEST_FILENAME}` for source commit and release gates.",
             f"- Inspect `{manifest['sbom']['filename']}` for the CycloneDX SBOM.",
+            "- Archive members are checked for safe paths, unique names, regular types, "
+            "safe modes, expected executables, and bounded expansion.",
             "- Attach the green CI run separately; CI evidence is not inferred locally.",
             "- Review and trust the exact Codex Hook definition manually.",
             "",
