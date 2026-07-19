@@ -19,7 +19,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 V2_ROOT = REPO_ROOT / "tests" / "fixtures" / "similarity" / "v2"
 V21_ROOT = REPO_ROOT / "tests" / "fixtures" / "similarity" / "v2_1"
 V2_DIGEST = "241a4f536ea53694b8172accc5a528961673a843983f99702651357cff3619b3"
-V21_DIGEST = "be972354eaeb9839a2434b296d7cc8b4691277c3256ce53ba89424aa68bdfcbb"
+V21_DIGEST = "eaae7a5e97c79e59f8d45706466170fe93cc66c2c2e6293d82f5721ef32d7cf4"
 
 
 class SimilarityEvaluationV21Test(unittest.TestCase):

@@ -266,7 +266,7 @@ _DATASET_REGISTRY = {
         "files": frozenset({"pairs", "scenarios", "retrieval_pools"}),
     },
     (V21_DATASET_SCHEMA_VERSION, V21_DATASET_VERSION): {
-        "digest": "be972354eaeb9839a2434b296d7cc8b4691277c3256ce53ba89424aa68bdfcbb",
+        "digest": "eaae7a5e97c79e59f8d45706466170fe93cc66c2c2e6293d82f5721ef32d7cf4",
         "files": frozenset({"pairs", "scenarios", "retrieval_pools"}),
     },
 }

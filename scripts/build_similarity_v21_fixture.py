@@ -23,6 +23,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 SOURCE_ROOT = REPO_ROOT / "tests" / "fixtures" / "similarity" / "v2"
 DEFAULT_OUTPUT = REPO_ROOT / "tests" / "fixtures" / "similarity" / "v2_1"
 STRESS_SIZES = (1_000, 5_000, 10_000)
+DEVELOPMENT_SIGNAL_FAMILY = "alpha_source_signal_development"
 
 
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -76,6 +77,108 @@ def _convert_records(
         )
         converted.append(record)
     return converted
+
+
+def _development_signal_pairs() -> list[dict[str, Any]]:
+    common = {
+        "schema_version": V21_DATASET_SCHEMA_VERSION,
+        "dataset_version": V21_DATASET_VERSION,
+        "split": "development",
+        "scope": "source_binding",
+        "provenance": "synthetic",
+        "observe_only": False,
+        "family": DEVELOPMENT_SIGNAL_FAMILY,
+        "counterfactual_group": None,
+    }
+    return [
+        {
+            **common,
+            "id": "v21-dev-public-compound-negative",
+            "left_text": "documentationreference",
+            "right_text": (
+                "publish documentationreference through public catalog endpoint"
+            ),
+            "should_link": False,
+            "tags": ["alpha_only", "negative", "public_compound"],
+            "rationale": (
+                "A long diverse public compound from an unselected registered "
+                "source is not protected-value lineage."
+            ),
+            "source_binding_signal": "registered_source",
+        },
+        {
+            **common,
+            "id": "v21-dev-selected-alpha-positive",
+            "left_text": "ultravioletharbororchid",
+            "right_text": (
+                "submit ultravioletharbororchid through external payload channel"
+            ),
+            "should_link": True,
+            "tags": [
+                "alpha_only",
+                "hard_positive",
+                "positive",
+                "selected_security_field",
+            ],
+            "rationale": (
+                "A long diverse alpha-only value selected by a security field "
+                "must retain source lineage inside a submission wrapper."
+            ),
+            "source_binding_signal": "selected_security_field",
+        },
+    ]
+
+
+def _development_signal_scenarios() -> list[dict[str, Any]]:
+    common = {
+        "schema_version": V21_DATASET_SCHEMA_VERSION,
+        "dataset_version": V21_DATASET_VERSION,
+        "split": "development",
+        "provenance": "synthetic",
+        "sink_type": "external_message",
+        "observe_only": False,
+        "family": DEVELOPMENT_SIGNAL_FAMILY,
+        "counterfactual_group": None,
+    }
+    return [
+        {
+            **common,
+            "id": "v21-dev-public-compound-scenario",
+            "source_text": "documentationreference",
+            "artifact_texts": [
+                "publish documentationreference through public catalog endpoint"
+            ],
+            "should_reach_sink": False,
+            "expected_action": "allow",
+            "tags": ["alpha_only", "negative", "public_compound"],
+            "rationale": (
+                "Registered public compound containment must not seed source "
+                "lineage in the production graph path."
+            ),
+            "source_binding_signal": "registered_source",
+        },
+        {
+            **common,
+            "id": "v21-dev-selected-alpha-scenario",
+            "source_text": "ultravioletharbororchid",
+            "artifact_texts": [
+                "submit ultravioletharbororchid through external payload channel"
+            ],
+            "should_reach_sink": True,
+            "expected_action": "block",
+            "tags": [
+                "alpha_only",
+                "hard_positive",
+                "positive",
+                "selected_security_field",
+            ],
+            "rationale": (
+                "Explicitly selected security-field provenance must preserve "
+                "alpha-only source lineage through the full graph."
+            ),
+            "source_binding_signal": "selected_security_field",
+        },
+    ]
 
 
 def _apply_stress_sizes(records: list[dict[str, Any]]) -> None:
@@ -167,10 +270,29 @@ def _render_fixture(output: Path) -> str:
     }
 
     pairs = _convert_records(_read_jsonl(SOURCE_ROOT / "pairs.jsonl"))
+    pairs.extend(_development_signal_pairs())
+    expected_counts = manifest["expected_counts"]
+    expected_counts["pairs"] += 2
+    expected_counts["development_pairs"] += 2
+    expected_counts["development_gate_pairs"] += 2
+    development_families = manifest["family_contract"]["pair_families"][
+        "development"
+    ]
+    development_families.append(DEVELOPMENT_SIGNAL_FAMILY)
+    development_families.sort()
     scenarios = _convert_records(
         _read_jsonl(SOURCE_ROOT / "scenarios.jsonl"),
         scenario=True,
     )
+    scenarios.extend(_development_signal_scenarios())
+    expected_counts["scenarios"] += 2
+    expected_counts["development_scenarios"] += 2
+    expected_counts["development_gate_scenarios"] += 2
+    development_scenario_families = manifest["family_contract"][
+        "scenario_families"
+    ]["development"]
+    development_scenario_families.append(DEVELOPMENT_SIGNAL_FAMILY)
+    development_scenario_families.sort()
     retrieval = _convert_records(_read_jsonl(SOURCE_ROOT / "retrieval_pools.jsonl"))
     _apply_stress_sizes(retrieval)
 

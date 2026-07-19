@@ -93,7 +93,7 @@ if TYPE_CHECKING:
 
 
 DEFAULT_DB_PATH = Path(".tooluseproxy/events.db")
-CURRENT_SCHEMA_VERSION = 4
+CURRENT_SCHEMA_VERSION = 5
 RUNTIME_REQUIRED_TABLES = frozenset(
     {
         "analysis_cursors",
@@ -176,6 +176,20 @@ RUNTIME_REQUIRED_COLUMNS = {
             "workspace_id",
             "source_key",
             "selector_json",
+        }
+    ),
+    "source_chunks": frozenset(
+        {
+            "chunk_id",
+            "source_id",
+            "workspace_id",
+            "ordinal",
+            "text",
+            "normalized_text",
+            "text_hash",
+            "shingle_fingerprint",
+            "token_count",
+            "source_binding_signal",
         }
     ),
     "protected_source_candidates": frozenset(
@@ -728,12 +742,19 @@ class EventStore:
                     text_hash TEXT NOT NULL,
                     shingle_fingerprint TEXT NOT NULL,
                     token_count INTEGER NOT NULL,
+                    source_binding_signal TEXT NOT NULL DEFAULT 'registered_source',
                     recorded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (source_id) REFERENCES protected_sources (source_id)
                 )
                 """
             )
             self._ensure_column(conn, "source_chunks", "workspace_id", "TEXT")
+            self._ensure_column(
+                conn,
+                "source_chunks",
+                "source_binding_signal",
+                "TEXT NOT NULL DEFAULT 'registered_source'",
+            )
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS flow_edges (
@@ -2750,8 +2771,9 @@ class EventStore:
                 normalized_text,
                 text_hash,
                 shingle_fingerprint,
-                token_count
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                token_count,
+                source_binding_signal
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 (
@@ -2764,6 +2786,7 @@ class EventStore:
                     chunk.text_hash,
                     chunk.shingle_fingerprint,
                     chunk.token_count,
+                    chunk.source_binding_signal,
                 )
                 for chunk in chunks
             ],
@@ -3779,7 +3802,7 @@ class EventStore:
                         f"""
                         SELECT chunk_id, source_id, ordinal, text,
                                normalized_text, text_hash, shingle_fingerprint,
-                               token_count, workspace_id
+                               token_count, workspace_id, source_binding_signal
                         FROM source_chunks
                         WHERE chunk_id IN ({placeholders})
                           AND workspace_id = ?
@@ -3799,6 +3822,7 @@ class EventStore:
                                 "shingle_fingerprint": row[6],
                                 "token_count": row[7],
                                 "workspace_id": row[8],
+                                "source_binding_signal": row[9],
                             },
                         )
                         for row in rows
@@ -7763,7 +7787,8 @@ class EventStore:
                     text_hash,
                     shingle_fingerprint,
                     token_count,
-                    workspace_id
+                    workspace_id,
+                    source_binding_signal
                 FROM source_chunks
                 ORDER BY source_id, ordinal
                 """
@@ -7810,7 +7835,8 @@ class EventStore:
                     text_hash,
                     shingle_fingerprint,
                     token_count,
-                    workspace_id
+                    workspace_id,
+                    source_binding_signal
                 FROM source_chunks
                 WHERE workspace_id = ?
                 ORDER BY source_id, ordinal
@@ -9097,7 +9123,7 @@ class EventStore:
                 """
                 SELECT chunk_id, source_id, workspace_id, ordinal, text,
                        normalized_text, text_hash, shingle_fingerprint,
-                       token_count
+                       token_count, source_binding_signal
                 FROM source_chunks
                 WHERE workspace_id = ?
                 ORDER BY chunk_id
@@ -12457,6 +12483,7 @@ def _source_chunk_from_row(row: tuple) -> SourceChunk:
         shingle_fingerprint=row[6],
         token_count=row[7],
         workspace_id=row[8],
+        source_binding_signal=row[9],
     )
 
 

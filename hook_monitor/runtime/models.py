@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from hook_monitor.runtime.source_binding import SOURCE_BINDING_SIGNALS
+
 
 @dataclass(frozen=True)
 class NormalizedEvent:
@@ -198,6 +200,11 @@ class SourceChunk:
     shingle_fingerprint: str
     token_count: int
     workspace_id: str | None = None
+    source_binding_signal: str = "registered_source"
+
+    def __post_init__(self) -> None:
+        if self.source_binding_signal not in SOURCE_BINDING_SIGNALS:
+            raise ValueError("source chunk has an invalid source_binding_signal")
 
 
 @dataclass(frozen=True)

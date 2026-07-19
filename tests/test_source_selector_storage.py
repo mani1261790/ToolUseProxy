@@ -26,6 +26,44 @@ from hook_monitor.runtime.workspace import resolve_workspace
 
 
 class SourceSelectorStorageTest(unittest.TestCase):
+    def test_initialize_migrates_v4_source_chunks_with_safe_default(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            db_path = Path(temporary_directory) / "events.db"
+            store = EventStore(db_path)
+            store.initialize()
+            with sqlite3.connect(db_path) as connection:
+                connection.execute(
+                    "ALTER TABLE source_chunks DROP COLUMN source_binding_signal"
+                )
+                connection.execute("PRAGMA user_version = 4")
+
+            store.initialize()
+
+            with sqlite3.connect(db_path) as connection:
+                columns = {
+                    row[1]: row[4]
+                    for row in connection.execute(
+                        "PRAGMA table_info(source_chunks)"
+                    ).fetchall()
+                }
+                version = connection.execute("PRAGMA user_version").fetchone()[0]
+            self.assertEqual(CURRENT_SCHEMA_VERSION, version)
+            self.assertEqual("'registered_source'", columns["source_binding_signal"])
+
+    def test_source_chunk_rejects_unknown_binding_signal(self) -> None:
+        with self.assertRaisesRegex(ValueError, "invalid source_binding_signal"):
+            SourceChunk(
+                chunk_id="invalid-signal",
+                source_id="source",
+                ordinal=0,
+                text="value",
+                normalized_text="value",
+                text_hash="0" * 64,
+                shingle_fingerprint="[]",
+                token_count=1,
+                source_binding_signal="unknown",
+            )
+
     def test_initialize_migrates_v1_catalog_and_preserves_legacy_row(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             db_path = Path(temporary_directory) / "events.db"
@@ -127,6 +165,7 @@ class SourceSelectorStorageTest(unittest.TestCase):
                 [source],
                 store.list_protected_sources_for_workspace(workspace_id),
             )
+            self.assertEqual([chunk], store.list_source_chunks_for_workspace(workspace_id))
             with sqlite3.connect(store.db_path) as connection:
                 selector_json = connection.execute(
                     """
@@ -396,6 +435,7 @@ class SourceSelectorStorageTest(unittest.TestCase):
             shingle_fingerprint="selector-storage-fixture",
             token_count=1,
             workspace_id=workspace_id,
+            source_binding_signal="selected_security_field",
         )
         return source, chunk
 

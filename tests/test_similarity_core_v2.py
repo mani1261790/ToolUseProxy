@@ -9,6 +9,7 @@ from hook_monitor.analysis.similarity import (
     SIMILARITY_TOKEN_EQUIVALENT_SCORE,
     PreparedSimilarityText,
     SimilarityCandidateStats,
+    compare_source_binding_text,
     compare_text,
     prepare_similarity_text,
     rank_similarity_candidate_ids,
@@ -26,6 +27,34 @@ class _RecordingEmbeddingBackend:
 
 
 class SimilarityCoreV2Test(unittest.TestCase):
+    def test_source_binding_alpha_containment_requires_selected_security_field(
+        self,
+    ) -> None:
+        value = "ultravioletharbororchid"
+        wrapper = f"submit {value} through external payload channel"
+        for signal in ("registered_source", "selected_field"):
+            with self.subTest(signal=signal):
+                decision = self._compare_source_binding(value, wrapper, signal)
+                self.assertFalse(decision.matched)
+                self.assertEqual("none", decision.method)
+
+        selected = self._compare_source_binding(
+            value,
+            wrapper,
+            "selected_security_field",
+        )
+        self.assertTrue(selected.matched)
+        self.assertEqual("substring", selected.method)
+        self.assertTrue(self._compare(value, wrapper).matched)
+
+        exact = self._compare_source_binding(
+            value,
+            value,
+            "registered_source",
+        )
+        self.assertTrue(exact.matched)
+        self.assertEqual("exact", exact.method)
+
     def test_profile_prepares_one_origin_independent_exact_key_and_feature_set(
         self,
     ) -> None:
@@ -855,6 +884,18 @@ class SimilarityCoreV2Test(unittest.TestCase):
             right_hash=hashlib.sha256(right.encode("utf-8")).hexdigest(),
             embedding_backend=embedding_backend,
             minimum_length=4,
+        )
+
+    @staticmethod
+    def _compare_source_binding(left: str, right: str, signal: str):
+        return compare_source_binding_text(
+            source_binding_signal=signal,
+            left_text=left,
+            left_normalized=normalize_text(left),
+            left_hash=hashlib.sha256(left.encode("utf-8")).hexdigest(),
+            right_text=right,
+            right_normalized=normalize_text(right),
+            right_hash=hashlib.sha256(right.encode("utf-8")).hexdigest(),
         )
 
 

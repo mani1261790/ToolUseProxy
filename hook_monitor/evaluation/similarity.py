@@ -27,6 +27,7 @@ from hook_monitor.analysis.similarity import (
     SIMILARITY_SHINGLE_THRESHOLD,
     SimilarityCandidateStats,
     SimilarityDecision,
+    compare_source_binding_text,
     compare_text,
     make_shingles,
     prepare_similarity_text,
@@ -125,7 +126,11 @@ def evaluate_similarity(
 
     pairs = dataset.select_pairs(split)
     scenarios = dataset.select_scenarios(split)
-    pair_cases = [_evaluate_pair(pair) for pair in pairs]
+    source_signals_enabled = dataset.schema_version >= 3
+    pair_cases = [
+        _evaluate_pair(pair, source_signals_enabled=source_signals_enabled)
+        for pair in pairs
+    ]
     explicit_retrieval_pools = dataset.select_retrieval_pools(split)
     retrieval_cases = (
         _evaluate_retrieval_pools(explicit_retrieval_pools)
@@ -136,7 +141,10 @@ def evaluate_similarity(
     scenario_results: list[dict[str, Any]] = []
     parity_cases: list[dict[str, Any]] = []
     for scenario in scenarios:
-        material = _make_scenario_material(scenario)
+        material = _make_scenario_material(
+            scenario,
+            source_signals_enabled=source_signals_enabled,
+        )
         full = _run_full_scenario(
             scenario,
             material,
@@ -147,6 +155,7 @@ def evaluate_similarity(
             scenario,
             minimum_path_score=minimum_path_score,
             finding_min_score=finding_min_score,
+            source_signals_enabled=source_signals_enabled,
         )
         scenario_results.append(
             {
@@ -176,6 +185,7 @@ def evaluate_similarity(
         benchmark_repeats=benchmark_repeats,
         minimum_path_score=minimum_path_score,
         finding_min_score=finding_min_score,
+        source_signals_enabled=source_signals_enabled,
     )
     split_name = split or "all"
     report_schema_version = (
@@ -455,8 +465,12 @@ def nearest_rank_percentile(values: Sequence[float], percentile: float) -> float
     return ordered[index]
 
 
-def _evaluate_pair(pair: PairExample) -> dict[str, Any]:
-    decision = _compare_pair(pair)
+def _evaluate_pair(
+    pair: PairExample,
+    *,
+    source_signals_enabled: bool = False,
+) -> dict[str, Any]:
+    decision = _compare_pair(pair, source_signals_enabled=source_signals_enabled)
     return {
         "id": pair.example_id,
         "split": pair.split,
@@ -473,8 +487,21 @@ def _evaluate_pair(pair: PairExample) -> dict[str, Any]:
     }
 
 
-def _compare_pair(pair: PairExample) -> SimilarityDecision:
-    return compare_text(
+def _compare_pair(
+    pair: PairExample,
+    *,
+    source_signals_enabled: bool = False,
+) -> SimilarityDecision:
+    comparator = (
+        compare_source_binding_text
+        if source_signals_enabled and pair.scope == "source_binding"
+        else compare_text
+    )
+    arguments: dict[str, Any] = {}
+    if comparator is compare_source_binding_text:
+        arguments["source_binding_signal"] = pair.source_binding_signal
+    return comparator(
+        **arguments,
         left_text=pair.left_text,
         left_normalized=normalize_text(pair.left_text),
         left_hash=_text_hash(pair.left_text),
@@ -613,6 +640,7 @@ def _make_scenario_material(
     *,
     workspace_id: str = "similarity-evaluation-workspace",
     workspace_root: str = "/synthetic/workspace",
+    source_signals_enabled: bool = True,
 ) -> _ScenarioMaterial:
     session_id = f"similarity-evaluation:{scenario.scenario_id}"
     source_normalized = normalize_text(scenario.source_text)
@@ -626,6 +654,11 @@ def _make_scenario_material(
         shingle_fingerprint=_shingle_fingerprint(source_normalized),
         token_count=estimate_token_count(source_normalized),
         workspace_id=workspace_id,
+        source_binding_signal=(
+            scenario.source_binding_signal
+            if source_signals_enabled
+            else "selected_security_field"
+        ),
     )
     contexts = tuple(
         _make_artifact_context(
@@ -752,6 +785,7 @@ def _run_incremental_scenario(
     *,
     minimum_path_score: float,
     finding_min_score: float,
+    source_signals_enabled: bool,
 ) -> _ScenarioExecution:
     with tempfile.TemporaryDirectory(
         prefix="tooluseproxy-similarity-incremental-"
@@ -769,6 +803,7 @@ def _run_incremental_scenario(
             scenario,
             workspace_id=workspace.workspace_id,
             workspace_root=workspace.canonical_root,
+            source_signals_enabled=source_signals_enabled,
         )
         store = EventStore(Path(temporary_directory) / "events.db")
         store.initialize()
@@ -1741,6 +1776,7 @@ def _benchmark(
     benchmark_repeats: int,
     minimum_path_score: float,
     finding_min_score: float,
+    source_signals_enabled: bool,
 ) -> dict[str, dict[str, float | int]]:
     samples: dict[str, list[int]] = defaultdict(list)
     candidates_by_scope = {
@@ -1759,7 +1795,14 @@ def _benchmark(
     }
     for _repeat in range(benchmark_repeats):
         for pair in pairs:
-            samples["pair"].append(_timed_ns(lambda pair=pair: _compare_pair(pair)))
+            samples["pair"].append(
+                _timed_ns(
+                    lambda pair=pair: _compare_pair(
+                        pair,
+                        source_signals_enabled=source_signals_enabled,
+                    )
+                )
+            )
             if not retrieval_pools:
                 samples[f"{pair.scope.split('_')[0]}_retrieval"].append(
                     _timed_ns(
@@ -1795,7 +1838,10 @@ def _benchmark(
                 )
             )
         for scenario in scenarios:
-            material = _make_scenario_material(scenario)
+            material = _make_scenario_material(
+                scenario,
+                source_signals_enabled=source_signals_enabled,
+            )
             samples["e2e_full"].append(
                 _timed_ns(
                     lambda scenario=scenario, material=material: _run_full_scenario(
@@ -1812,6 +1858,7 @@ def _benchmark(
                         scenario,
                         minimum_path_score=minimum_path_score,
                         finding_min_score=finding_min_score,
+                        source_signals_enabled=source_signals_enabled,
                     )
                 )
             )
