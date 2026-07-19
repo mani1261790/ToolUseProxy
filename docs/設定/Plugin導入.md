@@ -242,6 +242,8 @@ sh "<PLUGIN_ROOT>/hooks/run_cli.sh" uninstall apply \
 
 alpha.1からalpha.3候補へのupgrade / safe rollback手順と検証結果は[Pluginライフサイクル](../運用/Pluginライフサイクル.md)を参照してください。将来versionとcross-platformでの反復は引き続きpublic alphaのrelease gateです。
 
+pre-release候補で実際のHook trust、agent説明、実tool invocationを検証するときは、通常workspaceや実secretを使わず、[Pluginドッグフードのmanual Phase B](../運用/Pluginドッグフード.md#manual-phase-b)を実行します。prepare出力はlocal pathを含むため公開せず、raw値とpathを除外したverify結果だけをrelease evidenceとして扱います。
+
 ## trustとfailure時の挙動
 
 - 未trustのPlugin HookはCodex側でskipされます

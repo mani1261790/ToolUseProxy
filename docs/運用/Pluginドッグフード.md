@@ -37,18 +37,44 @@ python3.11 scripts/dogfood_plugin.py --installation-mode extracted
 
 ## manual Phase B
 
-自動runnerはHook definitionのtrustや、Codexがdenyを受けて実tool invocationを0件にしたことを代行しません。pre-release候補では新しいCodex taskを作り、次を人間が確認します。
+自動runnerはHook definitionのtrustや、Codexがdenyを受けて実tool invocationを0件にしたことを代行しません。manual Phase Bはrepository外の専用directoryへisolated `CODEX_HOME`、synthetic workspace、local fake `curl`を準備します。
+
+```bash
+python3.11 scripts/manual_plugin_phase_b.py prepare \
+  --root /absolute/path/outside/repository/tooluseproxy-phase-b
+```
+
+既存directoryとrepository内pathは上書き事故やcommit混入を避けるため拒否します。prepareはclean Plugin ZIPをbuildしてisolated marketplaceへinstallし、artifact SHA-256、Plugin / Codex version、login command、task launcher、値を含まないpromptをJSONで返します。このprepare出力にはlocal absolute pathがあるため公開artifactへ貼りません。生成するlauncherに`--dangerously-bypass-hook-trust`はなく、Hook trustは必ずCodex UI上で人が確認します。
+
+必要なら出力されたlogin commandでisolated `CODEX_HOME`へloginし、task launcherを実行します。promptを新しいCodex taskへ渡し、次を人間が確認します。
 
 1. Codexが表示するHook definitionとartifact version / SHA-256をreviewしてtrustする
 2. synthetic workspaceで`init`、`doctor`、`status`を実行する
-3. public fixtureをBash / MCPへ送り、false blockがないことを確認する
-4. synthetic protected fixtureの送信を依頼し、deny時の実side effectが0であることを確認する
-5. final answer reviewとtraceの説明が値を含まないことを確認する
-6. update後にapproved sourceと監査dataが残り、古いproposalがstaleになることを確認する
-7. remove後にactive Hookが残らず、data保持方針が表示どおりであることを確認する
-8. uninstall planのfile数 / byte数 / 管理外entry数をreviewし、明示apply後だけ管理dataが消えることを確認する
+3. `protect scan`のvalue-freeなexact proposal説明を読み、明示approveする
+4. public fixtureをBashへ送り、false blockがなくfake sink markerが作られることを確認する
+5. synthetic protected fixtureの送信を依頼し、deny時のfake sink markerが0であることを確認する
 
-manual結果には実secretやSQLiteを使わず、synthetic case ID、version、artifact SHA-256、所要時間、判定、failure codeだけを記録します。
+Phase B harnessのworkspaceでは、PATH先頭のfake `curl`がnetworkへ接続せず、呼び出された事実だけをmarkerへ書きます。public callはmarkerを作り、protected callはPreToolUse denyによりmarkerを作らないことが期待結果です。実行後、ユーザー自身の確認結果を明示してverifierを実行します。
+
+```bash
+python3.11 scripts/manual_plugin_phase_b.py verify \
+  --root /absolute/path/outside/repository/tooluseproxy-phase-b \
+  --hook-trust-reviewed yes \
+  --agent-explanation-clear yes \
+  --manual-registration-attempts 0 \
+  --additional-question-count 0
+```
+
+verifierは次をSQLite、manifest、markerから相互確認します。
+
+- bounded scanまたはexplicit suggestionのcandidateと明示decision
+- `protected_sources.json`へのexact source登録
+- 実Codex task由来のpublic / protected `PreToolUse`
+- public callだけに対応する`PostToolUse`とlocal marker
+- protected callの`block` decision、`PostToolUse`不在、side-effect marker 0
+- proposal作成から明示decisionまでの時間
+
+verify出力はroot path、source hash、candidate ID、tool input、raw canaryを含まないaggregate-only JSONです。`status: passed`の出力だけをIssueへ記録できます。`needs_followup`では`failed_checks`を直し、同じrunを成功扱いにしません。manual結果には実secretやSQLiteを使わず、synthetic case ID、version、artifact SHA-256、所要時間、判定、failure codeだけを記録します。
 
 説明UXのdogfoodでは、JSONやsource値を保存せず、次の集約値だけを記録します。
 
@@ -58,6 +84,8 @@ manual結果には実secretやSQLiteを使わず、synthetic case ID、version�
 - proposalを理解するために追加質問が必要だった件数
 - 最初のproposal提示から明示判断までの時間
 
-自動Phase Aの件数をmanual Phase Bの実利用値へ合算しません。Hook trust、実tool side effect、agent説明の理解度は人間が確認したrunだけを実利用として扱います。
+自動Phase Aの件数をmanual Phase Bの実利用値へ合算しません。Hook trust、実tool side effect、agent説明の理解度は人間が確認し、Phase B verifierが実Hook DBとmarkerを照合したrunだけを実利用として扱います。
+
+このharnessが対象にするのは#18の初回onboardingと実Bash遮断です。final answer / MCP、update後のapproved source保持とstale proposal、remove / data保持 / uninstallは自動Phase Aと[Pluginライフサイクル](Pluginライフサイクル.md)で機械検証済みですが、人が参加するpre-release全体のPhase B evidenceとしては別途反復します。初回onboardingの合格だけでそれらもmanual確認済みとは扱いません。
 
 immutable alpha.1と現在release候補のupgrade / rollback / disable / removeは[Pluginライフサイクル](Pluginライフサイクル.md)の独立runnerで検証します。
