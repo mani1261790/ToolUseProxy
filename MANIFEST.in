@@ -1,0 +1,18 @@
+include README.md
+include pyproject.toml
+include MANIFEST.in
+
+prune .agents
+prune .codex-plugin
+prune .github
+prune docs
+prune hooks
+prune scripts
+prune skills
+prune tests
+prune hook_monitor/evaluation
+
+global-exclude .DS_Store
+global-exclude *.db
+global-exclude *.py[cod]
+global-exclude __pycache__
