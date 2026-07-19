@@ -1,4 +1,6 @@
 include README.md
+include README.en.md
+include QUICKSTART.md
 include PRIVACY.md
 include SUPPORT.md
 include pyproject.toml

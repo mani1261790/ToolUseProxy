@@ -60,6 +60,8 @@ class PluginArtifactTest(unittest.TestCase):
                 marketplace["plugins"][0]["source"],
             )
             self.assertIn("PRIVACY.md", names)
+            self.assertIn("QUICKSTART.md", names)
+            self.assertIn("README.en.md", names)
             self.assertIn("README.md", names)
             self.assertIn("SUPPORT.md", names)
             self.assertIn("tooluseproxy/.codex-plugin/plugin.json", names)
@@ -238,6 +240,8 @@ class PluginArtifactTest(unittest.TestCase):
                 self.assertFalse(set(relative.parts) & FORBIDDEN_PARTS, str(relative))
             self.assertFalse((installed_path / ".agents").exists())
             self.assertFalse((installed_path / "PRIVACY.md").exists())
+            self.assertFalse((installed_path / "QUICKSTART.md").exists())
+            self.assertFalse((installed_path / "README.en.md").exists())
             self.assertFalse((installed_path / "README.md").exists())
             self.assertFalse((installed_path / "SUPPORT.md").exists())
             self.assertTrue((installed_path / "tooluseproxy" / "__main__.py").is_file())

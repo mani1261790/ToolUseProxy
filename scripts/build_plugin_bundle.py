@@ -24,7 +24,13 @@ FIXED_FILES = (
     "skills/tooluseproxy-setup/SKILL.md",
     "tooluseproxy_plugin.py",
 )
-MARKETPLACE_DOCUMENTATION_FILES = ("PRIVACY.md", "README.md", "SUPPORT.md")
+MARKETPLACE_DOCUMENTATION_FILES = (
+    "PRIVACY.md",
+    "QUICKSTART.md",
+    "README.en.md",
+    "README.md",
+    "SUPPORT.md",
+)
 PYTHON_PACKAGE_DIRECTORIES = ("hook_monitor", "tooluseproxy")
 EXCLUDED_PYTHON_DIRECTORIES = (PurePosixPath("hook_monitor/evaluation"),)
 

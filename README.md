@@ -2,9 +2,12 @@
 
 Codexのtool useをローカルで観測し、protected sourceから外部toolや最終回答までの情報流を追跡・検知・制御するための研究実装です。
 
-> 現在は`0.1.0-alpha.3`です。中核機能は動作しますが、公開release、配布物の供給網、cross-platform E2Eはまだ整備中です。
+> 現在は`0.1.0-alpha.3`です。中核機能と再現可能な配布候補は動作しますが、LICENSE、manual Phase B、公開前review、immutable releaseは未完了です。
 
 - [Codex Pluginとして試す](docs/設定/Plugin導入.md)
+- [5分quickstart / Five-minute quickstart](QUICKSTART.md)
+- 30秒synthetic demo: `python3.11 scripts/demo_plugin.py`
+- [English introduction](README.en.md)
 - [対応環境と既知の制限](SUPPORT.md)
 - [プライバシーとデータ保持](PRIVACY.md)
 - [Pluginドッグフード](docs/運用/Pluginドッグフード.md)
@@ -30,11 +33,11 @@ Hook内のnetwork access、remote embedding、telemetryは使いません。runt
 | 領域 | 状態 | 現在の境界 |
 | --- | --- | --- |
 | 1. Trace | 中核完了 | event / artifact / resource / sinkをworkspace・session単位で追跡し、再現可能な解析runを保存 |
-| 2. Detect | 中核完了 | protected source binding、lineage、finding、policy、類似度profile v2を実装 |
+| 2. Detect | 中核完了 | protected source binding、lineage、finding、policy、類似度profile v2.1を実装 |
 | 3. Stop | alpha実装済み | Stopの`continue_review`と、opt-inのBash / MCP PreToolUse denyを提供。runtime redactは無効 |
 | Plugin化 | alpha.3 | installable package、relocatable Plugin、`PLUGIN_ROOT` / `PLUGIN_DATA`、初期化・診断・traceを実装 |
 | protected source登録 | 明示承認型を実装済み | `scan` / `suggest` → exact proposal → `approve` / `reject` / `ignore`。無承認登録はしない |
-| Public alpha | 準備中 | immutable release、LICENSE、checksum / SBOM、upgrade / rollback、cross-platform E2Eが未完了 |
+| Public alpha | 準備中 | checksum / SBOM、upgrade / rollback、自動dogfoodは完了。LICENSE、manual Phase B、security review、immutable releaseが未完了 |
 
 設計全体は[アーキテクチャ概要](docs/設計/アーキテクチャ.md)、詳細な完了範囲と残作業は[実装タスク計画](docs/運用/実装タスク.md)を参照してください。
 
@@ -68,26 +71,27 @@ sh "<PLUGIN_ROOT>/hooks/run_cli.sh" status --workspace "$PWD" --data-dir "<PLUGI
 
 ## 品質ゲート
 
-類似度profile v2はversioned synthetic corpusで次を固定しています。
+類似度profile v2.1はversioned synthetic corpusで次を固定しています。
 
-- 38 pair、9 E2E scenario、16 candidate retrieval pool
+- 42 pair、13 E2E scenario、16 candidate retrieval pool
 - pair precision / recall / F1: `1.0`
 - artifact recall@50、source recall@200: `1.0`
 - E2E reachability / action: `1.0`
 - false block、privacy exposure: `0`
-- full / incremental parity: `9 / 9`
+- full / incremental / SQLite parity mismatch: `0`
+- 1,000〜10,000候補のstress poolでsaturated recall: `1.0`
 
-dataset digestは`241a4f536ea53694b8172accc5a528961673a843983f99702651357cff3619b3`です。再現方法、split、既知の限界は[類似度評価](docs/運用/類似度評価.md)に記録しています。
+dataset digestは`0e7045219148a9e1ba45073e390802ca21ddb60b6c119afd532c66d76b399822`です。再現方法、split、既知の限界は[類似度評価](docs/運用/類似度評価.md)に記録しています。
 
 ## 次に進めること
 
 優先順位の正本は[実装タスク計画](docs/運用/実装タスク.md)とGitHub Issues / Projectです。
 
-1. [#19](https://github.com/mani1261790/ToolUseProxy/issues/19): 固定済みartifact / Python 3.11・3.12 CI / support・privacy契約を検証し、LICENSEを決定する
-2. [#19](https://github.com/mani1261790/ToolUseProxy/issues/19): 自動Phase A済みのalpha.3 dogfoodを、manual trustと実tool side effect 0を含むPhase Bで閉じる
-3. [#20](https://github.com/mani1261790/ToolUseProxy/issues/20): 長い英字の公開compound誤検知と有限candidate capをadversarial corpusで改善・検証する
-4. [#18](https://github.com/mani1261790/ToolUseProxy/issues/18): protected source onboardingを実Plugin E2Eで閉じ、runtime observed-pathやauto-enrollは別の研究判断として扱う
-5. [#19](https://github.com/mani1261790/ToolUseProxy/issues/19): 検証済みlifecycleを30秒demo、5分quickstart、最小限の英語導入へ落とし込む
+1. [#18](https://github.com/mani1261790/ToolUseProxy/issues/18): manual Phase BでHook trust、agent説明、明示判断、実tool side effect 0を測る
+2. [#19](https://github.com/mani1261790/ToolUseProxy/issues/19): public alphaのLICENSEを決定する
+3. [#19](https://github.com/mani1261790/ToolUseProxy/issues/19): final answer / MCP、update / rollback、remove / uninstallを含むmanual Phase Bを閉じる
+4. [#19](https://github.com/mani1261790/ToolUseProxy/issues/19): 公開前security reviewと少人数pilotを行う
+5. [#19](https://github.com/mani1261790/ToolUseProxy/issues/19): immutable tag / GitHub pre-releaseを明示承認後に作成する
 
 ## 研究の考え方
 
