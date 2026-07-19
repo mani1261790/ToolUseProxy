@@ -24,6 +24,7 @@ SOURCE_ROOT = REPO_ROOT / "tests" / "fixtures" / "similarity" / "v2"
 DEFAULT_OUTPUT = REPO_ROOT / "tests" / "fixtures" / "similarity" / "v2_1"
 STRESS_SIZES = (1_000, 5_000, 10_000)
 DEVELOPMENT_SIGNAL_FAMILY = "alpha_source_signal_development"
+VALIDATION_SIGNAL_FAMILY = "alpha_source_signal_validation"
 
 
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -181,6 +182,106 @@ def _development_signal_scenarios() -> list[dict[str, Any]]:
     ]
 
 
+def _validation_signal_pairs() -> list[dict[str, Any]]:
+    common = {
+        "schema_version": V21_DATASET_SCHEMA_VERSION,
+        "dataset_version": V21_DATASET_VERSION,
+        "split": "validation",
+        "scope": "source_binding",
+        "provenance": "synthetic",
+        "observe_only": False,
+        "family": VALIDATION_SIGNAL_FAMILY,
+        "counterfactual_group": None,
+    }
+    return [
+        {
+            **common,
+            "id": "v21-validation-open-catalog-negative",
+            "left_text": "interoperabilitydocumentation",
+            "right_text": (
+                "catalog entry interoperabilitydocumentation has open visibility"
+            ),
+            "should_link": False,
+            "tags": ["alpha_only", "negative", "public_compound"],
+            "rationale": (
+                "An unrelated open-catalog compound must not gain protected "
+                "lineage from registered-source containment."
+            ),
+            "source_binding_signal": "registered_source",
+        },
+        {
+            **common,
+            "id": "v21-validation-selected-credential-positive",
+            "left_text": "amberciphersparrowquartz",
+            "right_text": (
+                "outbound envelope carries amberciphersparrowquartz as credential material"
+            ),
+            "should_link": True,
+            "tags": [
+                "alpha_only",
+                "hard_positive",
+                "positive",
+                "selected_security_field",
+            ],
+            "rationale": (
+                "An independently named selected credential must retain alpha-only "
+                "lineage in a different wrapper."
+            ),
+            "source_binding_signal": "selected_security_field",
+        },
+    ]
+
+
+def _validation_signal_scenarios() -> list[dict[str, Any]]:
+    common = {
+        "schema_version": V21_DATASET_SCHEMA_VERSION,
+        "dataset_version": V21_DATASET_VERSION,
+        "split": "validation",
+        "provenance": "synthetic",
+        "sink_type": "external_http_request",
+        "observe_only": False,
+        "family": VALIDATION_SIGNAL_FAMILY,
+        "counterfactual_group": None,
+    }
+    return [
+        {
+            **common,
+            "id": "v21-validation-open-catalog-scenario",
+            "source_text": "interoperabilitydocumentation",
+            "artifact_texts": [
+                "send catalog entry interoperabilitydocumentation to archive gateway",
+            ],
+            "should_reach_sink": False,
+            "expected_action": "allow",
+            "tags": ["alpha_only", "negative", "public_compound"],
+            "rationale": (
+                "A public catalog HTTP submission must remain outside source lineage."
+            ),
+            "source_binding_signal": "registered_source",
+        },
+        {
+            **common,
+            "id": "v21-validation-selected-credential-scenario",
+            "source_text": "amberciphersparrowquartz",
+            "artifact_texts": [
+                "dispatch credential payload amberciphersparrowquartz is staged to partner",
+            ],
+            "should_reach_sink": True,
+            "expected_action": "block",
+            "tags": [
+                "alpha_only",
+                "hard_positive",
+                "positive",
+                "selected_security_field",
+            ],
+            "rationale": (
+                "Selected credential provenance must reach a differently shaped HTTP sink."
+            ),
+            "source_binding_signal": "selected_security_field",
+        },
+    ]
+
+
 def _apply_stress_sizes(records: list[dict[str, Any]]) -> None:
     for split in ("development", "validation"):
         split_records = [record for record in records if record["split"] == split]
@@ -271,28 +372,44 @@ def _render_fixture(output: Path) -> str:
 
     pairs = _convert_records(_read_jsonl(SOURCE_ROOT / "pairs.jsonl"))
     pairs.extend(_development_signal_pairs())
+    pairs.extend(_validation_signal_pairs())
     expected_counts = manifest["expected_counts"]
-    expected_counts["pairs"] += 2
+    expected_counts["pairs"] += 4
     expected_counts["development_pairs"] += 2
     expected_counts["development_gate_pairs"] += 2
+    expected_counts["validation_pairs"] += 2
+    expected_counts["validation_gate_pairs"] += 2
     development_families = manifest["family_contract"]["pair_families"][
         "development"
     ]
     development_families.append(DEVELOPMENT_SIGNAL_FAMILY)
     development_families.sort()
+    validation_families = manifest["family_contract"]["pair_families"][
+        "validation"
+    ]
+    validation_families.append(VALIDATION_SIGNAL_FAMILY)
+    validation_families.sort()
     scenarios = _convert_records(
         _read_jsonl(SOURCE_ROOT / "scenarios.jsonl"),
         scenario=True,
     )
     scenarios.extend(_development_signal_scenarios())
-    expected_counts["scenarios"] += 2
+    scenarios.extend(_validation_signal_scenarios())
+    expected_counts["scenarios"] += 4
     expected_counts["development_scenarios"] += 2
     expected_counts["development_gate_scenarios"] += 2
+    expected_counts["validation_scenarios"] += 2
+    expected_counts["validation_gate_scenarios"] += 2
     development_scenario_families = manifest["family_contract"][
         "scenario_families"
     ]["development"]
     development_scenario_families.append(DEVELOPMENT_SIGNAL_FAMILY)
     development_scenario_families.sort()
+    validation_scenario_families = manifest["family_contract"][
+        "scenario_families"
+    ]["validation"]
+    validation_scenario_families.append(VALIDATION_SIGNAL_FAMILY)
+    validation_scenario_families.sort()
     retrieval = _convert_records(_read_jsonl(SOURCE_ROOT / "retrieval_pools.jsonl"))
     _apply_stress_sizes(retrieval)
 

@@ -19,7 +19,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 V2_ROOT = REPO_ROOT / "tests" / "fixtures" / "similarity" / "v2"
 V21_ROOT = REPO_ROOT / "tests" / "fixtures" / "similarity" / "v2_1"
 V2_DIGEST = "241a4f536ea53694b8172accc5a528961673a843983f99702651357cff3619b3"
-V21_DIGEST = "eaae7a5e97c79e59f8d45706466170fe93cc66c2c2e6293d82f5721ef32d7cf4"
+V21_DIGEST = "1855ec5aae9fe3ecf61190f1631a1d72e0163c76dbbe6bc6954b221cb7b391cb"
 
 
 class SimilarityEvaluationV21Test(unittest.TestCase):
@@ -96,6 +96,62 @@ class SimilarityEvaluationV21Test(unittest.TestCase):
                     retrieval = report["metrics"]["candidate_retrieval"][scope]
                     self.assertEqual(1.0, retrieval["saturation_rate"])
                     self.assertEqual(1.0, retrieval["gate_saturated"]["recall"])
+
+    def test_frozen_rule_passes_independent_development_and_validation_families(
+        self,
+    ) -> None:
+        development_families = {
+            pair.family for pair in self.dataset.select_pairs("development")
+        }
+        validation_families = {
+            pair.family for pair in self.dataset.select_pairs("validation")
+        }
+        self.assertIn("alpha_source_signal_development", development_families)
+        self.assertIn("alpha_source_signal_validation", validation_families)
+        self.assertTrue(development_families.isdisjoint(validation_families))
+
+        report = evaluate_similarity(
+            self.dataset,
+            split="validation",
+            benchmark_repeats=1,
+        )
+        pairs = {case["id"]: case for case in report["cases"]["pairs"]}
+        scenarios = {
+            case["id"]: case for case in report["cases"]["scenarios"]
+        }
+        parity = {case["id"]: case for case in report["cases"]["parity"]}
+
+        negative = pairs["v21-validation-open-catalog-negative"]
+        positive = pairs["v21-validation-selected-credential-positive"]
+        self.assertEqual((False, False, "none"), (
+            negative["expected"],
+            negative["actual"],
+            negative["method"],
+        ))
+        self.assertEqual((True, True, "substring"), (
+            positive["expected"],
+            positive["actual"],
+            positive["method"],
+        ))
+
+        negative_scenario = scenarios["v21-validation-open-catalog-scenario"]
+        positive_scenario = scenarios[
+            "v21-validation-selected-credential-scenario"
+        ]
+        self.assertEqual((False, "allow"), (
+            negative_scenario["actual_reach"],
+            negative_scenario["actual_action"],
+        ))
+        self.assertEqual((True, "block"), (
+            positive_scenario["actual_reach"],
+            positive_scenario["actual_action"],
+        ))
+        self.assertTrue(
+            parity["v21-validation-open-catalog-scenario"]["passed"]
+        )
+        self.assertTrue(
+            parity["v21-validation-selected-credential-scenario"]["passed"]
+        )
 
     def test_builder_reproduces_committed_fixture(self) -> None:
         result = subprocess.run(
