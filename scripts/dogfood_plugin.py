@@ -19,6 +19,17 @@ from typing import Any
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PLUGIN_BUILDER = REPO_ROOT / "scripts" / "build_plugin_bundle.py"
 SYNTHETIC_CANARY = "DOGFOOD.CANARY.7E91A4C2B8D6"
+REJECTED_CANARY = "DOGFOOD.REJECTED.31C8A4E2"
+IGNORED_CANARY = "DOGFOOD.IGNORED.64F1B9D3"
+STALE_CANARY = "DOGFOOD.STALE.2D7E5A91"
+STALE_REPLACEMENT_CANARY = "DOGFOOD.STALE.REPLACED.8A3C6F14"
+SYNTHETIC_PROTECTED_VALUES = (
+    SYNTHETIC_CANARY,
+    REJECTED_CANARY,
+    IGNORED_CANARY,
+    STALE_CANARY,
+    STALE_REPLACEMENT_CANARY,
+)
 
 
 class DogfoodFailure(RuntimeError):
@@ -154,9 +165,136 @@ def _run_dogfood(installation_mode: str) -> dict[str, Any]:
         if initialized.get("status") != "initialized":
             raise DogfoodFailure(stage, "init_status_invalid")
 
-        source = workspace / ".env.dogfood"
-        source.write_text(f"DOGFOOD_TOKEN={SYNTHETIC_CANARY}\n", encoding="utf-8")
-        source.chmod(0o600)
+        sources = {
+            ".env.dogfood": ("DOGFOOD_TOKEN", SYNTHETIC_CANARY),
+            ".env.ignore": ("IGNORED_TOKEN", IGNORED_CANARY),
+            ".env.reject": ("REJECTED_TOKEN", REJECTED_CANARY),
+            ".env.stale": ("STALE_TOKEN", STALE_CANARY),
+        }
+        for relative_path, (key, value) in sources.items():
+            source = workspace / relative_path
+            source.write_text(f"{key}={value}\n", encoding="utf-8")
+            source.chmod(0o600)
+
+        stage = "protect_suggest_reject"
+        rejected_suggestion = _suggest_candidate(
+            cli_launcher,
+            ".env.reject",
+            workspace=workspace,
+            data_dir=data_dir,
+            env=plugin_environment,
+            stage=stage,
+            captured_outputs=captured_outputs,
+        )
+        rejected_candidate = _single_review_candidate(
+            rejected_suggestion,
+            expected_path=".env.reject",
+            stage=stage,
+        )
+        rejected = _run_plugin_json(
+            cli_launcher,
+            [
+                "protect",
+                "reject",
+                _required_string(rejected_candidate, "candidate_id", stage),
+                "--candidate-revision",
+                _required_string(rejected_candidate, "candidate_revision", stage),
+                "--workspace",
+                str(workspace),
+                "--data-dir",
+                str(data_dir),
+                "--json",
+            ],
+            cwd=workspace,
+            env=plugin_environment,
+            stage=stage,
+            captured_outputs=captured_outputs,
+        )
+        if rejected.get("status") != "rejected":
+            raise DogfoodFailure(stage, "candidate_not_rejected")
+
+        stage = "protect_suggest_ignore"
+        ignored_suggestion = _suggest_candidate(
+            cli_launcher,
+            ".env.ignore",
+            workspace=workspace,
+            data_dir=data_dir,
+            env=plugin_environment,
+            stage=stage,
+            captured_outputs=captured_outputs,
+        )
+        ignored_candidate = _single_review_candidate(
+            ignored_suggestion,
+            expected_path=".env.ignore",
+            stage=stage,
+        )
+        ignored = _run_plugin_json(
+            cli_launcher,
+            [
+                "protect",
+                "ignore",
+                _required_string(ignored_candidate, "candidate_id", stage),
+                "--candidate-revision",
+                _required_string(ignored_candidate, "candidate_revision", stage),
+                "--workspace",
+                str(workspace),
+                "--data-dir",
+                str(data_dir),
+                "--json",
+            ],
+            cwd=workspace,
+            env=plugin_environment,
+            stage=stage,
+            captured_outputs=captured_outputs,
+        )
+        if ignored.get("status") != "ignored":
+            raise DogfoodFailure(stage, "candidate_not_ignored")
+
+        stage = "protect_stale_source"
+        stale_suggestion = _suggest_candidate(
+            cli_launcher,
+            ".env.stale",
+            workspace=workspace,
+            data_dir=data_dir,
+            env=plugin_environment,
+            stage=stage,
+            captured_outputs=captured_outputs,
+        )
+        stale_candidate = _single_review_candidate(
+            stale_suggestion,
+            expected_path=".env.stale",
+            stage=stage,
+        )
+        stale_source = workspace / ".env.stale"
+        stale_source.write_text(
+            f"STALE_TOKEN={STALE_REPLACEMENT_CANARY}\n",
+            encoding="utf-8",
+        )
+        stale_error = _run_plugin_json_failure(
+            cli_launcher,
+            [
+                "protect",
+                "approve",
+                _required_string(stale_candidate, "candidate_id", stage),
+                "--candidate-revision",
+                _required_string(stale_candidate, "candidate_revision", stage),
+                "--expected-manifest-sha256",
+                _required_string(stale_suggestion, "manifest_sha256", stage),
+                "--workspace",
+                str(workspace),
+                "--data-dir",
+                str(data_dir),
+                "--json",
+            ],
+            cwd=workspace,
+            env=plugin_environment,
+            stage=stage,
+            captured_outputs=captured_outputs,
+        )
+        error = stale_error.get("error")
+        if not isinstance(error, dict) or error.get("code") != "source_changed":
+            raise DogfoodFailure(stage, "stale_source_not_rejected")
+        stale_source.unlink()
 
         stage = "protect_scan"
         scan = _run_plugin_json(
@@ -178,9 +316,13 @@ def _run_dogfood(installation_mode: str) -> dict[str, Any]:
         candidates = scan.get("candidates")
         if scan.get("status") != "review_required" or not isinstance(candidates, list):
             raise DogfoodFailure(stage, "candidate_review_missing")
-        if len(candidates) != 1 or not isinstance(candidates[0], dict):
-            raise DogfoodFailure(stage, "candidate_count_invalid")
-        candidate = candidates[0]
+        candidate = _single_review_candidate(
+            scan,
+            expected_path=".env.dogfood",
+            stage=stage,
+        )
+        if scan.get("suppressed_count") != 2:
+            raise DogfoodFailure(stage, "negative_review_suppression_missing")
 
         stage = "protect_approve"
         approved = _run_plugin_json(
@@ -206,6 +348,32 @@ def _run_dogfood(installation_mode: str) -> dict[str, Any]:
         )
         if approved.get("status") != "approved":
             raise DogfoodFailure(stage, "candidate_not_approved")
+
+        stage = "protect_rescan"
+        rescan = _run_plugin_json(
+            cli_launcher,
+            [
+                "protect",
+                "scan",
+                "--workspace",
+                str(workspace),
+                "--data-dir",
+                str(data_dir),
+                "--json",
+            ],
+            cwd=workspace,
+            env=plugin_environment,
+            stage=stage,
+            captured_outputs=captured_outputs,
+        )
+        if (
+            rescan.get("status") != "suppressed"
+            or rescan.get("candidates") != []
+            or rescan.get("suppressed_count") != 2
+            or rescan.get("already_registered_count") != 1
+            or rescan.get("continuation_required") is not False
+        ):
+            raise DogfoodFailure(stage, "review_dispositions_not_preserved")
 
         stage = "status"
         status = _run_plugin_json(
@@ -402,7 +570,7 @@ def _run_dogfood(installation_mode: str) -> dict[str, Any]:
         _assert_no_canary_exposure(captured_outputs)
 
         return {
-            "schema_version": 1,
+            "schema_version": 2,
             "status": "passed",
             "installation_mode": installation_mode,
             "plugin_version": manifest["version"],
@@ -410,7 +578,11 @@ def _run_dogfood(installation_mode: str) -> dict[str, Any]:
             "trust_review": "manual_required_not_bypassed",
             "checks": {
                 "init_active": True,
+                "candidate_rejected": True,
+                "candidate_ignored": True,
+                "stale_source_rejected": True,
                 "candidate_approved": True,
+                "negative_reviews_suppressed": True,
                 "public_bash_allowed": True,
                 "public_mcp_allowed": True,
                 "protected_bash_denied": True,
@@ -425,8 +597,66 @@ def _run_dogfood(installation_mode: str) -> dict[str, Any]:
             "metrics": {
                 "time_to_first_block_ms": time_to_first_block_ms,
                 "external_side_effect_count": 0,
+                "proposal_review_count": 4,
+                "proposal_discovery_counts": {
+                    "bounded_scan": 1,
+                    "explicit_suggestion": 3,
+                },
+                "explicit_decision_counts": {
+                    "approve": 1,
+                    "ignore": 1,
+                    "reject": 1,
+                },
+                "stale_proposal_rejection_count": 1,
             },
         }
+
+
+def _suggest_candidate(
+    launcher: Path,
+    relative_path: str,
+    *,
+    workspace: Path,
+    data_dir: Path,
+    env: dict[str, str],
+    stage: str,
+    captured_outputs: list[str],
+) -> dict[str, Any]:
+    return _run_plugin_json(
+        launcher,
+        [
+            "protect",
+            "suggest",
+            "--path",
+            relative_path,
+            "--workspace",
+            str(workspace),
+            "--data-dir",
+            str(data_dir),
+            "--json",
+        ],
+        cwd=workspace,
+        env=env,
+        stage=stage,
+        captured_outputs=captured_outputs,
+    )
+
+
+def _single_review_candidate(
+    payload: dict[str, Any],
+    *,
+    expected_path: str,
+    stage: str,
+) -> dict[str, Any]:
+    candidates = payload.get("candidates")
+    if payload.get("status") != "review_required" or not isinstance(candidates, list):
+        raise DogfoodFailure(stage, "candidate_review_missing")
+    if len(candidates) != 1 or not isinstance(candidates[0], dict):
+        raise DogfoodFailure(stage, "candidate_count_invalid")
+    candidate = candidates[0]
+    if candidate.get("path") != expected_path or candidate.get("review_required") is not True:
+        raise DogfoodFailure(stage, "candidate_review_invalid")
+    return candidate
 
 
 def _run_plugin_json(
@@ -445,6 +675,29 @@ def _run_plugin_json(
         stage=stage,
         captured_outputs=captured_outputs,
     )
+
+
+def _run_plugin_json_failure(
+    launcher: Path,
+    arguments: list[str],
+    *,
+    cwd: Path,
+    env: dict[str, str],
+    stage: str,
+    captured_outputs: list[str],
+) -> dict[str, Any]:
+    result = subprocess.run(
+        ["sh", str(launcher), *arguments],
+        cwd=cwd,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    captured_outputs.extend((result.stdout, result.stderr))
+    if result.returncode == 0 or result.stdout:
+        raise DogfoodFailure(stage, "command_failure_required")
+    return _parse_json(result.stderr, stage)
 
 
 def _run_hook(
@@ -592,7 +845,11 @@ def _latest_decision_id(database: Path) -> str:
 
 
 def _assert_no_canary_exposure(outputs: list[str]) -> None:
-    if any(SYNTHETIC_CANARY in output for output in outputs):
+    if any(
+        protected_value in output
+        for output in outputs
+        for protected_value in SYNTHETIC_PROTECTED_VALUES
+    ):
         raise DogfoodFailure("privacy", "raw_value_exposure")
 
 

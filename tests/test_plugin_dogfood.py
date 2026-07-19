@@ -26,6 +26,7 @@ class PluginDogfoodTest(unittest.TestCase):
         self.assertNotIn(SYNTHETIC_CANARY, result.stdout + result.stderr)
         payload = json.loads(result.stdout)
         self.assertEqual("passed", payload["status"])
+        self.assertEqual(2, payload["schema_version"])
         self.assertEqual("manual_required_not_bypassed", payload["trust_review"])
         self.assertTrue(
             all(
@@ -35,7 +36,22 @@ class PluginDogfoodTest(unittest.TestCase):
             )
         )
         self.assertFalse(payload["checks"]["raw_value_exposure"])
+        self.assertTrue(payload["checks"]["candidate_rejected"])
+        self.assertTrue(payload["checks"]["candidate_ignored"])
+        self.assertTrue(payload["checks"]["stale_source_rejected"])
+        self.assertTrue(payload["checks"]["candidate_approved"])
+        self.assertTrue(payload["checks"]["negative_reviews_suppressed"])
         self.assertEqual(0, payload["metrics"]["external_side_effect_count"])
+        self.assertEqual(4, payload["metrics"]["proposal_review_count"])
+        self.assertEqual(
+            {"bounded_scan": 1, "explicit_suggestion": 3},
+            payload["metrics"]["proposal_discovery_counts"],
+        )
+        self.assertEqual(
+            {"approve": 1, "ignore": 1, "reject": 1},
+            payload["metrics"]["explicit_decision_counts"],
+        )
+        self.assertEqual(1, payload["metrics"]["stale_proposal_rejection_count"])
         self.assertLess(payload["metrics"]["time_to_first_block_ms"], 300_000)
 
     @unittest.skipUnless(
@@ -54,7 +70,13 @@ class PluginDogfoodTest(unittest.TestCase):
         self.assertNotIn(SYNTHETIC_CANARY, result.stdout + result.stderr)
         payload = json.loads(result.stdout)
         self.assertEqual("passed", payload["status"])
+        self.assertEqual(2, payload["schema_version"])
         self.assertEqual("codex", payload["installation_mode"])
+        self.assertTrue(payload["checks"]["candidate_rejected"])
+        self.assertTrue(payload["checks"]["candidate_ignored"])
+        self.assertTrue(payload["checks"]["stale_source_rejected"])
+        self.assertTrue(payload["checks"]["candidate_approved"])
+        self.assertTrue(payload["checks"]["negative_reviews_suppressed"])
         self.assertTrue(payload["checks"]["plugin_code_removed"])
         self.assertTrue(payload["checks"]["runtime_data_retained"])
         self.assertTrue(

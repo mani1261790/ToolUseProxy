@@ -12,6 +12,17 @@ ToolUseProxyのCodex Pluginは、repository全体ではなく、生成時にallo
 
 詳細は[サポート範囲と既知の制限](../../SUPPORT.md)と[プライバシーとデータ保持](../../PRIVACY.md)を参照してください。Windows実機とLinux実Codex CLIのcross-platform E2Eはpublic alphaまでの残作業です。最新の優先順位は[実装タスク計画](../運用/実装タスク.md)を参照してください。
 
+## 導入前の安全境界
+
+導入、候補登録、更新、削除を始める前に、次の4点を一続きの契約として確認してください。
+
+1. [プライバシーとデータ保持](../../PRIVACY.md): raw Hook payloadやprotected source chunkがlocal SQLiteへ平文で残り得て、自動expirationやsecure eraseがない
+2. [サポート範囲と既知の制限](../../SUPPORT.md): Hook内部エラーは原則fail-openで、Windowsの登録workflowはalpha未対応
+3. [Plugin upgrade / rollback rehearsal](../運用/Pluginライフサイクル.md): rollbackは新DBを旧runtimeでdowngradeせず、upgrade前backupを別data directoryへ復元する
+4. この文書の[disable / uninstall](#disable--uninstall): Plugin codeのremoveはdata削除を意味せず、exact planへの別の明示承認が必要
+
+alphaのthreat modelは、Pluginやcoding agentの無承認manifest変更、stale proposal、同じ候補の再提示、意図しないmanaged-data削除を防ぐことを対象にします。同一OS accountで任意file / SQLite writeができる攻撃者、Codexや外部tool自体のnetwork通信、filesystem snapshotや外部backupからの復元は防御範囲外です。workspace lockはToolUseProxyの協調writerだけを直列化し、同一UIDの非協調editorとの完全なfilesystem CASは保証しません。
+
 ## 現在versionと更新
 
 現在versionは`0.1.0-alpha.3`です。類似度profile v2とruntime graph v19を導入しています。既存sessionを次に解析する際は古いcandidate indexを使い続けず、そのsessionのgraphとindexを一度全再構築します。
