@@ -26,6 +26,14 @@ def _run(lock: Path, *, skip_environment: bool = False) -> subprocess.CompletedP
     )
 
 
+def _without_lock_entry(content: str, package: str) -> str:
+    lines = content.splitlines(keepends=True)
+    for index, line in enumerate(lines):
+        if line.startswith(f"{package}=="):
+            return "".join((*lines[:index], *lines[index + 2 :]))
+    raise AssertionError(f"missing lock fixture package: {package}")
+
+
 class BuildToolchainContractTest(unittest.TestCase):
     def test_repository_lock_matches_environment(self) -> None:
         result = _run(LOCK)
@@ -36,11 +44,7 @@ class BuildToolchainContractTest(unittest.TestCase):
     def test_lock_requires_exact_complete_hashes(self) -> None:
         original = LOCK.read_text(encoding="ascii")
         cases = {
-            "missing": original.replace(
-                "wheel==0.45.1 \\\n"
-                "    --hash=sha256:708e7481cc80179af0e556bbf0cc00b8444c7321e2700b8d8580231d13017248\n",
-                "",
-            ),
+            "missing": _without_lock_entry(original, "wheel"),
             "mutable": original.replace("build==1.2.1", "build>=1.2.1"),
             "bad-hash": original.replace(
                 "75e10f767a433d9a86e50d83f418e83efc18ede923ee5ff7df93b6cb0306c5d4",
