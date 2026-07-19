@@ -602,6 +602,8 @@ JSONの例:
 
 canonicalizationはNFKC、1回だけのpercent decode、JSON escape、identifier separatorを固定段数・固定byte上限内で扱います。上限を超えた本文はraw exact以外をfail closedにし、短いlow-information phrase、否定や条件が衝突する表現、一般的な数値phraseを近似一致へ昇格しません。
 
+source bindingでは、長く多様な英字だけの単一tokenをwrapper内でsubstring一致させる場合に限り、secretfile selectorが明示したsecurity fieldの値であることも要求します。selectorなし、または通常項目を選んだだけの値はこのalpha-only heuristicで結びません。exact一致とartifact fragment同士の比較には影響しません。
+
 候補探索ではcanonical / raw exactをlexical上限の外で先に保持し、残りをbounded feature indexからcoverageとoverlapの二つの順位で取得します。artifactは50件、sourceは200件を上限とし、full rebuildとsession incrementalで同じranking helperを使います。
 
 `embedding_cosine`のinterfaceは比較器に残していますが、現在のHook runtimeはembedding backend、network、remote serviceを使いません。意味的な言い換えは研究gapとして評価corpusへ残しています。固定corpus、promotion基準、full / incremental parity、privacy invariantは[類似度評価](../運用/類似度評価.md)を参照してください。

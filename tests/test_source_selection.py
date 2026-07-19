@@ -58,6 +58,10 @@ class SourceSelectionContractTest(unittest.TestCase):
             [first, repeated, third],
             [chunk.text for chunk in chunks],
         )
+        self.assertEqual(
+            ["selected_security_field"] * 3,
+            [chunk.source_binding_signal for chunk in chunks],
+        )
 
         reordered_source = self._load_source(
             path=".env.production",
@@ -68,6 +72,35 @@ class SourceSelectionContractTest(unittest.TestCase):
         self.assertEqual(
             chunks,
             build_source_chunks(self.workspace, reordered_source),
+        )
+
+    def test_compact_security_field_names_receive_security_signal(self) -> None:
+        dotenv_source = self._load_source(
+            path=".env",
+            content="APIKEY=ultravioletharbororchid\n",
+            schema_version=2,
+            selector={"dotenv_keys": ["APIKEY"]},
+        )
+        json_source = self._load_source(
+            path="secrets.json",
+            content=json.dumps({"clientSecret": "velvetmarblelanternquartz"}),
+            schema_version=2,
+            selector={"json_pointers": ["/clientSecret"]},
+        )
+
+        self.assertEqual(
+            ["selected_security_field"],
+            [
+                chunk.source_binding_signal
+                for chunk in build_source_chunks(self.workspace, dotenv_source)
+            ],
+        )
+        self.assertEqual(
+            ["selected_security_field"],
+            [
+                chunk.source_binding_signal
+                for chunk in build_source_chunks(self.workspace, json_source)
+            ],
         )
 
     def test_schema_v2_json_selector_supports_nested_arrays_and_pointer_escapes(
@@ -109,6 +142,19 @@ class SourceSelectionContractTest(unittest.TestCase):
         self.assertEqual(
             [nested, array_scalar, array_nested, slash, tilde],
             [chunk.text for chunk in build_source_chunks(self.workspace, source)],
+        )
+        self.assertEqual(
+            [
+                "selected_security_field",
+                "selected_field",
+                "selected_security_field",
+                "selected_security_field",
+                "selected_security_field",
+            ],
+            [
+                chunk.source_binding_signal
+                for chunk in build_source_chunks(self.workspace, source)
+            ],
         )
 
     def test_json_pointer_empty_string_selects_document_root(self) -> None:
@@ -168,6 +214,13 @@ class SourceSelectionContractTest(unittest.TestCase):
                         chunk.text
                         for chunk in build_source_chunks(self.workspace, source)
                     ],
+                )
+                self.assertEqual(
+                    {"registered_source"},
+                    {
+                        chunk.source_binding_signal
+                        for chunk in build_source_chunks(self.workspace, source)
+                    },
                 )
 
     def test_legacy_manifests_reject_selectors(self) -> None:

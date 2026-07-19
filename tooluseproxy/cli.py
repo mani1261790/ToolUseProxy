@@ -57,6 +57,12 @@ from tooluseproxy.protected_sources import (
     scan_protected_sources,
     suggest_protected_source,
 )
+from tooluseproxy.uninstall import (
+    DATA_DIRECTORY_MARKER,
+    apply_managed_data_deletion,
+    ensure_data_directory_marker,
+    plan_managed_data_deletion,
+)
 
 
 MANIFEST_FILENAME = "protected_sources.json"
@@ -103,6 +109,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _run_status(args)
         if args.command == "protect":
             return _run_protect(args)
+        if args.command == "uninstall":
+            return _run_uninstall(args)
         if args.command == "trace":
             return _run_trace(args.arguments)
     except (
@@ -249,6 +257,28 @@ def _build_parser() -> argparse.ArgumentParser:
 
     trace = subparsers.add_parser("trace", help="Show source lineage for a stored analysis run.")
     trace.add_argument("arguments", nargs=argparse.REMAINDER)
+
+    uninstall = subparsers.add_parser(
+        "uninstall",
+        help="Review or delete only ToolUseProxy-managed local data.",
+    )
+    uninstall_subparsers = uninstall.add_subparsers(
+        dest="uninstall_command",
+        required=True,
+    )
+    uninstall_plan = uninstall_subparsers.add_parser(
+        "plan",
+        help="Create a value-free deletion plan without changing local data.",
+    )
+    uninstall_plan.add_argument("--data-dir", type=Path, required=True)
+    uninstall_plan.add_argument("--json", action="store_true")
+    uninstall_apply = uninstall_subparsers.add_parser(
+        "apply",
+        help="Delete the exact managed data reviewed by uninstall plan.",
+    )
+    uninstall_apply.add_argument("--data-dir", type=Path, required=True)
+    uninstall_apply.add_argument("--confirmation-token", required=True)
+    uninstall_apply.add_argument("--json", action="store_true")
     return parser
 
 
@@ -256,6 +286,18 @@ def _add_runtime_path_arguments(parser: argparse.ArgumentParser) -> None:
     paths = parser.add_mutually_exclusive_group()
     paths.add_argument("--db", type=Path, help="Use an explicit SQLite database path.")
     paths.add_argument("--data-dir", type=Path, help="Use an explicit writable data directory.")
+
+
+def _run_uninstall(args: argparse.Namespace) -> int:
+    if args.uninstall_command == "plan":
+        payload = plan_managed_data_deletion(args.data_dir).to_payload()
+    else:
+        payload = apply_managed_data_deletion(
+            args.data_dir,
+            confirmation_token=args.confirmation_token,
+        )
+    _render(payload, as_json=args.json)
+    return 0
 
 
 def _run_init(args: argparse.Namespace) -> int:
@@ -273,6 +315,7 @@ def _run_init(args: argparse.Namespace) -> int:
                 "--data-dir does not match the Codex Plugin PLUGIN_DATA directory"
             )
     prepare_data_directory(paths)
+    ensure_data_directory_marker(paths.data_dir)
     secure_database_permissions(paths.db_path)
     if args.import_db is not None:
         _import_database(args.import_db, paths.db_path)
@@ -794,7 +837,7 @@ def _scan_excluded_relative_paths(
     if relative_data_dir != Path("."):
         return (relative_data_dir.as_posix(),)
 
-    exclusions = ["manifest-backups"]
+    exclusions = [DATA_DIRECTORY_MARKER, "manifest-backups"]
     canonical_database = Path(os.path.realpath(paths.db_path))
     relative_database = _relative_path_from_filesystem_ancestor(
         canonical_workspace,

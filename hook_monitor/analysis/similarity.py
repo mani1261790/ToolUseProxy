@@ -345,6 +345,48 @@ def compare_text(
     )
 
 
+def compare_source_binding_text(
+    *,
+    source_binding_signal: str,
+    left_text: str,
+    left_normalized: str,
+    left_hash: str,
+    right_text: str,
+    right_normalized: str,
+    right_hash: str,
+    embedding_backend: EmbeddingBackend | None = None,
+    minimum_length: int = 8,
+) -> SimilarityDecision:
+    """Apply source provenance to otherwise ambiguous alpha-only containment."""
+    decision = compare_text(
+        left_text=left_text,
+        left_normalized=left_normalized,
+        left_hash=left_hash,
+        right_text=right_text,
+        right_normalized=right_normalized,
+        right_hash=right_hash,
+        embedding_backend=embedding_backend,
+        minimum_length=minimum_length,
+    )
+    if not decision.matched or decision.method != "substring":
+        return decision
+    shorter = min((left_normalized, right_normalized), key=len)
+    tokens = _tokenize(shorter)
+    if (
+        tokens is not None
+        and len(tokens) == 1
+        and _is_long_diverse_alpha_value(tokens[0])
+        and source_binding_signal != "selected_security_field"
+    ):
+        return SimilarityDecision(
+            "none",
+            0.0,
+            "alpha-only containment requires an explicitly selected security field",
+            False,
+        )
+    return decision
+
+
 def rank_similarity_candidate_ids(
     *,
     query_feature_count: int,

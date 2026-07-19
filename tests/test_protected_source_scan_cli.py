@@ -884,6 +884,7 @@ class ProtectedSourceScanCliTest(unittest.TestCase):
         )
         self.assertEqual(
             (
+                ".tooluseproxy-data.json",
                 "events.db",
                 "events.db-shm",
                 "events.db-wal",
@@ -962,6 +963,7 @@ class ProtectedSourceScanCliTest(unittest.TestCase):
 
         self.assertEqual(
             (
+                ".tooluseproxy-data.json",
                 "events.db",
                 "events.db-shm",
                 "events.db-wal",

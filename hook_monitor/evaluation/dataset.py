@@ -13,10 +13,20 @@ DATASET_SCHEMA_VERSION = 1
 SUPPORTED_DATASET_VERSION = "1.0.0"
 V1_DATASET_VERSION = "1.0.0"
 V2_DATASET_VERSION = "2.0.0"
+V21_DATASET_VERSION = "2.1.0"
 V1_DATASET_SCHEMA_VERSION = 1
 V2_DATASET_SCHEMA_VERSION = 2
+V21_DATASET_SCHEMA_VERSION = 3
 SUPPORTED_SPLITS = frozenset({"development", "validation"})
 SUPPORTED_PAIR_SCOPES = frozenset({"artifact_flow", "source_binding"})
+SUPPORTED_SOURCE_BINDING_SIGNALS = frozenset(
+    {
+        "not_applicable",
+        "registered_source",
+        "selected_field",
+        "selected_security_field",
+    }
+)
 SUPPORTED_ACTIONS = frozenset({"allow", "warn", "block", "continue_review"})
 SUPPORTED_SINK_TYPES = frozenset(
     {
@@ -59,6 +69,7 @@ _V2_MANIFEST_KEYS = frozenset(
         "family_contract",
     }
 )
+_V21_MANIFEST_KEYS = _V2_MANIFEST_KEYS | frozenset({"stress_contract"})
 _V1_PAIR_KEYS = frozenset(
     {
         "id",
@@ -76,6 +87,7 @@ _V1_PAIR_KEYS = frozenset(
     }
 )
 _V2_PAIR_KEYS = _V1_PAIR_KEYS | frozenset({"family", "counterfactual_group"})
+_V21_PAIR_KEYS = _V2_PAIR_KEYS | frozenset({"source_binding_signal"})
 _V1_SCENARIO_KEYS = frozenset(
     {
         "id",
@@ -96,6 +108,7 @@ _V1_SCENARIO_KEYS = frozenset(
 _V2_SCENARIO_KEYS = _V1_SCENARIO_KEYS | frozenset(
     {"family", "counterfactual_group"}
 )
+_V21_SCENARIO_KEYS = _V2_SCENARIO_KEYS | frozenset({"source_binding_signal"})
 _RETRIEVAL_POOL_KEYS = frozenset(
     {
         "id",
@@ -113,6 +126,9 @@ _RETRIEVAL_POOL_KEYS = frozenset(
         "tags",
         "rationale",
     }
+)
+_V21_RETRIEVAL_POOL_KEYS = _RETRIEVAL_POOL_KEYS | frozenset(
+    {"source_binding_signal"}
 )
 _RETRIEVAL_CANDIDATE_KEYS = frozenset({"id", "text", "sequence_no"})
 _RETRIEVAL_CANDIDATE_SERIES_KEYS = frozenset(
@@ -202,8 +218,27 @@ _FAMILY_CONTRACT_KEYS = frozenset(
     }
 )
 _SPLIT_MAP_KEYS = frozenset({"development", "validation"})
+_STRESS_CONTRACT_KEYS = frozenset(
+    {
+        "generated_pool_sizes",
+        "maximum_candidate_count",
+        "minimum_saturation_rate",
+        "latency_warning_ms",
+    }
+)
+_LATENCY_WARNING_KEYS = frozenset(
+    {
+        "pair_p95",
+        "artifact_retrieval_p95",
+        "source_retrieval_p95",
+        "e2e_full_p95",
+        "e2e_incremental_p95",
+    }
+)
 _MAX_EXPANDED_FIXTURE_TEXT_CHARS = 65_536
 _MAX_RETRIEVAL_POOL_TEXT_CHARS = 4 * 1024 * 1024
+_V2_MAX_RETRIEVAL_CANDIDATES = 1_000
+_V21_MAX_RETRIEVAL_CANDIDATES = 10_000
 _SPLIT_CONTRACT_STOP_TOKENS = frozenset(
     {
         "access",
@@ -240,6 +275,10 @@ _DATASET_REGISTRY = {
         "digest": "241a4f536ea53694b8172accc5a528961673a843983f99702651357cff3619b3",
         "files": frozenset({"pairs", "scenarios", "retrieval_pools"}),
     },
+    (V21_DATASET_SCHEMA_VERSION, V21_DATASET_VERSION): {
+        "digest": "0e7045219148a9e1ba45073e390802ca21ddb60b6c119afd532c66d76b399822",
+        "files": frozenset({"pairs", "scenarios", "retrieval_pools"}),
+    },
 }
 
 
@@ -260,6 +299,7 @@ class PairExample:
     rationale: str
     family: str = "v1_pair"
     counterfactual_group: str | None = None
+    source_binding_signal: str = "not_applicable"
 
     @property
     def minimum_length(self) -> int:
@@ -280,6 +320,7 @@ class LineageScenario:
     rationale: str
     family: str = "v1_scenario"
     counterfactual_group: str | None = None
+    source_binding_signal: str = "registered_source"
 
 
 @dataclass(frozen=True)
@@ -302,6 +343,7 @@ class RetrievalPool:
     observe_only: bool
     tags: tuple[str, ...]
     rationale: str
+    source_binding_signal: str = "not_applicable"
 
 
 @dataclass(frozen=True)
@@ -322,6 +364,7 @@ class SimilarityDataset:
     baselines: dict[str, dict[str, object]] | None = None
     family_contract: dict[str, object] | None = None
     split_contract: dict[str, object] | None = None
+    stress_contract: dict[str, object] | None = None
 
     def select_pairs(self, split: str | None = None) -> tuple[PairExample, ...]:
         _validate_requested_split(split)
@@ -366,6 +409,8 @@ def load_similarity_dataset(root: Path) -> SimilarityDataset:
         )
     if registry_key == (V1_DATASET_SCHEMA_VERSION, V1_DATASET_VERSION):
         _require_exact_keys(manifest, _V1_MANIFEST_KEYS, manifest_path)
+    elif registry_key == (V21_DATASET_SCHEMA_VERSION, V21_DATASET_VERSION):
+        _require_exact_keys(manifest, _V21_MANIFEST_KEYS, manifest_path)
     else:
         _require_exact_keys(manifest, _V2_MANIFEST_KEYS, manifest_path)
 
@@ -395,7 +440,7 @@ def load_similarity_dataset(root: Path) -> SimilarityDataset:
             "files.retrieval_pools",
             manifest_path,
         )
-        if schema_version == V2_DATASET_SCHEMA_VERSION
+        if schema_version >= V2_DATASET_SCHEMA_VERSION
         else None
     )
 
@@ -457,7 +502,8 @@ def load_similarity_dataset(root: Path) -> SimilarityDataset:
     baselines: dict[str, dict[str, object]] | None = None
     family_contract: dict[str, object] | None = None
     split_contract: dict[str, object] | None = None
-    if schema_version == V2_DATASET_SCHEMA_VERSION:
+    stress_contract: dict[str, object] | None = None
+    if schema_version >= V2_DATASET_SCHEMA_VERSION:
         expected_counts = _parse_expected_counts(
             manifest["expected_counts"], manifest_path
         )
@@ -474,6 +520,15 @@ def load_similarity_dataset(root: Path) -> SimilarityDataset:
             family_contract=family_contract,
             location=manifest_path,
         )
+        if schema_version == V21_DATASET_SCHEMA_VERSION:
+            stress_contract = _parse_stress_contract(
+                manifest["stress_contract"], manifest_path
+            )
+            _validate_v21_stress_contract(
+                retrieval_pools,
+                stress_contract=stress_contract,
+                location=manifest_path,
+            )
     digest_paths = (manifest_path, pair_path, scenario_path) + (
         ((retrieval_path,) if retrieval_path is not None else ())
     )
@@ -495,6 +550,7 @@ def load_similarity_dataset(root: Path) -> SimilarityDataset:
         baselines=baselines,
         family_contract=family_contract,
         split_contract=split_contract,
+        stress_contract=stress_contract,
     )
 
 
@@ -507,8 +563,13 @@ def _parse_pair(
     dataset_version: str,
 ) -> PairExample:
     location = f"{path}:{line_no}"
-    is_v2 = schema_version == V2_DATASET_SCHEMA_VERSION
-    _require_exact_keys(record, _V2_PAIR_KEYS if is_v2 else _V1_PAIR_KEYS, location)
+    is_versioned = schema_version >= V2_DATASET_SCHEMA_VERSION
+    pair_keys = (
+        _V21_PAIR_KEYS
+        if schema_version == V21_DATASET_SCHEMA_VERSION
+        else (_V2_PAIR_KEYS if is_versioned else _V1_PAIR_KEYS)
+    )
+    _require_exact_keys(record, pair_keys, location)
     _require_version(
         record,
         location,
@@ -522,13 +583,13 @@ def _parse_pair(
         record["left_text"],
         "left_text",
         location,
-        allow_recipe=is_v2,
+        allow_recipe=is_versioned,
     )
     right_text = _parse_fixture_text(
         record["right_text"],
         "right_text",
         location,
-        allow_recipe=is_v2,
+        allow_recipe=is_versioned,
     )
     _validate_fixture_text(left_text, "left_text", location)
     _validate_fixture_text(right_text, "right_text", location)
@@ -545,7 +606,7 @@ def _parse_pair(
         rationale=_require_nonempty_string(record["rationale"], "rationale", location),
         family=(
             _require_identifier(record["family"], "family", location)
-            if is_v2
+            if is_versioned
             else "v1_pair"
         ),
         counterfactual_group=(
@@ -554,8 +615,14 @@ def _parse_pair(
                 "counterfactual_group",
                 location,
             )
-            if is_v2
+            if is_versioned
             else None
+        ),
+        source_binding_signal=_parse_source_binding_signal(
+            record.get("source_binding_signal", "not_applicable"),
+            scope=scope,
+            location=location,
+            required=schema_version == V21_DATASET_SCHEMA_VERSION,
         ),
     )
 
@@ -569,10 +636,14 @@ def _parse_scenario(
     dataset_version: str,
 ) -> LineageScenario:
     location = f"{path}:{line_no}"
-    is_v2 = schema_version == V2_DATASET_SCHEMA_VERSION
+    is_versioned = schema_version >= V2_DATASET_SCHEMA_VERSION
     _require_exact_keys(
         record,
-        _V2_SCENARIO_KEYS if is_v2 else _V1_SCENARIO_KEYS,
+        (
+            _V21_SCENARIO_KEYS
+            if schema_version == V21_DATASET_SCHEMA_VERSION
+            else (_V2_SCENARIO_KEYS if is_versioned else _V1_SCENARIO_KEYS)
+        ),
         location,
     )
     _require_version(
@@ -638,7 +709,7 @@ def _parse_scenario(
         rationale=_require_nonempty_string(record["rationale"], "rationale", location),
         family=(
             _require_identifier(record["family"], "family", location)
-            if is_v2
+            if is_versioned
             else "v1_scenario"
         ),
         counterfactual_group=(
@@ -647,8 +718,14 @@ def _parse_scenario(
                 "counterfactual_group",
                 location,
             )
-            if is_v2
+            if is_versioned
             else None
+        ),
+        source_binding_signal=_parse_source_binding_signal(
+            record.get("source_binding_signal", "registered_source"),
+            scope="source_binding",
+            location=location,
+            required=schema_version == V21_DATASET_SCHEMA_VERSION,
         ),
     )
 
@@ -662,7 +739,15 @@ def _parse_retrieval_pool(
     dataset_version: str,
 ) -> RetrievalPool:
     location = f"{path}:{line_no}"
-    _require_exact_keys(record, _RETRIEVAL_POOL_KEYS, location)
+    _require_exact_keys(
+        record,
+        (
+            _V21_RETRIEVAL_POOL_KEYS
+            if schema_version == V21_DATASET_SCHEMA_VERSION
+            else _RETRIEVAL_POOL_KEYS
+        ),
+        location,
+    )
     _require_version(
         record,
         location,
@@ -688,6 +773,11 @@ def _parse_retrieval_pool(
         raw_candidates,
         location,
         relevant_candidate_id=relevant_candidate_id,
+        maximum_candidate_count=(
+            _V21_MAX_RETRIEVAL_CANDIDATES
+            if schema_version == V21_DATASET_SCHEMA_VERSION
+            else _V2_MAX_RETRIEVAL_CANDIDATES
+        ),
     )
     candidate_ids = [item.candidate_id for item in candidates]
     if len(candidate_ids) != len(set(candidate_ids)):
@@ -715,6 +805,12 @@ def _parse_retrieval_pool(
         tags=_require_tags(record["tags"], location),
         rationale=_require_nonempty_string(
             record["rationale"], "rationale", location
+        ),
+        source_binding_signal=_parse_source_binding_signal(
+            record.get("source_binding_signal", "not_applicable"),
+            scope=scope,
+            location=location,
+            required=schema_version == V21_DATASET_SCHEMA_VERSION,
         ),
     )
 
@@ -748,6 +844,7 @@ def _parse_retrieval_candidates(
     location: str,
     *,
     relevant_candidate_id: str,
+    maximum_candidate_count: int,
 ) -> tuple[RetrievalPoolCandidate, ...]:
     if isinstance(value, dict):
         if set(value) == _RETRIEVAL_CONSTANT_DECOY_SERIES_KEYS:
@@ -755,6 +852,7 @@ def _parse_retrieval_candidates(
                 value,
                 location,
                 relevant_candidate_id=relevant_candidate_id,
+                maximum_candidate_count=maximum_candidate_count,
             )
         _require_exact_keys(
             value,
@@ -787,9 +885,10 @@ def _parse_retrieval_candidates(
             f"{location}.candidates",
         )
         count = value["count"]
-        if type(count) is not int or not 1 <= count <= 1_000:
+        if type(count) is not int or not 1 <= count <= maximum_candidate_count:
             raise SimilarityDatasetError(
-                f"{location}.candidates: count must be between 1 and 1000"
+                f"{location}.candidates: count must be between 1 and "
+                f"{maximum_candidate_count}"
             )
         width = max(3, len(str(count - 1)))
         maximum_decoy_length = len(decoy_text_prefix) + width
@@ -864,6 +963,7 @@ def _parse_constant_decoy_candidate_series(
     location: str,
     *,
     relevant_candidate_id: str,
+    maximum_candidate_count: int,
 ) -> tuple[RetrievalPoolCandidate, ...]:
     series_location = f"{location}.candidates"
     id_prefix = _require_identifier(
@@ -893,9 +993,10 @@ def _parse_constant_decoy_candidate_series(
     ):
         _validate_fixture_text(text, field, series_location)
     count = value["count"]
-    if type(count) is not int or not 1 <= count <= 1_000:
+    if type(count) is not int or not 1 <= count <= maximum_candidate_count:
         raise SimilarityDatasetError(
-            f"{series_location}: count must be between 1 and 1000"
+            f"{series_location}: count must be between 1 and "
+            f"{maximum_candidate_count}"
         )
     matching_decoy_count = value["matching_decoy_count"]
     if (
@@ -1012,6 +1113,124 @@ def _parse_thresholds(value: Any, location: object) -> dict[str, float]:
             )
         result[key] = float(raw_threshold)
     return result
+
+
+def _parse_source_binding_signal(
+    value: Any,
+    *,
+    scope: str,
+    location: object,
+    required: bool,
+) -> str:
+    signal = _require_choice(
+        value,
+        "source_binding_signal",
+        SUPPORTED_SOURCE_BINDING_SIGNALS,
+        location,
+    )
+    if scope == "artifact_flow" and signal != "not_applicable":
+        raise SimilarityDatasetError(
+            f"{location}: artifact_flow requires "
+            "source_binding_signal=not_applicable"
+        )
+    if scope == "source_binding" and signal == "not_applicable":
+        if required:
+            raise SimilarityDatasetError(
+                f"{location}: source_binding requires an explicit source signal"
+            )
+        return "registered_source"
+    return signal
+
+
+def _parse_stress_contract(value: Any, location: object) -> dict[str, object]:
+    contract_location = f"{location}.stress_contract"
+    if not isinstance(value, dict) or set(value) != _STRESS_CONTRACT_KEYS:
+        raise SimilarityDatasetError(
+            f"{contract_location}: stress contract keys are invalid"
+        )
+    raw_sizes = value["generated_pool_sizes"]
+    if (
+        not isinstance(raw_sizes, list)
+        or not raw_sizes
+        or any(type(item) is not int for item in raw_sizes)
+        or raw_sizes != sorted(set(raw_sizes))
+        or raw_sizes[0] < 1_000
+        or raw_sizes[-1] > _V21_MAX_RETRIEVAL_CANDIDATES
+    ):
+        raise SimilarityDatasetError(
+            f"{contract_location}.generated_pool_sizes must be sorted unique "
+            "integers between 1000 and 10000"
+        )
+    maximum = value["maximum_candidate_count"]
+    if maximum != _V21_MAX_RETRIEVAL_CANDIDATES:
+        raise SimilarityDatasetError(
+            f"{contract_location}.maximum_candidate_count must be 10000"
+        )
+    minimum_rate = value["minimum_saturation_rate"]
+    if (
+        isinstance(minimum_rate, bool)
+        or not isinstance(minimum_rate, (int, float))
+        or not 0.0 <= float(minimum_rate) <= 1.0
+    ):
+        raise SimilarityDatasetError(
+            f"{contract_location}.minimum_saturation_rate must be between zero and one"
+        )
+    raw_latency = value["latency_warning_ms"]
+    if not isinstance(raw_latency, dict) or set(raw_latency) != _LATENCY_WARNING_KEYS:
+        raise SimilarityDatasetError(
+            f"{contract_location}.latency_warning_ms keys are invalid"
+        )
+    latency_warning: dict[str, float] = {}
+    for key, raw_value in raw_latency.items():
+        if (
+            isinstance(raw_value, bool)
+            or not isinstance(raw_value, (int, float))
+            or not 0.0 < float(raw_value) <= 60_000.0
+        ):
+            raise SimilarityDatasetError(
+                f"{contract_location}.latency_warning_ms values must be "
+                "positive milliseconds at most 60000"
+            )
+        latency_warning[str(key)] = float(raw_value)
+    return {
+        "generated_pool_sizes": tuple(raw_sizes),
+        "maximum_candidate_count": maximum,
+        "minimum_saturation_rate": float(minimum_rate),
+        "latency_warning_ms": dict(sorted(latency_warning.items())),
+    }
+
+
+def _validate_v21_stress_contract(
+    retrieval_pools: tuple[RetrievalPool, ...],
+    *,
+    stress_contract: dict[str, object],
+    location: object,
+) -> None:
+    declared_sizes = stress_contract["generated_pool_sizes"]
+    minimum_rate = stress_contract["minimum_saturation_rate"]
+    assert isinstance(declared_sizes, tuple)
+    assert isinstance(minimum_rate, float)
+    for split in SUPPORTED_SPLITS:
+        split_pools = [item for item in retrieval_pools if item.split == split]
+        observed_sizes = {len(item.candidates) for item in split_pools}
+        missing_sizes = sorted(set(declared_sizes) - observed_sizes)
+        if missing_sizes:
+            raise SimilarityDatasetError(
+                f"{location}: {split} is missing generated pool sizes "
+                f"{missing_sizes}"
+            )
+        saturated = sum(
+            len(item.candidates)
+            > (
+                50 if item.scope == "artifact_flow" else 200
+            )
+            for item in split_pools
+        )
+        saturation_rate = saturated / len(split_pools) if split_pools else 0.0
+        if saturation_rate < minimum_rate:
+            raise SimilarityDatasetError(
+                f"{location}: {split} saturation rate is below stress contract"
+            )
 
 
 def _parse_baselines(

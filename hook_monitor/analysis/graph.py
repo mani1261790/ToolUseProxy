@@ -10,6 +10,7 @@ from hook_monitor.analysis.adapters.common import make_structured_edge, normaliz
 from hook_monitor.analysis.bash_submission import extract_bash_http_submissions
 from hook_monitor.analysis.similarity import (
     SimilarityCandidateStats,
+    compare_source_binding_text,
     compare_text,
     prepare_similarity_text,
     rank_similarity_candidate_ids,
@@ -306,7 +307,8 @@ def build_source_binding_edges(
                     reason="identical JSON key text hash",
                 )
                 continue
-            decision = compare_text(
+            decision = compare_source_binding_text(
+                source_binding_signal=chunk.source_binding_signal,
                 left_text=chunk.text,
                 left_normalized=chunk.normalized_text,
                 left_hash=chunk.text_hash,

@@ -602,7 +602,19 @@ class SimilarityEvaluationV2Test(unittest.TestCase):
             candidate = development["metrics"]["candidate_retrieval"][scope]
             self.assertEqual(expected_pool, candidate["pool_size"])
             self.assertEqual(expected_saturated, candidate["saturated_case_count"])
+            self.assertEqual(1.0, candidate["saturation_rate"])
             self.assertEqual(1.0, candidate["gate"]["recall"])
+            self.assertEqual(1.0, candidate["gate_saturated"]["recall"])
+            self.assertRegex(
+                candidate["gate"]["candidate_sets_sha256"],
+                r"^[0-9a-f]{64}$",
+            )
+            for case in self.reports["development"]["cases"]["retrieval"]:
+                if case["scope"] == scope:
+                    self.assertRegex(
+                        case["candidate_set_sha256"],
+                        r"^[0-9a-f]{64}$",
+                    )
 
     def test_report_contains_no_fixture_body_or_individual_body_hash(self) -> None:
         serialized = json.dumps(

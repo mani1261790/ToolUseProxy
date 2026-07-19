@@ -1,16 +1,27 @@
 # Codex Plugin 導入
 
-ToolUseProxyのCodex Pluginは、repository rootを自己完結したPlugin bundleとして配布します。`.codex-plugin/plugin.json`、`hooks/hooks.json`、setup skill、pure Python runtimeが同じversionに含まれます。Hook commandにcheckout先の絶対pathは書かず、Codexが渡す`PLUGIN_ROOT`からcodeを起動し、mutableなSQLite stateは`PLUGIN_DATA`へ保存します。
+ToolUseProxyのCodex Pluginは、repository全体ではなく、生成時にallowlist化した自己完結Plugin bundleとして配布します。`.codex-plugin/plugin.json`、`hooks/hooks.json`、setup skill、pure Python runtimeが同じversionに含まれます。Hook commandにcheckout先の絶対pathは書かず、Codexが渡す`PLUGIN_ROOT`からcodeを起動し、mutableなSQLite stateは`PLUGIN_DATA`へ保存します。
 
 ## 現在のsupport範囲
 
-- Python 3.11以上
-- macOS: local package、relocated Plugin bundle、Codex CLIのisolated local marketplace installを自動検証
-- Linux: Ubuntu CIでpackage、relocated Plugin bundle、wheelのcheckout外実行を検証。Codex CLI marketplace installの実環境E2Eは未検証
-- Windows: `py -3.11`を使うlauncherを同梱。実機検証は未完了で、protected-source登録workflow全体は現在未対応
+- Python 3.11 / 3.12。3.13以降は現在未対応
+- macOS: local package、relocated Plugin bundle、Codex CLIのisolated local marketplace install、alpha.1→alpha.3 upgrade / safe rollbackを検証。Python 3.12 package smokeはCIで継続確認
+- Linux: Ubuntu CIでPython 3.11 / 3.12のfull suite、package、relocated Plugin bundle、wheelのcheckout外実行を検証。Codex CLI marketplace installの実環境E2Eは未検証
+- Windows: `py -3.11`を使うlauncherを同梱するexperimental範囲。実機検証は未完了で、protected-source登録workflow全体は現在未対応
 - Hook内network access、remote embedding、telemetry: なし
 
-Python 3.12のCI契約、Windows実機、install / update / removeのcross-platform E2Eはpublic alphaまでの残作業です。最新の優先順位は[実装タスク計画](../運用/実装タスク.md)を参照してください。
+詳細は[サポート範囲と既知の制限](../../SUPPORT.md)と[プライバシーとデータ保持](../../PRIVACY.md)を参照してください。Windows実機とLinux実Codex CLIのcross-platform E2Eはpublic alphaまでの残作業です。最新の優先順位は[実装タスク計画](../運用/実装タスク.md)を参照してください。
+
+## 導入前の安全境界
+
+導入、候補登録、更新、削除を始める前に、次の4点を一続きの契約として確認してください。
+
+1. [プライバシーとデータ保持](../../PRIVACY.md): raw Hook payloadやprotected source chunkがlocal SQLiteへ平文で残り得て、自動expirationやsecure eraseがない
+2. [サポート範囲と既知の制限](../../SUPPORT.md): Hook内部エラーは原則fail-openで、Windowsの登録workflowはalpha未対応
+3. [Plugin upgrade / rollback rehearsal](../運用/Pluginライフサイクル.md): rollbackは新DBを旧runtimeでdowngradeせず、upgrade前backupを別data directoryへ復元する
+4. この文書の[disable / uninstall](#disable--uninstall): Plugin codeのremoveはdata削除を意味せず、exact planへの別の明示承認が必要
+
+alphaのthreat modelは、Pluginやcoding agentの無承認manifest変更、stale proposal、同じ候補の再提示、意図しないmanaged-data削除を防ぐことを対象にします。同一OS accountで任意file / SQLite writeができる攻撃者、Codexや外部tool自体のnetwork通信、filesystem snapshotや外部backupからの復元は防御範囲外です。workspace lockはToolUseProxyの協調writerだけを直列化し、同一UIDの非協調editorとの完全なfilesystem CASは保証しません。
 
 ## 現在versionと更新
 
@@ -20,7 +31,7 @@ SQLite schemaはv4のままなので、alpha.3への更新だけを理由にDB m
 
 ## install
 
-現在のalpha開発版は、可変なremote `main`を実行元にしないため、checkoutをrepository-local marketplaceとして追加します。
+現在のalpha開発版は、可変なremote `main`を実行元にしないため、checkoutをrepository-local marketplaceとして追加できます。
 
 ```bash
 codex plugin marketplace add /absolute/path/to/ToolUseProxy
@@ -28,6 +39,35 @@ codex plugin add tooluseproxy@tooluseproxy
 ```
 
 この絶対pathはmarketplaceを登録する開発時の1回だけに使い、Hook definitionには保存されません。公開配布はimmutableなrelease tagまたはcommitへpinし、Plugin version、checksum、release notes、変更後のHook再review方針を揃えてから有効にします。remote `main`を直接実行元にはしません。
+
+### clean marketplace bundleの作成
+
+配布候補を検証するときはrepository rootをそのまま渡さず、専用builderで再現可能なZIPを作ります。
+
+```bash
+python3.11 scripts/build_plugin_bundle.py --outdir dist
+```
+
+出力は`dist/tooluseproxy-plugin-<version>.zip`です。同じsource treeから作ったZIPは同じSHA-256になります。展開後のrootにはmarketplace definitionがあり、その内側の`tooluseproxy/`だけがPlugin sourceです。
+
+```text
+extracted/
+├── .agents/plugins/marketplace.json
+└── tooluseproxy/
+    ├── .codex-plugin/plugin.json
+    ├── hooks/
+    ├── skills/
+    ├── hook_monitor/
+    ├── tooluseproxy/
+    └── tooluseproxy_plugin.py
+```
+
+```bash
+codex plugin marketplace add /absolute/path/to/extracted
+codex plugin add tooluseproxy@tooluseproxy
+```
+
+builderはruntime fileを明示的に選び、`.git`、`.github`、tests、内部設計docs、scripts、cache、virtual environment、local DB、legacy Hook entrypointをZIPへ含めません。展開したmarketplace rootにはREADME、support、privacy契約を含めますが、marketplace metadataとこれらの文書はinstall済みPluginには入りません。ZIPはまだ署名済みpublic releaseではないため、checksum公開、SBOM、release notes、LICENSE gateを満たすまでは開発・dogfood用途として扱います。
 
 installまたはHook定義の更新後は、Codexが示すHook definitionを確認してtrustします。ToolUseProxyはこのreviewを迂回しません。新しいPlugin componentとskillを確実に読み込むため、trust後は新しいtaskを開始します。
 
@@ -170,7 +210,7 @@ release artifactは、古い`build/`や`.DS_Store`を混入させないclean sta
 python3.11 scripts/build_package.py --outdir dist --sdist
 ```
 
-現行sdistはruntimeに不要な一部testを含む一方、そのfixtureを含まないため、public alphaのartifact契約としては未確定です。公開前にruntime allowlistへ固定し、Python 3.11 / 3.12でcheckout外installをCI検証します。immutable tag、checksum、SBOM、release notes、LICENSE / privacyを含むrelease gateは[実装タスク計画](../運用/実装タスク.md)と[#19](https://github.com/mani1261790/ToolUseProxy/issues/19)で管理します。
+wheel / sdist / Plugin ZIPはruntime allowlistへ固定し、Python 3.11 / 3.12でcheckout外installをCI検証します。release candidate builderはmanifest、SHA256SUMS、CycloneDX 1.7 SBOM、release notes候補を一括生成します。immutable tag、GitHub pre-release、LICENSE gateは[実装タスク計画](../運用/実装タスク.md)と[#19](https://github.com/mani1261790/ToolUseProxy/issues/19)で管理します。
 
 ## disable / uninstall
 
@@ -181,9 +221,28 @@ codex plugin remove tooluseproxy@tooluseproxy
 codex plugin marketplace remove tooluseproxy
 ```
 
-現段階では、Pluginをremoveしてもlocal監査dataを自動削除しません。保持・削除を選べる`tooluseproxy uninstall`は未実装です。dataを削除する場合も、対象の`PLUGIN_DATA`を確認し、明示的なユーザー承認を得てから行ってください。
+Pluginをremoveしてもlocal監査dataは自動削除されません。保持する場合は追加操作は不要です。削除する場合は、関連taskとToolUseProxy processを止め、install済みpackageまたは同じrelease artifactのlauncherからvalue-freeなplanを作ります。
 
-upgrade / rollbackとdata retentionを含むlifecycle E2Eもpublic alphaのrelease gateです。
+```bash
+sh "<PLUGIN_ROOT>/hooks/run_cli.sh" uninstall plan \
+  --data-dir "<PLUGIN_DATA>" \
+  --json
+```
+
+管理file数、byte数、管理外entry数を確認し、同じ`data_dir`に対して出力tokenを明示的に渡します。
+
+```bash
+sh "<PLUGIN_ROOT>/hooks/run_cli.sh" uninstall apply \
+  --data-dir "<PLUGIN_DATA>" \
+  --confirmation-token "<CONFIRMATION_TOKEN>" \
+  --json
+```
+
+削除対象はSQLite database / sidecar、migration backup、manifest backupだけです。管理外fileは残し、plan後に内容が変わった場合はstale tokenを拒否します。workspace manifestやprotected source本体、symlink先、package codeは削除しません。secure eraseやfilesystem snapshotの削除は保証しません。
+
+alpha.1からalpha.3候補へのupgrade / safe rollback手順と検証結果は[Pluginライフサイクル](../運用/Pluginライフサイクル.md)を参照してください。将来versionとcross-platformでの反復は引き続きpublic alphaのrelease gateです。
+
+pre-release候補で実際のHook trust、agent説明、実tool invocationを検証するときは、通常workspaceや実secretを使わず、[Pluginドッグフードのmanual Phase B](../運用/Pluginドッグフード.md#manual-phase-b)を実行します。prepare出力はlocal pathを含むため公開せず、raw値とpathを除外したverify結果だけをrelease evidenceとして扱います。
 
 ## trustとfailure時の挙動
 

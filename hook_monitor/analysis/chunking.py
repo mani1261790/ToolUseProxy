@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from dataclasses import dataclass
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -10,12 +11,22 @@ from hook_monitor.runtime.models import ProtectedSource, ProtectedSourceSelector
 from hook_monitor.runtime.ids import make_source_chunk_id
 from hook_monitor.runtime.normalize import estimate_token_count, normalize_text
 from hook_monitor.runtime.source_config import SourceConfigError, resolve_protected_source_path
+from hook_monitor.runtime.source_binding import (
+    SOURCE_BINDING_REGISTERED_SOURCE,
+    selected_field_source_binding_signal,
+)
 
 
-SOURCE_CHUNKER_VERSION = "source-chunker-v3-secret-selectors"
+SOURCE_CHUNKER_VERSION = "source-chunker-v4-source-binding-signals"
 _DOTENV_ASSIGNMENT = re.compile(
     r"^(?:export\s+)?([A-Za-z_][A-Za-z0-9_.-]*)\s*=(.*)$"
 )
+
+
+@dataclass(frozen=True)
+class _ChunkText:
+    text: str
+    source_binding_signal: str = SOURCE_BINDING_REGISTERED_SOURCE
 
 
 def build_source_chunks(repo_root: Path, source: ProtectedSource) -> list[SourceChunk]:
@@ -25,7 +36,8 @@ def build_source_chunks(repo_root: Path, source: ProtectedSource) -> list[Source
 
     chunks = _split_chunks(source_path, text, source)
     records: list[SourceChunk] = []
-    for ordinal, chunk_text in enumerate(chunks):
+    for ordinal, chunk in enumerate(chunks):
+        chunk_text = chunk.text
         normalized = normalize_text(chunk_text)
         shingles = _make_shingles(normalized, size=5)
         records.append(
@@ -39,6 +51,7 @@ def build_source_chunks(repo_root: Path, source: ProtectedSource) -> list[Source
                 shingle_fingerprint=json.dumps(shingles, ensure_ascii=False, sort_keys=True),
                 token_count=estimate_token_count(normalized),
                 workspace_id=source.workspace_id,
+                source_binding_signal=chunk.source_binding_signal,
             )
         )
     return records
@@ -48,7 +61,7 @@ def _split_chunks(
     source_path: Path,
     text: str,
     source: ProtectedSource,
-) -> list[str]:
+) -> list[_ChunkText]:
     # secret fileはkeyや構文wrapperをsource本文として扱わず、送信され得る
     # decoded valueを比較単位にする。解釈できない形式は従来の段落単位へ
     # fail-safeし、parserの不完全さによって保護対象を消さない。
@@ -59,7 +72,7 @@ def _split_chunks(
                 raise SourceConfigError(
                     "selected dotenv source is not statically parseable"
                 )
-            return _split_paragraphs(text)
+            return _registered_chunks(_split_paragraphs(text))
         return values
     if (
         source.source_type == "secretfile"
@@ -69,7 +82,7 @@ def _split_chunks(
         if values is None:
             if source.selector is not None:
                 raise SourceConfigError("selected JSON source is not valid JSON")
-            return _split_paragraphs(text)
+            return _registered_chunks(_split_paragraphs(text))
         return values
     if source.selector is not None:
         raise SourceConfigError(
@@ -78,8 +91,8 @@ def _split_chunks(
 
     # コードは関数・class 単位、文章は段落単位で切る。
     if source_path.suffix == ".py":
-        return _split_python_like(text)
-    return _split_paragraphs(text)
+        return _registered_chunks(_split_python_like(text))
+    return _registered_chunks(_split_paragraphs(text))
 
 
 def _is_dotenv_path(source_path: Path) -> bool:
@@ -90,12 +103,12 @@ def _is_dotenv_path(source_path: Path) -> bool:
 def _split_dotenv_values(
     text: str,
     selector: ProtectedSourceSelector | None,
-) -> list[str] | None:
+) -> list[_ChunkText] | None:
     if selector is not None and selector.kind != "dotenv_keys":
         raise SourceConfigError("dotenv source requires selector.dotenv_keys")
     selected = None if selector is None else frozenset(selector.values)
     resolved: set[str] = set()
-    values: list[str] = []
+    values: list[_ChunkText] = []
     for raw_line in text.splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#"):
@@ -108,7 +121,12 @@ def _split_dotenv_values(
         if value is None:
             return None
         if value.strip() and (selected is None or key in selected):
-            values.append(value)
+            signal = (
+                SOURCE_BINDING_REGISTERED_SOURCE
+                if selected is None
+                else selected_field_source_binding_signal(key)
+            )
+            values.append(_ChunkText(value, signal))
             resolved.add(key)
     if selected is not None and resolved != selected:
         raise SourceConfigError(
@@ -174,7 +192,7 @@ def _strip_dotenv_inline_comment(value: str) -> str:
 def _split_json_string_values(
     text: str,
     selector: ProtectedSourceSelector | None,
-) -> list[str] | None:
+) -> list[_ChunkText] | None:
     if selector is not None and selector.kind != "json_pointers":
         raise SourceConfigError("JSON source requires selector.json_pointers")
     try:
@@ -183,12 +201,12 @@ def _split_json_string_values(
         return None
 
     selected = None if selector is None else frozenset(selector.values)
-    values: list[str] = []
+    values: list[_ChunkText] = []
     resolved: set[str] = set()
     for pointer, value in _walk_json_nodes(payload):
         if selected is None:
             if isinstance(value, str) and value.strip():
-                values.append(value)
+                values.append(_ChunkText(value))
             continue
         if pointer not in selected:
             continue
@@ -196,11 +214,24 @@ def _split_json_string_values(
             raise SourceConfigError(
                 "selector.json_pointers must resolve to non-empty string values"
             )
-        values.append(value)
+        terminal = _json_pointer_terminal(pointer)
+        values.append(
+            _ChunkText(value, selected_field_source_binding_signal(terminal))
+        )
         resolved.add(pointer)
     if selected is not None and resolved != selected:
         raise SourceConfigError("selector.json_pointers contains a missing pointer")
     return values
+
+
+def _json_pointer_terminal(pointer: str) -> str:
+    if not pointer:
+        return ""
+    return pointer.rsplit("/", 1)[-1].replace("~1", "/").replace("~0", "~")
+
+
+def _registered_chunks(values: list[str]) -> list[_ChunkText]:
+    return [_ChunkText(value) for value in values]
 
 
 def _walk_json_nodes(

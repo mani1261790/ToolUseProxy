@@ -1,0 +1,194 @@
+{
+  "schema_version": 3,
+  "dataset_id": "tooluseproxy-similarity",
+  "dataset_version": "2.1.0",
+  "description": "Synthetic similarity v2.1 foundation with explicit source-binding signals and generated 1k-10k candidate stress pools.",
+  "files": {
+    "pairs": "pairs.jsonl",
+    "scenarios": "scenarios.jsonl",
+    "retrieval_pools": "retrieval_pools.jsonl"
+  },
+  "expected_counts": {
+    "pairs": 42,
+    "scenarios": 13,
+    "retrieval_pools": 16,
+    "development_pairs": 22,
+    "validation_pairs": 20,
+    "development_scenarios": 7,
+    "validation_scenarios": 6,
+    "development_retrieval_pools": 8,
+    "validation_retrieval_pools": 8,
+    "development_gate_pairs": 21,
+    "validation_gate_pairs": 19,
+    "development_gate_scenarios": 7,
+    "validation_gate_scenarios": 6,
+    "development_gate_retrieval_pools": 8,
+    "validation_gate_retrieval_pools": 8
+  },
+  "go_no_go": {
+    "minimum_pair_precision": 0.9,
+    "minimum_pair_recall": 0.9,
+    "minimum_pair_f1": 0.9,
+    "minimum_artifact_candidate_recall": 0.95,
+    "minimum_source_candidate_recall": 0.95,
+    "minimum_e2e_reachability_f1": 0.9,
+    "minimum_e2e_action_accuracy": 0.9,
+    "minimum_family_accuracy": 0.8,
+    "maximum_false_blocks": 0,
+    "maximum_privacy_exposures": 0
+  },
+  "baselines": {
+    "all": {
+      "pair_tp": 16,
+      "pair_fp": 0,
+      "pair_tn": 24,
+      "pair_fn": 0,
+      "artifact_candidate_positive_cases": 8,
+      "artifact_candidate_retrieved": 8,
+      "source_candidate_positive_cases": 8,
+      "source_candidate_retrieved": 8,
+      "e2e_tp": 7,
+      "e2e_fp": 0,
+      "e2e_tn": 6,
+      "e2e_fn": 0,
+      "e2e_action_correct": 13,
+      "e2e_action_cases": 13,
+      "parity_mismatches": 0,
+      "pair_outcomes_sha256": "8424810f58679fc2ce2ca2698d14b0ed9ebdcadf096747b4885e00688146d97d",
+      "candidate_outcomes_sha256": "00111ab71993a26a1c1cbb21e444a2ef18cff90a5a8205b3a3b47d9238ac006f",
+      "scenario_outcomes_sha256": "1d834490670e32aee2976ea682fc063d81abff8331691022669571319c0b853c",
+      "privacy_exposures": 0
+    },
+    "development": {
+      "pair_tp": 8,
+      "pair_fp": 0,
+      "pair_tn": 13,
+      "pair_fn": 0,
+      "artifact_candidate_positive_cases": 4,
+      "artifact_candidate_retrieved": 4,
+      "source_candidate_positive_cases": 4,
+      "source_candidate_retrieved": 4,
+      "e2e_tp": 4,
+      "e2e_fp": 0,
+      "e2e_tn": 3,
+      "e2e_fn": 0,
+      "e2e_action_correct": 7,
+      "e2e_action_cases": 7,
+      "parity_mismatches": 0,
+      "pair_outcomes_sha256": "2b15c99f13d68d82b72d596c5553a555d3a6227e3838032532c24c8060e6cf2b",
+      "candidate_outcomes_sha256": "63ad96ec92c71af6f46393f79fa7041c93576de133e5e0e8292838513078959b",
+      "scenario_outcomes_sha256": "c8437ed2ba2bd9dd5524e36f6902549a58ab7e98d45a14007afd6046f8d16ce2",
+      "privacy_exposures": 0
+    },
+    "validation": {
+      "pair_tp": 8,
+      "pair_fp": 0,
+      "pair_tn": 11,
+      "pair_fn": 0,
+      "artifact_candidate_positive_cases": 4,
+      "artifact_candidate_retrieved": 4,
+      "source_candidate_positive_cases": 4,
+      "source_candidate_retrieved": 4,
+      "e2e_tp": 3,
+      "e2e_fp": 0,
+      "e2e_tn": 3,
+      "e2e_fn": 0,
+      "e2e_action_correct": 6,
+      "e2e_action_cases": 6,
+      "parity_mismatches": 0,
+      "pair_outcomes_sha256": "f36f5503ff5e432b47698cf76f9534d4de4c9251204d813fcfd076736bcf6750",
+      "candidate_outcomes_sha256": "2ba7c1f23bc5ac569565e4c513e935ca79c57e7fb0813fbe62afc98d937e04d8",
+      "scenario_outcomes_sha256": "35fa96dd39d7aa481e43a9b74331946db9b880b74d88b470450c83e7da5fe3e7",
+      "privacy_exposures": 0
+    }
+  },
+  "family_contract": {
+    "pair_families": {
+      "development": [
+        "alpha_secret_containment_counterfactual",
+        "alpha_source_signal_development",
+        "approval_state_counterfactual",
+        "bounded_middle_change",
+        "case_whitespace_transport",
+        "common_access_phrase_guard",
+        "common_security_phrase_guard",
+        "identifier_separator_transport",
+        "namespace_prefix_collision",
+        "plural_edit_transport",
+        "polarity_exception_guard",
+        "prefixed_template_collision",
+        "semantic_paraphrase_research",
+        "separator_boundary_guard",
+        "unrelated_content_isolation"
+      ],
+      "validation": [
+        "alpha_credential_containment_holdout",
+        "alpha_source_signal_validation",
+        "api_year_phrase_guard",
+        "credential_field_phrase_guard",
+        "fullwidth_compatibility_transport",
+        "number_alias_transport",
+        "percent_transport",
+        "polarity_except_guard",
+        "public_api_phrase_guard",
+        "record_template_collision",
+        "revocation_state_guard",
+        "semantic_paraphrase_holdout",
+        "unicode_composition_counterfactual",
+        "unicode_composition_transport"
+      ]
+    },
+    "candidate_families": {
+      "development": [
+        "artifact_shared_prefix_pressure",
+        "artifact_short_noise_pressure",
+        "source_dense_lexical_pressure",
+        "source_low_signal_quota_pressure"
+      ],
+      "validation": [
+        "artifact_minimum_length_pressure",
+        "artifact_template_density",
+        "source_long_tail_density",
+        "source_low_signal_holdout_pressure"
+      ]
+    },
+    "scenario_families": {
+      "development": [
+        "alpha_secret_external_lineage",
+        "alpha_source_signal_development",
+        "approval_state_lineage",
+        "exact_external_lineage",
+        "unrelated_content_isolation"
+      ],
+      "validation": [
+        "alpha_source_signal_validation",
+        "percent_transport_lineage",
+        "record_template_isolation",
+        "unicode_lineage_counterfactual"
+      ]
+    },
+    "counterfactual_groups_per_split": 7,
+    "minimum_artifact_pool_size": 51,
+    "minimum_source_pool_size": 201,
+    "maximum_split_vocabulary_jaccard": 0.2,
+    "maximum_split_feature_jaccard": 0.2,
+    "development_shape_sha256": "80dfecf4f45635c0ec0b173dca775a085685861026b89bf556360d0964a42ec9",
+    "validation_shape_sha256": "f64f29d31ebf9d6159bb7470d271ce53ca8bdfdbd9e5d23365b03e09713df0c0"
+  },
+  "stress_contract": {
+    "generated_pool_sizes": [
+      1000,
+      5000,
+      10000
+    ],
+    "maximum_candidate_count": 10000,
+    "minimum_saturation_rate": 1.0,
+    "latency_warning_ms": {
+      "pair_p95": 10.0,
+      "artifact_retrieval_p95": 2000.0,
+      "source_retrieval_p95": 3000.0,
+      "e2e_full_p95": 50.0,
+      "e2e_incremental_p95": 500.0
+    }
+  }
+}

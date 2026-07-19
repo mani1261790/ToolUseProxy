@@ -27,6 +27,7 @@ from hook_monitor.analysis.similarity import (
     SIMILARITY_SHINGLE_THRESHOLD,
     SimilarityCandidateStats,
     SimilarityDecision,
+    compare_source_binding_text,
     compare_text,
     make_shingles,
     prepare_similarity_text,
@@ -61,6 +62,8 @@ from hook_monitor.runtime.workspace import resolve_workspace
 
 REPORT_SCHEMA_VERSION = 2
 RUNNER_VERSION = "similarity-evaluation-v2"
+V21_REPORT_SCHEMA_VERSION = 3
+V21_RUNNER_VERSION = "similarity-evaluation-v2.1"
 DEFAULT_MINIMUM_PATH_SCORE = 0.15
 DEFAULT_FINDING_MIN_SCORE = 0.30
 _ACTION_PRIORITY = {
@@ -123,7 +126,11 @@ def evaluate_similarity(
 
     pairs = dataset.select_pairs(split)
     scenarios = dataset.select_scenarios(split)
-    pair_cases = [_evaluate_pair(pair) for pair in pairs]
+    source_signals_enabled = dataset.schema_version >= 3
+    pair_cases = [
+        _evaluate_pair(pair, source_signals_enabled=source_signals_enabled)
+        for pair in pairs
+    ]
     explicit_retrieval_pools = dataset.select_retrieval_pools(split)
     retrieval_cases = (
         _evaluate_retrieval_pools(explicit_retrieval_pools)
@@ -134,7 +141,10 @@ def evaluate_similarity(
     scenario_results: list[dict[str, Any]] = []
     parity_cases: list[dict[str, Any]] = []
     for scenario in scenarios:
-        material = _make_scenario_material(scenario)
+        material = _make_scenario_material(
+            scenario,
+            source_signals_enabled=source_signals_enabled,
+        )
         full = _run_full_scenario(
             scenario,
             material,
@@ -145,6 +155,7 @@ def evaluate_similarity(
             scenario,
             minimum_path_score=minimum_path_score,
             finding_min_score=finding_min_score,
+            source_signals_enabled=source_signals_enabled,
         )
         scenario_results.append(
             {
@@ -153,6 +164,7 @@ def evaluate_similarity(
                 "tags": list(scenario.tags),
                 "family": scenario.family,
                 "counterfactual_group": scenario.counterfactual_group,
+                "source_binding_signal": scenario.source_binding_signal,
                 "observe_only": scenario.observe_only,
                 "expected_reach": scenario.should_reach_sink,
                 "actual_reach": full.outcome["reached"],
@@ -173,8 +185,17 @@ def evaluate_similarity(
         benchmark_repeats=benchmark_repeats,
         minimum_path_score=minimum_path_score,
         finding_min_score=finding_min_score,
+        source_signals_enabled=source_signals_enabled,
+    )
+    latency_warning = _latency_warning_assessment(
+        latency,
+        dataset.stress_contract,
     )
     split_name = split or "all"
+    report_schema_version = (
+        V21_REPORT_SCHEMA_VERSION if dataset.schema_version >= 3 else REPORT_SCHEMA_VERSION
+    )
+    runner_version = V21_RUNNER_VERSION if dataset.schema_version >= 3 else RUNNER_VERSION
     pair_metrics = _pair_metrics(pair_cases)
     retrieval_metrics = _retrieval_metrics(
         retrieval_cases,
@@ -183,8 +204,8 @@ def evaluate_similarity(
     end_to_end_metrics = _end_to_end_metrics(scenario_results)
     parity_metrics = _parity_metrics(parity_cases)
     report = {
-        "schema_version": REPORT_SCHEMA_VERSION,
-        "runner_version": RUNNER_VERSION,
+        "schema_version": report_schema_version,
+        "runner_version": runner_version,
         "dataset": {
             "id": dataset.dataset_id,
             "schema_version": dataset.schema_version,
@@ -198,6 +219,7 @@ def evaluate_similarity(
             "scenario_count": len(scenarios),
             "retrieval_pool_count": len(explicit_retrieval_pools),
             "split_contract": dataset.split_contract,
+            "stress_contract": dataset.stress_contract,
         },
         "configuration": {
             "artifact_candidate_limit": MAX_LEXICAL_CANDIDATES,
@@ -225,6 +247,7 @@ def evaluate_similarity(
                     "the Python simulation; e2e_incremental includes temporary "
                     "SQLite initialization and production incremental graph functions."
                 ),
+                "warning_envelope": latency_warning,
                 **latency,
             },
         },
@@ -283,7 +306,10 @@ def render_similarity_report(report: dict[str, Any]) -> str:
         lines.append(
             f"candidate {scope} recall@{retrieval[scope]['limit']}="
             f"{_format_ratio(item['recall'])} ({item['retrieved']}/{item['positive_cases']}) "
-            f"pool={retrieval[scope]['pool_size']} {pool_status}"
+            f"pool={retrieval[scope]['pool_size']} {pool_status} "
+            f"saturation_rate={_format_ratio(retrieval[scope]['saturation_rate'])} "
+            f"saturated_recall={_format_ratio(retrieval[scope]['gate_saturated']['recall'])} "
+            f"candidate_sets_sha256={item['candidate_sets_sha256'][:12]}"
         )
     gate_pairs = pairs["gate"]
     lines.append(
@@ -329,7 +355,9 @@ def render_similarity_report(report: dict[str, Any]) -> str:
         f"artifact_retrieval={latency['artifact_retrieval']['p95']:.3f} "
         f"source_retrieval={latency['source_retrieval']['p95']:.3f} "
         f"e2e_full={latency['e2e_full']['p95']:.3f} "
-        f"e2e_incremental={latency['e2e_incremental']['p95']:.3f}"
+        f"e2e_incremental={latency['e2e_incremental']['p95']:.3f}\n"
+        "latency warning envelope="
+        f"{'PASS' if latency['warning_envelope']['passed'] else 'FAIL'}"
     )
     if gate_pairs["false_positive_ids"]:
         lines.append(f"pair false positives: {', '.join(gate_pairs['false_positive_ids'])}")
@@ -444,8 +472,12 @@ def nearest_rank_percentile(values: Sequence[float], percentile: float) -> float
     return ordered[index]
 
 
-def _evaluate_pair(pair: PairExample) -> dict[str, Any]:
-    decision = _compare_pair(pair)
+def _evaluate_pair(
+    pair: PairExample,
+    *,
+    source_signals_enabled: bool = False,
+) -> dict[str, Any]:
+    decision = _compare_pair(pair, source_signals_enabled=source_signals_enabled)
     return {
         "id": pair.example_id,
         "split": pair.split,
@@ -453,6 +485,7 @@ def _evaluate_pair(pair: PairExample) -> dict[str, Any]:
         "tags": list(pair.tags),
         "family": pair.family,
         "counterfactual_group": pair.counterfactual_group,
+        "source_binding_signal": pair.source_binding_signal,
         "observe_only": pair.observe_only,
         "expected": pair.should_link,
         "actual": decision.matched,
@@ -461,8 +494,21 @@ def _evaluate_pair(pair: PairExample) -> dict[str, Any]:
     }
 
 
-def _compare_pair(pair: PairExample) -> SimilarityDecision:
-    return compare_text(
+def _compare_pair(
+    pair: PairExample,
+    *,
+    source_signals_enabled: bool = False,
+) -> SimilarityDecision:
+    comparator = (
+        compare_source_binding_text
+        if source_signals_enabled and pair.scope == "source_binding"
+        else compare_text
+    )
+    arguments: dict[str, Any] = {}
+    if comparator is compare_source_binding_text:
+        arguments["source_binding_signal"] = pair.source_binding_signal
+    return comparator(
+        **arguments,
         left_text=pair.left_text,
         left_normalized=normalize_text(pair.left_text),
         left_hash=_text_hash(pair.left_text),
@@ -514,6 +560,7 @@ def _evaluate_retrieval(pairs: Sequence[PairExample]) -> list[dict[str, Any]]:
                     "relevant": pair.should_link,
                     "retrieved_relevant": pair.example_id in retrieved,
                     "candidate_count": len(retrieved),
+                    "candidate_set_sha256": _candidate_set_digest(retrieved),
                     "pool_size": len(candidates),
                     "cap_saturated": len(candidates)
                     > (
@@ -556,10 +603,12 @@ def _evaluate_retrieval_pools(
                 "scope": pool.scope,
                 "family": pool.family,
                 "counterfactual_group": pool.counterfactual_group,
+                "source_binding_signal": pool.source_binding_signal,
                 "observe_only": pool.observe_only,
                 "relevant": True,
                 "retrieved_relevant": pool.relevant_candidate_id in retrieved,
                 "candidate_count": len(retrieved),
+                "candidate_set_sha256": _candidate_set_digest(retrieved),
                 "pool_size": len(candidates),
                 "cap_saturated": len(candidates) > limit,
             }
@@ -580,11 +629,25 @@ def _simulate_production_candidate_retrieval(
     )
 
 
+def _candidate_set_digest(candidate_ids: Sequence[str]) -> str:
+    """Hash public candidate IDs without exposing fixture or candidate text."""
+    digest = hashlib.sha256(b"tooluseproxy-similarity-candidate-set-v1\0")
+    digest.update(
+        json.dumps(
+            sorted(candidate_ids),
+            ensure_ascii=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    )
+    return digest.hexdigest()
+
+
 def _make_scenario_material(
     scenario: LineageScenario,
     *,
     workspace_id: str = "similarity-evaluation-workspace",
     workspace_root: str = "/synthetic/workspace",
+    source_signals_enabled: bool = True,
 ) -> _ScenarioMaterial:
     session_id = f"similarity-evaluation:{scenario.scenario_id}"
     source_normalized = normalize_text(scenario.source_text)
@@ -598,6 +661,11 @@ def _make_scenario_material(
         shingle_fingerprint=_shingle_fingerprint(source_normalized),
         token_count=estimate_token_count(source_normalized),
         workspace_id=workspace_id,
+        source_binding_signal=(
+            scenario.source_binding_signal
+            if source_signals_enabled
+            else "selected_security_field"
+        ),
     )
     contexts = tuple(
         _make_artifact_context(
@@ -724,6 +792,7 @@ def _run_incremental_scenario(
     *,
     minimum_path_score: float,
     finding_min_score: float,
+    source_signals_enabled: bool,
 ) -> _ScenarioExecution:
     with tempfile.TemporaryDirectory(
         prefix="tooluseproxy-similarity-incremental-"
@@ -741,6 +810,7 @@ def _run_incremental_scenario(
             scenario,
             workspace_id=workspace.workspace_id,
             workspace_root=workspace.canonical_root,
+            source_signals_enabled=source_signals_enabled,
         )
         store = EventStore(Path(temporary_directory) / "events.db")
         store.initialize()
@@ -1168,6 +1238,8 @@ def _retrieval_metrics(
         scoped = [item for item in cases if item["scope"] == scope]
         gate_scoped = [item for item in scoped if not item["observe_only"]]
         pool_size = max((int(item["pool_size"]) for item in scoped), default=0)
+        saturated = [item for item in scoped if item["cap_saturated"]]
+        gate_saturated = [item for item in gate_scoped if item["cap_saturated"]]
         metrics[scope] = {
             "limit": limit,
             "pool_size": pool_size,
@@ -1175,6 +1247,9 @@ def _retrieval_metrics(
             "saturated_case_count": sum(
                 bool(item["cap_saturated"]) for item in scoped
             ),
+            "saturation_rate": _safe_ratio(len(saturated), len(scoped)),
+            "saturated": _retrieval_summary(saturated),
+            "gate_saturated": _retrieval_summary(gate_saturated),
             "metric_name": f"candidate eligibility recall@{limit}",
             "implementation": "production_preparation_adapter_v2",
             "production_equivalence": (
@@ -1222,6 +1297,16 @@ def _retrieval_summary(cases: list[dict[str, Any]]) -> dict[str, Any]:
         "recall": _safe_ratio(len(retrieved), len(positives)),
         "miss_ids": sorted(
             item["id"] for item in positives if not item["retrieved_relevant"]
+        ),
+        "candidate_sets_sha256": _outcomes_digest(
+            b"tooluseproxy-similarity-candidate-sets-v1\0",
+            [
+                {
+                    "id": item["id"],
+                    "candidate_set_sha256": item["candidate_set_sha256"],
+                }
+                for item in cases
+            ],
         ),
         "candidate_count_p50": (
             nearest_rank_percentile(counts, 0.50) if counts else 0.0
@@ -1515,6 +1600,11 @@ def _finish_evaluation_contract(
         "split_vocabulary_and_shape_contract_loaded": (
             dataset.split_contract is not None if v2_contract else True
         ),
+        "offline_latency_warning_envelope": (
+            report["metrics"]["latency_ms"]["warning_envelope"]["passed"]
+            if dataset.schema_version >= 3
+            else True
+        ),
     }
     report["metrics"]["privacy"] = privacy
     report["metrics"]["invariants"] = {
@@ -1698,6 +1788,7 @@ def _benchmark(
     benchmark_repeats: int,
     minimum_path_score: float,
     finding_min_score: float,
+    source_signals_enabled: bool,
 ) -> dict[str, dict[str, float | int]]:
     samples: dict[str, list[int]] = defaultdict(list)
     candidates_by_scope = {
@@ -1716,7 +1807,14 @@ def _benchmark(
     }
     for _repeat in range(benchmark_repeats):
         for pair in pairs:
-            samples["pair"].append(_timed_ns(lambda pair=pair: _compare_pair(pair)))
+            samples["pair"].append(
+                _timed_ns(
+                    lambda pair=pair: _compare_pair(
+                        pair,
+                        source_signals_enabled=source_signals_enabled,
+                    )
+                )
+            )
             if not retrieval_pools:
                 samples[f"{pair.scope.split('_')[0]}_retrieval"].append(
                     _timed_ns(
@@ -1752,7 +1850,10 @@ def _benchmark(
                 )
             )
         for scenario in scenarios:
-            material = _make_scenario_material(scenario)
+            material = _make_scenario_material(
+                scenario,
+                source_signals_enabled=source_signals_enabled,
+            )
             samples["e2e_full"].append(
                 _timed_ns(
                     lambda scenario=scenario, material=material: _run_full_scenario(
@@ -1769,6 +1870,7 @@ def _benchmark(
                         scenario,
                         minimum_path_score=minimum_path_score,
                         finding_min_score=finding_min_score,
+                        source_signals_enabled=source_signals_enabled,
                     )
                 )
             )
@@ -1799,6 +1901,37 @@ def _latency_summary(samples_ns: Sequence[int]) -> dict[str, float | int]:
         "p50": round(nearest_rank_percentile(samples_ms, 0.50), 6),
         "p95": round(nearest_rank_percentile(samples_ms, 0.95), 6),
         "max": round(max(samples_ms), 6),
+    }
+
+
+def _latency_warning_assessment(
+    latency: dict[str, dict[str, float | int]],
+    stress_contract: dict[str, object] | None,
+) -> dict[str, Any]:
+    if stress_contract is None:
+        return {"available": False, "passed": True, "checks": {}, "limits_ms": {}}
+    raw_limits = stress_contract.get("latency_warning_ms")
+    if not isinstance(raw_limits, dict):
+        return {"available": False, "passed": False, "checks": {}, "limits_ms": {}}
+    measurements = {
+        "pair_p95": float(latency["pair"]["p95"]),
+        "artifact_retrieval_p95": float(latency["artifact_retrieval"]["p95"]),
+        "source_retrieval_p95": float(latency["source_retrieval"]["p95"]),
+        "e2e_full_p95": float(latency["e2e_full"]["p95"]),
+        "e2e_incremental_p95": float(latency["e2e_incremental"]["p95"]),
+    }
+    limits = {key: float(value) for key, value in raw_limits.items()}
+    checks = {
+        key: measurements[key] <= limits[key]
+        for key in sorted(measurements)
+    }
+    return {
+        "available": True,
+        "passed": all(checks.values()),
+        "checks": checks,
+        "observed_ms": dict(sorted(measurements.items())),
+        "limits_ms": dict(sorted(limits.items())),
+        "scope": "offline CI warning envelope; not a Hook runtime SLO",
     }
 
 

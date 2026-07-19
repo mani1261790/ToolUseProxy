@@ -1663,6 +1663,7 @@ class WheelInstallationTest(unittest.TestCase):
                     str(REPO_ROOT / "scripts" / "build_package.py"),
                     "--outdir",
                     str(dist),
+                    "--sdist",
                 ],
                 cwd=REPO_ROOT,
                 check=True,
