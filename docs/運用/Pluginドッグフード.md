@@ -46,7 +46,7 @@ python3.11 scripts/manual_plugin_phase_b.py prepare \
 
 既存directoryとrepository内pathは上書き事故やcommit混入を避けるため拒否します。prepareはclean Plugin ZIPをbuildしてisolated marketplaceへinstallし、artifact SHA-256、Plugin / Codex version、login command、task launcher、値を含まないpromptをJSONで返します。このprepare出力にはlocal absolute pathがあるため公開artifactへ貼りません。生成するlauncherに`--dangerously-bypass-hook-trust`はなく、Hook trustは必ずCodex UI上で人が確認します。
 
-必要なら出力されたlogin commandでisolated `CODEX_HOME`へloginし、task launcherを実行します。promptを新しいCodex taskへ渡し、次を人間が確認します。
+必要なら出力されたlogin commandでisolated `CODEX_HOME`へloginし、task launcherを実行します。prepareは同じrootへmode `0600`の`phase-b-prompt.txt`も作り、launcher起動時にそのpathを案内します。このpromptを新しいCodex taskへ渡し、次を人間が確認します。
 
 1. Codexが表示するHook definitionとartifact version / SHA-256をreviewしてtrustする
 2. synthetic workspaceで`init`、`doctor`、`status`を実行する

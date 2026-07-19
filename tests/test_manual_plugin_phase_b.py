@@ -48,10 +48,17 @@ class ManualPluginPhaseBTest(unittest.TestCase):
             self.assertFalse(payload["prepare_output_publishable"])
             self.assertTrue(payload["verify_output_publishable"])
             self.assertTrue((root / "launch-codex.sh").is_file())
+            prompt_file = root / "phase-b-prompt.txt"
+            self.assertTrue(prompt_file.is_file())
+            self.assertEqual(payload["local_only"]["prompt"], prompt_file.read_text().rstrip("\n"))
+            self.assertEqual(str(prompt_file.resolve()), payload["local_only"]["prompt_file"])
+            self.assertEqual(0o600, prompt_file.stat().st_mode & 0o777)
+            self.assertNotIn(CANARY, prompt_file.read_text())
             self.assertNotIn(
                 "bypass-hook-trust",
                 (root / "launch-codex.sh").read_text(),
             )
+            self.assertIn(str(prompt_file), (root / "launch-codex.sh").read_text())
             state = json.loads((root / "phase-b-state.json").read_text())
             self.assertNotIn(CANARY, json.dumps(state))
             self.assertEqual(hashlib.sha256(SOURCE_BYTES).hexdigest(), state["source_sha256"])
