@@ -105,6 +105,21 @@ jobs:
           --check
           --require-go
 
+      - name: Check similarity v2.1 stress foundation
+        run: |
+          for split in development validation all; do
+            python -m hook_monitor.evaluation.cli \
+              --dataset tests/fixtures/similarity/v2_1 \
+              --split "${split}" \
+              --benchmark-repeats 1 \
+              --format text \
+              --check \
+              --require-go
+          done
+
+      - name: Check reproducible similarity v2.1 fixture
+        run: python scripts/build_similarity_v21_fixture.py --check
+
       - name: Check source-ingestion runtime parity
         run: >-
           python -m hook_monitor.evaluation.source_ingestion_cli

@@ -61,6 +61,8 @@ from hook_monitor.runtime.workspace import resolve_workspace
 
 REPORT_SCHEMA_VERSION = 2
 RUNNER_VERSION = "similarity-evaluation-v2"
+V21_REPORT_SCHEMA_VERSION = 3
+V21_RUNNER_VERSION = "similarity-evaluation-v2.1"
 DEFAULT_MINIMUM_PATH_SCORE = 0.15
 DEFAULT_FINDING_MIN_SCORE = 0.30
 _ACTION_PRIORITY = {
@@ -153,6 +155,7 @@ def evaluate_similarity(
                 "tags": list(scenario.tags),
                 "family": scenario.family,
                 "counterfactual_group": scenario.counterfactual_group,
+                "source_binding_signal": scenario.source_binding_signal,
                 "observe_only": scenario.observe_only,
                 "expected_reach": scenario.should_reach_sink,
                 "actual_reach": full.outcome["reached"],
@@ -175,6 +178,10 @@ def evaluate_similarity(
         finding_min_score=finding_min_score,
     )
     split_name = split or "all"
+    report_schema_version = (
+        V21_REPORT_SCHEMA_VERSION if dataset.schema_version >= 3 else REPORT_SCHEMA_VERSION
+    )
+    runner_version = V21_RUNNER_VERSION if dataset.schema_version >= 3 else RUNNER_VERSION
     pair_metrics = _pair_metrics(pair_cases)
     retrieval_metrics = _retrieval_metrics(
         retrieval_cases,
@@ -183,8 +190,8 @@ def evaluate_similarity(
     end_to_end_metrics = _end_to_end_metrics(scenario_results)
     parity_metrics = _parity_metrics(parity_cases)
     report = {
-        "schema_version": REPORT_SCHEMA_VERSION,
-        "runner_version": RUNNER_VERSION,
+        "schema_version": report_schema_version,
+        "runner_version": runner_version,
         "dataset": {
             "id": dataset.dataset_id,
             "schema_version": dataset.schema_version,
@@ -198,6 +205,7 @@ def evaluate_similarity(
             "scenario_count": len(scenarios),
             "retrieval_pool_count": len(explicit_retrieval_pools),
             "split_contract": dataset.split_contract,
+            "stress_contract": dataset.stress_contract,
         },
         "configuration": {
             "artifact_candidate_limit": MAX_LEXICAL_CANDIDATES,
@@ -456,6 +464,7 @@ def _evaluate_pair(pair: PairExample) -> dict[str, Any]:
         "tags": list(pair.tags),
         "family": pair.family,
         "counterfactual_group": pair.counterfactual_group,
+        "source_binding_signal": pair.source_binding_signal,
         "observe_only": pair.observe_only,
         "expected": pair.should_link,
         "actual": decision.matched,
@@ -560,6 +569,7 @@ def _evaluate_retrieval_pools(
                 "scope": pool.scope,
                 "family": pool.family,
                 "counterfactual_group": pool.counterfactual_group,
+                "source_binding_signal": pool.source_binding_signal,
                 "observe_only": pool.observe_only,
                 "relevant": True,
                 "retrieved_relevant": pool.relevant_candidate_id in retrieved,
