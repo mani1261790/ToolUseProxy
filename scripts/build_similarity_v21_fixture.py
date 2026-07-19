@@ -368,6 +368,13 @@ def _render_fixture(output: Path) -> str:
         "generated_pool_sizes": list(STRESS_SIZES),
         "maximum_candidate_count": 10_000,
         "minimum_saturation_rate": 1.0,
+        "latency_warning_ms": {
+            "pair_p95": 10.0,
+            "artifact_retrieval_p95": 2_000.0,
+            "source_retrieval_p95": 3_000.0,
+            "e2e_full_p95": 50.0,
+            "e2e_incremental_p95": 500.0,
+        },
     }
 
     pairs = _convert_records(_read_jsonl(SOURCE_ROOT / "pairs.jsonl"))

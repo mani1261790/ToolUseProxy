@@ -187,6 +187,10 @@ def evaluate_similarity(
         finding_min_score=finding_min_score,
         source_signals_enabled=source_signals_enabled,
     )
+    latency_warning = _latency_warning_assessment(
+        latency,
+        dataset.stress_contract,
+    )
     split_name = split or "all"
     report_schema_version = (
         V21_REPORT_SCHEMA_VERSION if dataset.schema_version >= 3 else REPORT_SCHEMA_VERSION
@@ -243,6 +247,7 @@ def evaluate_similarity(
                     "the Python simulation; e2e_incremental includes temporary "
                     "SQLite initialization and production incremental graph functions."
                 ),
+                "warning_envelope": latency_warning,
                 **latency,
             },
         },
@@ -350,7 +355,9 @@ def render_similarity_report(report: dict[str, Any]) -> str:
         f"artifact_retrieval={latency['artifact_retrieval']['p95']:.3f} "
         f"source_retrieval={latency['source_retrieval']['p95']:.3f} "
         f"e2e_full={latency['e2e_full']['p95']:.3f} "
-        f"e2e_incremental={latency['e2e_incremental']['p95']:.3f}"
+        f"e2e_incremental={latency['e2e_incremental']['p95']:.3f}\n"
+        "latency warning envelope="
+        f"{'PASS' if latency['warning_envelope']['passed'] else 'FAIL'}"
     )
     if gate_pairs["false_positive_ids"]:
         lines.append(f"pair false positives: {', '.join(gate_pairs['false_positive_ids'])}")
@@ -1593,6 +1600,11 @@ def _finish_evaluation_contract(
         "split_vocabulary_and_shape_contract_loaded": (
             dataset.split_contract is not None if v2_contract else True
         ),
+        "offline_latency_warning_envelope": (
+            report["metrics"]["latency_ms"]["warning_envelope"]["passed"]
+            if dataset.schema_version >= 3
+            else True
+        ),
     }
     report["metrics"]["privacy"] = privacy
     report["metrics"]["invariants"] = {
@@ -1889,6 +1901,37 @@ def _latency_summary(samples_ns: Sequence[int]) -> dict[str, float | int]:
         "p50": round(nearest_rank_percentile(samples_ms, 0.50), 6),
         "p95": round(nearest_rank_percentile(samples_ms, 0.95), 6),
         "max": round(max(samples_ms), 6),
+    }
+
+
+def _latency_warning_assessment(
+    latency: dict[str, dict[str, float | int]],
+    stress_contract: dict[str, object] | None,
+) -> dict[str, Any]:
+    if stress_contract is None:
+        return {"available": False, "passed": True, "checks": {}, "limits_ms": {}}
+    raw_limits = stress_contract.get("latency_warning_ms")
+    if not isinstance(raw_limits, dict):
+        return {"available": False, "passed": False, "checks": {}, "limits_ms": {}}
+    measurements = {
+        "pair_p95": float(latency["pair"]["p95"]),
+        "artifact_retrieval_p95": float(latency["artifact_retrieval"]["p95"]),
+        "source_retrieval_p95": float(latency["source_retrieval"]["p95"]),
+        "e2e_full_p95": float(latency["e2e_full"]["p95"]),
+        "e2e_incremental_p95": float(latency["e2e_incremental"]["p95"]),
+    }
+    limits = {key: float(value) for key, value in raw_limits.items()}
+    checks = {
+        key: measurements[key] <= limits[key]
+        for key in sorted(measurements)
+    }
+    return {
+        "available": True,
+        "passed": all(checks.values()),
+        "checks": checks,
+        "observed_ms": dict(sorted(measurements.items())),
+        "limits_ms": dict(sorted(limits.items())),
+        "scope": "offline CI warning envelope; not a Hook runtime SLO",
     }
 
 

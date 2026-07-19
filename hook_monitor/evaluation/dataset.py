@@ -223,6 +223,16 @@ _STRESS_CONTRACT_KEYS = frozenset(
         "generated_pool_sizes",
         "maximum_candidate_count",
         "minimum_saturation_rate",
+        "latency_warning_ms",
+    }
+)
+_LATENCY_WARNING_KEYS = frozenset(
+    {
+        "pair_p95",
+        "artifact_retrieval_p95",
+        "source_retrieval_p95",
+        "e2e_full_p95",
+        "e2e_incremental_p95",
     }
 )
 _MAX_EXPANDED_FIXTURE_TEXT_CHARS = 65_536
@@ -266,7 +276,7 @@ _DATASET_REGISTRY = {
         "files": frozenset({"pairs", "scenarios", "retrieval_pools"}),
     },
     (V21_DATASET_SCHEMA_VERSION, V21_DATASET_VERSION): {
-        "digest": "1855ec5aae9fe3ecf61190f1631a1d72e0163c76dbbe6bc6954b221cb7b391cb",
+        "digest": "0e7045219148a9e1ba45073e390802ca21ddb60b6c119afd532c66d76b399822",
         "files": frozenset({"pairs", "scenarios", "retrieval_pools"}),
     },
 }
@@ -1165,10 +1175,28 @@ def _parse_stress_contract(value: Any, location: object) -> dict[str, object]:
         raise SimilarityDatasetError(
             f"{contract_location}.minimum_saturation_rate must be between zero and one"
         )
+    raw_latency = value["latency_warning_ms"]
+    if not isinstance(raw_latency, dict) or set(raw_latency) != _LATENCY_WARNING_KEYS:
+        raise SimilarityDatasetError(
+            f"{contract_location}.latency_warning_ms keys are invalid"
+        )
+    latency_warning: dict[str, float] = {}
+    for key, raw_value in raw_latency.items():
+        if (
+            isinstance(raw_value, bool)
+            or not isinstance(raw_value, (int, float))
+            or not 0.0 < float(raw_value) <= 60_000.0
+        ):
+            raise SimilarityDatasetError(
+                f"{contract_location}.latency_warning_ms values must be "
+                "positive milliseconds at most 60000"
+            )
+        latency_warning[str(key)] = float(raw_value)
     return {
         "generated_pool_sizes": tuple(raw_sizes),
         "maximum_candidate_count": maximum,
         "minimum_saturation_rate": float(minimum_rate),
+        "latency_warning_ms": dict(sorted(latency_warning.items())),
     }
 
 

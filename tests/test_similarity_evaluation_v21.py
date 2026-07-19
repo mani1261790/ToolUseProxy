@@ -19,7 +19,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 V2_ROOT = REPO_ROOT / "tests" / "fixtures" / "similarity" / "v2"
 V21_ROOT = REPO_ROOT / "tests" / "fixtures" / "similarity" / "v2_1"
 V2_DIGEST = "241a4f536ea53694b8172accc5a528961673a843983f99702651357cff3619b3"
-V21_DIGEST = "1855ec5aae9fe3ecf61190f1631a1d72e0163c76dbbe6bc6954b221cb7b391cb"
+V21_DIGEST = "0e7045219148a9e1ba45073e390802ca21ddb60b6c119afd532c66d76b399822"
 
 
 class SimilarityEvaluationV21Test(unittest.TestCase):
@@ -69,6 +69,16 @@ class SimilarityEvaluationV21Test(unittest.TestCase):
         self.assertEqual((1_000, 5_000, 10_000), contract["generated_pool_sizes"])
         self.assertEqual(10_000, contract["maximum_candidate_count"])
         self.assertEqual(1.0, contract["minimum_saturation_rate"])
+        self.assertEqual(
+            {
+                "artifact_retrieval_p95": 2_000.0,
+                "e2e_full_p95": 50.0,
+                "e2e_incremental_p95": 500.0,
+                "pair_p95": 10.0,
+                "source_retrieval_p95": 3_000.0,
+            },
+            contract["latency_warning_ms"],
+        )
         for split in ("development", "validation"):
             sizes = {
                 len(pool.candidates)
@@ -92,6 +102,11 @@ class SimilarityEvaluationV21Test(unittest.TestCase):
                 self.assertTrue(report["baseline"]["reproduced"])
                 self.assertTrue(report["summary"]["check_passed"])
                 self.assertTrue(report["summary"]["go_no_go_passed"])
+                self.assertTrue(
+                    report["metrics"]["latency_ms"]["warning_envelope"][
+                        "passed"
+                    ]
+                )
                 for scope in ("artifact_flow", "source_binding"):
                     retrieval = report["metrics"]["candidate_retrieval"][scope]
                     self.assertEqual(1.0, retrieval["saturation_rate"])
@@ -182,6 +197,34 @@ class SimilarityEvaluationV21Test(unittest.TestCase):
                 mutate(root)
                 with self.assertRaisesRegex(SimilarityDatasetError, expected):
                     load_similarity_dataset(root)
+
+    def test_latency_warning_envelope_is_a_check_invariant(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "v2_1"
+            shutil.copytree(V21_ROOT, root)
+            manifest_path = root / "manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["stress_contract"]["latency_warning_ms"] = {
+                key: 0.000001
+                for key in manifest["stress_contract"]["latency_warning_ms"]
+            }
+            manifest_path.write_text(
+                json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            report = evaluate_similarity(
+                load_similarity_dataset(root),
+                split="development",
+                benchmark_repeats=1,
+            )
+
+        warning = report["metrics"]["latency_ms"]["warning_envelope"]
+        self.assertTrue(warning["available"])
+        self.assertFalse(warning["passed"])
+        self.assertFalse(
+            report["metrics"]["invariants"]["offline_latency_warning_envelope"]
+        )
+        self.assertFalse(report["summary"]["check_passed"])
 
     @staticmethod
     def _records(path: Path) -> list[dict[str, object]]:
