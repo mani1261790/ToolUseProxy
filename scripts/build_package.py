@@ -16,6 +16,7 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+BUILD_TOOLCHAIN_CHECKER = REPO_ROOT / "scripts" / "check_build_toolchain.py"
 IGNORED_NAMES = {
     ".git",
     ".pytest_cache",
@@ -47,6 +48,7 @@ def main() -> int:
         help="Build an sdist as well as the wheel.",
     )
     args = parser.parse_args()
+    _check_build_toolchain()
     outdir = args.outdir.expanduser().resolve()
     outdir.mkdir(parents=True, exist_ok=True)
 
@@ -85,6 +87,18 @@ def main() -> int:
             digest = hashlib.sha256(destination.read_bytes()).hexdigest()
             print(f"{destination}\tsha256={digest}")
     return 0
+
+
+def _check_build_toolchain() -> None:
+    result = subprocess.run(
+        [sys.executable, str(BUILD_TOOLCHAIN_CHECKER)],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise SystemExit("release build requires the hash-locked build toolchain")
 
 
 def _ignore_source_entry(directory: str, names: list[str]) -> set[str]:

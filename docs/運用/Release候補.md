@@ -3,10 +3,17 @@
 public alphaのrelease候補は、wheel、sdist、Codex Plugin ZIPを個別に手作業で集めず、同じsource commitから一括生成します。
 
 ```bash
+python3.11 -m pip install \
+  --require-hashes \
+  --only-binary=:all: \
+  -r requirements/build.txt
+python3.11 scripts/check_build_toolchain.py
 python3.11 scripts/build_release_candidate.py \
   --outdir dist/release-candidate \
   --require-clean
 ```
+
+release builderは`build`、`packaging`、`pyproject-hooks`、`setuptools`、`wheel`が`requirements/build.txt`のexact versionと一致しない環境を拒否します。lockはPython 3.11 / 3.12とmacOS / Linuxで共通のpure Python wheelだけをSHA-256付きで許可し、CIも`--require-hashes --only-binary=:all:`でinstallします。
 
 出力directoryには次の7ファイルだけが入ります。
 
@@ -35,10 +42,11 @@ verifierは次を確認します。
 - manifestのsize / hashと実artifactが一致する
 - wheel / sdist / Plugin manifestのversionが一致する
 - CycloneDX SBOMのcomponentとartifact hashがmanifestに一致する
+- archive内部にunsafe path、重複entry、symlink等の非regular type、危険mode、想定外実行file、過大展開がない
 
 `artifact_set_eligible`はclean sourceとLICENSEの両方が揃った場合だけtrueになります。green CI run、manual Hook trust、実Codex task dogfood、公開承認はlocal builderから推測せず`external_required`のまま残します。candidate生成はGit tag、GitHub Release、repository公開を行いません。
 
-GitHub Actionsの`Reproducible release candidate` jobでも、clean checkoutに対して同じbuildとoffline検証を行います。local候補を公開判断へ進める場合は、そのsource commitに対応するgreen jobを外部CI evidenceとして確認します。
+GitHub Actionsの`Reproducible release candidate` jobでも、SHA固定したAction、`contents: read`権限、credentialを保持しないcheckout、hash-locked build toolchainを使い、clean checkoutに対して同じbuildとoffline検証を行います。local候補を公開判断へ進める場合は、そのsource commitに対応するgreen jobを外部CI evidenceとして確認します。
 
 候補directoryは[Pluginライフサイクル](Pluginライフサイクル.md)の`--candidate`へ渡し、immutable baselineからのupgrade / rollback / disable / removeにも同じ検証済みartifactを使えます。
 
