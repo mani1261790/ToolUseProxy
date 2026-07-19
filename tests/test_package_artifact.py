@@ -89,6 +89,14 @@ def _is_runtime_python_file(path: PurePosixPath) -> bool:
 
 
 class PackageArtifactTest(unittest.TestCase):
+    def test_package_artifact_bytes_are_reproducible(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            first_sdist, first_wheel = _build_artifacts(root / "first")
+            second_sdist, second_wheel = _build_artifacts(root / "second")
+            self.assertEqual(first_sdist.read_bytes(), second_sdist.read_bytes())
+            self.assertEqual(first_wheel.read_bytes(), second_wheel.read_bytes())
+
     def test_sdist_and_wheel_follow_the_runtime_allowlist(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             sdist, wheel = _build_artifacts(Path(temporary_directory))
