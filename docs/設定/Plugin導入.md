@@ -210,9 +210,26 @@ codex plugin remove tooluseproxy@tooluseproxy
 codex plugin marketplace remove tooluseproxy
 ```
 
-現段階では、Pluginをremoveしてもlocal監査dataを自動削除しません。保持・削除を選べる`tooluseproxy uninstall`は未実装です。dataを削除する場合も、対象の`PLUGIN_DATA`を確認し、明示的なユーザー承認を得てから行ってください。
+Pluginをremoveしてもlocal監査dataは自動削除されません。保持する場合は追加操作は不要です。削除する場合は、関連taskとToolUseProxy processを止め、install済みpackageまたは同じrelease artifactのlauncherからvalue-freeなplanを作ります。
 
-upgrade / rollbackとdata retentionを含むlifecycle E2Eもpublic alphaのrelease gateです。
+```bash
+sh "<PLUGIN_ROOT>/hooks/run_cli.sh" uninstall plan \
+  --data-dir "<PLUGIN_DATA>" \
+  --json
+```
+
+管理file数、byte数、管理外entry数を確認し、同じ`data_dir`に対して出力tokenを明示的に渡します。
+
+```bash
+sh "<PLUGIN_ROOT>/hooks/run_cli.sh" uninstall apply \
+  --data-dir "<PLUGIN_DATA>" \
+  --confirmation-token "<CONFIRMATION_TOKEN>" \
+  --json
+```
+
+削除対象はSQLite database / sidecar、migration backup、manifest backupだけです。管理外fileは残し、plan後に内容が変わった場合はstale tokenを拒否します。workspace manifestやprotected source本体、symlink先、package codeは削除しません。secure eraseやfilesystem snapshotの削除は保証しません。
+
+upgrade / rollbackを含む反復lifecycle E2Eは引き続きpublic alphaのrelease gateです。
 
 ## trustとfailure時の挙動
 

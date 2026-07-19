@@ -42,7 +42,7 @@ class PluginDogfoodTest(unittest.TestCase):
         shutil.which("codex"),
         "Codex CLI is required for isolated marketplace lifecycle dogfood",
     )
-    def test_isolated_codex_install_and_remove_preserve_data(self) -> None:
+    def test_isolated_codex_remove_preserves_then_explicitly_deletes_data(self) -> None:
         result = subprocess.run(
             [sys.executable, str(DOGFOOD_RUNNER), "--installation-mode", "codex"],
             cwd=REPO_ROOT,
@@ -57,6 +57,9 @@ class PluginDogfoodTest(unittest.TestCase):
         self.assertEqual("codex", payload["installation_mode"])
         self.assertTrue(payload["checks"]["plugin_code_removed"])
         self.assertTrue(payload["checks"]["runtime_data_retained"])
+        self.assertTrue(
+            payload["checks"]["runtime_data_deleted_after_confirmation"]
+        )
 
 
 if __name__ == "__main__":

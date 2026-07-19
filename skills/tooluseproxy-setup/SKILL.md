@@ -1,11 +1,11 @@
 ---
 name: tooluseproxy-setup
-description: Set up, diagnose, or inspect the ToolUseProxy Codex Plugin for the current workspace. Use for ToolUseProxy init, doctor, status, plugin Hook trust, database-path, or protected_sources.json onboarding tasks.
+description: Set up, diagnose, inspect, or explicitly uninstall the ToolUseProxy Codex Plugin for the current workspace. Use for ToolUseProxy init, doctor, status, plugin Hook trust, database-path, protected_sources.json onboarding, or managed-data removal tasks.
 ---
 
 # ToolUseProxy setup
 
-Use this workflow only when the user asks to set up or diagnose ToolUseProxy. Never add a protected source without showing the proposed entry and receiving explicit user approval.
+Use this workflow only when the user asks to set up, diagnose, or uninstall ToolUseProxy. Never add a protected source or delete local data without showing the exact value-free plan and receiving explicit user approval.
 
 1. Confirm that the current directory is the intended workspace root.
 2. Confirm that the ToolUseProxy Plugin Hook definition has been reviewed and trusted in Codex. Do not bypass Hook trust.
@@ -60,5 +60,19 @@ Use this workflow only when the user asks to set up or diagnose ToolUseProxy. Ne
    Run the whole `protect scan / suggest / approve / reject / ignore` workflow only on POSIX (macOS/Linux); it is not supported on Windows yet. Neither `init` nor a Hook runs the scanner implicitly.
 
 10. Use `status` to verify the database, canonical workspace registration, schema v2 manifest, and protected sources all resolve to the same workspace. `status: active` means runtime health, not that a complete scan ran or that every sensitive file is registered.
+
+11. If the user asks to uninstall, remove or disable the Plugin first so new Hook writes stop. Data retention is the default; Plugin or package removal never approves data deletion. If the user also asks to delete local data, run a non-mutating plan from an installed package or the exact release artifact being removed:
+
+   ```text
+   sh "<PLUGIN_ROOT>/hooks/run_cli.sh" uninstall plan --data-dir <PLUGIN_DATA> --json
+   ```
+
+   Show the selected data directory, managed file count, managed byte count, unmanaged top-level entry count, and that all workspaces sharing the database will be affected. Never inspect or reveal stored payloads. Wait for explicit approval of that exact deletion plan. Then pass the unchanged opaque confirmation token:
+
+   ```text
+   sh "<PLUGIN_ROOT>/hooks/run_cli.sh" uninstall apply --data-dir <PLUGIN_DATA> --confirmation-token <confirmation-token> --json
+   ```
+
+   Do not infer approval from a request to remove Plugin code, uninstall a Python package, clear a different cache, or approve a protected source. If managed data changes after review, `apply` rejects the stale token; create and present a new plan. The command deletes only the ToolUseProxy database / SQLite sidecars, migration backups, and manifest backups. It retains unknown entries, workspace manifests, protected source files, symlink targets, filesystem snapshots, and external backups. It does not provide secure erase.
 
 The default onboarding boundary records tool activity and reviews final responses. PreToolUse blocking and MCP blocking remain explicit opt-ins; do not silently enable them.

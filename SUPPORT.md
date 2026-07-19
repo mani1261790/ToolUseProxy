@@ -40,7 +40,7 @@ Codex Plugin APIやHook payloadはToolUseProxyとは別に変更され得ます�
 | Stop final-answer review | alpha対応 | critical findingを`continue_review`で差し戻す |
 | runtime redact / `updatedInput` | 未対応 | 複数Hook後の最終採用inputを証明できないため無効 |
 | remote embedding / telemetry | 非搭載 | Hook内network accessなし |
-| automatic uninstall / data erase | 未対応 | Plugin remove後もlocal dataを保持 |
+| explicit managed-data uninstall | macOS / Linux alpha対応 | Plugin removeは保持。`uninstall plan`のexact tokenを`apply`へ渡した場合だけ管理dataを削除 |
 
 ## 既知の制限
 
@@ -51,7 +51,7 @@ Codex Plugin APIやHook payloadはToolUseProxyとは別に変更され得ます�
 - candidate retrievalはartifact 50 / source 200の有限上限を持つ
 - local SQLiteにはraw Hook payloadやprotected source由来textが平文で残り得る
 - database、backup、trace exportの自動retention / secure eraseはない
-- Plugin remove後のcode残留0とdata保持はisolated local Codex CLIで検証済み。upgrade / rollbackとcross-platform lifecycleは未完了
+- Plugin remove後のcode残留0、data保持、その後の明示uninstallはisolated local Codex CLIで検証済み。upgrade / rollbackとcross-platform lifecycleは未完了
 - runtime policyは他のHookやtool自体をexclusiveに制御できず、ToolUseProxy単独で完全な外部送信防止を保証しない
 
 dataの詳細は[プライバシーとデータ保持](PRIVACY.md)、導入手順は[Codex Plugin導入](docs/設定/Plugin導入.md)、実装の優先順位は[実装タスク](docs/運用/実装タスク.md)を参照してください。

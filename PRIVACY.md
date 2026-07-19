@@ -43,7 +43,7 @@ Codex自体や、Codexが呼び出す外部tool / MCP serverの通信はToolUseP
 
 ## 保持期間
 
-一般のevent、artifact、source chunk、graph、finding、candidate、backupに自動expirationはありません。明示的に削除するまで残ります。一部のredaction auditにはdry-runを既定とするcleanup scriptがありますが、database全体のretention policyや一括uninstallではありません。
+一般のevent、artifact、source chunk、graph、finding、candidate、backupに自動expirationはありません。明示的に削除するまで残ります。一部のredaction auditにはdry-runを既定とするcleanup scriptがありますが、database全体の自動retention policyではありません。
 
 Pluginのdisable、remove、marketplace remove、package uninstallはlocal dataを自動削除しません。これは誤削除を防ぎ、監査やupgrade後の再利用を可能にするためのalpha既定です。
 
@@ -53,9 +53,12 @@ Pluginのdisable、remove、marketplace remove、package uninstallはlocal data�
 2. `status --json`またはPluginが表示したcommandで対象の`data_dir` / `db_path`を確認する
 3. 必要な監査dataをbackupするか、不要であることを確認する
 4. Codexの関連taskとToolUseProxy processを終了する
-5. 確認したdata directoryをOSのfile操作で明示的に削除する
+5. `tooluseproxy uninstall plan --data-dir <DATA_DIR> --json`を実行し、管理file数、byte数、管理外entry数をreviewする
+6. 出力された現在内容固有のtokenを`tooluseproxy uninstall apply --data-dir <DATA_DIR> --confirmation-token <TOKEN> --json`へ明示的に渡す
 
-複数workspaceが同じdatabaseを共有している場合、directory削除は全workspaceの履歴を削除します。alpha.3にはworkspace単位の完全なerase command、secure erase、backup追跡、復元不能性の保証はありません。SSD、filesystem snapshot、backup serviceには削除後もcopyが残る可能性があります。
+`init`はdata directoryへ値を含まないprivateな識別markerを作成します。既存directoryにmarkerがない場合はToolUseProxy SQLite schemaを識別できた場合だけ削除planを作ります。`apply`はmarker、`events.db`とSQLite sidecar、migration backup、`manifest-backups`だけを管理対象として削除します。管理外entryは削除せずdata directoryを残します。plan後に管理dataの内容が変化した場合、tokenは無効になり再planが必要です。symlinkやgroup / otherから読めるdata directoryは拒否します。
+
+複数workspaceが同じdatabaseを共有している場合、uninstallは全workspaceの履歴を削除します。alpha.3にはworkspace単位の完全なerase command、secure erase、外部backup追跡、復元不能性の保証はありません。SSD、filesystem snapshot、backup serviceには削除後もcopyが残る可能性があります。
 
 ## 共有時の注意
 

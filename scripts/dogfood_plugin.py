@@ -66,6 +66,7 @@ def _run_dogfood(installation_mode: str) -> dict[str, Any]:
         root = Path(temporary_directory)
         dist = root / "dist"
         marketplace_root = root / "marketplace"
+        cleanup_marketplace_root = root / "cleanup-marketplace"
         codex_home = root / "codex-home"
         workspace = root / "workspace"
         data_dir = root / "plugin-data"
@@ -86,6 +87,7 @@ def _run_dogfood(installation_mode: str) -> dict[str, Any]:
         artifact_sha256 = hashlib.sha256(artifact.read_bytes()).hexdigest()
         with zipfile.ZipFile(artifact) as archive:
             archive.extractall(marketplace_root)
+            archive.extractall(cleanup_marketplace_root)
             manifest = json.loads(
                 archive.read("tooluseproxy/.codex-plugin/plugin.json").decode("utf-8")
             )
@@ -355,6 +357,48 @@ def _run_dogfood(installation_mode: str) -> dict[str, Any]:
         data_retained = (data_dir / "events.db").is_file()
         if not data_retained:
             raise DogfoodFailure(stage, "runtime_data_not_retained")
+
+        cleanup_plugin_root = cleanup_marketplace_root / "tooluseproxy"
+        cleanup_launcher = cleanup_plugin_root / "hooks" / "run_cli.sh"
+        cleanup_environment = {
+            **plugin_environment,
+            "PLUGIN_ROOT": str(cleanup_plugin_root),
+        }
+        stage = "uninstall_plan"
+        uninstall_plan = _run_plugin_json(
+            cleanup_launcher,
+            ["uninstall", "plan", "--data-dir", str(data_dir), "--json"],
+            cwd=workspace,
+            env=cleanup_environment,
+            stage=stage,
+            captured_outputs=captured_outputs,
+        )
+        if uninstall_plan.get("status") != "review_required":
+            raise DogfoodFailure(stage, "data_deletion_review_missing")
+        confirmation_token = _required_string(
+            uninstall_plan,
+            "confirmation_token",
+            stage,
+        )
+        stage = "uninstall_apply"
+        uninstall_result = _run_plugin_json(
+            cleanup_launcher,
+            [
+                "uninstall",
+                "apply",
+                "--data-dir",
+                str(data_dir),
+                "--confirmation-token",
+                confirmation_token,
+                "--json",
+            ],
+            cwd=workspace,
+            env=cleanup_environment,
+            stage=stage,
+            captured_outputs=captured_outputs,
+        )
+        if uninstall_result.get("status") != "deleted" or data_dir.exists():
+            raise DogfoodFailure(stage, "managed_data_not_deleted")
         _assert_no_canary_exposure(captured_outputs)
 
         return {
@@ -375,6 +419,7 @@ def _run_dogfood(installation_mode: str) -> dict[str, Any]:
                 "decision_trace_available": True,
                 "plugin_code_removed": True,
                 "runtime_data_retained": True,
+                "runtime_data_deleted_after_confirmation": True,
                 "raw_value_exposure": False,
             },
             "metrics": {
