@@ -118,7 +118,7 @@ jobs:
           done
 
       - name: Check reproducible similarity v2.1 fixture
-        run: python scripts/build_similarity_v21_fixture.py --check
+        run: python -m scripts.build_similarity_v21_fixture --check
 
       - name: Check source-ingestion runtime parity
         run: >-

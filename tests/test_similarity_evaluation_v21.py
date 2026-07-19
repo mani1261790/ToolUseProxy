@@ -101,7 +101,8 @@ class SimilarityEvaluationV21Test(unittest.TestCase):
         result = subprocess.run(
             [
                 sys.executable,
-                str(REPO_ROOT / "scripts" / "build_similarity_v21_fixture.py"),
+                "-m",
+                "scripts.build_similarity_v21_fixture",
                 "--check",
             ],
             cwd=REPO_ROOT,
