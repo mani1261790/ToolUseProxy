@@ -15,7 +15,9 @@ PACKAGE_BUILDER = REPO_ROOT / "scripts" / "build_package.py"
 SDIST_ROOT_FILES = {
     PurePosixPath("MANIFEST.in"),
     PurePosixPath("PKG-INFO"),
+    PurePosixPath("PRIVACY.md"),
     PurePosixPath("README.md"),
+    PurePosixPath("SUPPORT.md"),
     PurePosixPath("pyproject.toml"),
     PurePosixPath("setup.cfg"),
 }

@@ -1,4 +1,6 @@
 include README.md
+include PRIVACY.md
+include SUPPORT.md
 include pyproject.toml
 include MANIFEST.in
 

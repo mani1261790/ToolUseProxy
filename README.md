@@ -5,6 +5,8 @@ Codexのtool useをローカルで観測し、protected sourceから外部tool�
 > 現在は`0.1.0-alpha.3`です。中核機能は動作しますが、公開release、配布物の供給網、cross-platform E2Eはまだ整備中です。
 
 - [Codex Pluginとして試す](docs/設定/Plugin導入.md)
+- [対応環境と既知の制限](SUPPORT.md)
+- [プライバシーとデータ保持](PRIVACY.md)
 - [現在地と実装ロードマップ](docs/運用/実装タスク.md)
 - [ドキュメント索引](docs/索引.md)
 - [GitHub Project](https://github.com/users/mani1261790/projects/1)
@@ -29,13 +31,13 @@ Hook内のnetwork access、remote embedding、telemetryは使いません。runt
 | 3. Stop | alpha実装済み | Stopの`continue_review`と、opt-inのBash / MCP PreToolUse denyを提供。runtime redactは無効 |
 | Plugin化 | alpha.3 | installable package、relocatable Plugin、`PLUGIN_ROOT` / `PLUGIN_DATA`、初期化・診断・traceを実装 |
 | protected source登録 | 明示承認型を実装済み | `scan` / `suggest` → exact proposal → `approve` / `reject` / `ignore`。無承認登録はしない |
-| Public alpha | 準備中 | immutable release、LICENSE / privacy、checksum / SBOM、upgrade / rollback、cross-platform E2Eが未完了 |
+| Public alpha | 準備中 | immutable release、LICENSE、checksum / SBOM、upgrade / rollback、cross-platform E2Eが未完了 |
 
 設計全体は[アーキテクチャ概要](docs/設計/アーキテクチャ.md)、詳細な完了範囲と残作業は[実装タスク計画](docs/運用/実装タスク.md)を参照してください。
 
 ## Pluginを試す
 
-Python 3.11以上とCodex CLIを用意し、現在のcheckoutをlocal marketplaceとして追加します。
+Python 3.11または3.12とCodex CLIを用意し、現在のcheckoutをlocal marketplaceとして追加します。OS・機能別の境界は[サポート範囲](SUPPORT.md)を確認してください。
 
 ```bash
 codex plugin marketplace add /absolute/path/to/ToolUseProxy
@@ -78,7 +80,7 @@ dataset digestは`241a4f536ea53694b8172accc5a528961673a843983f99702651357cff3619
 
 優先順位の正本は[実装タスク計画](docs/運用/実装タスク.md)とGitHub Issues / Projectです。
 
-1. [#19](https://github.com/mani1261790/ToolUseProxy/issues/19): sdist内容、Python 3.11 / 3.12 CI、LICENSE / privacy、support matrixを固定する
+1. [#19](https://github.com/mani1261790/ToolUseProxy/issues/19): 固定済みartifact / Python 3.11・3.12 CI / support・privacy契約を検証し、LICENSEを決定する
 2. [#19](https://github.com/mani1261790/ToolUseProxy/issues/19): alpha.3をimmutableなartifactから実Codexへ導入し、trustからblock・trace・removeまでdogfoodする
 3. [#20](https://github.com/mani1261790/ToolUseProxy/issues/20): 長い英字の公開compound誤検知と有限candidate capをadversarial corpusで改善・検証する
 4. [#18](https://github.com/mani1261790/ToolUseProxy/issues/18): protected source onboardingを実Plugin E2Eで閉じ、runtime observed-pathやauto-enrollは別の研究判断として扱う

@@ -24,6 +24,7 @@ FIXED_FILES = (
     "skills/tooluseproxy-setup/SKILL.md",
     "tooluseproxy_plugin.py",
 )
+MARKETPLACE_DOCUMENTATION_FILES = ("PRIVACY.md", "README.md", "SUPPORT.md")
 PYTHON_PACKAGE_DIRECTORIES = ("hook_monitor", "tooluseproxy")
 EXCLUDED_PYTHON_DIRECTORIES = (PurePosixPath("hook_monitor/evaluation"),)
 
@@ -68,6 +69,15 @@ def main() -> int:
                 marketplace,
                 executable=False,
             )
+            for relative_path in MARKETPLACE_DOCUMENTATION_FILES:
+                source = REPO_ROOT / relative_path
+                _validate_source_file(source, PurePosixPath(relative_path))
+                _write_bytes(
+                    archive,
+                    relative_path,
+                    source.read_bytes(),
+                    executable=False,
+                )
             for source, relative_path in files:
                 _write_bytes(
                     archive,

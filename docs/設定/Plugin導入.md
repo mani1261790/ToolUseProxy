@@ -4,13 +4,13 @@ ToolUseProxyのCodex Pluginは、repository全体ではなく、生成時にallo
 
 ## 現在のsupport範囲
 
-- Python 3.11以上
-- macOS: local package、relocated Plugin bundle、Codex CLIのisolated local marketplace installを自動検証
-- Linux: Ubuntu CIでpackage、relocated Plugin bundle、wheelのcheckout外実行を検証。Codex CLI marketplace installの実環境E2Eは未検証
-- Windows: `py -3.11`を使うlauncherを同梱。実機検証は未完了で、protected-source登録workflow全体は現在未対応
+- Python 3.11 / 3.12。3.13以降は現在未対応
+- macOS: local package、relocated Plugin bundle、Codex CLIのisolated local marketplace installを検証。Python 3.12 package smokeはCI greenを正式判定とする
+- Linux: Ubuntu CIでPython 3.11 / 3.12のfull suite、package、relocated Plugin bundle、wheelのcheckout外実行を検証。Codex CLI marketplace installの実環境E2Eは未検証
+- Windows: `py -3.11`を使うlauncherを同梱するexperimental範囲。実機検証は未完了で、protected-source登録workflow全体は現在未対応
 - Hook内network access、remote embedding、telemetry: なし
 
-Python 3.12のCI契約、Windows実機、install / update / removeのcross-platform E2Eはpublic alphaまでの残作業です。最新の優先順位は[実装タスク計画](../運用/実装タスク.md)を参照してください。
+詳細は[サポート範囲と既知の制限](../../SUPPORT.md)と[プライバシーとデータ保持](../../PRIVACY.md)を参照してください。Windows実機、install / update / removeのcross-platform E2Eはpublic alphaまでの残作業です。最新の優先順位は[実装タスク計画](../運用/実装タスク.md)を参照してください。
 
 ## 現在versionと更新
 
@@ -56,7 +56,7 @@ codex plugin marketplace add /absolute/path/to/extracted
 codex plugin add tooluseproxy@tooluseproxy
 ```
 
-builderはruntime fileを明示的に選び、`.git`、`.github`、tests、docs、scripts、cache、virtual environment、local DB、legacy Hook entrypointをZIPへ含めません。marketplace metadata自体もinstall済みPluginには入りません。ZIPはまだ署名済みpublic releaseではないため、checksum公開、SBOM、release notes、license / privacy gateを満たすまでは開発・dogfood用途として扱います。
+builderはruntime fileを明示的に選び、`.git`、`.github`、tests、内部設計docs、scripts、cache、virtual environment、local DB、legacy Hook entrypointをZIPへ含めません。展開したmarketplace rootにはREADME、support、privacy契約を含めますが、marketplace metadataとこれらの文書はinstall済みPluginには入りません。ZIPはまだ署名済みpublic releaseではないため、checksum公開、SBOM、release notes、LICENSE gateを満たすまでは開発・dogfood用途として扱います。
 
 installまたはHook定義の更新後は、Codexが示すHook definitionを確認してtrustします。ToolUseProxyはこのreviewを迂回しません。新しいPlugin componentとskillを確実に読み込むため、trust後は新しいtaskを開始します。
 

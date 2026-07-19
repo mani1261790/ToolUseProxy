@@ -59,6 +59,9 @@ class PluginArtifactTest(unittest.TestCase):
                 {"source": "local", "path": "./tooluseproxy"},
                 marketplace["plugins"][0]["source"],
             )
+            self.assertIn("PRIVACY.md", names)
+            self.assertIn("README.md", names)
+            self.assertIn("SUPPORT.md", names)
             self.assertIn("tooluseproxy/.codex-plugin/plugin.json", names)
             self.assertIn("tooluseproxy/hooks/hooks.json", names)
             self.assertIn("tooluseproxy/hooks/run_cli.sh", names)
@@ -234,6 +237,9 @@ class PluginArtifactTest(unittest.TestCase):
                 relative = path.relative_to(installed_path)
                 self.assertFalse(set(relative.parts) & FORBIDDEN_PARTS, str(relative))
             self.assertFalse((installed_path / ".agents").exists())
+            self.assertFalse((installed_path / "PRIVACY.md").exists())
+            self.assertFalse((installed_path / "README.md").exists())
+            self.assertFalse((installed_path / "SUPPORT.md").exists())
             self.assertTrue((installed_path / "tooluseproxy" / "__main__.py").is_file())
 
 
