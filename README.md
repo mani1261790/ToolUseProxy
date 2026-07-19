@@ -8,6 +8,7 @@ Codexのtool useをローカルで観測し、protected sourceから外部tool�
 - [対応環境と既知の制限](SUPPORT.md)
 - [プライバシーとデータ保持](PRIVACY.md)
 - [Pluginドッグフード](docs/運用/Pluginドッグフード.md)
+- [Release候補の作成と検証](docs/運用/Release候補.md)
 - [現在地と実装ロードマップ](docs/運用/実装タスク.md)
 - [ドキュメント索引](docs/索引.md)
 - [GitHub Project](https://github.com/users/mani1261790/projects/1)
