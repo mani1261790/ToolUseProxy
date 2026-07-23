@@ -69,6 +69,14 @@ class ManualPluginPhaseBTest(unittest.TestCase):
             self.assertIn(str(fake_sink), prompt_file.read_text())
             self.assertIn("`$VAR`", prompt_file.read_text())
             self.assertIn(str(context_file), prompt_file.read_text())
+            for plain_language_label in (
+                "守るファイル",
+                "守る範囲",
+                "止める場面",
+                "承認すると変わるもの",
+                "承認しない場合",
+            ):
+                self.assertIn(plain_language_label, prompt_file.read_text())
 
             context = json.loads(context_file.read_text())
             self.assertEqual(1, context["schema_version"])
@@ -76,6 +84,19 @@ class ManualPluginPhaseBTest(unittest.TestCase):
             self.assertNotIn(CANARY, json.dumps(context))
 
             state = json.loads((root / "phase-b-state.json").read_text())
+            guide = guide_file.read_text()
+            for hook_name, plain_language_role in (
+                ("PreToolUse", "toolを実行する前"),
+                ("PostToolUse", "toolを実行した後"),
+                ("Stop", "最終回答を返す前"),
+            ):
+                self.assertIn(hook_name, guide)
+                self.assertIn(plain_language_role, guide)
+            self.assertIn("sandboxの外", guide)
+            self.assertIn("外部通信しません", guide)
+            self.assertIn("Trust all", guide)
+            self.assertIn(state["plugin_root"], guide)
+
             self.assertEqual(2, state["schema_version"])
             self.assertNotIn(CANARY, json.dumps(state))
             self.assertEqual(
@@ -93,9 +114,23 @@ class ManualPluginPhaseBTest(unittest.TestCase):
             self.assertNotIn("export PATH=", launcher)
             self.assertIn(str(preflight), launcher)
             self.assertIn(str(prompt_file), launcher)
+            self.assertIn(str(guide_file), launcher)
+            self.assertIn("read -r", launcher)
+            self.assertIn("/dev/tty", launcher)
             self.assertTrue((root / "login-codex.sh").is_file())
             self.assertTrue((root / "login-codex-device.sh").is_file())
             self.assertTrue((root / "logout-codex.sh").is_file())
+            launcher_syntax = subprocess.run(
+                ["sh", "-n", str(root / "launch-codex.sh")],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(
+                0,
+                launcher_syntax.returncode,
+                launcher_syntax.stderr,
+            )
 
             preflight_result = subprocess.run(
                 [sys.executable, str(preflight)],
@@ -133,6 +168,32 @@ class ManualPluginPhaseBTest(unittest.TestCase):
             self.assertTrue(
                 (root / "workspace" / ".phase-b-public-side-effect").is_file()
             )
+
+    def test_setup_skill_requires_plain_hook_and_proposal_explanations(self) -> None:
+        skill = (
+            REPO_ROOT / "skills" / "tooluseproxy-setup" / "SKILL.md"
+        ).read_text(encoding="utf-8")
+
+        for hook_name, plain_language_role in (
+            ("PreToolUse", "toolを実行する前"),
+            ("PostToolUse", "toolを実行した後"),
+            ("Stop", "最終回答を返す前"),
+        ):
+            self.assertIn(hook_name, skill)
+            self.assertIn(plain_language_role, skill)
+        for proposal_label in (
+            "守るファイル",
+            "守る範囲",
+            "止める場面",
+            "承認すると変わるもの",
+            "承認しない場合",
+        ):
+            self.assertIn(proposal_label, skill)
+        self.assertIn("長い sh ...", skill)
+        self.assertIn("追加の処理ではありません", skill)
+        self.assertIn("copy the CLI result's proposed source object verbatim", skill)
+        self.assertIn("never rewrite it as `selectors`", skill)
+        self.assertIn("First ask whether", skill)
 
     def test_verify_accepts_cross_checked_actual_hook_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

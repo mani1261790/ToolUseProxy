@@ -1,4 +1,5 @@
 {
+  "description": "ToolUseProxy checks tool inputs before execution, records tool results locally, and reviews final responses for protected content. These hooks do not use the network.",
   "hooks": {
     "PreToolUse": [
       {

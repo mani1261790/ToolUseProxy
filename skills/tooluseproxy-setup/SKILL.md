@@ -7,6 +7,28 @@ description: Set up, diagnose, inspect, or explicitly uninstall the ToolUseProxy
 
 Use this workflow only when the user asks to set up, diagnose, or uninstall ToolUseProxy. Never add a protected source or delete local data without showing the exact value-free plan and receiving explicit user approval.
 
+Before asking the user to trust ToolUseProxy Hooks, explain all three roles in
+plain language:
+
+- `PreToolUse`: toolを実行する前に、Bash、file edit、MCPへ渡す内容を確認し、
+  protected contentの外部送信を実行前に止める。
+- `PostToolUse`: toolを実行した後に、入力と結果をlocal DBへ記録する。すでに
+  実行されたtoolを取り消すものではない。
+- `Stop`: 最終回答を返す前に、protected contentが残っていないか確認し、必要なら
+  回答を作り直させる。
+
+Explain that command Hooks run outside the Codex sandbox with the user's local
+permissions. ToolUseProxy's Hook implementation writes to its local data
+directory and does not make network requests, but the user must still verify
+the source is `Plugin - tooluseproxy@tooluseproxy`, exactly three ToolUseProxy
+Hooks are present, and every ToolUseProxy command points inside the expected
+installed Plugin root. In an isolated manual Phase B harness, those three must
+be the only pending Hooks. Outside that harness, if unrelated Hooks are also
+pending, do not use `Trust all`; review the three ToolUseProxy entries
+individually. Explain that trust applies to the exact definitions currently
+shown and changed definitions require review again. If any ToolUseProxy source,
+count, or path differs, tell the user not to trust and stop setup.
+
 Before requesting permission to run any `run_cli.sh` or `run_cli.cmd` command,
 explain the operation in plain language. The explanation must let a person
 decide without parsing the installed Plugin path or the raw shell command.
@@ -22,6 +44,14 @@ Do not use implementation terms such as revision, manifest hash, Hook data
 directory, or opaque token as the primary permission explanation. Those terms
 may follow as technical detail. If a command combines multiple read-only
 checks after one local initialization, say so explicitly.
+
+Immediately before the permission prompt, add one final sentence explaining
+that the long `sh ...` text Codex shows is the exact installed Plugin command,
+not an additional operation. State whether the described action is safe to
+approve, or what mismatch would make the user reject it. Do not ask the user
+to infer the purpose from the command text. In Japanese, say:
+`承認画面に出る長い sh ... は、説明済みの操作をinstalled Pluginから実行する
+ための正確なpathです。追加の処理ではありません。`
 
 1. Confirm that the current directory is the intended workspace root.
 2. Confirm that the ToolUseProxy Plugin Hook definition has been reviewed and trusted in Codex. Do not bypass Hook trust.
@@ -66,6 +96,37 @@ checks after one local initialization, say so explicitly.
    ```
 
    The scanner is read-only for source files and the manifest, performs no network access, and uses fixed limits for traversal depth, entries, supported files, total bytes, and candidates. It excludes VCS, dependencies, virtual environments, build/cache directories, symlinks, and ToolUseProxy runtime data. It writes only a value-free candidate/review audit plus internal source hash/stat to the local runtime database and returns at most one review candidate in stable relative-path order. Show the relative path, reason codes, confidence, proposed source entry, and scan completeness. Never show or repeat source values, source hashes, absolute paths, or file previews. If `scan_complete` is false, explain the reached limit reasons and that unscanned scope remains; never report that no protected source exists.
+
+   Before showing the exact JSON proposal, translate it into this five-line
+   review card:
+
+   - `守るファイル`: show only the workspace-relative path.
+   - `守る範囲`: explain selectors as scope, not syntax. For `dotenv_keys`,
+     say that only the values of the named settings are selected, not every
+     value in the file. For `json_pointers`, identify the selected JSON fields
+     without showing their values. If there is no selector, say that the file
+     content is selected.
+   - `止める場面`: explain in ordinary language that attempts to include the
+     selected content in external sending or search can be stopped before the
+     tool runs.
+   - `承認すると変わるもの`: explain that one entry is added to
+     `protected_sources.json`; the source file itself is not changed.
+   - `承認しない場合`: explain that nothing is registered or changed. Briefly
+     offer reject for a reviewed non-secret and ignore when the user does not
+     want the same content proposed again by the current detector.
+
+   After the card, copy the CLI result's proposed source object verbatim as the
+   exact value-free JSON proposal. Do not reconstruct it from memory, rename
+   keys, change singular/plural forms, change arrays or objects, add or remove
+   fields, or normalize its contents. In particular, preserve `selector`
+   exactly; never rewrite it as `selectors`. If the exact object is no longer
+   available, stop and rerun the same bounded discovery command instead of
+   presenting a reconstructed proposal. Follow the JSON with reason codes,
+   confidence, and scan completeness as technical detail. First ask whether
+   the user understands what content is selected and what approval changes.
+   If the answer is no or uncertain, explain again and do not request approval.
+   Ask for explicit approve, reject, or ignore only after the explanation is
+   understood.
 8. If the user or agent already knows one `.env`, `.env.*`, or JSON path, or needs to propose a file outside the bounded scanner's policy, use the explicit-path fallback:
 
    ```text

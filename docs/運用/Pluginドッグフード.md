@@ -48,16 +48,18 @@ python3.11 scripts/manual_plugin_phase_b.py prepare \
 
 通常のbrowser loginがlocalhost callbackやcookieで失敗した場合は、prepare出力の`device_login_command`を使います。認証URLやdevice codeはIssueやchatへ貼りません。
 
-task launcherは起動直前にprepare時のCodex versionとfake sinkのpath、mode、SHA-256を再確認します。Codexが更新された場合やfake sinkが変わった場合はtaskを起動せず、fresh prepareを要求します。
+task launcherは起動直前にprepare時のCodex versionとfake sinkのpath、mode、SHA-256を再確認します。Codexが更新された場合やfake sinkが変わった場合はtaskを起動せず、fresh prepareを要求します。preflight通過後は人向けのHook review guideをterminalへ全文表示し、`yes`が入力されるまでCodexを起動しません。この`yes`はHook trustの代行ではなく、続くCodex画面で何を確認するかを読んだというcheckpointです。
 
 prepareは同じrootへmode `0600`の`phase-b-prompt.txt`、`phase-b-guide.md`、`phase-b-context.json`を作ります。contextにはworkspace、installed Plugin、Plugin data、fake sinkのlocal pathだけを置き、source値を含めません。setup skillはこのcontextを使い、`ps`やworkspace外の広い検索でpathを推測しません。このpromptを新しいCodex taskへ渡し、次を人間が確認します。
 
-1. Codexが表示するHook definitionとartifact version / SHA-256をreviewしてtrustする
-2. 長いPlugin commandの前に、目的、読むもの、変更するもの、外部通信、取消方法が平易に説明される
-3. synthetic workspaceで`init`、`doctor`、`status`を実行する
-4. `protect scan`のvalue-freeなexact proposal説明を読み、明示approveする
-5. public fixtureを絶対pathのfake sinkへ送り、false blockがなくmarkerが作られることを確認する
-6. synthetic protected fixtureを静的なliteralとして同じfake sinkへ送るtool callを依頼し、deny時のmarkerが0であることを確認する
+1. guideでPreToolUse / PostToolUse / Stopの役割、sandbox外実行、local data、networkなし、想定source / 件数 / command rootを理解する
+2. Codexが表示する3件のHook definitionをreviewし、guideと一致する場合だけtrustする
+3. 長いPlugin commandの前に、目的、読むもの、変更するもの、外部通信、取消方法が平易に説明される
+4. synthetic workspaceで`init`、`doctor`、`status`を実行する
+5. `protect scan`候補について、exact JSONより先に「守るファイル」「守る範囲」「止める場面」「承認すると変わるもの」「承認しない場合」の説明を読む
+6. その説明を理解した場合だけexact proposalを明示approveする
+7. public fixtureを絶対pathのfake sinkへ送り、false blockがなくmarkerが作られることを確認する
+8. synthetic protected fixtureを静的なliteralとして同じfake sinkへ送るtool callを依頼し、deny時のmarkerが0であることを確認する
 
 Phase B harnessはPATH上の`curl`を信用しません。promptに記録された絶対pathのfake sinkだけを使い、fake sinkはnetworkへ接続せず、呼び出された事実だけをmarkerへ書きます。public callはmarkerを作り、protected callはPreToolUse denyによりmarkerを作らないことが期待結果です。system curl、別pathのcurl、変更されたfake sinkを使ったrunはmarkerの有無にかかわらず不合格です。
 
@@ -103,6 +105,8 @@ verify出力はroot path、source hash、candidate ID、tool input、raw canary�
 自動Phase Aの件数をmanual Phase Bの実利用値へ合算しません。Hook trust、実tool side effect、agent説明の理解度は人間が確認し、Phase B verifierが実Hook DBとmarkerを照合したrunだけを実利用として扱います。
 
 このharnessが対象にするのは#18の初回onboardingと実Bash遮断です。final answer / MCP、update後のapproved source保持とstale proposal、remove / data保持 / uninstallは自動Phase Aと[Pluginライフサイクル](Pluginライフサイクル.md)で機械検証済みですが、人が参加するpre-release全体のPhase B evidenceとしては別途反復します。初回onboardingの合格だけでそれらもmanual確認済みとは扱いません。
+
+2026-07-24のPhase B v2 human runでは、candidate approve、public allow、protected PreToolUse block、protected side effect 0、session / Hook DB / markerの相互照合はすべて成功しました。一方、人間評価はHook review理解`no`、proposal説明理解`no`、command説明`yes`だが長い`sh ...`表示は人によって分かりにくい可能性あり、追加質問0回でした。したがってrun全体は`needs_followup`です。機能成功を説明UX成功へ読み替えません。
 
 verify結果を保存した後は、prepare出力の`logout_command`でisolated `CODEX_HOME`からlogoutします。失敗調査中はrootを保持できますが、調査完了後は認証cacheとraw local sessionを含むため、必要なaggregate evidenceを残してrootを明示的に削除します。削除はverifierが自動で行いません。
 
