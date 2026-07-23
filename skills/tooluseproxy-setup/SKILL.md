@@ -7,9 +7,35 @@ description: Set up, diagnose, inspect, or explicitly uninstall the ToolUseProxy
 
 Use this workflow only when the user asks to set up, diagnose, or uninstall ToolUseProxy. Never add a protected source or delete local data without showing the exact value-free plan and receiving explicit user approval.
 
+Before requesting permission to run any `run_cli.sh` or `run_cli.cmd` command,
+explain the operation in plain language. The explanation must let a person
+decide without parsing the installed Plugin path or the raw shell command.
+Use these five labels:
+
+- `目的`: what the operation accomplishes
+- `読むもの`: which local configuration or source scope it reads
+- `変更するもの`: which local files or database state it may write, or `なし`
+- `外部通信`: `なし` unless the operation truly requires it
+- `元に戻せるか`: how to reverse or review the change
+
+Do not use implementation terms such as revision, manifest hash, Hook data
+directory, or opaque token as the primary permission explanation. Those terms
+may follow as technical detail. If a command combines multiple read-only
+checks after one local initialization, say so explicitly.
+
 1. Confirm that the current directory is the intended workspace root.
 2. Confirm that the ToolUseProxy Plugin Hook definition has been reviewed and trusted in Codex. Do not bypass Hook trust.
-3. Resolve the absolute Plugin root from this skill's location; it is two directories above `skills/tooluseproxy-setup`. On macOS/Linux, run every command through `sh "<PLUGIN_ROOT>/hooks/run_cli.sh"`. The general Windows launcher is `<PLUGIN_ROOT>\hooks\run_cli.cmd`, but the entire protected-source registration workflow is not supported on Windows yet.
+3. If the workspace belongs to a manual Phase B harness and the prompt names a
+   mode `0600` `phase-b-context.json`, read that exact file first. Use only its
+   `workspace`, `plugin_root`, `plugin_data`, and `test_sink` paths. Do not use
+   `ps`, inspect parent-process environments, or broadly search outside the
+   workspace to rediscover those paths. If the context conflicts with the
+   current workspace or a Hook diagnostic, stop and explain the mismatch.
+   Otherwise, resolve the absolute Plugin root from this skill's location; it
+   is two directories above `skills/tooluseproxy-setup`. On macOS/Linux, run
+   every command through `sh "<PLUGIN_ROOT>/hooks/run_cli.sh"`. The general
+   Windows launcher is `<PLUGIN_ROOT>\hooks\run_cli.cmd`, but the entire
+   protected-source registration workflow is not supported on Windows yet.
 4. Initialize the same writable directory used by the Hook:
 
    ```text
