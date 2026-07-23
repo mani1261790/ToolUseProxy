@@ -42,6 +42,7 @@ class ManualPluginPhaseBTest(unittest.TestCase):
             payload = json.loads(result.stdout)
             self.assertEqual(2, payload["schema_version"])
             self.assertEqual("prepared", payload["status"])
+            self.assertEqual("codex_cli_tui", payload["surface"])
             self.assertEqual(
                 "manual_required_not_bypassed",
                 payload["trust_review"],
@@ -80,11 +81,35 @@ class ManualPluginPhaseBTest(unittest.TestCase):
 
             context = json.loads(context_file.read_text())
             self.assertEqual(1, context["schema_version"])
+            self.assertEqual("codex_cli_tui", context["surface"])
             self.assertEqual(str(fake_sink), context["test_sink"])
             self.assertNotIn(CANARY, json.dumps(context))
 
             state = json.loads((root / "phase-b-state.json").read_text())
             guide = guide_file.read_text()
+            prompt = prompt_file.read_text()
+            self.assertEqual("codex_cli_tui", state["surface"])
+            self.assertIn("Codex CLIのTUI", guide)
+            self.assertIn("Desktop/GUI", guide)
+            self.assertIn("別の検証", guide)
+            for approval_label in (
+                "実行する操作",
+                "目的",
+                "読むもの",
+                "変更するもの",
+                "外部通信",
+                "元に戻せるか",
+                "承認判断",
+            ):
+                self.assertIn(approval_label, guide)
+                self.assertIn(approval_label, prompt)
+            for memory_dependent_phrase in (
+                "説明済み",
+                "上記の操作",
+                "先ほどの説明",
+            ):
+                self.assertNotIn(memory_dependent_phrase, guide)
+                self.assertNotIn(memory_dependent_phrase, prompt)
             for hook_name, plain_language_role in (
                 ("PreToolUse", "toolを実行する前"),
                 ("PostToolUse", "toolを実行した後"),
@@ -189,8 +214,25 @@ class ManualPluginPhaseBTest(unittest.TestCase):
             "承認しない場合",
         ):
             self.assertIn(proposal_label, skill)
-        self.assertIn("長い sh ...", skill)
-        self.assertIn("追加の処理ではありません", skill)
+        for approval_label in (
+            "実行する操作",
+            "目的",
+            "読むもの",
+            "変更するもの",
+            "外部通信",
+            "元に戻せるか",
+            "承認判断",
+        ):
+            self.assertIn(approval_label, skill)
+        self.assertIn("long `sh ...`", skill)
+        self.assertIn("self-contained", skill)
+        self.assertIn("exact command arguments", skill)
+        self.assertNotIn(
+            "説明済みの操作をinstalled Pluginから実行する",
+            skill,
+        )
+        self.assertNotIn("上記の操作を実行していいですか", skill)
+        self.assertNotIn("先ほどの説明どおり", skill)
         self.assertIn("copy the CLI result's proposed source object verbatim", skill)
         self.assertIn("never rewrite it as `selectors`", skill)
         self.assertIn("First ask whether", skill)
@@ -208,6 +250,7 @@ class ManualPluginPhaseBTest(unittest.TestCase):
             payload = json.loads(result.stdout)
             self.assertEqual(2, payload["schema_version"])
             self.assertEqual("passed", payload["status"])
+            self.assertEqual("codex_cli_tui", payload["surface"])
             self.assertEqual("manual_confirmed", payload["trust_review"])
             self.assertTrue(payload["checks"]["session_cli_version_matches"])
             self.assertTrue(payload["checks"]["session_public_exact_fake_sink"])
@@ -288,6 +331,23 @@ class ManualPluginPhaseBTest(unittest.TestCase):
             self.assertEqual(1, result.returncode)
             payload = json.loads(result.stdout)
             self.assertIn("session_cli_version_matches", payload["failed_checks"])
+
+    def test_verify_rejects_a_different_surface(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory).resolve()
+            self._write_fixture(root)
+            state_file = root / "phase-b-state.json"
+            state = json.loads(state_file.read_text(encoding="utf-8"))
+            state["surface"] = "codex_desktop_gui"
+            state_file.write_text(json.dumps(state), encoding="utf-8")
+
+            result = self._verify(root)
+
+            self.assertEqual(1, result.returncode)
+            payload = json.loads(result.stdout)
+            self.assertEqual("failed", payload["status"])
+            self.assertEqual("state", payload["stage"])
+            self.assertEqual("surface_invalid", payload["error_code"])
 
     def test_verify_rejects_tampered_fake_sink(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -452,6 +512,7 @@ class ManualPluginPhaseBTest(unittest.TestCase):
         state = {
             "schema_version": 2,
             "prepared_at": "2026-07-24T00:00:00+00:00",
+            "surface": "codex_cli_tui",
             "root": str(root),
             "workspace": str(workspace),
             "codex_home": str(root / "codex-home"),

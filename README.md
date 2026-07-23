@@ -37,7 +37,7 @@ Hook内のnetwork access、remote embedding、telemetryは使いません。runt
 | 3. Stop | alpha実装済み | Stopの`continue_review`と、opt-inのBash / MCP PreToolUse denyを提供。runtime redactは無効 |
 | Plugin化 | alpha.3 | installable package、relocatable Plugin、`PLUGIN_ROOT` / `PLUGIN_DATA`、初期化・診断・traceを実装 |
 | protected source登録 | 明示承認型を実装済み | `scan` / `suggest` → exact proposal → `approve` / `reject` / `ignore`。無承認登録はしない |
-| Public alpha | 準備中 | checksum / SBOM、archive内部、CI Action、hash-locked build、Git履歴監査のsupply-chain gate、upgrade / rollback、自動dogfoodは完了。LICENSE、manual Phase B、人手security review、immutable releaseが未完了 |
+| Public alpha | 準備中 | checksum / SBOM、archive内部、CI Action、hash-locked build、Git履歴監査のsupply-chain gate、upgrade / rollback、自動dogfoodは完了。CLI TUIのmanual Phase B説明UX、Desktop / GUI検証、LICENSE、人手security review、immutable releaseが未完了 |
 
 設計全体は[アーキテクチャ概要](docs/設計/アーキテクチャ.md)、詳細な完了範囲と残作業は[実装タスク計画](docs/運用/実装タスク.md)を参照してください。
 
@@ -87,11 +87,12 @@ dataset digestは`0e7045219148a9e1ba45073e390802ca21ddb60b6c119afd532c66d76b3998
 
 優先順位の正本は[実装タスク計画](docs/運用/実装タスク.md)とGitHub Issues / Projectです。
 
-1. [#18](https://github.com/mani1261790/ToolUseProxy/issues/18): manual Phase BでHook trust、agent説明、明示判断、実tool side effect 0を測る
-2. [#19](https://github.com/mani1261790/ToolUseProxy/issues/19): public alphaのLICENSEを決定する
-3. [#19](https://github.com/mani1261790/ToolUseProxy/issues/19): final answer / MCP、update / rollback、remove / uninstallを含むmanual Phase Bを閉じる
-4. [#19](https://github.com/mani1261790/ToolUseProxy/issues/19): 公開前security reviewと少人数pilotを行う
-5. [#19](https://github.com/mani1261790/ToolUseProxy/issues/19): immutable tag / GitHub pre-releaseを明示承認後に作成する
+1. [#18](https://github.com/mani1261790/ToolUseProxy/issues/18): CLI TUIで自己完結型command承認説明を再検証する
+2. [#18](https://github.com/mani1261790/ToolUseProxy/issues/18): Desktop / GUIでHook review、command承認、実tool blockを別に検証する
+3. [#19](https://github.com/mani1261790/ToolUseProxy/issues/19): public alphaのLICENSEを決定する
+4. [#19](https://github.com/mani1261790/ToolUseProxy/issues/19): final answer / MCP、update / rollback、remove / uninstallを含むmanual Phase Bを閉じる
+5. [#19](https://github.com/mani1261790/ToolUseProxy/issues/19): 公開前security reviewと少人数pilotを行う
+6. [#19](https://github.com/mani1261790/ToolUseProxy/issues/19): immutable tag / GitHub pre-releaseを明示承認後に作成する
 
 ## 研究の考え方
 

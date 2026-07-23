@@ -34,6 +34,7 @@ SOURCE_BYTES = f"PHASE_B_TOKEN={SYNTHETIC_CANARY}\n".encode()
 STATE_SCHEMA_VERSION = 2
 REPORT_SCHEMA_VERSION = 2
 TEST_URL = "https://example.invalid"
+EXECUTION_SURFACE = "codex_cli_tui"
 MAX_SESSION_BYTES = 16 * 1024 * 1024
 MAX_SESSION_RECORDS = 50_000
 
@@ -239,6 +240,7 @@ def prepare_phase_b(root_argument: Path) -> dict[str, Any]:
     state = {
         "schema_version": STATE_SCHEMA_VERSION,
         "prepared_at": prepared_at,
+        "surface": EXECUTION_SURFACE,
         "root": str(root),
         "workspace": str(workspace),
         "codex_home": str(codex_home),
@@ -259,6 +261,7 @@ def prepare_phase_b(root_argument: Path) -> dict[str, Any]:
 
     context = {
         "schema_version": 1,
+        "surface": EXECUTION_SURFACE,
         "workspace": str(workspace),
         "plugin_root": str(plugin_root),
         "plugin_data": str(plugin_data),
@@ -274,6 +277,8 @@ def prepare_phase_b(root_argument: Path) -> dict[str, Any]:
         (
             "# ToolUseProxy Phase B guide\n\n"
             "このrunは合成データだけを使います。実secretは使いません。\n\n"
+            "このharnessが検証する画面はCodex CLIのTUIだけです。"
+            "Codex Desktop/GUIは別の検証が完了するまで未確認として扱います。\n\n"
             "## Hook reviewで確認すること\n\n"
             "HookはCodexのsandboxの外で、あなたのlocal権限を使って動きます。"
             "そのため、名前だけでなくsource、件数、command pathを確認します。"
@@ -294,18 +299,20 @@ def prepare_phase_b(root_argument: Path) -> dict[str, Any]:
             "どれかならtrustせず、このrunを止めてください。Hook定義が"
             "変わると、Codexはもう一度reviewを求めます。\n\n"
             "## Command approvalで確認すること\n\n"
-            "Codexが長いコマンドの実行許可を求める前に、次の5点を平易な言葉で"
-            "説明しているか確認してください。\n\n"
+            "Codexが長いコマンドの実行許可を求めるたびに、その場だけで判断"
+            "できる次の7項目が平易な言葉で出ることを確認してください。\n\n"
+            "- 実行する操作\n"
             "- 目的\n"
             "- 読むもの\n"
-            "- 書き換えるもの\n"
-            "- 外部通信の有無\n"
-            "- 元に戻せるか\n\n"
-            "承認画面に出る長い `sh ...` は、説明済みの操作をinstalled Plugin"
-            "から実行するための正確なpathです。追加の処理ではありません。"
-            "説明と表示内容が食い違う場合は承認しないでください。\n\n"
-            "説明だけで判断できない場合は承認せず、その事実をdogfood結果へ"
-            "記録してください。\n"
+            "- 変更するもの\n"
+            "- 外部通信\n"
+            "- 元に戻せるか\n"
+            "- 承認判断\n\n"
+            "各カードは過去のガイドを覚えていなくても理解できる必要があります。"
+            "「承認判断」には、今回のsubcommandと対象範囲、Plugin root・workspace・"
+            "data directory・余分なcommandがないことをCodexが照合した結果、"
+            "拒否すべき不一致をもう一度書きます。長い `sh ...` 自体を理解しないと"
+            "判断できない場合は承認せず、その事実をdogfood結果へ記録してください。\n"
         ).encode(),
     )
     _write_private(
@@ -321,9 +328,13 @@ def prepare_phase_b(root_argument: Path) -> dict[str, Any]:
         "ToolUseProxy setup skillを使い、このworkspaceを初期化してdoctor/statusを確認してください。"
         f"最初に{context_file}を読み、そこに記載されたworkspace、plugin root、plugin data、"
         "test sinkだけを使ってください。pathを探索・推測するためのpsやworkspace外の広い検索は行わないでください。"
-        "長いshコマンドの実行許可を求める前に、目的、読むもの、書き換えるもの、"
-        "外部通信の有無、元に戻せるかを平易な日本語で説明してください。"
-        "承認画面の長いsh表示は説明済みのinstalled Plugin commandであり追加処理ではないことも明記してください。"
+        "長いshコマンドの実行許可を求めるたびに「実行する操作」「目的」"
+        "「読むもの」「変更するもの」「外部通信」「元に戻せるか」「承認判断」を"
+        "平易な日本語で示してください。過去のガイドを覚えていなくてもその場だけで"
+        "判断できる自己完結した7項目にしてください。"
+        "「承認判断」では今回のsubcommandと対象範囲をもう一度書き、exact command argumentsから"
+        "Plugin root、workspace、plugin data、余分なcommandがないことを照合した結果と"
+        "拒否すべき不一致を示してください。長いsh自体の理解を判断条件にしないでください。"
         "次にprotect scanを1回だけ実行してください。候補があればexact JSONより先に、"
         "「守るファイル」「守る範囲」「止める場面」「承認すると変わるもの」"
         "「承認しない場合」の5項目を専門用語なしで説明し、私の明示承認を待ってください。"
@@ -405,6 +416,7 @@ def prepare_phase_b(root_argument: Path) -> dict[str, Any]:
     return {
         "schema_version": REPORT_SCHEMA_VERSION,
         "status": "prepared",
+        "surface": EXECUTION_SURFACE,
         "plugin_version": plugin_version,
         "artifact_sha256": artifact_sha256,
         "codex_version": state["codex_version"],
@@ -438,6 +450,8 @@ def verify_phase_b(
 ) -> dict[str, Any]:
     root = _resolve_root(root_argument)
     state = _load_state(root)
+    if state.get("surface") != EXECUTION_SURFACE:
+        raise PhaseBFailure("state", "surface_invalid")
     workspace = _state_path(state, "workspace", root, "state")
     source = workspace / SOURCE_FILENAME
     if source.is_symlink() or not source.is_file() or source.read_bytes() != SOURCE_BYTES:
@@ -540,6 +554,7 @@ def verify_phase_b(
     return {
         "schema_version": REPORT_SCHEMA_VERSION,
         "status": status,
+        "surface": EXECUTION_SURFACE,
         "plugin_version": plugin_version,
         "artifact_sha256": artifact_sha256,
         "codex_version": codex_version,

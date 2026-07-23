@@ -30,7 +30,9 @@ POSIX launcherもpackage metadataと同じPython 3.11 / 3.12だけを選びま�
 - GitHub Actionsはreview済みactionだけをfull commit SHAで固定し、checkout credentialを残さず、`contents: read`だけで実行する。DependabotがSHA更新候補をPRとして提示する
 - release build toolchainは5つのpure Python wheelをexact versionとSHA-256で固定し、lockと異なる環境からのcandidate buildを拒否する
 - public化前にreachable Git blob、commit / tag message、worktreeをaggregate-onlyで監査し、危険file、provider形式credential、未知binary、oversizeを拒否する。形式を持たないsecretや画像内文字の完全検出は保証しない
-- manual trust、実tool invocation、Linux上の実Codex task、Windows、upgrade / rollback反復E2Eは未完了
+- Codex CLI TUI `0.145.0`ではmanual Hook trust、public call、protected PreToolUse block、side effect 0を確認済み。ただし自己完結型command承認説明のhuman再検証は未完了
+- Codex Desktop / GUIはlocal Pluginを利用できる公式surfaceですが、ToolUseProxyのHook review・command承認・PreToolUse blockは未検証。CLI TUIの結果をGUI対応の根拠にしません
+- Linux上の実Codex task、Windows、upgrade / rollback反復E2Eは未完了
 
 Codex Plugin APIやHook payloadはToolUseProxyとは別に変更され得ます。未検証のCodex CLI versionで異常が出た場合は、`doctor --json`、Codex version、synthetic payloadで再現し、protected dataを報告へ含めないでください。
 

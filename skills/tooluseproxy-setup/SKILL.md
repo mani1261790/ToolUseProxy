@@ -31,27 +31,34 @@ count, or path differs, tell the user not to trust and stop setup.
 
 Before requesting permission to run any `run_cli.sh` or `run_cli.cmd` command,
 explain the operation in plain language. The explanation must let a person
-decide without parsing the installed Plugin path or the raw shell command.
-Use these five labels:
+decide without parsing the installed Plugin path or the raw shell command, and
+without remembering an earlier guide or explanation. Repeat a self-contained
+permission card immediately before every permission request. Build the card
+from the exact command arguments that will be submitted, and use these labels:
 
+- `実行する操作`: name the exact subcommand, count, and target workspace in
+  ordinary language
 - `目的`: what the operation accomplishes
 - `読むもの`: which local configuration or source scope it reads
 - `変更するもの`: which local files or database state it may write, or `なし`
 - `外部通信`: `なし` unless the operation truly requires it
 - `元に戻せるか`: how to reverse or review the change
+- `承認判断`: repeat the exact operation and scope that this one approval will
+  allow, plus the concrete conditions that require rejection
 
 Do not use implementation terms such as revision, manifest hash, Hook data
 directory, or opaque token as the primary permission explanation. Those terms
 may follow as technical detail. If a command combines multiple read-only
 checks after one local initialization, say so explicitly.
 
-Immediately before the permission prompt, add one final sentence explaining
-that the long `sh ...` text Codex shows is the exact installed Plugin command,
-not an additional operation. State whether the described action is safe to
-approve, or what mismatch would make the user reject it. Do not ask the user
-to infer the purpose from the command text. In Japanese, say:
-`承認画面に出る長い sh ... は、説明済みの操作をinstalled Pluginから実行する
-ための正確なpathです。追加の処理ではありません。`
+Never use memory-dependent references such as `説明済み`, `上記の操作`, or
+`先ほどの説明` in the permission card. The final `承認判断` line must stand
+on its own. Before submitting the tool call, verify that the long `sh ...`
+display uses the expected installed Plugin launcher, exact subcommand,
+workspace, and data directory, and contains no unmentioned command. State that
+verification in the card. Tell the user to reject if the command differs from
+the named operation or scope. The user must not need to understand the long
+shell command to decide.
 
 1. Confirm that the current directory is the intended workspace root.
 2. Confirm that the ToolUseProxy Plugin Hook definition has been reviewed and trusted in Codex. Do not bypass Hook trust.
@@ -66,6 +73,8 @@ to infer the purpose from the command text. In Japanese, say:
    every command through `sh "<PLUGIN_ROOT>/hooks/run_cli.sh"`. The general
    Windows launcher is `<PLUGIN_ROOT>\hooks\run_cli.cmd`, but the entire
    protected-source registration workflow is not supported on Windows yet.
+   If the context declares `surface: codex_cli_tui`, report the result only for
+   the Codex CLI TUI. Do not infer Codex Desktop/GUI support from that run.
 4. Initialize the same writable directory used by the Hook:
 
    ```text

@@ -39,6 +39,13 @@ python3.11 scripts/dogfood_plugin.py --installation-mode extracted
 
 自動runnerはHook definitionのtrustや、Codexがdenyを受けて実tool invocationを0件にしたことを代行しません。manual Phase Bはrepository外の専用directoryへisolated `CODEX_HOME`、synthetic workspace、絶対pathでだけ呼ぶlocal fake `curl`を準備します。一時directoryはOSに削除される場合があるため、人が数日に分けて実行するときは本人だけが読める永続directoryを使います。
 
+現在のharnessが起動・検証するsurfaceは`codex_cli_tui`です。公式Codex資料ではDesktopとCLIが同じconfig layerを使い、local Plugin workflowを両方で利用できることまでは確認できますが、ToolUseProxyのHook review表示、command承認表示、PreToolUse blockのDesktop上の同等性はこのharnessでは証明していません。verify出力にもsurfaceを含め、TUIの合格をDesktop / GUIの合格へ読み替えません。
+
+| surface | Plugin利用の公式案内 | ToolUseProxy Phase B |
+| --- | --- | --- |
+| Codex CLI TUI | あり | 機能動作を確認済み。説明UXは再検証待ち |
+| Codex Desktop / GUI | あり | Hook review・command承認・blockを未検証 |
+
 ```bash
 python3.11 scripts/manual_plugin_phase_b.py prepare \
   --root /absolute/path/outside/repository/tooluseproxy-phase-b
@@ -54,7 +61,7 @@ prepareは同じrootへmode `0600`の`phase-b-prompt.txt`、`phase-b-guide.md`�
 
 1. guideでPreToolUse / PostToolUse / Stopの役割、sandbox外実行、local data、networkなし、想定source / 件数 / command rootを理解する
 2. Codexが表示する3件のHook definitionをreviewし、guideと一致する場合だけtrustする
-3. 長いPlugin commandの前に、目的、読むもの、変更するもの、外部通信、取消方法が平易に説明される
+3. 長いPlugin commandの承認ごとに、「実行する操作」「目的」「読むもの」「変更するもの」「外部通信」「元に戻せるか」「承認判断」がその場だけで分かる形で繰り返される
 4. synthetic workspaceで`init`、`doctor`、`status`を実行する
 5. `protect scan`候補について、exact JSONより先に「守るファイル」「守る範囲」「止める場面」「承認すると変わるもの」「承認しない場合」の説明を読む
 6. その説明を理解した場合だけexact proposalを明示approveする
@@ -106,7 +113,9 @@ verify出力はroot path、source hash、candidate ID、tool input、raw canary�
 
 このharnessが対象にするのは#18の初回onboardingと実Bash遮断です。final answer / MCP、update後のapproved source保持とstale proposal、remove / data保持 / uninstallは自動Phase Aと[Pluginライフサイクル](Pluginライフサイクル.md)で機械検証済みですが、人が参加するpre-release全体のPhase B evidenceとしては別途反復します。初回onboardingの合格だけでそれらもmanual確認済みとは扱いません。
 
-2026-07-24のPhase B v2 human runでは、candidate approve、public allow、protected PreToolUse block、protected side effect 0、session / Hook DB / markerの相互照合はすべて成功しました。一方、人間評価はHook review理解`no`、proposal説明理解`no`、command説明`yes`だが長い`sh ...`表示は人によって分かりにくい可能性あり、追加質問0回でした。したがってrun全体は`needs_followup`です。機能成功を説明UX成功へ読み替えません。
+2026-07-24のPhase B v2 human runでは、candidate approve、public allow、protected PreToolUse block、protected side effect 0、session / Hook DB / markerの相互照合はすべて成功しました。一方、最初のUX評価はHook review理解`no`、proposal説明理解`no`でした。起動前guideとcandidate review cardを追加した次のrunではcandidate説明は理解でき、同じ機能動作も成功しましたが、command承認は「起動前guideを覚えている」前提が残っていました。長い`sh ...`を理解せず、その承認直前の説明だけで判断することはできなかったため、command説明は`no`です。どちらのrunも`needs_followup`であり、機能成功を説明UX成功へ読み替えません。
+
+次のrunでは、各command承認の直前にexact command argumentsから作った自己完結型の7項目を表示します。「説明済み」「上記の操作」「先ほどの説明」のような過去参照は禁止し、「承認判断」で今回のsubcommand・scope・照合結果・拒否条件を繰り返します。このTUI再検証とは別に、Desktop / GUI専用のPhase B caseを用意します。
 
 verify結果を保存した後は、prepare出力の`logout_command`でisolated `CODEX_HOME`からlogoutします。失敗調査中はrootを保持できますが、調査完了後は認証cacheとraw local sessionを含むため、必要なaggregate evidenceを残してrootを明示的に削除します。削除はverifierが自動で行いません。
 
