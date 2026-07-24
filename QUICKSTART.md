@@ -1,16 +1,7 @@
 # ToolUseProxy five-minute quickstart
 
-This quickstart uses a local development checkout. Public releases will use an immutable tag or artifact; do not treat a mutable remote branch as a trusted distribution source.
-
-After a public pre-release exists, add the repository marketplace with an immutable
-release ref:
-
-```bash
-codex plugin marketplace add mani1261790/ToolUseProxy --ref v0.1.0-alpha.3
-codex plugin add tooluseproxy@tooluseproxy
-```
-
-Do not use this remote command until the repository is public and the named tag exists.
+This quickstart installs the public alpha from the immutable
+`v0.1.0-alpha.3` tag. Do not substitute the mutable `main` branch.
 
 ## 1. Prerequisites
 
@@ -31,16 +22,20 @@ python3.11 scripts/demo_plugin.py
 
 It does not replace manual Hook trust or actual-tool Phase B testing.
 
-## 3. Install the local Plugin
+## 3. Install the public Plugin
 
-From the checkout root:
+Add the tagged repository marketplace and install ToolUseProxy:
 
 ```bash
-codex plugin marketplace add "$PWD"
+codex plugin marketplace add mani1261790/ToolUseProxy --ref v0.1.0-alpha.3
 codex plugin add tooluseproxy@tooluseproxy
 ```
 
 Start a new Codex task in the workspace you want to monitor. Review the exact Hook definition shown by Codex and trust it only if the Plugin source and version are the ones you intended to install. ToolUseProxy does not bypass this review.
+
+For development from a checkout, replace the first command with
+`codex plugin marketplace add "$PWD"`. Do not use a mutable remote branch as a
+trusted distribution source.
 
 ## 4. Initialize and diagnose
 

@@ -10,7 +10,7 @@ ToolUseProxyのCodex Pluginは、repository全体ではなく、生成時にallo
 - Windows: `py -3.11`を使うlauncherを同梱するexperimental範囲。実機検証は未完了で、protected-source登録workflow全体は現在未対応
 - Hook内network access、remote embedding、telemetry: なし
 
-詳細は[サポート範囲と既知の制限](../../SUPPORT.md)と[プライバシーとデータ保持](../../PRIVACY.md)を参照してください。Windows実機とLinux実Codex CLIのcross-platform E2Eはpublic alphaまでの残作業です。最新の優先順位は[実装タスク計画](../運用/実装タスク.md)を参照してください。
+詳細は[サポート範囲と既知の制限](../../SUPPORT.md)と[プライバシーとデータ保持](../../PRIVACY.md)を参照してください。Windows実機とLinux実Codex CLIのcross-platform E2Eはpublic alphaの既知の未検証範囲です。最新の優先順位は[実装タスク計画](../運用/実装タスク.md)を参照してください。
 
 ## 導入前の安全境界
 
@@ -31,14 +31,23 @@ SQLite schemaはv4のままなので、alpha.3への更新だけを理由にDB m
 
 ## install
 
-現在のalpha開発版は、可変なremote `main`を実行元にしないため、checkoutをrepository-local marketplaceとして追加できます。
+公開alphaは、可変なremote `main`ではなく、immutableなrelease tagを指定してinstallします。
+
+```bash
+codex plugin marketplace add mani1261790/ToolUseProxy --ref v0.1.0-alpha.3
+codex plugin add tooluseproxy@tooluseproxy
+```
+
+install後はCodexが表示するPlugin source、version、3つのHook definitionを確認してtrustします。ToolUseProxyはこのreviewを迂回しません。release artifact、checksum、SBOM、release notesは[`v0.1.0-alpha.3`](https://github.com/mani1261790/ToolUseProxy/releases/tag/v0.1.0-alpha.3)で確認できます。
+
+checkoutから開発版を試す場合だけ、repository rootをlocal marketplaceとして追加します。
 
 ```bash
 codex plugin marketplace add /absolute/path/to/ToolUseProxy
 codex plugin add tooluseproxy@tooluseproxy
 ```
 
-この絶対pathはmarketplaceを登録する開発時の1回だけに使い、Hook definitionには保存されません。公開配布はimmutableなrelease tagまたはcommitへpinし、Plugin version、checksum、release notes、変更後のHook再review方針を揃えてから有効にします。remote `main`を直接実行元にはしません。
+この絶対pathはmarketplaceを登録する開発時の1回だけに使い、Hook definitionには保存されません。remote `main`を直接実行元にはしません。
 
 ### clean marketplace bundleの作成
 
@@ -67,7 +76,7 @@ codex plugin marketplace add /absolute/path/to/extracted
 codex plugin add tooluseproxy@tooluseproxy
 ```
 
-builderはruntime fileを明示的に選び、`.git`、`.github`、tests、内部設計docs、scripts、cache、virtual environment、local DB、legacy Hook entrypointをZIPへ含めません。展開したmarketplace rootにはREADME、support、privacy契約、Apache-2.0 LICENSEを含め、install済みPluginにもLICENSEを残します。ZIPはまだ署名済みpublic releaseではないため、immutable tag、green CI、manual Phase B、公開承認を満たすまでは開発・dogfood用途として扱います。
+builderはruntime fileを明示的に選び、`.git`、`.github`、tests、内部設計docs、scripts、cache、virtual environment、local DB、legacy Hook entrypointをZIPへ含めません。展開したmarketplace rootにはREADME、support、privacy / security契約、Apache-2.0 LICENSEを含め、install済みPluginにもLICENSEを残します。公開済みZIPを利用する場合はReleaseのSHA256SUMSと照合してください。
 
 installまたはHook定義の更新後は、Codexが示すHook definitionを確認してtrustします。ToolUseProxyはこのreviewを迂回しません。新しいPlugin componentとskillを確実に読み込むため、trust後は新しいtaskを開始します。
 
@@ -210,7 +219,7 @@ release artifactは、古い`build/`や`.DS_Store`を混入させないclean sta
 python3.11 scripts/build_package.py --outdir dist --sdist
 ```
 
-wheel / sdist / Plugin ZIPはruntime allowlistへ固定し、Python 3.11 / 3.12でcheckout外installをCI検証します。release candidate builderはApache-2.0 metadata、manifest、SHA256SUMS、CycloneDX 1.7 SBOM、release notes候補を一括生成します。immutable tagとGitHub pre-releaseは[実装タスク計画](../運用/実装タスク.md)と[#19](https://github.com/mani1261790/ToolUseProxy/issues/19)で管理します。
+wheel / sdist / Plugin ZIPはruntime allowlistへ固定し、Python 3.11 / 3.12でcheckout外installをCI検証します。release candidate builderはApache-2.0 metadata、manifest、SHA256SUMS、CycloneDX 1.7 SBOM、release notes候補を一括生成します。公開済みのimmutable tagとGitHub pre-releaseは[Releases](https://github.com/mani1261790/ToolUseProxy/releases)で確認できます。
 
 ## disable / uninstall
 
@@ -240,7 +249,7 @@ sh "<PLUGIN_ROOT>/hooks/run_cli.sh" uninstall apply \
 
 削除対象はSQLite database / sidecar、migration backup、manifest backupだけです。管理外fileは残し、plan後に内容が変わった場合はstale tokenを拒否します。workspace manifestやprotected source本体、symlink先、package codeは削除しません。secure eraseやfilesystem snapshotの削除は保証しません。
 
-alpha.1からalpha.3候補へのupgrade / safe rollback手順と検証結果は[Pluginライフサイクル](../運用/Pluginライフサイクル.md)を参照してください。将来versionとcross-platformでの反復は引き続きpublic alphaのrelease gateです。
+alpha.1からalpha.3へのupgrade / safe rollback手順と検証結果は[Pluginライフサイクル](../運用/Pluginライフサイクル.md)を参照してください。将来versionとcross-platformでの反復は引き続きpublic alphaの検証課題です。
 
 pre-release候補で実際のHook trust、agent説明、実tool invocationを検証するときは、通常workspaceや実secretを使わず、[Pluginドッグフードのmanual Phase B](../運用/Pluginドッグフード.md#manual-phase-b)を実行します。prepare出力はlocal pathを含むため公開せず、raw値とpathを除外したverify結果だけをrelease evidenceとして扱います。
 

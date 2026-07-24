@@ -2,7 +2,9 @@
 
 ToolUseProxy is a local-first research implementation for tracing information flow through Codex tool calls and reviewing high-confidence leaks before they leave the workspace.
 
-The current version is `0.1.0-alpha.3`. It is not a complete DLP system and is not yet a published release.
+This project is a research and development outcome of [SecHack365](https://sechack365.nict.go.jp/).
+
+The current version is the `0.1.0-alpha.3` public alpha. It is not a complete DLP system.
 
 ToolUseProxy is licensed under the [Apache License 2.0](LICENSE).
 
@@ -15,7 +17,18 @@ ToolUseProxy is licensed under the [Apache License 2.0](LICENSE).
 - Can deny high-confidence Bash or MCP disclosures when opt-in enforcement is enabled.
 - Uses no Hook-time network service, remote embedding, or ToolUseProxy telemetry.
 
-## Try it
+## Install the Plugin
+
+Install the immutable public-alpha marketplace snapshot:
+
+```bash
+codex plugin marketplace add mani1261790/ToolUseProxy --ref v0.1.0-alpha.3
+codex plugin add tooluseproxy@tooluseproxy
+```
+
+Review the exact Hook definitions before trusting them. Then follow the [five-minute quickstart](QUICKSTART.md) to initialize ToolUseProxy and review the first protected-source proposal.
+
+## Try the synthetic preview
 
 Run the automated, synthetic preview from a checkout:
 
@@ -23,7 +36,7 @@ Run the automated, synthetic preview from a checkout:
 python3.11 scripts/demo_plugin.py
 ```
 
-For local Plugin installation and first protected-source registration, follow the [five-minute quickstart](QUICKSTART.md).
+The preview does not replace manual Hook review or an actual Codex task.
 
 ## Important boundaries
 

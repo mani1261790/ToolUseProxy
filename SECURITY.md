@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-ToolUseProxy is currently a public-alpha candidate. Security fixes are applied
+ToolUseProxy is currently a public alpha. Security fixes are applied
 only to the latest `0.1.0-alpha.x` release. Older alpha builds are unsupported.
 
 ## Reporting a vulnerability
