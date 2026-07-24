@@ -10,6 +10,7 @@ Codexのtool useをローカルで観測し、protected sourceから外部tool�
 - [English introduction](README.en.md)
 - [対応環境と既知の制限](SUPPORT.md)
 - [プライバシーとデータ保持](PRIVACY.md)
+- [脆弱性の非公開報告](SECURITY.md)
 - [Pluginドッグフード](docs/運用/Pluginドッグフード.md)
 - [Plugin upgrade / rollback rehearsal](docs/運用/Pluginライフサイクル.md)
 - [Release候補の作成と検証](docs/運用/Release候補.md)
@@ -118,6 +119,8 @@ API keyのように文字列patternで判別しやすい秘密だけでなく、
 ## ライセンス
 
 ToolUseProxyは[Apache License 2.0](LICENSE)で提供します。
+
+脆弱性の報告にsecret、protected source、local pathなどが含まれる可能性がある場合は、public Issueではなく[非公開の報告手順](SECURITY.md)を使用してください。
 
 ## 進捗管理
 

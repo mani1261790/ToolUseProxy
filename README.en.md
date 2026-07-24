@@ -33,4 +33,4 @@ For local Plugin installation and first protected-source registration, follow th
 - Removing the Plugin does not delete local audit data.
 - Protected-source onboarding and manifest migration are supported on macOS and Linux for this alpha, not Windows.
 
-Read [support and known limitations](SUPPORT.md), [privacy and retention](PRIVACY.md), and the [Japanese project documentation](README.md) before using the alpha.
+Read [support and known limitations](SUPPORT.md), [privacy and retention](PRIVACY.md), [private vulnerability reporting](SECURITY.md), and the [Japanese project documentation](README.md) before using the alpha.
