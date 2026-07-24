@@ -111,6 +111,7 @@ class ReleaseCandidateTest(unittest.TestCase):
             manifest = json.loads(first_files["release-manifest.json"])
             self.assertEqual(1, manifest["schema_version"])
             self.assertEqual("candidate", manifest["status"])
+            self.assertEqual({"id": "Apache-2.0"}, manifest["license"])
             self.assertEqual(3, len(manifest["artifacts"]))
             license_present = (REPO_ROOT / "LICENSE").is_file()
             self.assertEqual(license_present, manifest["gates"]["license_present"])
@@ -130,6 +131,10 @@ class ReleaseCandidateTest(unittest.TestCase):
             sbom = json.loads(first_files[sbom_name])
             self.assertEqual("CycloneDX", sbom["bomFormat"])
             self.assertEqual("1.7", sbom["specVersion"])
+            self.assertEqual(
+                [{"license": {"id": "Apache-2.0"}}],
+                sbom["metadata"]["component"]["licenses"],
+            )
             self.assertEqual(3, len(sbom["components"]))
 
             verified = _run("--verify", str(first))

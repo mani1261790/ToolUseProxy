@@ -60,11 +60,13 @@ class PluginArtifactTest(unittest.TestCase):
                 marketplace["plugins"][0]["source"],
             )
             self.assertIn("PRIVACY.md", names)
+            self.assertIn("LICENSE", names)
             self.assertIn("QUICKSTART.md", names)
             self.assertIn("README.en.md", names)
             self.assertIn("README.md", names)
             self.assertIn("SUPPORT.md", names)
             self.assertIn("tooluseproxy/.codex-plugin/plugin.json", names)
+            self.assertIn("tooluseproxy/LICENSE", names)
             self.assertIn("tooluseproxy/hooks/hooks.json", names)
             self.assertIn("tooluseproxy/hooks/run_cli.sh", names)
             self.assertIn("tooluseproxy/hooks/run_hook.sh", names)
@@ -105,6 +107,11 @@ class PluginArtifactTest(unittest.TestCase):
                 )
                 archive.extractall(extracted)
 
+            self.assertEqual("Apache-2.0", manifest["license"])
+            self.assertEqual(
+                "https://github.com/mani1261790/ToolUseProxy/blob/main/PRIVACY.md",
+                manifest["interface"]["privacyPolicyURL"],
+            )
             plugin_root = extracted / "tooluseproxy"
             workspace = root / "workspace"
             data_dir = root / "plugin data"
@@ -240,6 +247,7 @@ class PluginArtifactTest(unittest.TestCase):
                 self.assertFalse(set(relative.parts) & FORBIDDEN_PARTS, str(relative))
             self.assertFalse((installed_path / ".agents").exists())
             self.assertFalse((installed_path / "PRIVACY.md").exists())
+            self.assertTrue((installed_path / "LICENSE").is_file())
             self.assertFalse((installed_path / "QUICKSTART.md").exists())
             self.assertFalse((installed_path / "README.en.md").exists())
             self.assertFalse((installed_path / "README.md").exists())

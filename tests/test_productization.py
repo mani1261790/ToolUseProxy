@@ -805,6 +805,7 @@ class PluginBundleTest(unittest.TestCase):
 
         self.assertEqual("tooluseproxy", manifest["name"])
         self.assertEqual(__version__, manifest["version"].replace("-alpha.", "a"))
+        self.assertEqual("Apache-2.0", manifest["license"])
         self.assertNotIn("hooks", manifest)
         self.assertEqual(
             (

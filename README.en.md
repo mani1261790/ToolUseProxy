@@ -4,6 +4,8 @@ ToolUseProxy is a local-first research implementation for tracing information fl
 
 The current version is `0.1.0-alpha.3`. It is not a complete DLP system and is not yet a published release.
 
+ToolUseProxy is licensed under the [Apache License 2.0](LICENSE).
+
 ## What it does
 
 - Records Codex `PreToolUse`, `PostToolUse`, and `Stop` events in local SQLite storage.

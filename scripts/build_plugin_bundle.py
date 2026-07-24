@@ -16,6 +16,7 @@ PLUGIN_DIRECTORY = "tooluseproxy"
 FIXED_ZIP_TIMESTAMP = (1980, 1, 1, 0, 0, 0)
 FIXED_FILES = (
     ".codex-plugin/plugin.json",
+    "LICENSE",
     "hooks/hooks.json",
     "hooks/run_cli.cmd",
     "hooks/run_cli.sh",
@@ -25,6 +26,7 @@ FIXED_FILES = (
     "tooluseproxy_plugin.py",
 )
 MARKETPLACE_DOCUMENTATION_FILES = (
+    "LICENSE",
     "PRIVACY.md",
     "QUICKSTART.md",
     "README.en.md",

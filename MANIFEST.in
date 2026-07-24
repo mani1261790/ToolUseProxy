@@ -3,6 +3,7 @@ include README.en.md
 include QUICKSTART.md
 include PRIVACY.md
 include SUPPORT.md
+include LICENSE
 include pyproject.toml
 include MANIFEST.in
 

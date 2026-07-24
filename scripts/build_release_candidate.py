@@ -24,6 +24,7 @@ PLUGIN_BUILDER = REPO_ROOT / "scripts" / "build_plugin_bundle.py"
 MANIFEST_FILENAME = "release-manifest.json"
 CHECKSUM_FILENAME = "SHA256SUMS"
 SBOM_SPEC_VERSION = "1.7"
+LICENSE_ID = "Apache-2.0"
 COMMIT_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 MAX_ARCHIVE_MEMBERS = 10_000
@@ -91,6 +92,7 @@ def build_candidate(outdir: Path, *, require_clean: bool) -> dict[str, Any]:
             "product": "ToolUseProxy",
             "python_version": python_version,
             "plugin_version": plugin_version,
+            "license": {"id": LICENSE_ID},
             "source": source,
             "gates": {
                 "clean_source": not source["dirty"],
@@ -474,6 +476,7 @@ def _cyclonedx_sbom(
                 "name": "tooluseproxy",
                 "version": python_version,
                 "purl": root_ref,
+                "licenses": [{"license": {"id": LICENSE_ID}}],
                 "externalReferences": [
                     {
                         "type": "vcs",
@@ -547,6 +550,8 @@ def _release_notes(manifest: dict[str, Any]) -> str:
 def _validate_manifest(manifest: dict[str, Any]) -> None:
     if manifest.get("schema_version") != 1 or manifest.get("status") != "candidate":
         raise ReleaseCandidateError("release manifest schema or status is invalid")
+    if manifest.get("license") != {"id": LICENSE_ID}:
+        raise ReleaseCandidateError("release manifest license is invalid")
     source = manifest.get("source")
     gates = manifest.get("gates")
     artifacts = manifest.get("artifacts")
@@ -591,6 +596,8 @@ def _validate_sbom(path: Path, manifest: dict[str, Any]) -> None:
     root = metadata.get("component")
     if not isinstance(root, dict) or root.get("version") != manifest["python_version"]:
         raise ReleaseCandidateError("SBOM root component version is invalid")
+    if root.get("licenses") != [{"license": {"id": LICENSE_ID}}]:
+        raise ReleaseCandidateError("SBOM root component license is invalid")
     expected = {
         artifact["filename"]: artifact["sha256"] for artifact in manifest["artifacts"]
     }
