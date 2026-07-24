@@ -27,18 +27,50 @@ alphaのthreat modelは、Pluginやcoding agentの無承認manifest変更、stal
 
 現在versionは`0.1.0-alpha.3`です。類似度profile v2とruntime graph v19を導入しています。既存sessionを次に解析する際は古いcandidate indexを使い続けず、そのsessionのgraphとindexを一度全再構築します。
 
+Codex CLIはPluginごとの自動更新commandではなく、登録済みGit marketplaceを明示的に更新する`codex plugin marketplace upgrade`を提供します。moving refを登録している場合、更新されたmarketplace snapshotからinstall済みPluginも置き換わります。ToolUseProxyは次の2方式を分けます。
+
+| 方式 | `--ref` | 用途 | 更新 |
+| --- | --- | --- | --- |
+| public alpha更新チャンネル | `public-alpha` | 通常のdogfood / pilot | `marketplace upgrade`で明示更新 |
+| immutable version固定 | `v0.1.0-alpha.3` | 再現実験、監査、rollback | tagは動かないため自動的に別versionへ進まない |
+
+`public-alpha`はreview済み・CI green・公開済みのalpha release commitだけへfast-forwardする保護branchです。開発途中の`main`を実行元にはしません。更新は自動ではなく、ユーザーがcommandを実行した時だけ行われます。Codex Desktop / GUIの更新導線は未検証なので、この文書が保証するのはCodex CLIです。
+
 SQLite schemaはv4のままなので、alpha.3への更新だけを理由にDB migrationや`init`を再実行する必要はありません。将来SQLite schema更新を伴うreleaseで`doctor` / `status`がupgrade必要と報告した場合だけ、Hook外で明示的な`init --codex`を実行します。更新後は新しいHook definitionをreview・trustして新しいtaskを開始し、`doctor` / `status`を実行してください。
 
 ## install
 
-公開alphaは、可変なremote `main`ではなく、immutableなrelease tagを指定してinstallします。
+通常のpublic alpha利用では、保護された更新チャンネルを指定します。
 
 ```bash
-codex plugin marketplace add mani1261790/ToolUseProxy --ref v0.1.0-alpha.3
+codex plugin marketplace add mani1261790/ToolUseProxy --ref public-alpha
 codex plugin add tooluseproxy@tooluseproxy
 ```
 
+versionを固定する場合は最初のcommandを次に置き換えます。
+
+```bash
+codex plugin marketplace add mani1261790/ToolUseProxy --ref v0.1.0-alpha.3
+```
+
 install後はCodexが表示するPlugin source、version、3つのHook definitionを確認してtrustします。ToolUseProxyはこのreviewを迂回しません。release artifact、checksum、SBOM、release notesは[`v0.1.0-alpha.3`](https://github.com/mani1261790/ToolUseProxy/releases/tag/v0.1.0-alpha.3)で確認できます。
+
+### CLIで更新する
+
+`public-alpha`を登録した環境では、新release公開後に次を実行します。
+
+```bash
+codex plugin marketplace upgrade tooluseproxy
+codex plugin list --json
+```
+
+更新後は表示されたversionを確認し、変更されたHook definitionをreview・trustして、新しいCodex taskを開始します。続いて対象workspaceで`doctor`と`status`を実行してください。schema migrationが必要と報告された場合だけ、Hook外で`init --codex`を実行し、作成されたmigration backupを保持します。`PLUGIN_DATA`はmarketplace cacheと分離されるため、Plugin codeの置換では削除されません。
+
+固定tagを登録している場合、`marketplace upgrade`は同じtagを再取得するだけで別versionへ進みません。将来の別tagへ移るには、Pluginとmarketplaceをremoveし、新しいtagを指定してmarketplaceとPluginを追加します。この操作でも`PLUGIN_DATA`は保持されます。managed dataを削除する`uninstall apply`は更新には使いません。
+
+### rollback
+
+codeだけを以前のversionへ戻す場合は、Pluginとmarketplaceをremoveし、戻したいimmutable tagを指定して再追加します。新しいschemaを古いruntimeで無理に開かないでください。旧runtimeが現在DBをinactiveと判定する場合は、upgrade前に`init --codex`が作成したSQLite backupを別の`PLUGIN_DATA`へ復元します。現在DBは上書きせず保持します。検証済みの手順は[Pluginライフサイクル](../運用/Pluginライフサイクル.md)にあります。
 
 checkoutから開発版を試す場合だけ、repository rootをlocal marketplaceとして追加します。
 

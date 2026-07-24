@@ -21,18 +21,19 @@ POSIX launcherもpackage metadataと同じPython 3.11 / 3.12だけを選びま�
 
 ## Codex Plugin
 
-- localでCodex CLI `0.142.5`のmarketplace add / Plugin installを検証済み
+- localでCodex CLIのmarketplace add / Plugin installを検証済み
+- Gitのmoving refを使う`codex plugin marketplace upgrade`で、install済みPluginがremove / reinstallなしにalpha.1からalpha.3へ置き換わり、`PLUGIN_DATA`が保持されることを実Codex CLIで自動検証
 - Hook definitionのreview / trustを迂回しない
 - install後のcodeは`PLUGIN_ROOT`、mutable dataは`PLUGIN_DATA`へ分離
-- remote `main`を実行元にせず、releaseではimmutable artifactを使う
+- remote `main`を実行元にせず、通常更新は保護されたfast-forward-only `public-alpha`、再現性優先時はimmutable release tagを使う
 - isolated Codex CLIではinstall / protect / Hook payload allow-deny / trace / removeとdata保持を自動検証
 - release candidate verifierはwheel / sdist / Plugin ZIP内部のunsafe path、重複entry、symlink等の非regular type、危険mode、想定外の実行file、過大展開をfail-closedで拒否
 - GitHub Actionsはreview済みactionだけをfull commit SHAで固定し、checkout credentialを残さず、`contents: read`だけで実行する。DependabotがSHA更新候補をPRとして提示する
 - release build toolchainは5つのpure Python wheelをexact versionとSHA-256で固定し、lockと異なる環境からのcandidate buildを拒否する
 - public化前にreachable Git blob、commit / tag message、worktreeをaggregate-onlyで監査し、危険file、provider形式credential、未知binary、oversizeを拒否する。形式を持たないsecretや画像内文字の完全検出は保証しない
 - Codex CLI TUI `0.145.0`ではmanual Hook trust、public call、protected PreToolUse block、side effect 0を確認済み。ただし自己完結型command承認説明のhuman再検証は未完了
-- Codex Desktop / GUIはlocal Pluginを利用できる公式surfaceですが、ToolUseProxyのHook review・command承認・PreToolUse blockは未検証。CLI TUIの結果をGUI対応の根拠にしません
-- Linux上の実Codex task、Windows、upgrade / rollback反復E2Eは未完了
+- Codex Desktop / GUIはlocal Pluginを利用できる公式surfaceですが、ToolUseProxyのHook review・command承認・PreToolUse block・更新操作は未検証。CLI TUIの結果をGUI対応の根拠にしません
+- Linux上の実Codex task、Windows、将来release間のupgrade / rollback反復E2Eは未完了
 
 Codex Plugin APIやHook payloadはToolUseProxyとは別に変更され得ます。未検証のCodex CLI versionで異常が出た場合は、`doctor --json`、Codex version、synthetic payloadで再現し、protected dataを報告へ含めないでください。
 
@@ -59,7 +60,7 @@ Codex Plugin APIやHook payloadはToolUseProxyとは別に変更され得ます�
 - candidate retrievalはartifact 50 / source 200の有限上限を持つ
 - local SQLiteにはraw Hook payloadやprotected source由来textが平文で残り得る
 - database、backup、trace exportの自動retention / secure eraseはない
-- immutable alpha.1からalpha.3へのlocal upgrade、backupを使うsafe rollback、Plugin / marketplace remove、data保持 / 明示uninstallはisolated Codex CLIで検証済み。Linux実Codex CLI、Windows実機、将来version間の反復は未完了
+- moving marketplace refによるalpha.1からalpha.3へのnative upgrade、immutable alpha.1からalpha.3へのlifecycle upgrade、backupを使うsafe rollback、Plugin / marketplace remove、data保持 / 明示uninstallはisolated Codex CLIで検証済み。Linux実Codex CLI、Windows実機、将来version間の反復は未完了
 - runtime policyは他のHookやtool自体をexclusiveに制御できず、ToolUseProxy単独で完全な外部送信防止を保証しない
 
 dataの詳細は[プライバシーとデータ保持](PRIVACY.md)、導入手順は[Codex Plugin導入](docs/設定/Plugin導入.md)、実装の優先順位は[実装タスク](docs/運用/実装タスク.md)を参照してください。

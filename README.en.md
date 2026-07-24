@@ -19,14 +19,21 @@ ToolUseProxy is licensed under the [Apache License 2.0](LICENSE).
 
 ## Install the Plugin
 
-Install the immutable public-alpha marketplace snapshot:
+For normal alpha use, install from the protected `public-alpha` release channel:
 
 ```bash
-codex plugin marketplace add mani1261790/ToolUseProxy --ref v0.1.0-alpha.3
+codex plugin marketplace add mani1261790/ToolUseProxy --ref public-alpha
 codex plugin add tooluseproxy@tooluseproxy
 ```
 
-Review the exact Hook definitions before trusting them. Then follow the [five-minute quickstart](QUICKSTART.md) to initialize ToolUseProxy and review the first protected-source proposal.
+Updates are explicit, not automatic:
+
+```bash
+codex plugin marketplace upgrade tooluseproxy
+codex plugin list --json
+```
+
+Use the immutable `v0.1.0-alpha.3` tag instead of `public-alpha` when reproducible version pinning matters. A pinned tag does not move when the marketplace is upgraded. Review the exact Hook definitions after installation or an update before trusting them. Then follow the [five-minute quickstart](QUICKSTART.md) to initialize ToolUseProxy and review the first protected-source proposal. The CLI update path is tested; the Codex Desktop / GUI update experience is not yet verified.
 
 ## Try the synthetic preview
 
