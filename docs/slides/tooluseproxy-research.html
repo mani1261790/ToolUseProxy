@@ -1,0 +1,3163 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="初見の学生に向けてToolUseProxy研究を説明するHTMLスライド">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%232563eb'/%3E%3Cpath d='M16 7 9 10v5c0 4.4 2.9 7.3 7 8.8 4.1-1.5 7-4.4 7-8.8v-5l-7-3Z' fill='none' stroke='white' stroke-width='2.2' stroke-linejoin='round'/%3E%3Cpath d='m12.5 15.6 2.1 2.1 4.5-4.7' fill='none' stroke='white' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+  <title>ToolUseProxy — AIエージェントの情報流を追跡・検知・制御する</title>
+  <style>
+    :root {
+      --paper: #f7f8f4;
+      --surface: #ffffff;
+      --ink: #172033;
+      --muted: #536078;
+      --line: #dce2ea;
+      --blue: #2563eb;
+      --blue-soft: #eaf1ff;
+      --orange: #ea6a2a;
+      --orange-soft: #fff0e7;
+      --green: #16835f;
+      --green-soft: #e8f7f1;
+      --yellow: #b7791f;
+      --yellow-soft: #fff8dd;
+      --violet: #6954c7;
+      --violet-soft: #f0edff;
+      --shadow: 0 18px 50px rgba(29, 42, 68, 0.1);
+      --radius: 22px;
+      --sans: "Noto Sans JP", "Hiragino Sans", "Yu Gothic UI", "Yu Gothic", system-ui, sans-serif;
+      --mono: "Roboto Mono", "SFMono-Regular", Consolas, monospace;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      color-scheme: light;
+      background: var(--paper);
+    }
+
+    body {
+      margin: 0;
+      overflow: hidden;
+      background: var(--paper);
+      color: var(--ink);
+      font-family: var(--sans);
+      font-feature-settings: "palt" 1;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    button,
+    a {
+      font: inherit;
+    }
+
+    button {
+      cursor: pointer;
+    }
+
+    a {
+      color: inherit;
+    }
+
+    .skip-link {
+      position: fixed;
+      z-index: 100;
+      top: 10px;
+      left: 10px;
+      padding: 10px 14px;
+      border-radius: 10px;
+      background: var(--ink);
+      color: #fff;
+      transform: translateY(-150%);
+      transition: transform 180ms ease-out;
+    }
+
+    .skip-link:focus {
+      transform: translateY(0);
+    }
+
+    .svg-defs {
+      position: absolute;
+      width: 0;
+      height: 0;
+      overflow: hidden;
+    }
+
+    .topbar {
+      position: fixed;
+      z-index: 50;
+      top: 18px;
+      left: 24px;
+      right: 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      pointer-events: none;
+    }
+
+    .brand,
+    .section-label {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      color: var(--ink);
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .brand-mark {
+      display: grid;
+      width: 28px;
+      height: 28px;
+      place-items: center;
+      border: 2px solid var(--blue);
+      border-radius: 9px 3px 9px 3px;
+      background: var(--surface);
+      color: var(--blue);
+      box-shadow: 4px 4px 0 var(--blue-soft);
+    }
+
+    .brand-mark svg {
+      width: 17px;
+      height: 17px;
+    }
+
+    .section-label {
+      color: var(--muted);
+      font-family: var(--mono);
+      font-weight: 600;
+      letter-spacing: 0.04em;
+    }
+
+    .deck {
+      display: flex;
+      width: 100vw;
+      height: 100svh;
+      overflow-x: auto;
+      overflow-y: hidden;
+      scroll-behavior: smooth;
+      scroll-snap-type: x mandatory;
+      scrollbar-width: none;
+      overscroll-behavior-x: contain;
+    }
+
+    .deck::-webkit-scrollbar {
+      display: none;
+    }
+
+    .slide {
+      position: relative;
+      display: grid;
+      flex: 0 0 100vw;
+      width: 100vw;
+      height: 100svh;
+      min-height: 560px;
+      padding: clamp(76px, 9vh, 104px) clamp(28px, 6vw, 92px) clamp(84px, 10vh, 110px);
+      overflow-x: hidden;
+      overflow-y: auto;
+      scroll-snap-align: start;
+      scroll-snap-stop: always;
+      isolation: isolate;
+    }
+
+    .slide::before {
+      position: absolute;
+      z-index: -2;
+      inset: 0;
+      content: "";
+      background-image:
+        linear-gradient(rgba(44, 63, 96, 0.035) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(44, 63, 96, 0.035) 1px, transparent 1px);
+      background-size: 32px 32px;
+      mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 0.55), transparent 85%);
+    }
+
+    .slide::after {
+      position: absolute;
+      z-index: -1;
+      width: 340px;
+      height: 340px;
+      right: -160px;
+      top: -150px;
+      border: 72px solid var(--blue-soft);
+      border-radius: 50%;
+      content: "";
+      opacity: 0.75;
+    }
+
+    .slide:nth-child(3n + 2)::after {
+      border-color: var(--orange-soft);
+    }
+
+    .slide:nth-child(3n)::after {
+      border-color: var(--green-soft);
+    }
+
+    .slide-inner {
+      width: min(1180px, 100%);
+      margin: auto;
+    }
+
+    .slide-head {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: end;
+      gap: 24px;
+      margin-bottom: clamp(24px, 4vh, 44px);
+    }
+
+    .kicker {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin: 0 0 14px;
+      color: var(--blue);
+      font-family: var(--mono);
+      font-size: clamp(11px, 1.1vw, 14px);
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .kicker::before {
+      width: 30px;
+      height: 3px;
+      border-radius: 99px;
+      background: currentColor;
+      content: "";
+    }
+
+    h1,
+    h2,
+    h3,
+    p {
+      margin-top: 0;
+    }
+
+    h1,
+    h2 {
+      margin-bottom: 0;
+      letter-spacing: -0.045em;
+      line-height: 1.12;
+      text-wrap: balance;
+    }
+
+    h1 {
+      max-width: 900px;
+      font-size: clamp(40px, 5.4vw, 74px);
+      font-weight: 800;
+    }
+
+    h2 {
+      max-width: 930px;
+      font-size: clamp(32px, 4vw, 56px);
+      font-weight: 800;
+    }
+
+    h3 {
+      margin-bottom: 8px;
+      font-size: clamp(17px, 1.55vw, 21px);
+      line-height: 1.35;
+    }
+
+    .lead {
+      max-width: 760px;
+      margin: 26px 0 0;
+      color: var(--muted);
+      font-size: clamp(17px, 1.65vw, 23px);
+      font-weight: 500;
+      line-height: 1.75;
+      text-wrap: pretty;
+    }
+
+    .lead strong {
+      color: var(--ink);
+    }
+
+    .slide-no {
+      color: #96a0b2;
+      font-family: var(--mono);
+      font-size: 14px;
+      font-weight: 600;
+    }
+
+    .hero-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.1fr) minmax(340px, 0.75fr);
+      align-items: center;
+      gap: clamp(30px, 6vw, 88px);
+    }
+
+    .hero-title .accent {
+      position: relative;
+      color: var(--blue);
+      white-space: nowrap;
+    }
+
+    .hero-title .accent::after {
+      position: absolute;
+      height: 10px;
+      right: 0;
+      bottom: 2px;
+      left: 0;
+      border-radius: 99px;
+      background: var(--blue-soft);
+      content: "";
+      z-index: -1;
+    }
+
+    .meta-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 34px;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 34px;
+      padding: 7px 12px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.88);
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .pill svg {
+      width: 16px;
+      height: 16px;
+      color: var(--blue);
+    }
+
+    .hero-visual {
+      position: relative;
+      min-height: 440px;
+    }
+
+    .hero-orbit {
+      position: absolute;
+      inset: 50% auto auto 50%;
+      width: 340px;
+      height: 340px;
+      border: 1px dashed #9eb3d6;
+      border-radius: 50%;
+      transform: translate(-50%, -50%);
+    }
+
+    .hero-orbit::before,
+    .hero-orbit::after {
+      position: absolute;
+      border: 1px solid var(--line);
+      border-radius: 50%;
+      content: "";
+    }
+
+    .hero-orbit::before {
+      inset: 42px;
+      background: rgba(255, 255, 255, 0.7);
+    }
+
+    .hero-orbit::after {
+      inset: 108px;
+      border: 0;
+      background: var(--blue);
+      box-shadow: 0 22px 46px rgba(37, 99, 235, 0.26);
+    }
+
+    .hero-shield {
+      position: absolute;
+      z-index: 2;
+      top: 50%;
+      left: 50%;
+      width: 86px;
+      height: 86px;
+      color: white;
+      transform: translate(-50%, -50%);
+    }
+
+    .orbit-card {
+      position: absolute;
+      z-index: 3;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 12px 15px;
+      border: 1px solid var(--line);
+      border-radius: 15px;
+      background: var(--surface);
+      box-shadow: var(--shadow);
+      color: var(--ink);
+      font-family: var(--mono);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .orbit-card svg {
+      width: 20px;
+      height: 20px;
+    }
+
+    .orbit-card.source {
+      top: 22px;
+      left: 6px;
+      color: var(--orange);
+    }
+
+    .orbit-card.tool {
+      top: 74px;
+      right: -12px;
+      color: var(--violet);
+    }
+
+    .orbit-card.answer {
+      right: 5px;
+      bottom: 46px;
+      color: var(--green);
+    }
+
+    .orbit-card.trace {
+      bottom: 22px;
+      left: 2px;
+      color: var(--blue);
+    }
+
+    .story-board {
+      display: grid;
+      grid-template-columns: 0.9fr 54px 1fr 54px 0.9fr;
+      align-items: stretch;
+      gap: 12px;
+    }
+
+    .story-card,
+    .card {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      box-shadow: 0 10px 30px rgba(29, 42, 68, 0.06);
+    }
+
+    .story-card {
+      display: flex;
+      min-height: 285px;
+      padding: 28px;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+
+    .story-card .icon-box,
+    .icon-box {
+      display: grid;
+      width: 48px;
+      height: 48px;
+      place-items: center;
+      border-radius: 14px;
+      background: var(--blue-soft);
+      color: var(--blue);
+    }
+
+    .story-card .icon-box svg,
+    .icon-box svg {
+      width: 25px;
+      height: 25px;
+    }
+
+    .story-card.risk {
+      border-color: #f5c8b2;
+      background: linear-gradient(145deg, #fff 55%, var(--orange-soft));
+    }
+
+    .story-card.risk .icon-box {
+      background: var(--orange-soft);
+      color: var(--orange);
+    }
+
+    .story-card h3 {
+      margin-top: 32px;
+    }
+
+    .story-card p {
+      margin-bottom: 0;
+      color: var(--muted);
+      font-size: 15px;
+      line-height: 1.75;
+    }
+
+    .arrow-bridge {
+      display: grid;
+      place-items: center;
+      color: #8d9bb1;
+    }
+
+    .arrow-bridge svg {
+      width: 28px;
+      height: 28px;
+    }
+
+    .risk-banner {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      align-items: center;
+      gap: 18px;
+      margin-top: 22px;
+      padding: 17px 20px;
+      border-left: 5px solid var(--orange);
+      border-radius: 0 14px 14px 0;
+      background: var(--orange-soft);
+      color: #7b3618;
+    }
+
+    .risk-banner strong {
+      font-size: 17px;
+    }
+
+    .risk-banner span {
+      font-size: 14px;
+      line-height: 1.65;
+    }
+
+    .question-grid {
+      display: grid;
+      grid-template-columns: 0.9fr 1.1fr;
+      align-items: stretch;
+      gap: 24px;
+    }
+
+    .big-question {
+      position: relative;
+      display: flex;
+      min-height: 420px;
+      padding: clamp(28px, 4vw, 48px);
+      border-radius: var(--radius);
+      background: var(--blue);
+      color: white;
+      flex-direction: column;
+      justify-content: space-between;
+      overflow: hidden;
+    }
+
+    .big-question::after {
+      position: absolute;
+      right: -48px;
+      bottom: -110px;
+      color: rgba(255, 255, 255, 0.11);
+      content: "?";
+      font-family: Georgia, serif;
+      font-size: 330px;
+      font-weight: 700;
+      line-height: 1;
+    }
+
+    .big-question .label {
+      position: relative;
+      z-index: 1;
+      font-family: var(--mono);
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .big-question blockquote {
+      position: relative;
+      z-index: 1;
+      margin: 0;
+      font-size: clamp(26px, 3vw, 42px);
+      font-weight: 800;
+      letter-spacing: -0.035em;
+      line-height: 1.45;
+      text-wrap: balance;
+    }
+
+    .subquestions {
+      display: grid;
+      gap: 16px;
+    }
+
+    .subquestion {
+      display: grid;
+      grid-template-columns: 52px 1fr;
+      align-items: start;
+      gap: 18px;
+      padding: 24px;
+    }
+
+    .subquestion .number {
+      display: grid;
+      width: 44px;
+      height: 44px;
+      place-items: center;
+      border: 1px solid #a9c2f7;
+      border-radius: 50%;
+      color: var(--blue);
+      font-family: var(--mono);
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .subquestion p {
+      margin-bottom: 0;
+      color: var(--muted);
+      font-size: 15px;
+      line-height: 1.7;
+    }
+
+    .stage-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 20px;
+    }
+
+    .stage-card {
+      position: relative;
+      min-height: 330px;
+      padding: 30px;
+      overflow: hidden;
+    }
+
+    .stage-card::after {
+      position: absolute;
+      right: -18px;
+      bottom: -28px;
+      color: #eff2f7;
+      content: attr(data-number);
+      font-family: var(--mono);
+      font-size: 130px;
+      font-weight: 800;
+      line-height: 1;
+    }
+
+    .stage-card > * {
+      position: relative;
+      z-index: 1;
+    }
+
+    .stage-card .icon-box {
+      margin-bottom: 50px;
+    }
+
+    .stage-card.detect .icon-box {
+      background: var(--violet-soft);
+      color: var(--violet);
+    }
+
+    .stage-card.stop .icon-box {
+      background: var(--orange-soft);
+      color: var(--orange);
+    }
+
+    .stage-card p {
+      margin: 12px 0 0;
+      color: var(--muted);
+      font-size: 15px;
+      line-height: 1.75;
+    }
+
+    .stage-tag {
+      display: inline-flex;
+      margin-top: 20px;
+      padding: 5px 9px;
+      border-radius: 7px;
+      background: #f1f4f8;
+      color: #526078;
+      font-family: var(--mono);
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    .arch {
+      display: grid;
+      grid-template-columns: 0.9fr 1.25fr 1.25fr 1.1fr;
+      align-items: stretch;
+      gap: 12px;
+    }
+
+    .arch-column {
+      position: relative;
+      display: flex;
+      min-height: 340px;
+      padding: 18px;
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      background: rgba(255, 255, 255, 0.86);
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .arch-column + .arch-column::before {
+      position: absolute;
+      z-index: 3;
+      top: 50%;
+      left: -20px;
+      display: grid;
+      width: 28px;
+      height: 28px;
+      place-items: center;
+      border: 1px solid var(--line);
+      border-radius: 50%;
+      background: var(--surface);
+      color: var(--blue);
+      content: "→";
+      font-family: var(--mono);
+      font-size: 15px;
+      font-weight: 800;
+      transform: translateY(-50%);
+    }
+
+    .arch-title {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 4px;
+      padding: 4px 4px 10px;
+      border-bottom: 1px solid var(--line);
+      font-size: 13px;
+      font-weight: 800;
+    }
+
+    .arch-title svg {
+      width: 20px;
+      height: 20px;
+      color: var(--blue);
+    }
+
+    .arch-item {
+      flex: 1;
+      display: flex;
+      min-height: 64px;
+      padding: 13px 14px;
+      border-radius: 12px;
+      background: #f2f5f9;
+      flex-direction: column;
+      justify-content: center;
+    }
+
+    .arch-item strong {
+      font-family: var(--mono);
+      font-size: 12px;
+    }
+
+    .arch-item span {
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.5;
+    }
+
+    .arch-column.highlight {
+      border-color: #a9c2f7;
+      background: var(--blue-soft);
+    }
+
+    .arch-column.highlight .arch-item {
+      background: #fff;
+    }
+
+    .arch-column.policy {
+      border-color: #f2c4ad;
+      background: var(--orange-soft);
+    }
+
+    .arch-column.policy .arch-item {
+      background: #fff;
+    }
+
+    .note-line {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-top: 18px;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 650;
+    }
+
+    .note-line svg {
+      width: 18px;
+      height: 18px;
+      color: var(--green);
+      flex: 0 0 auto;
+    }
+
+    .graph-layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1.35fr) minmax(280px, 0.65fr);
+      gap: 24px;
+    }
+
+    .graph-board {
+      position: relative;
+      min-height: 410px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      box-shadow: 0 10px 30px rgba(29, 42, 68, 0.06);
+      overflow: hidden;
+    }
+
+    .graph-board::before {
+      position: absolute;
+      inset: 0;
+      background-image: radial-gradient(#cbd5e1 1px, transparent 1px);
+      background-size: 18px 18px;
+      content: "";
+      opacity: 0.65;
+    }
+
+    .graph-lines {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+    }
+
+    .graph-line {
+      fill: none;
+      stroke: #91a7c9;
+      stroke-width: 2.2;
+      marker-end: url(#arrowhead);
+    }
+
+    .graph-line.hot {
+      stroke: var(--orange);
+      stroke-width: 3.5;
+    }
+
+    .graph-node {
+      position: absolute;
+      z-index: 2;
+      width: 150px;
+      padding: 13px 14px;
+      border: 1px solid var(--line);
+      border-radius: 13px;
+      background: #fff;
+      box-shadow: 0 8px 20px rgba(29, 42, 68, 0.08);
+    }
+
+    .graph-node strong {
+      display: block;
+      font-family: var(--mono);
+      font-size: 12px;
+    }
+
+    .graph-node span {
+      display: block;
+      margin-top: 5px;
+      color: var(--muted);
+      font-size: 10px;
+      line-height: 1.45;
+    }
+
+    .graph-node.source {
+      top: 48px;
+      left: 34px;
+      border-color: #f0aa87;
+      background: var(--orange-soft);
+    }
+
+    .graph-node.read {
+      top: 55px;
+      left: 42%;
+    }
+
+    .graph-node.edit {
+      left: 39%;
+      bottom: 45px;
+    }
+
+    .graph-node.answer {
+      top: 62px;
+      right: 30px;
+      border-color: #efb99f;
+    }
+
+    .graph-node.safe {
+      right: 30px;
+      bottom: 42px;
+      border-color: #8ecdb5;
+      background: var(--green-soft);
+    }
+
+    .graph-legend {
+      display: grid;
+      gap: 14px;
+    }
+
+    .legend-card {
+      padding: 22px;
+    }
+
+    .legend-card .mini-label {
+      display: inline-flex;
+      padding: 4px 8px;
+      border-radius: 6px;
+      background: var(--blue-soft);
+      color: var(--blue);
+      font-family: var(--mono);
+      font-size: 10px;
+      font-weight: 800;
+      text-transform: uppercase;
+    }
+
+    .legend-card p {
+      margin: 12px 0 0;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.65;
+    }
+
+    .detector-layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1.1fr) minmax(320px, 0.9fr);
+      gap: 24px;
+    }
+
+    .ladder {
+      display: grid;
+      gap: 12px;
+    }
+
+    .rung {
+      display: grid;
+      grid-template-columns: 45px 150px 1fr;
+      align-items: center;
+      gap: 14px;
+      min-height: 64px;
+      padding: 12px 18px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: #fff;
+    }
+
+    .rung-number {
+      color: var(--blue);
+      font-family: var(--mono);
+      font-weight: 800;
+    }
+
+    .rung strong {
+      font-family: var(--mono);
+      font-size: 13px;
+    }
+
+    .rung span {
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .rung:last-child {
+      border-color: #cabff6;
+      background: var(--violet-soft);
+    }
+
+    .finding-card {
+      display: flex;
+      min-height: 100%;
+      padding: 28px;
+      border: 1px solid #f0b79b;
+      border-radius: var(--radius);
+      background: var(--orange-soft);
+      flex-direction: column;
+    }
+
+    .finding-card .finding-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding-bottom: 18px;
+      border-bottom: 1px solid #efc9b5;
+    }
+
+    .finding-card .finding-head strong {
+      font-family: var(--mono);
+      font-size: 13px;
+    }
+
+    .severity {
+      padding: 5px 9px;
+      border-radius: 7px;
+      background: var(--orange);
+      color: white;
+      font-family: var(--mono);
+      font-size: 10px;
+      font-weight: 800;
+      text-transform: uppercase;
+    }
+
+    .finding-path {
+      display: grid;
+      gap: 10px;
+      margin: 24px 0;
+    }
+
+    .finding-path div {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 11px 13px;
+      border-radius: 10px;
+      background: rgba(255, 255, 255, 0.75);
+      color: #6e361b;
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .finding-path div + div::before {
+      color: var(--orange);
+      content: "↓";
+      font-family: var(--mono);
+      font-weight: 800;
+    }
+
+    .finding-foot {
+      margin-top: auto;
+      color: #7b4229;
+      font-size: 13px;
+      line-height: 1.65;
+    }
+
+    .policy-timeline {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      align-items: stretch;
+      gap: 18px;
+    }
+
+    .policy-card {
+      position: relative;
+      min-height: 340px;
+      padding: 28px;
+    }
+
+    .policy-card .hook {
+      display: inline-flex;
+      padding: 6px 9px;
+      border-radius: 7px;
+      background: #eef2f7;
+      font-family: var(--mono);
+      font-size: 11px;
+      font-weight: 800;
+    }
+
+    .policy-card .icon-box {
+      margin: 42px 0 24px;
+    }
+
+    .policy-card p {
+      margin: 10px 0 0;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.7;
+    }
+
+    .policy-card .default {
+      position: absolute;
+      right: 20px;
+      bottom: 18px;
+      left: 20px;
+      padding-top: 13px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 10px;
+    }
+
+    .policy-card.review {
+      border-color: #edc598;
+      background: var(--yellow-soft);
+    }
+
+    .policy-card.review .icon-box {
+      background: #fff2c3;
+      color: var(--yellow);
+    }
+
+    .policy-card.block {
+      border-color: #efb99f;
+      background: var(--orange-soft);
+    }
+
+    .policy-card.block .icon-box {
+      background: #ffe0d0;
+      color: var(--orange);
+    }
+
+    .approval-flow {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 12px;
+      margin-top: 20px;
+    }
+
+    .approval-step {
+      position: relative;
+      min-height: 165px;
+      padding: 22px;
+      border: 1px solid var(--line);
+      border-radius: 17px;
+      background: #fff;
+    }
+
+    .approval-step + .approval-step::before {
+      position: absolute;
+      top: 50%;
+      left: -21px;
+      display: grid;
+      width: 28px;
+      height: 28px;
+      place-items: center;
+      border: 1px solid var(--line);
+      border-radius: 50%;
+      background: #fff;
+      color: var(--blue);
+      content: "→";
+      font-family: var(--mono);
+      font-size: 14px;
+      font-weight: 800;
+      transform: translateY(-50%);
+    }
+
+    .approval-step .step-no {
+      color: var(--blue);
+      font-family: var(--mono);
+      font-size: 11px;
+      font-weight: 800;
+    }
+
+    .approval-step h3 {
+      margin-top: 20px;
+      font-size: 17px;
+    }
+
+    .approval-step p {
+      margin-bottom: 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.65;
+    }
+
+    .approval-step.human {
+      border-color: #a9c2f7;
+      background: var(--blue-soft);
+    }
+
+    .approval-step.commit {
+      border-color: #8ecdb5;
+      background: var(--green-soft);
+    }
+
+    .nonnegotiable {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-top: 22px;
+      padding: 15px 18px;
+      border-radius: 13px;
+      background: var(--ink);
+      color: #fff;
+      font-size: 14px;
+      font-weight: 700;
+    }
+
+    .nonnegotiable svg {
+      width: 20px;
+      height: 20px;
+      color: #83d5b7;
+      flex: 0 0 auto;
+    }
+
+    .experiment-grid {
+      display: grid;
+      grid-template-columns: 0.8fr 1.2fr;
+      gap: 24px;
+    }
+
+    .metric-stack {
+      display: grid;
+      gap: 14px;
+    }
+
+    .metric-card {
+      display: grid;
+      grid-template-columns: 88px 1fr;
+      align-items: center;
+      min-height: 98px;
+      padding: 16px 20px;
+    }
+
+    .metric-card .metric {
+      color: var(--blue);
+      font-family: var(--mono);
+      font-size: 32px;
+      font-weight: 800;
+      letter-spacing: -0.05em;
+    }
+
+    .metric-card strong {
+      display: block;
+      font-size: 15px;
+    }
+
+    .metric-card span {
+      display: block;
+      margin-top: 5px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    .experiment-story {
+      padding: 28px;
+    }
+
+    .event-sequence {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 0 16px;
+    }
+
+    .event-dot {
+      position: relative;
+      display: grid;
+      width: 34px;
+      height: 34px;
+      place-items: center;
+      border: 2px solid #9db7e8;
+      border-radius: 50%;
+      background: var(--surface);
+      color: var(--blue);
+      font-family: var(--mono);
+      font-size: 11px;
+      font-weight: 800;
+    }
+
+    .event-dot:not(.last)::after {
+      position: absolute;
+      z-index: -1;
+      width: 2px;
+      height: 64px;
+      top: 32px;
+      left: 14px;
+      background: #cdd9ed;
+      content: "";
+    }
+
+    .event-content {
+      min-height: 68px;
+      padding: 4px 0 18px;
+    }
+
+    .event-content strong {
+      display: block;
+      font-size: 15px;
+    }
+
+    .event-content span {
+      display: block;
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.55;
+    }
+
+    .event-content.danger strong {
+      color: var(--orange);
+    }
+
+    .event-content.safe strong {
+      color: var(--green);
+    }
+
+    .score-layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1.2fr) minmax(320px, 0.8fr);
+      gap: 24px;
+    }
+
+    .scoreboard {
+      padding: 28px;
+    }
+
+    .score-row {
+      display: grid;
+      grid-template-columns: 210px 1fr 62px;
+      align-items: center;
+      gap: 18px;
+      min-height: 66px;
+    }
+
+    .score-label {
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .score-track {
+      position: relative;
+      height: 13px;
+      border-radius: 99px;
+      background: #e7ebf1;
+      overflow: hidden;
+    }
+
+    .score-fill {
+      width: 100%;
+      height: 100%;
+      border-radius: inherit;
+      background: var(--blue);
+    }
+
+    .score-row:nth-child(2) .score-fill {
+      background: var(--violet);
+    }
+
+    .score-row:nth-child(3) .score-fill {
+      background: var(--green);
+    }
+
+    .score-value {
+      font-family: var(--mono);
+      font-size: 14px;
+      font-weight: 800;
+      text-align: right;
+    }
+
+    .score-summary {
+      display: grid;
+      gap: 16px;
+    }
+
+    .score-kpi {
+      display: flex;
+      min-height: 126px;
+      padding: 22px;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+
+    .score-kpi strong {
+      color: var(--green);
+      font-family: var(--mono);
+      font-size: 34px;
+      letter-spacing: -0.04em;
+    }
+
+    .score-kpi span {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .caveat {
+      padding: 20px 22px;
+      border: 1px solid #ead79c;
+      border-radius: 16px;
+      background: var(--yellow-soft);
+      color: #6d5719;
+      font-size: 13px;
+      line-height: 1.7;
+    }
+
+    .caveat strong {
+      display: block;
+      margin-bottom: 6px;
+    }
+
+    .boundary-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 18px;
+    }
+
+    .boundary-card {
+      min-height: 155px;
+      padding: 24px;
+    }
+
+    .boundary-card .card-head {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .boundary-card .card-head svg {
+      width: 22px;
+      height: 22px;
+      color: var(--green);
+    }
+
+    .boundary-card p {
+      margin: 14px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.65;
+    }
+
+    .boundary-card.limit .card-head svg {
+      color: var(--orange);
+    }
+
+    .boundary-card.limit {
+      border-color: #efc8b5;
+    }
+
+    .status-layout {
+      display: grid;
+      grid-template-columns: 0.88fr 1.12fr;
+      gap: 24px;
+    }
+
+    .status-card {
+      padding: 28px;
+    }
+
+    .status-card.primary {
+      display: flex;
+      border: 0;
+      background: var(--blue);
+      color: #fff;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+
+    .version {
+      font-family: var(--mono);
+      font-size: clamp(34px, 4.2vw, 58px);
+      font-weight: 800;
+      letter-spacing: -0.05em;
+    }
+
+    .status-card.primary p {
+      max-width: 330px;
+      margin-bottom: 0;
+      color: #dce8ff;
+      font-size: 15px;
+      line-height: 1.7;
+    }
+
+    .status-list {
+      display: grid;
+      gap: 13px;
+    }
+
+    .status-item {
+      display: grid;
+      grid-template-columns: 28px 1fr;
+      align-items: start;
+      gap: 12px;
+      padding: 17px 18px;
+      border-radius: 13px;
+      background: #f4f6f9;
+    }
+
+    .status-item svg {
+      width: 20px;
+      height: 20px;
+      color: var(--green);
+    }
+
+    .status-item.pending svg {
+      color: var(--orange);
+    }
+
+    .status-item strong {
+      display: block;
+      font-size: 14px;
+    }
+
+    .status-item span {
+      display: block;
+      margin-top: 3px;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.5;
+    }
+
+    .takeaway {
+      display: grid;
+      grid-template-columns: 0.95fr 1.05fr;
+      align-items: center;
+      gap: clamp(34px, 7vw, 96px);
+    }
+
+    .takeaway-mark {
+      position: relative;
+      display: grid;
+      min-height: 430px;
+      place-items: center;
+    }
+
+    .takeaway-mark .ring {
+      position: absolute;
+      width: min(390px, 86%);
+      aspect-ratio: 1;
+      border: 44px solid var(--blue-soft);
+      border-radius: 50%;
+    }
+
+    .takeaway-mark .shield-block {
+      position: relative;
+      display: grid;
+      width: 190px;
+      height: 190px;
+      place-items: center;
+      border-radius: 46px 14px 46px 14px;
+      background: var(--blue);
+      box-shadow: 22px 22px 0 #bfd2fb;
+      color: white;
+      transform: rotate(-3deg);
+    }
+
+    .takeaway-mark svg {
+      width: 96px;
+      height: 96px;
+    }
+
+    .takeaway-copy h2 {
+      font-size: clamp(38px, 4.8vw, 66px);
+    }
+
+    .takeaway-copy .lead {
+      max-width: 590px;
+    }
+
+    .three-words {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 30px;
+    }
+
+    .three-words span {
+      padding: 9px 13px;
+      border-radius: 9px;
+      background: var(--blue-soft);
+      color: var(--blue);
+      font-family: var(--mono);
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .demo-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.2fr) minmax(320px, 0.8fr);
+      gap: 24px;
+    }
+
+    .terminal {
+      padding: 0;
+      border-color: #cfd6e1;
+      overflow: hidden;
+    }
+
+    .terminal-head {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      padding: 13px 16px;
+      border-bottom: 1px solid var(--line);
+      background: #eef1f5;
+    }
+
+    .terminal-head i {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #c6ccd6;
+    }
+
+    .terminal pre {
+      margin: 0;
+      padding: 26px;
+      overflow-x: auto;
+      color: #27324a;
+      font-family: var(--mono);
+      font-size: clamp(11px, 1.15vw, 14px);
+      line-height: 1.9;
+      white-space: pre-wrap;
+    }
+
+    .terminal .prompt {
+      color: var(--blue);
+      font-weight: 800;
+    }
+
+    .terminal .comment {
+      color: #718096;
+    }
+
+    .demo-notes {
+      display: grid;
+      gap: 14px;
+    }
+
+    .demo-note {
+      padding: 20px;
+    }
+
+    .demo-note p {
+      margin: 8px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.65;
+    }
+
+    .source-note {
+      margin-top: 16px;
+      color: #7b8799;
+      font-family: var(--mono);
+      font-size: 10px;
+      line-height: 1.5;
+    }
+
+    .source-note a {
+      text-decoration-color: #aab7ca;
+      text-underline-offset: 3px;
+    }
+
+    .source-note a:hover {
+      color: var(--blue);
+    }
+
+    .controls {
+      position: fixed;
+      z-index: 60;
+      right: 24px;
+      bottom: 20px;
+      left: 24px;
+      display: grid;
+      grid-template-columns: minmax(140px, 1fr) auto minmax(140px, 1fr);
+      align-items: center;
+      gap: 18px;
+      pointer-events: none;
+    }
+
+    .progress {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      pointer-events: auto;
+    }
+
+    .progress button {
+      flex: 1 1 auto;
+      height: 18px;
+      padding: 7px 0;
+      border: 0;
+      background: transparent;
+    }
+
+    .progress button::before {
+      display: block;
+      height: 3px;
+      border-radius: 99px;
+      background: #cfd6e1;
+      content: "";
+      transition: background 180ms ease-out, height 180ms ease-out;
+    }
+
+    .progress button:hover::before,
+    .progress button:focus-visible::before {
+      background: #8da6cf;
+      height: 5px;
+    }
+
+    .progress button[aria-current="step"]::before {
+      height: 5px;
+      background: var(--blue);
+    }
+
+    .control-center {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      padding: 6px;
+      border: 1px solid rgba(203, 211, 223, 0.9);
+      border-radius: 15px;
+      background: rgba(255, 255, 255, 0.92);
+      box-shadow: 0 10px 28px rgba(29, 42, 68, 0.13);
+      backdrop-filter: blur(12px);
+      pointer-events: auto;
+    }
+
+    .control-button {
+      display: grid;
+      width: 38px;
+      height: 38px;
+      padding: 0;
+      place-items: center;
+      border: 0;
+      border-radius: 10px;
+      background: transparent;
+      color: var(--ink);
+      transition: background 180ms ease-out, color 180ms ease-out;
+    }
+
+    .control-button:hover {
+      background: var(--blue-soft);
+      color: var(--blue);
+    }
+
+    .control-button:disabled {
+      color: #b8c0cd;
+      cursor: not-allowed;
+    }
+
+    .control-button svg {
+      width: 20px;
+      height: 20px;
+    }
+
+    .page-count {
+      min-width: 70px;
+      font-family: var(--mono);
+      font-size: 11px;
+      font-weight: 700;
+      text-align: center;
+    }
+
+    .control-right {
+      display: flex;
+      justify-content: flex-end;
+      pointer-events: auto;
+    }
+
+    .key-hint {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      color: #7d899c;
+      font-family: var(--mono);
+      font-size: 10px;
+    }
+
+    kbd {
+      display: inline-grid;
+      min-width: 25px;
+      height: 25px;
+      padding: 0 6px;
+      place-items: center;
+      border: 1px solid #cfd6e1;
+      border-bottom-width: 2px;
+      border-radius: 6px;
+      background: #fff;
+      color: #596579;
+      font-family: var(--mono);
+      font-size: 10px;
+    }
+
+    .announce {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+
+    .slide .reveal {
+      opacity: 0.55;
+      transform: translateY(10px);
+      transition: opacity 320ms ease-out, transform 320ms ease-out;
+    }
+
+    .slide.is-active .reveal {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    .slide.is-active .reveal:nth-child(2) {
+      transition-delay: 60ms;
+    }
+
+    .slide.is-active .reveal:nth-child(3) {
+      transition-delay: 110ms;
+    }
+
+    :focus-visible {
+      outline: 3px solid #ff9b65;
+      outline-offset: 3px;
+    }
+
+    /* Editorial revision: typography and evidence over decorative UI motifs. */
+    :root {
+      --paper: #fafaf8;
+      --surface: #ffffff;
+      --ink: #171717;
+      --muted: #555555;
+      --line: #d8d8d3;
+      --blue: #2458a6;
+      --blue-soft: #edf2fb;
+      --orange: #4f4f4f;
+      --orange-soft: #f0f0ed;
+      --green: #2458a6;
+      --green-soft: #edf2fb;
+      --yellow: #595959;
+      --yellow-soft: #f4f4ef;
+      --violet: #404040;
+      --violet-soft: #f0f0ed;
+      --shadow: none;
+      --radius: 0;
+    }
+
+    .slide::before,
+    .slide::after,
+    .kicker::before,
+    .hero-title .accent::after,
+    .big-question::after,
+    .stage-card::after,
+    .arch-column + .arch-column::before,
+    .graph-board::before,
+    .approval-step + .approval-step::before,
+    .event-dot:not(.last)::after {
+      display: none;
+    }
+
+    .slide {
+      background: var(--paper);
+    }
+
+    .brand-mark,
+    .hero-visual,
+    .arrow-bridge,
+    .graph-lines,
+    .note-line svg,
+    .nonnegotiable svg,
+    .boundary-card svg {
+      display: none;
+    }
+
+    .slide svg,
+    .slide .icon-box {
+      display: none !important;
+    }
+
+    .brand {
+      letter-spacing: 0.12em;
+    }
+
+    .kicker {
+      gap: 0;
+      color: var(--blue);
+      font-family: var(--sans);
+      font-size: 13px;
+      font-variant-numeric: tabular-nums;
+      letter-spacing: 0.12em;
+    }
+
+    .slide-no,
+    .subquestion .number,
+    .rung-number,
+    .approval-step .step-no,
+    .event-dot,
+    .page-count {
+      font-family: var(--sans);
+      font-variant-numeric: tabular-nums;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+    }
+
+    .slide-no {
+      font-size: 13px;
+    }
+
+    .hero-grid {
+      grid-template-columns: minmax(0, 930px);
+      justify-content: start;
+    }
+
+    .hero-title .accent {
+      color: var(--blue);
+    }
+
+    .meta-row {
+      gap: 12px 28px;
+      padding-top: 24px;
+      border-top: 1px solid var(--line);
+    }
+
+    .pill {
+      min-height: 0;
+      padding: 0;
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+      color: var(--ink);
+      font-family: var(--mono);
+      font-size: 11px;
+      letter-spacing: 0.04em;
+    }
+
+    .pill svg {
+      display: none;
+    }
+
+    .card,
+    .story-card,
+    .subquestion,
+    .stage-card,
+    .policy-card,
+    .metric-card,
+    .experiment-story,
+    .scoreboard,
+    .score-kpi,
+    .boundary-card,
+    .legend-card {
+      border: 0;
+      border-radius: 0;
+      background: #f0f0ed;
+      box-shadow: none;
+    }
+
+    .story-board {
+      grid-template-columns: repeat(3, 1fr);
+      gap: 16px;
+    }
+
+    .story-card,
+    .story-card.risk {
+      min-height: 260px;
+      background: #f0f0ed;
+    }
+
+    .story-card h3 {
+      margin-top: 0;
+      padding-top: 68px;
+    }
+
+    .story-card::before {
+      color: var(--blue);
+      content: attr(data-step);
+      font-family: var(--sans);
+      font-size: 14px;
+      font-variant-numeric: tabular-nums;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+    }
+
+    .risk-banner {
+      grid-template-columns: 220px 1fr;
+      border: 0;
+      border-radius: 0;
+      background: var(--ink);
+      color: #ffffff;
+    }
+
+    .big-question {
+      border-radius: 0;
+      background: var(--ink);
+    }
+
+    .stage-card {
+      min-height: 320px;
+      padding-top: 28px;
+    }
+
+    .stage-card::before {
+      display: block;
+      margin-bottom: 72px;
+      color: var(--blue);
+      content: "0" attr(data-number);
+      font-family: var(--sans);
+      font-size: 14px;
+      font-variant-numeric: tabular-nums;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+    }
+
+    .stage-card .icon-box {
+      display: none;
+    }
+
+    .stage-tag,
+    .mini-label,
+    .policy-card .hook,
+    .severity {
+      border-radius: 0;
+    }
+
+    .arch {
+      gap: 16px;
+    }
+
+    .arch-column,
+    .arch-column.highlight,
+    .arch-column.policy {
+      padding: 22px;
+      border: 0;
+      border-radius: 0;
+      background: #efefeb;
+    }
+
+    .arch-title {
+      padding: 0 0 16px;
+      border-bottom: 1px solid #bcbcb6;
+      font-family: var(--mono);
+      letter-spacing: 0.04em;
+    }
+
+    .arch-title svg {
+      display: none;
+    }
+
+    .arch-item,
+    .arch-column.highlight .arch-item,
+    .arch-column.policy .arch-item {
+      border-radius: 0;
+      background: #ffffff;
+    }
+
+    .note-line {
+      padding: 14px 18px;
+      background: var(--blue-soft);
+      color: var(--ink);
+    }
+
+    .flow-table {
+      display: grid;
+      background: #f0f0ed;
+    }
+
+    .flow-row {
+      display: grid;
+      grid-template-columns: 74px 180px 1fr;
+      align-items: center;
+      gap: 18px;
+      min-height: 92px;
+      padding: 18px 24px;
+      border-bottom: 1px solid #d1d1cb;
+    }
+
+    .flow-row:last-child {
+      border-bottom: 0;
+    }
+
+    .flow-row .flow-index {
+      color: var(--blue);
+      font-family: var(--sans);
+      font-size: 14px;
+      font-variant-numeric: tabular-nums;
+      font-weight: 700;
+    }
+
+    .flow-row strong {
+      font-family: var(--mono);
+      font-size: 13px;
+    }
+
+    .flow-row span:last-child {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.6;
+    }
+
+    .graph-legend {
+      gap: 16px;
+    }
+
+    .legend-card {
+      padding: 24px;
+    }
+
+    .finding-card {
+      border: 0;
+      border-radius: 0;
+      background: #ecece8;
+    }
+
+    .finding-card .finding-head {
+      border-color: #c8c8c1;
+    }
+
+    .severity {
+      background: var(--ink);
+    }
+
+    .finding-path div {
+      border-radius: 0;
+      background: #ffffff;
+      color: var(--ink);
+    }
+
+    .finding-path div + div::before {
+      display: none;
+    }
+
+    .policy-card,
+    .policy-card.review,
+    .policy-card.block {
+      border: 0;
+      background: #f0f0ed;
+    }
+
+    .policy-card h3 {
+      margin-top: 72px;
+    }
+
+    .approval-step,
+    .approval-step.human,
+    .approval-step.commit {
+      border: 0;
+      border-radius: 0;
+      background: #f0f0ed;
+    }
+
+    .approval-step.human {
+      background: var(--blue-soft);
+    }
+
+    .nonnegotiable {
+      border-radius: 0;
+      background: var(--ink);
+    }
+
+    .event-dot {
+      width: 34px;
+      height: 34px;
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+      color: var(--blue);
+      font-size: 14px;
+    }
+
+    .method-stack {
+      display: grid;
+      gap: 12px;
+    }
+
+    .method-item {
+      min-height: 106px;
+      padding: 20px 22px;
+      background: #f0f0ed;
+    }
+
+    .method-item .method-label {
+      display: block;
+      margin-bottom: 10px;
+      color: var(--blue);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .method-item strong {
+      display: block;
+      font-size: 17px;
+    }
+
+    .method-item p {
+      margin: 6px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.6;
+    }
+
+    .evaluation-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 16px;
+    }
+
+    .evaluation-item {
+      min-height: 300px;
+      padding: 26px;
+      background: #f0f0ed;
+    }
+
+    .evaluation-item .evaluation-label {
+      display: block;
+      margin-bottom: 82px;
+      color: var(--blue);
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+    }
+
+    .evaluation-item p {
+      margin: 12px 0 0;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.7;
+    }
+
+    .evaluation-note {
+      margin-top: 18px;
+      padding: 16px 20px;
+      background: var(--ink);
+      color: #ffffff;
+      font-size: 13px;
+      line-height: 1.65;
+    }
+
+    .score-track,
+    .score-fill {
+      border-radius: 0;
+    }
+
+    .score-row:nth-child(2) .score-fill,
+    .score-row:nth-child(3) .score-fill {
+      background: var(--blue);
+    }
+
+    .caveat {
+      border: 0;
+      border-radius: 0;
+      background: #f0f0ed;
+      color: var(--ink);
+    }
+
+    .boundary-card.limit {
+      border: 0;
+    }
+
+    .takeaway {
+      grid-template-columns: minmax(300px, 0.72fr) minmax(0, 1.28fr);
+    }
+
+    .takeaway-mark {
+      display: flex;
+      min-height: 430px;
+      align-items: flex-end;
+      padding: 36px;
+      background: var(--ink);
+    }
+
+    .takeaway-mark .ring,
+    .takeaway-mark .shield-block {
+      display: none;
+    }
+
+    .takeaway-statement {
+      color: #ffffff;
+      font-size: clamp(34px, 4vw, 54px);
+      font-weight: 800;
+      letter-spacing: -0.04em;
+      line-height: 1.25;
+    }
+
+    .three-words span {
+      border-radius: 0;
+    }
+
+    .control-center {
+      border-radius: 0;
+      box-shadow: none;
+      backdrop-filter: none;
+    }
+
+    .control-button {
+      width: auto;
+      min-width: 38px;
+      padding: 0 10px;
+      border-radius: 0;
+      font-family: var(--mono);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .page-count {
+      font-size: 12px;
+    }
+
+    .control-button svg {
+      display: none;
+    }
+
+    .progress button {
+      flex: 0 0 18px;
+    }
+
+    .progress button::before,
+    .progress button:hover::before,
+    .progress button:focus-visible::before,
+    .progress button[aria-current="step"]::before {
+      width: 6px;
+      height: 6px;
+      margin: auto;
+      border-radius: 0;
+    }
+
+    @media (max-width: 900px) {
+      .hero-grid,
+      .question-grid,
+      .graph-layout,
+      .detector-layout,
+      .experiment-grid,
+      .score-layout,
+      .status-layout,
+      .takeaway,
+      .demo-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .hero-visual {
+        min-height: 330px;
+      }
+
+      .hero-orbit {
+        width: 270px;
+        height: 270px;
+      }
+
+      .story-board {
+        grid-template-columns: 1fr;
+      }
+
+      .arrow-bridge {
+        height: 30px;
+        transform: rotate(90deg);
+      }
+
+      .stage-grid,
+      .policy-timeline {
+        grid-template-columns: 1fr;
+      }
+
+      .arch {
+        grid-template-columns: repeat(2, 1fr);
+      }
+
+      .arch-column + .arch-column::before {
+        display: none;
+      }
+
+      .approval-flow {
+        grid-template-columns: repeat(2, 1fr);
+      }
+
+      .approval-step + .approval-step::before {
+        display: none;
+      }
+
+      .slide {
+        align-items: start;
+      }
+
+      .takeaway-mark {
+        min-height: 330px;
+      }
+    }
+
+    @media (max-width: 620px) {
+      .topbar {
+        top: 12px;
+        left: 14px;
+        right: 14px;
+      }
+
+      .brand span {
+        display: none;
+      }
+
+      .slide {
+        min-height: 100svh;
+        padding: 68px 18px 94px;
+      }
+
+      .slide-head {
+        grid-template-columns: 1fr;
+        gap: 10px;
+      }
+
+      .slide-no {
+        display: none;
+      }
+
+      .lead {
+        font-size: 16px;
+      }
+
+      .hero-visual {
+        min-height: 300px;
+        transform: scale(0.86);
+      }
+
+      .stage-card,
+      .policy-card {
+        min-height: 285px;
+      }
+
+      .arch,
+      .approval-flow,
+      .boundary-grid,
+      .evaluation-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .graph-board {
+        min-height: 480px;
+      }
+
+      .graph-node {
+        width: 126px;
+      }
+
+      .graph-node.read {
+        top: 168px;
+        left: 20px;
+      }
+
+      .graph-node.edit {
+        left: auto;
+        right: 20px;
+        bottom: 158px;
+      }
+
+      .graph-node.answer {
+        top: auto;
+        right: 20px;
+        bottom: 22px;
+      }
+
+      .graph-node.safe {
+        display: none;
+      }
+
+      .flow-row {
+        grid-template-columns: 36px 1fr;
+        gap: 8px 14px;
+        padding: 18px;
+      }
+
+      .flow-row span:last-child {
+        grid-column: 2;
+      }
+
+      .rung {
+        grid-template-columns: 35px 1fr;
+      }
+
+      .rung span {
+        grid-column: 2;
+      }
+
+      .score-row {
+        grid-template-columns: 1fr 55px;
+        gap: 8px 12px;
+      }
+
+      .score-track {
+        grid-column: 1 / -1;
+        grid-row: 2;
+      }
+
+      .controls {
+        right: 12px;
+        bottom: 12px;
+        left: 12px;
+        grid-template-columns: 1fr auto;
+        gap: 8px;
+      }
+
+      .progress {
+        min-width: 0;
+        gap: 2px;
+      }
+
+      .progress button {
+        flex: 1 1 auto;
+        width: auto;
+      }
+
+      .progress {
+        grid-column: 1;
+      }
+
+      .control-center {
+        grid-column: 2;
+      }
+
+      .control-right {
+        display: none;
+      }
+
+      .control-button.fullscreen {
+        display: none;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *,
+      *::before,
+      *::after {
+        scroll-behavior: auto !important;
+        transition-duration: 0.01ms !important;
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+      }
+
+      .slide .reveal {
+        opacity: 1;
+        transform: none;
+      }
+    }
+
+    @media print {
+      @page {
+        size: 13.333in 7.5in;
+        margin: 0;
+      }
+
+      html,
+      body {
+        width: auto;
+        height: auto;
+        overflow: visible;
+        background: #fff;
+        print-color-adjust: exact;
+        -webkit-print-color-adjust: exact;
+      }
+
+      .topbar,
+      .controls,
+      .skip-link,
+      .announce {
+        display: none !important;
+      }
+
+      .deck {
+        display: block;
+        width: auto;
+        height: auto;
+        overflow: visible;
+      }
+
+      .slide {
+        width: 13.333in;
+        height: 7.5in;
+        min-height: 0;
+        overflow: hidden;
+        break-after: page;
+        page-break-after: always;
+      }
+
+      .slide .reveal {
+        opacity: 1;
+        transform: none;
+      }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip-link" href="#slide-1">発表本文へ移動</a>
+
+  <svg class="svg-defs" aria-hidden="true">
+    <defs>
+      <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+        <polygon points="0 0, 10 3.5, 0 7" fill="context-stroke"></polygon>
+      </marker>
+      <symbol id="i-shield" viewBox="0 0 24 24">
+        <path d="M12 3 4.5 6.2v5.2c0 4.8 3.1 8.1 7.5 9.6 4.4-1.5 7.5-4.8 7.5-9.6V6.2L12 3Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+        <path d="m8.9 12.1 2 2 4.4-4.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+      </symbol>
+      <symbol id="i-file" viewBox="0 0 24 24">
+        <path d="M6 3.5h8l4 4V20a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4.5a1 1 0 0 1 1-1Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+        <path d="M14 3.5V8h4M8 12h7M8 16h5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+      </symbol>
+      <symbol id="i-cpu" viewBox="0 0 24 24">
+        <rect x="6.5" y="6.5" width="11" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/>
+        <path d="M9.5 9.5h5v5h-5zM9 2.5v4M15 2.5v4M9 17.5v4M15 17.5v4M2.5 9h4M2.5 15h4M17.5 9h4M17.5 15h4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+      </symbol>
+      <symbol id="i-send" viewBox="0 0 24 24">
+        <path d="m21 3-7.4 18-3.8-7.3L3 9.8 21 3Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+        <path d="m9.8 13.7 4.5-4.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+      </symbol>
+      <symbol id="i-eye" viewBox="0 0 24 24">
+        <path d="M2.5 12s3.4-6 9.5-6 9.5 6 9.5 6-3.4 6-9.5 6-9.5-6-9.5-6Z" fill="none" stroke="currentColor" stroke-width="1.8"/>
+        <circle cx="12" cy="12" r="2.7" fill="none" stroke="currentColor" stroke-width="1.8"/>
+      </symbol>
+      <symbol id="i-route" viewBox="0 0 24 24">
+        <circle cx="5" cy="6" r="2" fill="none" stroke="currentColor" stroke-width="1.8"/>
+        <circle cx="19" cy="18" r="2" fill="none" stroke="currentColor" stroke-width="1.8"/>
+        <path d="M7 6h3.5a3 3 0 0 1 3 3v6a3 3 0 0 0 3 3H17M9.5 13H5a2 2 0 0 0-2 2v3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+      </symbol>
+      <symbol id="i-stop" viewBox="0 0 24 24">
+        <path d="m8 3-5 5v8l5 5h8l5-5V8l-5-5H8Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+        <path d="M8.5 8.5 15.5 15.5M15.5 8.5l-7 7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+      </symbol>
+      <symbol id="i-user-check" viewBox="0 0 24 24">
+        <circle cx="9" cy="8" r="3.5" fill="none" stroke="currentColor" stroke-width="1.8"/>
+        <path d="M3.5 20v-1.5A4.5 4.5 0 0 1 8 14h2a4.5 4.5 0 0 1 3.2 1.3M15 18l2 2 4-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+      </symbol>
+      <symbol id="i-lock" viewBox="0 0 24 24">
+        <rect x="4" y="10" width="16" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/>
+        <path d="M8 10V7a4 4 0 0 1 8 0v3M12 14v3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+      </symbol>
+      <symbol id="i-terminal" viewBox="0 0 24 24">
+        <rect x="3" y="4" width="18" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/>
+        <path d="m7 9 3 3-3 3M12.5 15H17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+      </symbol>
+      <symbol id="i-check" viewBox="0 0 24 24">
+        <path d="m5 12.5 4.5 4.5L19 7.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      </symbol>
+      <symbol id="i-alert" viewBox="0 0 24 24">
+        <path d="M12 3 2.8 20h18.4L12 3Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+        <path d="M12 9v5M12 17.3v.2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+      </symbol>
+      <symbol id="i-database" viewBox="0 0 24 24">
+        <ellipse cx="12" cy="5.5" rx="7.5" ry="3" fill="none" stroke="currentColor" stroke-width="1.8"/>
+        <path d="M4.5 5.5v6c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3v-6M4.5 11.5v6c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3v-6" fill="none" stroke="currentColor" stroke-width="1.8"/>
+      </symbol>
+      <symbol id="i-arrow-left" viewBox="0 0 24 24">
+        <path d="m15 18-6-6 6-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      </symbol>
+      <symbol id="i-arrow-right" viewBox="0 0 24 24">
+        <path d="m9 6 6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      </symbol>
+      <symbol id="i-fullscreen" viewBox="0 0 24 24">
+        <path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+      </symbol>
+    </defs>
+  </svg>
+
+  <header class="topbar" aria-hidden="true">
+    <div class="brand">
+      <span>ToolUseProxy Research</span>
+    </div>
+    <div class="section-label" id="section-label">INTRODUCTION</div>
+  </header>
+
+  <main class="deck" id="deck" aria-label="ToolUseProxy研究発表スライド">
+    <section class="slide is-active" id="slide-1" data-section="INTRODUCTION" aria-label="スライド1 表紙">
+      <div class="slide-inner hero-grid">
+        <div class="hero-title reveal">
+          <p class="kicker">Research Presentation / 2026</p>
+          <h1>AIエージェントの<br><span class="accent">情報の流れ</span>を守る</h1>
+          <p class="lead">Codexのツール利用をローカルで観測し、秘密情報が外部へ届くまでの経路を<strong>追跡・検知・制御</strong>する研究実装。</p>
+          <div class="meta-row" aria-label="研究の基本情報">
+            <span class="pill"><svg aria-hidden="true"><use href="#i-terminal"></use></svg>Codex Hooks</span>
+            <span class="pill"><svg aria-hidden="true"><use href="#i-route"></use></svg>Information Flow</span>
+            <span class="pill"><svg aria-hidden="true"><use href="#i-lock"></use></svg>Local-first</span>
+          </div>
+        </div>
+        <div class="hero-visual reveal" aria-hidden="true">
+          <div class="hero-orbit"></div>
+          <svg class="hero-shield"><use href="#i-shield"></use></svg>
+          <div class="orbit-card source"><svg><use href="#i-file"></use></svg>.env</div>
+          <div class="orbit-card tool"><svg><use href="#i-cpu"></use></svg>Codex</div>
+          <div class="orbit-card answer"><svg><use href="#i-send"></use></svg>final answer</div>
+          <div class="orbit-card trace"><svg><use href="#i-route"></use></svg>lineage</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide" id="slide-2" data-section="BACKGROUND" aria-label="スライド2 背景">
+      <div class="slide-inner">
+        <div class="slide-head">
+          <div>
+            <p class="kicker">01 / Background</p>
+            <h2>便利さと危険は、<br>同じ作業の中にある</h2>
+          </div>
+          <span class="slide-no">02 / 13</span>
+        </div>
+        <div class="story-board reveal">
+          <article class="story-card" data-step="01">
+            <div class="icon-box"><svg aria-hidden="true"><use href="#i-file"></use></svg></div>
+            <div>
+              <h3>秘密情報を読む</h3>
+              <p>開発支援のため、エージェントは設定ファイルや実行結果を読むことがある。</p>
+            </div>
+          </article>
+          <div class="arrow-bridge" aria-hidden="true"><svg><use href="#i-arrow-right"></use></svg></div>
+          <article class="story-card" data-step="02">
+            <div class="icon-box"><svg aria-hidden="true"><use href="#i-cpu"></use></svg></div>
+            <div>
+              <h3>推論してツールを使う</h3>
+              <p>ファイル編集、shell、MCP、最終回答など、複数の操作を連続して行う。</p>
+            </div>
+          </article>
+          <div class="arrow-bridge" aria-hidden="true"><svg><use href="#i-arrow-right"></use></svg></div>
+          <article class="story-card risk" data-step="03">
+            <div class="icon-box"><svg aria-hidden="true"><use href="#i-send"></use></svg></div>
+            <div>
+              <h3>外へ送ってしまう？</h3>
+              <p>値そのものだけでなく、加工・転記された情報も外部toolや回答へ届き得る。</p>
+            </div>
+          </article>
+        </div>
+        <div class="risk-banner reveal">
+          <strong>「読める」≠「送ってよい」</strong>
+          <span>権限内の操作であっても、情報がどこから来てどこへ向かったかを確認する必要がある。</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide" id="slide-3" data-section="RESEARCH QUESTION" aria-label="スライド3 研究課題">
+      <div class="slide-inner">
+        <div class="slide-head">
+          <div>
+            <p class="kicker">02 / Research Question</p>
+            <h2>研究の問い</h2>
+          </div>
+          <span class="slide-no">03 / 13</span>
+        </div>
+        <div class="question-grid">
+          <div class="big-question reveal">
+            <span class="label">Main question</span>
+            <blockquote>AIエージェントの作業を壊さずに、秘密情報の流出経路を説明し、必要な場面だけ止められるか？</blockquote>
+          </div>
+          <div class="subquestions reveal">
+            <article class="subquestion card">
+              <span class="number">Q1</span>
+              <div><h3>観測できるか</h3><p>ツール入力・出力・最終回答を、同じ作業の流れとして記録できるか。</p></div>
+            </article>
+            <article class="subquestion card">
+              <span class="number">Q2</span>
+              <div><h3>経路を説明できるか</h3><p>保護対象から外部送信候補まで、どの操作を経由したか再構築できるか。</p></div>
+            </article>
+            <article class="subquestion card">
+              <span class="number">Q3</span>
+              <div><h3>適切に介入できるか</h3><p>常に遮断せず、危険度とHookの位置に応じて記録・再確認・拒否を選べるか。</p></div>
+            </article>
+          </div>
+        </div>
+        <p class="source-note">Related concepts: provenance / information-flow control / runtime guardrails</p>
+      </div>
+    </section>
+
+    <section class="slide" id="slide-4" data-section="PROPOSAL" aria-label="スライド4 提案手法の概要">
+      <div class="slide-inner">
+        <div class="slide-head">
+          <div>
+            <p class="kicker">03 / Proposal</p>
+            <h2>提案：見張る、辿る、止める</h2>
+          </div>
+          <span class="slide-no">04 / 13</span>
+        </div>
+        <div class="stage-grid">
+          <article class="stage-card card reveal" data-number="1">
+            <div class="icon-box"><svg aria-hidden="true"><use href="#i-eye"></use></svg></div>
+            <h3>Trace</h3>
+            <p>Codex Hooksからtool useを記録し、「何を読んで、何を作り、どこへ渡したか」を残す。</p>
+            <span class="stage-tag">observe</span>
+          </article>
+          <article class="stage-card card detect reveal" data-number="2">
+            <div class="icon-box"><svg aria-hidden="true"><use href="#i-route"></use></svg></div>
+            <h3>Detect</h3>
+            <p>構造化adapterと文字列類似度を組み合わせ、protected sourceからsinkまでの経路を探す。</p>
+            <span class="stage-tag">explain</span>
+          </article>
+          <article class="stage-card card stop reveal" data-number="3">
+            <div class="icon-box"><svg aria-hidden="true"><use href="#i-stop"></use></svg></div>
+            <h3>Stop</h3>
+            <p>最終回答の再確認、またはopt-in時の外部送信拒否として、危険な経路へ介入する。</p>
+            <span class="stage-tag">intervene</span>
+          </article>
+        </div>
+        <p class="source-note">Source: <a href="../設計/アーキテクチャ.md">docs/設計/アーキテクチャ.md</a></p>
+      </div>
+    </section>
+
+    <section class="slide" id="slide-5" data-section="SYSTEM DESIGN" aria-label="スライド5 システム構成">
+      <div class="slide-inner">
+        <div class="slide-head">
+          <div>
+            <p class="kicker">04 / System Design</p>
+            <h2>Codexの外側に、<br>ローカルな観測層を置く</h2>
+          </div>
+          <span class="slide-no">05 / 13</span>
+        </div>
+        <div class="arch reveal" aria-label="ToolUseProxyのアーキテクチャ">
+          <div class="arch-column">
+            <div class="arch-title"><svg aria-hidden="true"><use href="#i-cpu"></use></svg>Codex</div>
+            <div class="arch-item"><strong>PreToolUse</strong><span>実行前のtool input</span></div>
+            <div class="arch-item"><strong>PostToolUse</strong><span>実行後のtool response</span></div>
+            <div class="arch-item"><strong>Stop</strong><span>最終回答</span></div>
+          </div>
+          <div class="arch-column highlight">
+            <div class="arch-title"><svg aria-hidden="true"><use href="#i-eye"></use></svg>Runtime</div>
+            <div class="arch-item"><strong>parse / normalize</strong><span>payloadを共通形式へ</span></div>
+            <div class="arch-item"><strong>artifact / resource</strong><span>情報と操作を抽出</span></div>
+            <div class="arch-item"><strong>SQLite</strong><span>workspace・session単位で保存</span></div>
+          </div>
+          <div class="arch-column">
+            <div class="arch-title"><svg aria-hidden="true"><use href="#i-route"></use></svg>Analysis</div>
+            <div class="arch-item"><strong>tool adapters</strong><span>構造が分かるedgeを優先</span></div>
+            <div class="arch-item"><strong>similarity</strong><span>文字列の依存候補を探索</span></div>
+            <div class="arch-item"><strong>lineage graph</strong><span>sourceからsinkへ伝播</span></div>
+          </div>
+          <div class="arch-column policy">
+            <div class="arch-title"><svg aria-hidden="true"><use href="#i-shield"></use></svg>Policy</div>
+            <div class="arch-item"><strong>allow</strong><span>通常どおり継続</span></div>
+            <div class="arch-item"><strong>continue_review</strong><span>回答を作り直す</span></div>
+            <div class="arch-item"><strong>deny</strong><span>外部送信を実行前に拒否</span></div>
+          </div>
+        </div>
+        <div class="note-line reveal"><svg aria-hidden="true"><use href="#i-lock"></use></svg>解析・保存はローカル。Hook内のnetwork access、remote embedding、telemetryは使わない。</div>
+        <p class="source-note">Source: <a href="../設計/アーキテクチャ.md">アーキテクチャ概要</a> / <a href="../../PRIVACY.md">PRIVACY.md</a></p>
+      </div>
+    </section>
+
+    <section class="slide" id="slide-6" data-section="TRACE" aria-label="スライド6 情報流グラフ">
+      <div class="slide-inner">
+        <div class="slide-head">
+          <div>
+            <p class="kicker">05 / Trace</p>
+            <h2>ログではなく、<br>「経路」として見る</h2>
+          </div>
+          <span class="slide-no">06 / 13</span>
+        </div>
+        <div class="graph-layout">
+          <div class="flow-table reveal" aria-label="protected sourceから最終回答までの情報流の例">
+            <div class="flow-row"><span class="flow-index">01</span><strong>source_chunk</strong><span>.envから、ユーザーが保護対象として選んだ値を読み込む。</span></div>
+            <div class="flow-row"><span class="flow-index">02</span><strong>Bash output</strong><span>catの出力として同じ情報が現れたことを記録する。</span></div>
+            <div class="flow-row"><span class="flow-index">03</span><strong>apply_patch</strong><span>別ファイルへの編集に使われた場合はresourceとの関係を残す。</span></div>
+            <div class="flow-row"><span class="flow-index">04</span><strong>final_answer</strong><span>最終回答へ届いた場合、外向きsink候補として評価する。</span></div>
+          </div>
+          <div class="graph-legend reveal">
+            <article class="legend-card card">
+              <span class="mini-label">Provenance</span>
+              <h3>由来を残す</h3>
+              <p>結果だけでなく、どのevent・artifact・resourceから導かれたかをedgeとして保存する。</p>
+            </article>
+            <article class="legend-card card">
+              <span class="mini-label">Lineage</span>
+              <h3>危険経路を説明する</h3>
+              <p>「秘密らしい文字があった」ではなく、source → 操作 → sinkの順で説明できる。</p>
+            </article>
+          </div>
+        </div>
+        <p class="source-note">Conceptual basis: W3C PROV / provenance traces. Implementation: <a href="../設計/情報流追跡.md">情報流追跡</a></p>
+      </div>
+    </section>
+
+    <section class="slide" id="slide-7" data-section="DETECT" aria-label="スライド7 検知方法">
+      <div class="slide-inner">
+        <div class="slide-head">
+          <div>
+            <p class="kicker">06 / Detect</p>
+            <h2>完全一致だけでは、<br>情報の変形を追えない</h2>
+          </div>
+          <span class="slide-no">07 / 13</span>
+        </div>
+        <div class="detector-layout">
+          <div class="ladder reveal" aria-label="類似度判定の段階">
+            <div class="rung"><span class="rung-number">01</span><strong>exact</strong><span>正規化後も同じ文字列</span></div>
+            <div class="rung"><span class="rung-number">02</span><strong>substring</strong><span>長い出力やcommand内に値が含まれる</span></div>
+            <div class="rung"><span class="rung-number">03</span><strong>token equivalent</strong><span>区切りや表記が変わってもtoken列が等しい</span></div>
+            <div class="rung"><span class="rung-number">04</span><strong>shingle</strong><span>部分列の重なりから候補を絞る</span></div>
+            <div class="rung"><span class="rung-number">+</span><strong>tool adapter</strong><span>pathや送信fieldを理解できる場合は構造的edgeを優先</span></div>
+          </div>
+          <aside class="finding-card reveal" aria-label="検知結果の例">
+            <div class="finding-head"><strong>finding / 0042</strong><span class="severity">critical</span></div>
+            <div class="finding-path">
+              <div>protected source</div>
+              <div>Bash tool_output</div>
+              <div>external sink</div>
+            </div>
+            <p class="finding-foot">検知結果には経路、sink種別、score、判断理由を残し、policyが介入方法を選ぶ。</p>
+          </aside>
+        </div>
+        <p class="source-note">Source: <a href="../設計/漏えい検知.md">漏えい検知</a> / <a href="../運用/類似度評価.md">類似度評価</a></p>
+      </div>
+    </section>
+
+    <section class="slide" id="slide-8" data-section="INTERVENTION" aria-label="スライド8 介入と明示承認">
+      <div class="slide-inner">
+        <div class="slide-head">
+          <div>
+            <p class="kicker">07 / Intervention</p>
+            <h2>強さの違う介入を、<br>安全な順に使う</h2>
+          </div>
+          <span class="slide-no">08 / 13</span>
+        </div>
+        <div class="policy-timeline">
+          <article class="policy-card card reveal">
+            <span class="hook">PostToolUse</span>
+            <div class="icon-box"><svg aria-hidden="true"><use href="#i-database"></use></svg></div>
+            <h3>記録する</h3>
+            <p>実行後のeventとbounded evidenceを保存し、後から経路を再構築する。</p>
+            <span class="default">DEFAULT: ON</span>
+          </article>
+          <article class="policy-card card review reveal">
+            <span class="hook">Stop</span>
+            <div class="icon-box"><svg aria-hidden="true"><use href="#i-user-check"></use></svg></div>
+            <h3>回答を再確認する</h3>
+            <p>criticalな経路が最終回答に届いた場合、Codexへ修正版の生成を求める。</p>
+            <span class="default">ALPHA: ON</span>
+          </article>
+          <article class="policy-card card block reveal">
+            <span class="hook">PreToolUse</span>
+            <div class="icon-box"><svg aria-hidden="true"><use href="#i-stop"></use></svg></div>
+            <h3>実行前に拒否する</h3>
+            <p>criticalなBash / MCP外部送信だけを、実際に送られる前にdenyする。</p>
+            <span class="default">DEFAULT: OPT-IN</span>
+          </article>
+        </div>
+        <p class="source-note">Safe default: runtime rewrite/redactは無効。複数Hook後の最終入力を証明できないため、曖昧な書換えを行わない。</p>
+      </div>
+    </section>
+
+    <section class="slide" id="slide-9" data-section="HUMAN CONTROL" aria-label="スライド9 保護ソースの登録">
+      <div class="slide-inner">
+        <div class="slide-head">
+          <div>
+            <p class="kicker">08 / Human Control</p>
+            <h2>何を守るかは、<br>エージェントが勝手に決めない</h2>
+          </div>
+          <span class="slide-no">09 / 13</span>
+        </div>
+        <div class="approval-flow reveal" aria-label="保護ソースを登録する4段階">
+          <article class="approval-step"><span class="step-no">STEP 1</span><h3>Offline scan</h3><p>.env / JSON候補を上限付きで探索。Hook実行中には行わない。</p></article>
+          <article class="approval-step"><span class="step-no">STEP 2</span><h3>Value-free提案</h3><p>相対path、selector、検出理由だけを提示。値そのものは表示しない。</p></article>
+          <article class="approval-step human"><span class="step-no">STEP 3</span><h3>人が明示承認</h3><p>提示されたexact proposalを1件ずつ確認し、approve / reject / ignoreを選ぶ。</p></article>
+          <article class="approval-step commit"><span class="step-no">STEP 4</span><h3>Atomic登録</h3><p>承認後だけmanifestへ原子的に追加。途中変更やstale proposalは拒否する。</p></article>
+        </div>
+        <div class="nonnegotiable reveal"><svg aria-hidden="true"><use href="#i-lock"></use></svg>一括承認なし・無承認の自動登録なし・Hook中のworkspace-wide scanなし</div>
+        <p class="source-note">Source: <a href="../設定/Plugin導入.md">Codex Plugin 導入</a></p>
+      </div>
+    </section>
+
+    <section class="slide" id="slide-10" data-section="EXPERIMENT" aria-label="スライド10 観測実験の手順">
+      <div class="slide-inner">
+        <div class="slide-head">
+          <div>
+            <p class="kicker">09 / Experiment A</p>
+            <h2>実装を確かめるための、<br>観測実験の手順</h2>
+          </div>
+          <span class="slide-no">10 / 13</span>
+        </div>
+        <div class="experiment-grid">
+          <div class="method-stack reveal">
+            <article class="method-item"><span class="method-label">Observe</span><strong>Hook payload</strong><p>実際のtool input・tool response・最終回答を共通形式で記録できるか。</p></article>
+            <article class="method-item"><span class="method-label">Reconstruct</span><strong>Information flow</strong><p>記録したeventからsource・artifact・resource・sinkの関係を再構築できるか。</p></article>
+            <article class="method-item"><span class="method-label">Intervene</span><strong>Policy behavior</strong><p>危険な経路と安全な経路に対し、意図したpolicy判断が行われるか。</p></article>
+          </div>
+          <article class="experiment-story reveal">
+            <div class="event-sequence">
+              <div class="event-dot">01</div><div class="event-content"><strong>合成した保護情報を用意する</strong><span>実際のsecretは使わず、挙動を追いやすいダミー文字列を用いる。</span></div>
+              <div class="event-dot">02</div><div class="event-content"><strong>代表的なtool useを行う</strong><span>Bash・ファイル編集・最終回答など、情報が移動する操作を実行する。</span></div>
+              <div class="event-dot">03</div><div class="event-content"><strong>保存された経路を再構築する</strong><span>Hook payloadからartifact、resource、sinkまでの関係を確認する。</span></div>
+              <div class="event-dot last">04</div><div class="event-content"><strong>policy判断と副作用を照合する</strong><span>記録・再確認・拒否が、想定した境界で働くかを比較する。</span></div>
+            </div>
+          </article>
+        </div>
+        <p class="source-note">Source: <a href="../調査/Codex実Hook観測実験.md">Codex実Hook観測実験</a></p>
+      </div>
+    </section>
+
+    <section class="slide" id="slide-11" data-section="EVALUATION" aria-label="スライド11 評価設計">
+      <div class="slide-inner">
+        <div class="slide-head">
+          <div>
+            <p class="kicker">10 / Experiment B</p>
+            <h2>評価は、三つの観点に分ける</h2>
+          </div>
+          <span class="slide-no">11 / 13</span>
+        </div>
+        <div class="evaluation-grid reveal">
+          <article class="evaluation-item"><span class="evaluation-label">A / QUALITY</span><h3>検知品質</h3><p>情報の対応付け、候補探索、sourceからsinkまでの到達判定を分けて確認する。</p></article>
+          <article class="evaluation-item"><span class="evaluation-label">B / CONSISTENCY</span><h3>再現性</h3><p>全体再解析と差分解析で、同じ情報流とpolicy判断を再現できるかを確認する。</p></article>
+          <article class="evaluation-item"><span class="evaluation-label">C / SAFETY</span><h3>安全性</h3><p>誤った遮断やprivacy exposureを見落とさず、通常タスクへの影響も評価する。</p></article>
+        </div>
+        <div class="evaluation-note reveal">合成データによる再現可能な評価と、未知の実世界データを使う外部holdoutは分けて扱う。</div>
+        <p class="source-note">Source: <a href="../運用/類似度評価.md">類似度評価</a> / <a href="../運用/外部holdout評価.md">外部holdout評価</a></p>
+      </div>
+    </section>
+
+    <section class="slide" id="slide-12" data-section="LIMITATIONS" aria-label="スライド12 安全境界と今後の課題">
+      <div class="slide-inner">
+        <div class="slide-head">
+          <div>
+            <p class="kicker">11 / Limitations</p>
+            <h2>できることと、<br>できないことを分ける</h2>
+          </div>
+          <span class="slide-no">12 / 13</span>
+        </div>
+        <div class="boundary-grid">
+          <article class="boundary-card card reveal">
+            <div class="card-head"><svg aria-hidden="true"><use href="#i-check"></use></svg><h3>Local-first</h3></div>
+            <p>ToolUseProxy自身はnetwork request、remote embedding、telemetryを行わない。</p>
+          </article>
+          <article class="boundary-card card reveal">
+            <div class="card-head"><svg aria-hidden="true"><use href="#i-check"></use></svg><h3>説明可能な介入</h3></div>
+            <p>sourceからsinkまでの経路、score、判断理由を監査可能な形で残す。</p>
+          </article>
+          <article class="boundary-card card limit reveal">
+            <div class="card-head"><svg aria-hidden="true"><use href="#i-alert"></use></svg><h3>完全なDLPではない</h3></div>
+            <p>未知tool、意味的な言い換え、解析失敗を完全には扱えない。内部例外では原則fail-open。</p>
+          </article>
+          <article class="boundary-card card limit reveal">
+            <div class="card-head"><svg aria-hidden="true"><use href="#i-alert"></use></svg><h3>ローカル保存にもリスク</h3></div>
+            <p>SQLiteにraw payloadやprotected textが平文で残り得る。自動retentionやsecure eraseは未搭載。</p>
+          </article>
+        </div>
+        <p class="source-note">Source: <a href="../../SUPPORT.md">SUPPORT.md</a> / <a href="../../PRIVACY.md">PRIVACY.md</a></p>
+      </div>
+    </section>
+
+    <section class="slide" id="slide-13" data-section="CONCLUSION" aria-label="スライド13 結論">
+      <div class="slide-inner takeaway">
+        <div class="takeaway-mark reveal" aria-hidden="true">
+          <div class="takeaway-statement">守る前に、<br>まず辿れる<br>ようにする。</div>
+        </div>
+        <div class="takeaway-copy reveal">
+          <p class="kicker">12 / Conclusion</p>
+          <h2>安全に速く進むための、情報流ガードレール</h2>
+          <p class="lead">ToolUseProxyは、AIエージェントを単に止める研究ではない。<strong>情報の由来と経路を見える形にし、人が理解できる境界で介入する</strong>ための研究である。</p>
+          <div class="three-words" aria-label="研究の3つの要点">
+            <span>TRACE</span><span>DETECT</span><span>STOP</span>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <nav class="controls" aria-label="スライド操作">
+    <div class="progress" id="progress" aria-label="スライド一覧"></div>
+    <div class="control-center">
+      <button class="control-button" id="prev" type="button" aria-label="前のスライド">
+        <span aria-hidden="true">←</span>
+      </button>
+      <span class="page-count" id="page-count" aria-live="off">01 / 13</span>
+      <button class="control-button" id="next" type="button" aria-label="次のスライド">
+        <span aria-hidden="true">→</span>
+      </button>
+      <button class="control-button fullscreen" id="fullscreen" type="button" aria-label="全画面表示">
+        <span aria-hidden="true">全画面</span>
+      </button>
+    </div>
+    <div class="control-right" aria-hidden="true">
+      <span class="key-hint"><kbd>←</kbd><kbd>→</kbd> to navigate</span>
+    </div>
+  </nav>
+
+  <div class="announce" id="announce" aria-live="polite"></div>
+
+  <script>
+    (() => {
+      const deck = document.getElementById("deck");
+      const slides = Array.from(deck.querySelectorAll(".slide"));
+      const progress = document.getElementById("progress");
+      const previousButton = document.getElementById("prev");
+      const nextButton = document.getElementById("next");
+      const fullscreenButton = document.getElementById("fullscreen");
+      const pageCount = document.getElementById("page-count");
+      const sectionLabel = document.getElementById("section-label");
+      const announce = document.getElementById("announce");
+      let current = 0;
+      let scrollFrame = null;
+      let pendingTarget = null;
+      let navigationTimer = null;
+
+      const formatNumber = (number) => String(number).padStart(2, "0");
+
+      slides.forEach((slide, index) => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.setAttribute("aria-label", `スライド${index + 1}へ移動`);
+        button.addEventListener("click", () => goTo(index));
+        progress.appendChild(button);
+      });
+
+      const progressButtons = Array.from(progress.querySelectorAll("button"));
+
+      function update(index, shouldAnnounce = false) {
+        current = Math.max(0, Math.min(index, slides.length - 1));
+        slides.forEach((slide, slideIndex) => {
+          const isActive = slideIndex === current;
+          slide.classList.toggle("is-active", isActive);
+          slide.setAttribute("aria-hidden", isActive ? "false" : "true");
+          slide.inert = !isActive;
+        });
+        progressButtons.forEach((button, buttonIndex) => {
+          if (buttonIndex === current) {
+            button.setAttribute("aria-current", "step");
+          } else {
+            button.removeAttribute("aria-current");
+          }
+        });
+        previousButton.disabled = current === 0;
+        nextButton.disabled = current === slides.length - 1;
+        pageCount.textContent = `${formatNumber(current + 1)} / ${formatNumber(slides.length)}`;
+        sectionLabel.textContent = slides[current].dataset.section || "";
+        document.title = `${slides[current].querySelector("h1, h2")?.textContent.trim() || "ToolUseProxy"} — ToolUseProxy`;
+        if (shouldAnnounce) {
+          announce.textContent = `スライド${current + 1}、${slides[current].getAttribute("aria-label")}`;
+        }
+      }
+
+      function goTo(index, shouldAnnounce = true) {
+        const target = Math.max(0, Math.min(index, slides.length - 1));
+        pendingTarget = target;
+        window.clearTimeout(navigationTimer);
+        slides[target].scrollTop = 0;
+        update(target, shouldAnnounce);
+        deck.scrollTo({ left: target * window.innerWidth, behavior: "smooth" });
+        navigationTimer = window.setTimeout(() => {
+          deck.scrollLeft = target * window.innerWidth;
+          pendingTarget = null;
+          update(target);
+        }, 480);
+      }
+
+      deck.addEventListener("scroll", () => {
+        if (scrollFrame) cancelAnimationFrame(scrollFrame);
+        scrollFrame = requestAnimationFrame(() => {
+          if (pendingTarget !== null) return;
+          const index = Math.round(deck.scrollLeft / Math.max(window.innerWidth, 1));
+          if (index !== current) update(index);
+        });
+      }, { passive: true });
+
+      previousButton.addEventListener("click", () => goTo(current - 1));
+      nextButton.addEventListener("click", () => goTo(current + 1));
+
+      fullscreenButton.addEventListener("click", async () => {
+        try {
+          if (!document.fullscreenElement) {
+            await document.documentElement.requestFullscreen();
+          } else {
+            await document.exitFullscreen();
+          }
+        } catch (_) {
+          announce.textContent = "このブラウザでは全画面表示を開始できませんでした";
+        }
+      });
+
+      document.addEventListener("fullscreenchange", () => {
+        fullscreenButton.setAttribute("aria-label", document.fullscreenElement ? "全画面表示を終了" : "全画面表示");
+      });
+
+      document.addEventListener("keydown", (event) => {
+        const target = event.target;
+        if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target?.isContentEditable) return;
+        if (event.key === "ArrowRight" || event.key === "PageDown" || event.key === " ") {
+          event.preventDefault();
+          goTo(current + 1);
+        } else if (event.key === "ArrowLeft" || event.key === "PageUp") {
+          event.preventDefault();
+          goTo(current - 1);
+        } else if (event.key === "Home") {
+          event.preventDefault();
+          goTo(0);
+        } else if (event.key === "End") {
+          event.preventDefault();
+          goTo(slides.length - 1);
+        } else if (event.key.toLowerCase() === "f") {
+          event.preventDefault();
+          fullscreenButton.click();
+        }
+      });
+
+      window.addEventListener("resize", () => {
+        slides[current].scrollIntoView({ behavior: "auto", block: "nearest", inline: "start" });
+      });
+
+      update(0);
+    })();
+  </script>
+</body>
+</html>
