@@ -93,7 +93,7 @@ dataset digestは`0e7045219148a9e1ba45073e390802ca21ddb60b6c119afd532c66d76b3998
 1. [#18](https://github.com/mani1261790/ToolUseProxy/issues/18): CLI TUIで自己完結型command承認説明を再検証する
 2. [#18](https://github.com/mani1261790/ToolUseProxy/issues/18): Desktop / GUIでHook review、command承認、実tool blockを別に検証する
 3. [#19](https://github.com/mani1261790/ToolUseProxy/issues/19): 少人数pilotでinstall / update / removeと説明UXのfeedbackを集める
-4. [#20](https://github.com/mani1261790/ToolUseProxy/issues/20): repository外holdoutとcross-platform実Codex taskを評価する
+4. [#19](https://github.com/mani1261790/ToolUseProxy/issues/19): repository外holdoutとcross-platform実Codex taskを評価する
 
 ## 研究の考え方
 
