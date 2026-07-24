@@ -64,6 +64,7 @@ class PluginArtifactTest(unittest.TestCase):
             self.assertIn("QUICKSTART.md", names)
             self.assertIn("README.en.md", names)
             self.assertIn("README.md", names)
+            self.assertIn("SECURITY.md", names)
             self.assertIn("SUPPORT.md", names)
             self.assertIn("tooluseproxy/.codex-plugin/plugin.json", names)
             self.assertIn("tooluseproxy/LICENSE", names)

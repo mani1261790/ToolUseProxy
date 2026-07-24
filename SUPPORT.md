@@ -1,6 +1,6 @@
 # サポート範囲と既知の制限
 
-ToolUseProxy `0.1.0-alpha.3`は研究用public alpha候補です。本番環境向けのSLA、security certification、完全なDLP、全toolの遮断保証は提供しません。対応と未対応をsilent fallbackで同一視せず、次の範囲を現在の契約とします。
+ToolUseProxy `0.1.0-alpha.3`は研究用public alphaです。本番環境向けのSLA、security certification、完全なDLP、全toolの遮断保証は提供しません。対応と未対応をsilent fallbackで同一視せず、次の範囲を現在の契約とします。
 
 ## 実行環境
 
@@ -59,11 +59,11 @@ Codex Plugin APIやHook payloadはToolUseProxyとは別に変更され得ます�
 - candidate retrievalはartifact 50 / source 200の有限上限を持つ
 - local SQLiteにはraw Hook payloadやprotected source由来textが平文で残り得る
 - database、backup、trace exportの自動retention / secure eraseはない
-- immutable alpha.1からalpha.3候補へのlocal upgrade、backupを使うsafe rollback、Plugin / marketplace remove、data保持 / 明示uninstallはisolated Codex CLIで検証済み。Linux実Codex CLI、Windows実機、将来version間の反復は未完了
+- immutable alpha.1からalpha.3へのlocal upgrade、backupを使うsafe rollback、Plugin / marketplace remove、data保持 / 明示uninstallはisolated Codex CLIで検証済み。Linux実Codex CLI、Windows実機、将来version間の反復は未完了
 - runtime policyは他のHookやtool自体をexclusiveに制御できず、ToolUseProxy単独で完全な外部送信防止を保証しない
 
 dataの詳細は[プライバシーとデータ保持](PRIVACY.md)、導入手順は[Codex Plugin導入](docs/設定/Plugin導入.md)、実装の優先順位は[実装タスク](docs/運用/実装タスク.md)を参照してください。
 
 ## 問題報告
 
-[GitHub Issues](https://github.com/mani1261790/ToolUseProxy/issues)へ、OS、Python / Codex version、実行command、期待結果、実結果をsynthetic dataで報告してください。secret、raw Hook payload、`events.db`、absolute user pathは添付しないでください。security-sensitiveな報告経路はpublic化前のrelease gateで別途固定します。
+[GitHub Issues](https://github.com/mani1261790/ToolUseProxy/issues)へ、OS、Python / Codex version、実行command、期待結果、実結果をsynthetic dataで報告してください。secret、raw Hook payload、`events.db`、absolute user pathは添付しないでください。security-sensitiveな内容は[非公開の脆弱性報告手順](SECURITY.md)を使用してください。

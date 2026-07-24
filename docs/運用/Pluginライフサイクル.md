@@ -1,6 +1,6 @@
 # Plugin upgrade / rollback rehearsal
 
-public alpha候補のinstall、明示upgrade、safe rollback、disable、remove、data保持、明示uninstallをsynthetic dataだけで反復します。
+public alphaのinstall、明示upgrade、safe rollback、disable、remove、data保持、明示uninstallをsynthetic dataだけで反復します。
 
 ## version境界
 
@@ -39,7 +39,7 @@ python3.11 scripts/rehearse_plugin_lifecycle.py \
 
 1. alpha.1をinstallし、schema v1 DBへsynthetic eventを記録
 2. PluginをremoveしてHook codeを無効化し、marketplace削除前後でdata保持を確認
-3. alpha.3候補をinstallし、旧schemaに対するHookがfail-openしてDDLやevent書込みをしないことを確認
+3. alpha.3をinstallし、旧schemaに対するHookがfail-openしてDDLやevent書込みをしないことを確認
 4. Hook外の明示`init --codex`でv1 backupを作り、schema v4へupgrade
 5. baseline event、workspace登録、runtime activeを確認し、upgrade後eventを記録
 6. alpha.3 codeをremoveし、dataを保持

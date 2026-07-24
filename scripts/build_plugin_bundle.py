@@ -31,6 +31,7 @@ MARKETPLACE_DOCUMENTATION_FILES = (
     "QUICKSTART.md",
     "README.en.md",
     "README.md",
+    "SECURITY.md",
     "SUPPORT.md",
 )
 PYTHON_PACKAGE_DIRECTORIES = ("hook_monitor", "tooluseproxy")

@@ -20,6 +20,7 @@ SDIST_ROOT_FILES = {
     PurePosixPath("QUICKSTART.md"),
     PurePosixPath("README.en.md"),
     PurePosixPath("README.md"),
+    PurePosixPath("SECURITY.md"),
     PurePosixPath("SUPPORT.md"),
     PurePosixPath("pyproject.toml"),
     PurePosixPath("setup.cfg"),

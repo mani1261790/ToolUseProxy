@@ -2,6 +2,7 @@ include README.md
 include README.en.md
 include QUICKSTART.md
 include PRIVACY.md
+include SECURITY.md
 include SUPPORT.md
 include LICENSE
 include pyproject.toml
