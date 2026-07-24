@@ -93,32 +93,29 @@ class ManualPluginPhaseBTest(unittest.TestCase):
             self.assertIn("Desktop/GUI", guide)
             self.assertIn("別の検証", guide)
             for approval_label in (
-                "実行する操作",
-                "目的",
-                "読むもの",
-                "変更するもの",
-                "外部通信",
-                "元に戻せるか",
-                "承認判断",
+                "【操作】",
+                "【目的】",
+                "【影響】",
+                "【通信】",
+                "【取消】",
+                "【判断】",
             ):
                 self.assertIn(approval_label, guide)
                 self.assertIn(approval_label, prompt)
-            for approval_heading in (
-                "### 実行前の確認",
-                "**実行する操作**",
-                "**目的**",
-                "**読むもの**",
-                "**変更するもの**",
-                "**外部通信**",
-                "**元に戻せるか**",
-                "**承認判断**",
-                "承認してよい条件",
-                "拒否する条件",
-            ):
-                self.assertIn(approval_heading, guide)
-                self.assertIn(approval_heading, prompt)
-            self.assertIn("各見出しの前後に空行", guide)
-            self.assertIn("各見出しの前後に空行", prompt)
+            self.assertIn(
+                "実行確認｜【操作】短い説明｜【目的】短い説明｜【影響】短い説明",
+                guide,
+            )
+            self.assertIn(
+                "実行確認｜【操作】短い説明｜【目的】短い説明｜【影響】短い説明",
+                prompt,
+            )
+            self.assertIn("Markdownを描画せず、改行を潰す", guide)
+            self.assertIn("Markdownや改行に頼らない", prompt)
+            self.assertNotIn("### 実行前の確認", guide)
+            self.assertNotIn("### 実行前の確認", prompt)
+            self.assertNotIn("**実行する操作**", guide)
+            self.assertNotIn("**実行する操作**", prompt)
             self.assertIn(
                 "init、doctor、status、protect scanのどれかが失敗",
                 prompt,
@@ -236,29 +233,22 @@ class ManualPluginPhaseBTest(unittest.TestCase):
         ):
             self.assertIn(proposal_label, skill)
         for approval_label in (
-            "実行する操作",
-            "目的",
-            "読むもの",
-            "変更するもの",
-            "外部通信",
-            "元に戻せるか",
-            "承認判断",
+            "【操作】",
+            "【目的】",
+            "【影響】",
+            "【通信】",
+            "【取消】",
+            "【判断】",
         ):
             self.assertIn(approval_label, skill)
-        for approval_heading in (
-            "### 実行前の確認",
-            "**実行する操作**",
-            "**目的**",
-            "**読むもの**",
-            "**変更するもの**",
-            "**外部通信**",
-            "**元に戻せるか**",
-            "**承認判断**",
-            "承認してよい条件",
-            "拒否する条件",
-        ):
-            self.assertIn(approval_heading, skill)
-        self.assertIn("before and after every heading", skill)
+        self.assertIn(
+            "実行確認｜【操作】...｜【目的】...｜【影響】...",
+            skill,
+        )
+        self.assertIn("may collapse every newline", skill)
+        self.assertIn("Never use Markdown headings", skill)
+        self.assertNotIn("### 実行前の確認", skill)
+        self.assertNotIn("**実行する操作**", skill)
         self.assertIn("continue to any send test", skill)
         self.assertIn("long `sh ...`", skill)
         self.assertIn("self-contained", skill)

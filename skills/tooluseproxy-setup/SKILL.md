@@ -33,53 +33,32 @@ Before requesting permission to run any `run_cli.sh` or `run_cli.cmd` command,
 explain the operation in plain language. The explanation must let a person
 decide without parsing the installed Plugin path or the raw shell command, and
 without remembering an earlier guide or explanation. Repeat a self-contained
-permission card immediately before every permission request. Build the card
-from the exact command arguments that will be submitted. Render it only in the
-exact vertical Markdown shape below. The bold headings, their order, and the
-blank line before and after every heading are mandatory. A consecutive
-`- label: long paragraph` list is invalid even if it contains all seven labels.
+permission summary immediately before every permission request. Build the
+summary from the exact command arguments that will be submitted.
 
-```markdown
-### 実行前の確認
+Assume the Codex approval surface renders plain text, exposes Markdown syntax
+literally, and may collapse every newline. Therefore the summary must be one
+short physical paragraph. Never use Markdown headings, emphasis, bullets,
+tables, code spans, or fenced blocks in it. In particular, do not emit `#`,
+`*`, backticks, or a leading `-`.
 
-**実行する操作**
+Use these full-width plain-text delimiters in this exact order:
 
-<name the exact subcommand, count, and target workspace in ordinary language>
+`実行確認｜【操作】...｜【目的】...｜【影響】...｜【通信】...｜【取消】...｜【判断】...`
 
-**目的**
+Keep the whole summary concise enough to scan after line wrapping. Describe:
 
-<what the operation accomplishes>
+- `操作`: exact subcommand, count, and target workspace in ordinary language
+- `目的`: what the operation accomplishes
+- `影響`: local data it reads and state it may write, or `変更なし`
+- `通信`: `なし` unless the operation truly requires it
+- `取消`: how to reverse or review the change
+- `判断`: first state the checked approval condition, then the concrete
+  mismatch or extra operation that requires rejection
 
-**読むもの**
-
-<which local configuration or source scope it reads>
-
-**変更するもの**
-
-<which local files or database state it may write, or なし>
-
-**外部通信**
-
-<なし unless the operation truly requires it>
-
-**元に戻せるか**
-
-<how to reverse or review the change>
-
-**承認判断**
-
-承認してよい条件:
-
-- <repeat the exact operation and scope already checked against the command>
-
-拒否する条件:
-
-- <mismatches or extra operations that require rejection>
-```
-
-Keep each paragraph to one or two short sentences. Put an absolute path on its
-own line when it must be shown; do not bury multiple paths inside prose. Do not
-combine the approval and rejection conditions into one long sentence.
+Do not list every absolute path in the summary. Name the workspace briefly and
+say that the submitted arguments were checked against the approved context
+file. The raw command remains available separately for technical review.
 
 Do not use implementation terms such as revision, manifest hash, Hook data
 directory, or opaque token as the primary permission explanation. Those terms
@@ -87,11 +66,11 @@ may follow as technical detail. If a command combines multiple read-only
 checks after one local initialization, say so explicitly.
 
 Never use memory-dependent references such as `説明済み`, `上記の操作`, or
-`先ほどの説明` in the permission card. The final `承認判断` line must stand
+`先ほどの説明` in the permission summary. The `【判断】` segment must stand
 on its own. Before submitting the tool call, verify that the long `sh ...`
 display uses the expected installed Plugin launcher, exact subcommand,
 workspace, and data directory, and contains no unmentioned command. State that
-verification in the card. Tell the user to reject if the command differs from
+verification in the summary. Tell the user to reject if the command differs from
 the named operation or scope. The user must not need to understand the long
 shell command to decide.
 
