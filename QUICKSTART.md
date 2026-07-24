@@ -6,7 +6,7 @@ After a public pre-release exists, add the repository marketplace with an immuta
 release ref:
 
 ```bash
-codex plugin marketplace add mani1261790/ToolUseProxy --ref <release-tag>
+codex plugin marketplace add mani1261790/ToolUseProxy --ref v0.1.0-alpha.3
 codex plugin add tooluseproxy@tooluseproxy
 ```
 
