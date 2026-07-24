@@ -805,7 +805,16 @@ class PluginBundleTest(unittest.TestCase):
 
         self.assertEqual("tooluseproxy", manifest["name"])
         self.assertEqual(__version__, manifest["version"].replace("-alpha.", "a"))
+        self.assertEqual("Apache-2.0", manifest["license"])
         self.assertNotIn("hooks", manifest)
+        self.assertEqual(
+            (
+                "ToolUseProxy checks tool inputs before execution, records tool "
+                "results locally, and reviews final responses for protected content. "
+                "These hooks do not use the network."
+            ),
+            hooks["description"],
+        )
         rendered_hooks = json.dumps(hooks)
         self.assertIn("PLUGIN_ROOT", rendered_hooks)
         self.assertNotIn(str(REPO_ROOT), rendered_hooks)

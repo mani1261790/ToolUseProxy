@@ -2,6 +2,16 @@
 
 This quickstart uses a local development checkout. Public releases will use an immutable tag or artifact; do not treat a mutable remote branch as a trusted distribution source.
 
+After a public pre-release exists, add the repository marketplace with an immutable
+release ref:
+
+```bash
+codex plugin marketplace add mani1261790/ToolUseProxy --ref <release-tag>
+codex plugin add tooluseproxy@tooluseproxy
+```
+
+Do not use this remote command until the repository is public and the named tag exists.
+
 ## 1. Prerequisites
 
 - macOS or Linux
@@ -9,6 +19,7 @@ This quickstart uses a local development checkout. Public releases will use an i
 - Codex CLI with Plugin support
 
 Review [support and known limitations](SUPPORT.md) and [privacy and retention](PRIVACY.md). ToolUseProxy stores local audit data that may contain plaintext code, commands, responses, and protected-source chunks.
+The source and distribution artifacts are licensed under the [Apache License 2.0](LICENSE).
 
 ## 2. Optional 30-second preview
 

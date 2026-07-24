@@ -8,6 +8,7 @@ dynamic = ["version"]
 description = "Local information-flow guardrails for Codex tool use"
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
+license = "Apache-2.0"
 authors = [
   { name = "ToolUseProxy contributors" },
 ]
@@ -17,7 +18,7 @@ dependencies = []
 dev = [
   "build>=1.2",
   "pytest>=8",
-  "ruff>=0.8",
+  "ruff==0.15.22",
 ]
 
 [project.scripts]

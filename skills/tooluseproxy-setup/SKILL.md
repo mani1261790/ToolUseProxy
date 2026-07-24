@@ -7,9 +7,88 @@ description: Set up, diagnose, inspect, or explicitly uninstall the ToolUseProxy
 
 Use this workflow only when the user asks to set up, diagnose, or uninstall ToolUseProxy. Never add a protected source or delete local data without showing the exact value-free plan and receiving explicit user approval.
 
+Before asking the user to trust ToolUseProxy Hooks, explain all three roles in
+plain language:
+
+- `PreToolUse`: toolを実行する前に、Bash、file edit、MCPへ渡す内容を確認し、
+  protected contentの外部送信を実行前に止める。
+- `PostToolUse`: toolを実行した後に、入力と結果をlocal DBへ記録する。すでに
+  実行されたtoolを取り消すものではない。
+- `Stop`: 最終回答を返す前に、protected contentが残っていないか確認し、必要なら
+  回答を作り直させる。
+
+Explain that command Hooks run outside the Codex sandbox with the user's local
+permissions. ToolUseProxy's Hook implementation writes to its local data
+directory and does not make network requests, but the user must still verify
+the source is `Plugin - tooluseproxy@tooluseproxy`, exactly three ToolUseProxy
+Hooks are present, and every ToolUseProxy command points inside the expected
+installed Plugin root. In an isolated manual Phase B harness, those three must
+be the only pending Hooks. Outside that harness, if unrelated Hooks are also
+pending, do not use `Trust all`; review the three ToolUseProxy entries
+individually. Explain that trust applies to the exact definitions currently
+shown and changed definitions require review again. If any ToolUseProxy source,
+count, or path differs, tell the user not to trust and stop setup.
+
+Before requesting permission to run any `run_cli.sh` or `run_cli.cmd` command,
+explain the operation in plain language. The explanation must let a person
+decide without parsing the installed Plugin path or the raw shell command, and
+without remembering an earlier guide or explanation. Repeat a self-contained
+permission summary immediately before every permission request. Build the
+summary from the exact command arguments that will be submitted.
+
+Assume the Codex approval surface renders plain text, exposes Markdown syntax
+literally, and may collapse every newline. Therefore the summary must be one
+short physical paragraph. Never use Markdown headings, emphasis, bullets,
+tables, code spans, or fenced blocks in it. In particular, do not emit `#`,
+`*`, backticks, or a leading `-`.
+
+Use these full-width plain-text delimiters in this exact order:
+
+`実行確認｜【操作】...｜【目的】...｜【影響】...｜【通信】...｜【取消】...｜【判断】...`
+
+Keep the whole summary concise enough to scan after line wrapping. Describe:
+
+- `操作`: exact subcommand, count, and target workspace in ordinary language
+- `目的`: what the operation accomplishes
+- `影響`: local data it reads and state it may write, or `変更なし`
+- `通信`: `なし` unless the operation truly requires it
+- `取消`: how to reverse or review the change
+- `判断`: first state the checked approval condition, then the concrete
+  mismatch or extra operation that requires rejection
+
+Do not list every absolute path in the summary. Name the workspace briefly and
+say that the submitted arguments were checked against the approved context
+file. The raw command remains available separately for technical review.
+
+Do not use implementation terms such as revision, manifest hash, Hook data
+directory, or opaque token as the primary permission explanation. Those terms
+may follow as technical detail. If a command combines multiple read-only
+checks after one local initialization, say so explicitly.
+
+Never use memory-dependent references such as `説明済み`, `上記の操作`, or
+`先ほどの説明` in the permission summary. The `【判断】` segment must stand
+on its own. Before submitting the tool call, verify that the long `sh ...`
+display uses the expected installed Plugin launcher, exact subcommand,
+workspace, and data directory, and contains no unmentioned command. State that
+verification in the summary. Tell the user to reject if the command differs from
+the named operation or scope. The user must not need to understand the long
+shell command to decide.
+
 1. Confirm that the current directory is the intended workspace root.
 2. Confirm that the ToolUseProxy Plugin Hook definition has been reviewed and trusted in Codex. Do not bypass Hook trust.
-3. Resolve the absolute Plugin root from this skill's location; it is two directories above `skills/tooluseproxy-setup`. On macOS/Linux, run every command through `sh "<PLUGIN_ROOT>/hooks/run_cli.sh"`. The general Windows launcher is `<PLUGIN_ROOT>\hooks\run_cli.cmd`, but the entire protected-source registration workflow is not supported on Windows yet.
+3. If the workspace belongs to a manual Phase B harness and the prompt names a
+   mode `0600` `phase-b-context.json`, read that exact file first. Use only its
+   `workspace`, `plugin_root`, `plugin_data`, and `test_sink` paths. Do not use
+   `ps`, inspect parent-process environments, or broadly search outside the
+   workspace to rediscover those paths. If the context conflicts with the
+   current workspace or a Hook diagnostic, stop and explain the mismatch.
+   Otherwise, resolve the absolute Plugin root from this skill's location; it
+   is two directories above `skills/tooluseproxy-setup`. On macOS/Linux, run
+   every command through `sh "<PLUGIN_ROOT>/hooks/run_cli.sh"`. The general
+   Windows launcher is `<PLUGIN_ROOT>\hooks\run_cli.cmd`, but the entire
+   protected-source registration workflow is not supported on Windows yet.
+   If the context declares `surface: codex_cli_tui`, report the result only for
+   the Codex CLI TUI. Do not infer Codex Desktop/GUI support from that run.
 4. Initialize the same writable directory used by the Hook:
 
    ```text
@@ -18,6 +97,11 @@ Use this workflow only when the user asks to set up, diagnose, or uninstall Tool
 
    If `PLUGIN_DATA` is not available in the current shell, use the exact data directory printed by the Plugin Hook's `database_missing` diagnostic. Do not guess a cache path.
 5. Run `doctor` and `status` with the same `--workspace` and `--data-dir` values. Stop and explain every failing check before enabling stronger policy gates. A legacy manifest may remain runtime-readable and active while reporting `registration_writable: false` and `migration_required: true`.
+   In a manual Phase B run, if `init`, `doctor`, `status`, or `protect scan`
+   returns an error or non-healthy status, stop that run immediately. Do not
+   continue to any send test, do not attempt the protected call, and do not
+   treat a later recovery as evidence for the failed run. Diagnose or prepare
+   a fresh run separately.
 6. Treat the generated `protected_sources.json` as a user-owned manifest. Never edit it directly on the user's behalf. If `status` reports that schema is omitted or v1, create a value-free migration plan on POSIX:
 
    ```text
@@ -40,6 +124,37 @@ Use this workflow only when the user asks to set up, diagnose, or uninstall Tool
    ```
 
    The scanner is read-only for source files and the manifest, performs no network access, and uses fixed limits for traversal depth, entries, supported files, total bytes, and candidates. It excludes VCS, dependencies, virtual environments, build/cache directories, symlinks, and ToolUseProxy runtime data. It writes only a value-free candidate/review audit plus internal source hash/stat to the local runtime database and returns at most one review candidate in stable relative-path order. Show the relative path, reason codes, confidence, proposed source entry, and scan completeness. Never show or repeat source values, source hashes, absolute paths, or file previews. If `scan_complete` is false, explain the reached limit reasons and that unscanned scope remains; never report that no protected source exists.
+
+   Before showing the exact JSON proposal, translate it into this five-line
+   review card:
+
+   - `守るファイル`: show only the workspace-relative path.
+   - `守る範囲`: explain selectors as scope, not syntax. For `dotenv_keys`,
+     say that only the values of the named settings are selected, not every
+     value in the file. For `json_pointers`, identify the selected JSON fields
+     without showing their values. If there is no selector, say that the file
+     content is selected.
+   - `止める場面`: explain in ordinary language that attempts to include the
+     selected content in external sending or search can be stopped before the
+     tool runs.
+   - `承認すると変わるもの`: explain that one entry is added to
+     `protected_sources.json`; the source file itself is not changed.
+   - `承認しない場合`: explain that nothing is registered or changed. Briefly
+     offer reject for a reviewed non-secret and ignore when the user does not
+     want the same content proposed again by the current detector.
+
+   After the card, copy the CLI result's proposed source object verbatim as the
+   exact value-free JSON proposal. Do not reconstruct it from memory, rename
+   keys, change singular/plural forms, change arrays or objects, add or remove
+   fields, or normalize its contents. In particular, preserve `selector`
+   exactly; never rewrite it as `selectors`. If the exact object is no longer
+   available, stop and rerun the same bounded discovery command instead of
+   presenting a reconstructed proposal. Follow the JSON with reason codes,
+   confidence, and scan completeness as technical detail. First ask whether
+   the user understands what content is selected and what approval changes.
+   If the answer is no or uncertain, explain again and do not request approval.
+   Ask for explicit approve, reject, or ignore only after the explanation is
+   understood.
 8. If the user or agent already knows one `.env`, `.env.*`, or JSON path, or needs to propose a file outside the bounded scanner's policy, use the explicit-path fallback:
 
    ```text

@@ -2,7 +2,7 @@
 
 Codexのtool useをローカルで観測し、protected sourceから外部toolや最終回答までの情報流を追跡・検知・制御するための研究実装です。
 
-> 現在は`0.1.0-alpha.3`です。中核機能と再現可能な配布候補は動作しますが、LICENSE、manual Phase B、公開前review、immutable releaseは未完了です。
+> 現在は`0.1.0-alpha.3`です。中核機能、再現可能な配布候補、Apache-2.0の配布契約は整いましたが、manual Phase B、公開前review、immutable releaseは未完了です。
 
 - [Codex Pluginとして試す](docs/設定/Plugin導入.md)
 - [5分quickstart / Five-minute quickstart](QUICKSTART.md)
@@ -37,7 +37,7 @@ Hook内のnetwork access、remote embedding、telemetryは使いません。runt
 | 3. Stop | alpha実装済み | Stopの`continue_review`と、opt-inのBash / MCP PreToolUse denyを提供。runtime redactは無効 |
 | Plugin化 | alpha.3 | installable package、relocatable Plugin、`PLUGIN_ROOT` / `PLUGIN_DATA`、初期化・診断・traceを実装 |
 | protected source登録 | 明示承認型を実装済み | `scan` / `suggest` → exact proposal → `approve` / `reject` / `ignore`。無承認登録はしない |
-| Public alpha | 準備中 | checksum / SBOM、archive内部、CI Action、hash-locked build、Git履歴監査のsupply-chain gate、upgrade / rollback、自動dogfoodは完了。LICENSE、manual Phase B、人手security review、immutable releaseが未完了 |
+| Public alpha | 準備中 | Apache-2.0、checksum / SBOM、archive内部、CI Action、hash-locked build、Git履歴監査のsupply-chain gate、upgrade / rollback、自動dogfoodは完了。CLI TUIのmanual Phase B説明UX、Desktop / GUI検証、人手security review、immutable releaseが未完了 |
 
 設計全体は[アーキテクチャ概要](docs/設計/アーキテクチャ.md)、詳細な完了範囲と残作業は[実装タスク計画](docs/運用/実装タスク.md)を参照してください。
 
@@ -87,8 +87,8 @@ dataset digestは`0e7045219148a9e1ba45073e390802ca21ddb60b6c119afd532c66d76b3998
 
 優先順位の正本は[実装タスク計画](docs/運用/実装タスク.md)とGitHub Issues / Projectです。
 
-1. [#18](https://github.com/mani1261790/ToolUseProxy/issues/18): manual Phase BでHook trust、agent説明、明示判断、実tool side effect 0を測る
-2. [#19](https://github.com/mani1261790/ToolUseProxy/issues/19): public alphaのLICENSEを決定する
+1. [#18](https://github.com/mani1261790/ToolUseProxy/issues/18): CLI TUIで自己完結型command承認説明を再検証する
+2. [#18](https://github.com/mani1261790/ToolUseProxy/issues/18): Desktop / GUIでHook review、command承認、実tool blockを別に検証する
 3. [#19](https://github.com/mani1261790/ToolUseProxy/issues/19): final answer / MCP、update / rollback、remove / uninstallを含むmanual Phase Bを閉じる
 4. [#19](https://github.com/mani1261790/ToolUseProxy/issues/19): 公開前security reviewと少人数pilotを行う
 5. [#19](https://github.com/mani1261790/ToolUseProxy/issues/19): immutable tag / GitHub pre-releaseを明示承認後に作成する
@@ -114,6 +114,10 @@ API keyのように文字列patternで判別しやすい秘密だけでなく、
 - 公開前の設計方針、関数名、閾値、アイデア
 
 企業向けの大規模DLPを導入しにくい個人開発者・学生研究者が、ローカルで軽量に試せる仕組みを目指します。
+
+## ライセンス
+
+ToolUseProxyは[Apache License 2.0](LICENSE)で提供します。
 
 ## 進捗管理
 

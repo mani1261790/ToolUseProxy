@@ -67,7 +67,7 @@ codex plugin marketplace add /absolute/path/to/extracted
 codex plugin add tooluseproxy@tooluseproxy
 ```
 
-builderはruntime fileを明示的に選び、`.git`、`.github`、tests、内部設計docs、scripts、cache、virtual environment、local DB、legacy Hook entrypointをZIPへ含めません。展開したmarketplace rootにはREADME、support、privacy契約を含めますが、marketplace metadataとこれらの文書はinstall済みPluginには入りません。ZIPはまだ署名済みpublic releaseではないため、checksum公開、SBOM、release notes、LICENSE gateを満たすまでは開発・dogfood用途として扱います。
+builderはruntime fileを明示的に選び、`.git`、`.github`、tests、内部設計docs、scripts、cache、virtual environment、local DB、legacy Hook entrypointをZIPへ含めません。展開したmarketplace rootにはREADME、support、privacy契約、Apache-2.0 LICENSEを含め、install済みPluginにもLICENSEを残します。ZIPはまだ署名済みpublic releaseではないため、immutable tag、green CI、manual Phase B、公開承認を満たすまでは開発・dogfood用途として扱います。
 
 installまたはHook定義の更新後は、Codexが示すHook definitionを確認してtrustします。ToolUseProxyはこのreviewを迂回しません。新しいPlugin componentとskillを確実に読み込むため、trust後は新しいtaskを開始します。
 
@@ -210,7 +210,7 @@ release artifactは、古い`build/`や`.DS_Store`を混入させないclean sta
 python3.11 scripts/build_package.py --outdir dist --sdist
 ```
 
-wheel / sdist / Plugin ZIPはruntime allowlistへ固定し、Python 3.11 / 3.12でcheckout外installをCI検証します。release candidate builderはmanifest、SHA256SUMS、CycloneDX 1.7 SBOM、release notes候補を一括生成します。immutable tag、GitHub pre-release、LICENSE gateは[実装タスク計画](../運用/実装タスク.md)と[#19](https://github.com/mani1261790/ToolUseProxy/issues/19)で管理します。
+wheel / sdist / Plugin ZIPはruntime allowlistへ固定し、Python 3.11 / 3.12でcheckout外installをCI検証します。release candidate builderはApache-2.0 metadata、manifest、SHA256SUMS、CycloneDX 1.7 SBOM、release notes候補を一括生成します。immutable tagとGitHub pre-releaseは[実装タスク計画](../運用/実装タスク.md)と[#19](https://github.com/mani1261790/ToolUseProxy/issues/19)で管理します。
 
 ## disable / uninstall
 

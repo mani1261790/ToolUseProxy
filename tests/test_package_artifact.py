@@ -13,6 +13,7 @@ from pathlib import Path, PurePosixPath
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PACKAGE_BUILDER = REPO_ROOT / "scripts" / "build_package.py"
 SDIST_ROOT_FILES = {
+    PurePosixPath("LICENSE"),
     PurePosixPath("MANIFEST.in"),
     PurePosixPath("PKG-INFO"),
     PurePosixPath("PRIVACY.md"),
@@ -142,9 +143,17 @@ class PackageArtifactTest(unittest.TestCase):
                     if len(path.parts) == 2 and path.parts[0].endswith(".dist-info"):
                         self.assertIn(path.name, DIST_INFO_FILES, str(path))
                         continue
+                    if (
+                        len(path.parts) == 3
+                        and path.parts[0].endswith(".dist-info")
+                        and path.parts[1] == "licenses"
+                    ):
+                        self.assertEqual("LICENSE", path.name)
+                        continue
                     self.fail(f"unexpected wheel file: {path}")
 
             self.assertEqual({">=3.11", "<3.13"}, set(metadata["Requires-Python"].split(",")))
+            self.assertEqual("Apache-2.0", metadata["License-Expression"])
             self.assertTrue(any(path.parts[0] == "hook_monitor" for path in wheel_paths))
             self.assertTrue(any(path.parts[0] == "tooluseproxy" for path in wheel_paths))
 

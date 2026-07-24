@@ -8,6 +8,7 @@
   },
   "homepage": "https://github.com/mani1261790/ToolUseProxy",
   "repository": "https://github.com/mani1261790/ToolUseProxy",
+  "license": "Apache-2.0",
   "keywords": [
     "codex",
     "hooks",
@@ -26,6 +27,7 @@
       "Write"
     ],
     "websiteURL": "https://github.com/mani1261790/ToolUseProxy",
+    "privacyPolicyURL": "https://github.com/mani1261790/ToolUseProxy/blob/main/PRIVACY.md",
     "defaultPrompt": [
       "Set up ToolUseProxy for this workspace.",
       "Run ToolUseProxy doctor and explain any problem.",
