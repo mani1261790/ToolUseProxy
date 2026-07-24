@@ -34,17 +34,52 @@ explain the operation in plain language. The explanation must let a person
 decide without parsing the installed Plugin path or the raw shell command, and
 without remembering an earlier guide or explanation. Repeat a self-contained
 permission card immediately before every permission request. Build the card
-from the exact command arguments that will be submitted, and use these labels:
+from the exact command arguments that will be submitted. Render it only in the
+exact vertical Markdown shape below. The bold headings, their order, and the
+blank line before and after every heading are mandatory. A consecutive
+`- label: long paragraph` list is invalid even if it contains all seven labels.
 
-- `実行する操作`: name the exact subcommand, count, and target workspace in
-  ordinary language
-- `目的`: what the operation accomplishes
-- `読むもの`: which local configuration or source scope it reads
-- `変更するもの`: which local files or database state it may write, or `なし`
-- `外部通信`: `なし` unless the operation truly requires it
-- `元に戻せるか`: how to reverse or review the change
-- `承認判断`: repeat the exact operation and scope that this one approval will
-  allow, plus the concrete conditions that require rejection
+```markdown
+### 実行前の確認
+
+**実行する操作**
+
+<name the exact subcommand, count, and target workspace in ordinary language>
+
+**目的**
+
+<what the operation accomplishes>
+
+**読むもの**
+
+<which local configuration or source scope it reads>
+
+**変更するもの**
+
+<which local files or database state it may write, or なし>
+
+**外部通信**
+
+<なし unless the operation truly requires it>
+
+**元に戻せるか**
+
+<how to reverse or review the change>
+
+**承認判断**
+
+承認してよい条件:
+
+- <repeat the exact operation and scope already checked against the command>
+
+拒否する条件:
+
+- <mismatches or extra operations that require rejection>
+```
+
+Keep each paragraph to one or two short sentences. Put an absolute path on its
+own line when it must be shown; do not bury multiple paths inside prose. Do not
+combine the approval and rejection conditions into one long sentence.
 
 Do not use implementation terms such as revision, manifest hash, Hook data
 directory, or opaque token as the primary permission explanation. Those terms
@@ -83,6 +118,11 @@ shell command to decide.
 
    If `PLUGIN_DATA` is not available in the current shell, use the exact data directory printed by the Plugin Hook's `database_missing` diagnostic. Do not guess a cache path.
 5. Run `doctor` and `status` with the same `--workspace` and `--data-dir` values. Stop and explain every failing check before enabling stronger policy gates. A legacy manifest may remain runtime-readable and active while reporting `registration_writable: false` and `migration_required: true`.
+   In a manual Phase B run, if `init`, `doctor`, `status`, or `protect scan`
+   returns an error or non-healthy status, stop that run immediately. Do not
+   continue to any send test, do not attempt the protected call, and do not
+   treat a later recovery as evidence for the failed run. Diagnose or prepare
+   a fresh run separately.
 6. Treat the generated `protected_sources.json` as a user-owned manifest. Never edit it directly on the user's behalf. If `status` reports that schema is omitted or v1, create a value-free migration plan on POSIX:
 
    ```text

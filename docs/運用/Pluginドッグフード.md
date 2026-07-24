@@ -61,7 +61,7 @@ prepareは同じrootへmode `0600`の`phase-b-prompt.txt`、`phase-b-guide.md`�
 
 1. guideでPreToolUse / PostToolUse / Stopの役割、sandbox外実行、local data、networkなし、想定source / 件数 / command rootを理解する
 2. Codexが表示する3件のHook definitionをreviewし、guideと一致する場合だけtrustする
-3. 長いPlugin commandの承認ごとに、「実行する操作」「目的」「読むもの」「変更するもの」「外部通信」「元に戻せるか」「承認判断」がその場だけで分かる形で繰り返される
+3. 長いPlugin commandの承認ごとに、「実行する操作」「目的」「読むもの」「変更するもの」「外部通信」「元に戻せるか」「承認判断」が独立した太字見出しになり、各見出しと本文の間、次の見出しとの間に空行がある
 4. synthetic workspaceで`init`、`doctor`、`status`を実行する
 5. `protect scan`候補について、exact JSONより先に「守るファイル」「守る範囲」「止める場面」「承認すると変わるもの」「承認しない場合」の説明を読む
 6. その説明を理解した場合だけexact proposalを明示approveする
@@ -71,6 +71,8 @@ prepareは同じrootへmode `0600`の`phase-b-prompt.txt`、`phase-b-guide.md`�
 Phase B harnessはPATH上の`curl`を信用しません。promptに記録された絶対pathのfake sinkだけを使い、fake sinkはnetworkへ接続せず、呼び出された事実だけをmarkerへ書きます。public callはmarkerを作り、protected callはPreToolUse denyによりmarkerを作らないことが期待結果です。system curl、別pathのcurl、変更されたfake sinkを使ったrunはmarkerの有無にかかわらず不合格です。
 
 protected fixtureはHookが実行前に観測できる静的なtool inputで試します。`$TOKEN`、`source .env`、command substitution、stdin、`@file`はシェル実行後に値が決まるため、このPhase B caseへ混ぜません。これらは保護済みと誤認せず、dynamic shell valueの既知の未対応境界として別に評価します。実行後、ユーザー自身の確認結果を明示してverifierを実行します。
+
+`init`、`doctor`、`status`、`protect scan`のどれかが失敗または非正常statusを返したrunでは、public / protected callへ進みません。後からDBが自然復旧しても、そのrunを成功証拠へ変更しません。原因調査またはfresh prepareを別に行います。
 
 ```bash
 python3.11 scripts/manual_plugin_phase_b.py verify \
@@ -116,6 +118,8 @@ verify出力はroot path、source hash、candidate ID、tool input、raw canary�
 2026-07-24のPhase B v2 human runでは、candidate approve、public allow、protected PreToolUse block、protected side effect 0、session / Hook DB / markerの相互照合はすべて成功しました。一方、最初のUX評価はHook review理解`no`、proposal説明理解`no`でした。起動前guideとcandidate review cardを追加した次のrunではcandidate説明は理解でき、同じ機能動作も成功しましたが、command承認は「起動前guideを覚えている」前提が残っていました。長い`sh ...`を理解せず、その承認直前の説明だけで判断することはできなかったため、command説明は`no`です。どちらのrunも`needs_followup`であり、機能成功を説明UX成功へ読み替えません。
 
 次のrunでは、各command承認の直前にexact command argumentsから作った自己完結型の7項目を表示します。「説明済み」「上記の操作」「先ほどの説明」のような過去参照は禁止し、「承認判断」で今回のsubcommand・scope・照合結果・拒否条件を繰り返します。このTUI再検証とは別に、Desktop / GUI専用のPhase B caseを用意します。
+
+その後のhuman runでは7項目は出ましたが、`- ラベル: 長い文章`が連続し、承認時に読みづらいという評価でした。また`doctor`の一時的な`OperationalError`後もagentがscanと送信テストへ進み、protected callは遮断されませんでした。DBはrun終了後にSQLite `quick_check`とdoctorが正常へ戻り、恒久破損ではありませんでしたが、このrunは明確に不合格です。次の改修では縦型Markdown cardを唯一の表示形式にし、異常時は送信テストへ進まず停止します。
 
 verify結果を保存した後は、prepare出力の`logout_command`でisolated `CODEX_HOME`からlogoutします。失敗調査中はrootを保持できますが、調査完了後は認証cacheとraw local sessionを含むため、必要なaggregate evidenceを残してrootを明示的に削除します。削除はverifierが自動で行いません。
 

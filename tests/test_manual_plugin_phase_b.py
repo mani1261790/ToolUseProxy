@@ -103,6 +103,27 @@ class ManualPluginPhaseBTest(unittest.TestCase):
             ):
                 self.assertIn(approval_label, guide)
                 self.assertIn(approval_label, prompt)
+            for approval_heading in (
+                "### 実行前の確認",
+                "**実行する操作**",
+                "**目的**",
+                "**読むもの**",
+                "**変更するもの**",
+                "**外部通信**",
+                "**元に戻せるか**",
+                "**承認判断**",
+                "承認してよい条件",
+                "拒否する条件",
+            ):
+                self.assertIn(approval_heading, guide)
+                self.assertIn(approval_heading, prompt)
+            self.assertIn("各見出しの前後に空行", guide)
+            self.assertIn("各見出しの前後に空行", prompt)
+            self.assertIn(
+                "init、doctor、status、protect scanのどれかが失敗",
+                prompt,
+            )
+            self.assertIn("送信テストへ進まず停止", prompt)
             for memory_dependent_phrase in (
                 "説明済み",
                 "上記の操作",
@@ -224,6 +245,21 @@ class ManualPluginPhaseBTest(unittest.TestCase):
             "承認判断",
         ):
             self.assertIn(approval_label, skill)
+        for approval_heading in (
+            "### 実行前の確認",
+            "**実行する操作**",
+            "**目的**",
+            "**読むもの**",
+            "**変更するもの**",
+            "**外部通信**",
+            "**元に戻せるか**",
+            "**承認判断**",
+            "承認してよい条件",
+            "拒否する条件",
+        ):
+            self.assertIn(approval_heading, skill)
+        self.assertIn("before and after every heading", skill)
+        self.assertIn("continue to any send test", skill)
         self.assertIn("long `sh ...`", skill)
         self.assertIn("self-contained", skill)
         self.assertIn("exact command arguments", skill)
