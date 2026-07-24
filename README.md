@@ -46,14 +46,23 @@ Hook内のnetwork access、remote embedding、telemetryは使いません。runt
 
 ## Pluginをインストールする
 
-Python 3.11または3.12とCodex CLIを用意し、公開済みのimmutable tagをmarketplaceとして追加します。可変な`main`ではなく、次のrelease tagへ固定してください。OS・機能別の境界は[サポート範囲](SUPPORT.md)を確認してください。
+Python 3.11または3.12とCodex CLIを用意します。通常は、公開alphaだけをfast-forwardで配信する`public-alpha`更新チャンネルを追加してください。可変な開発branchの`main`を実行元にはしません。OS・機能別の境界は[サポート範囲](SUPPORT.md)を確認してください。
 
 ```bash
-codex plugin marketplace add mani1261790/ToolUseProxy --ref v0.1.0-alpha.3
+codex plugin marketplace add mani1261790/ToolUseProxy --ref public-alpha
 codex plugin add tooluseproxy@tooluseproxy
 ```
 
-Codexが表示するHook definitionを確認してtrustし、新しいtaskを開始します。Pluginが示す`PLUGIN_ROOT` / `PLUGIN_DATA`を使って、対象workspaceで初期化と診断を行います。
+更新は自動ではありません。新しいpublic alphaが出た後、次を明示的に実行します。
+
+```bash
+codex plugin marketplace upgrade tooluseproxy
+codex plugin list --json
+```
+
+特定versionを固定したい場合は、`public-alpha`の代わりにimmutable tag `v0.1.0-alpha.3`を指定します。固定tagは`marketplace upgrade`を実行しても別versionへ移動しません。
+
+installまたは更新後は、Codexが表示するHook definitionを確認してtrustし、新しいtaskを開始します。Pluginが示す`PLUGIN_ROOT` / `PLUGIN_DATA`を使って、対象workspaceで初期化と診断を行います。
 
 ```bash
 sh "<PLUGIN_ROOT>/hooks/run_cli.sh" init --codex --data-dir "<PLUGIN_DATA>"
@@ -61,7 +70,7 @@ sh "<PLUGIN_ROOT>/hooks/run_cli.sh" doctor --workspace "$PWD" --data-dir "<PLUGI
 sh "<PLUGIN_ROOT>/hooks/run_cli.sh" status --workspace "$PWD" --data-dir "<PLUGIN_DATA>"
 ```
 
-Hook trustで確認する内容、protected sourceの候補発見・承認、更新、削除時のdata保持を含む完全な手順は[Plugin導入](docs/設定/Plugin導入.md)にあります。checkoutから開発版を試す場合だけ、local marketplaceとして絶対pathを指定してください。
+Hook trustで確認する内容、更新チャンネルと固定tagの違い、protected sourceの候補発見・承認、rollback、削除時のdata保持を含む完全な手順は[Plugin導入](docs/設定/Plugin導入.md)にあります。Codex CLIのMarketplace更新は実機検証済みですが、Codex Desktop / GUIの更新操作は未検証です。checkoutから開発版を試す場合だけ、local marketplaceとして絶対pathを指定してください。
 
 ## 安全側の既定値
 

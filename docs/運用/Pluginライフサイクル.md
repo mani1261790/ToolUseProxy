@@ -13,6 +13,20 @@ baseline treeは`git archive`から一時directoryへ展開します。CI checko
 
 ## 実行
 
+### Codex native marketplace update
+
+実Codex CLIがmoving marketplace refを更新し、install済みPluginをremove / reinstallなしに置き換える契約は専用testで検証します。
+
+```bash
+python3.11 -m pytest tests/test_codex_marketplace_upgrade.py
+```
+
+testはloopback HTTPだけを使う一時Git marketplaceを作り、同じrefをalpha.1から現在commitへfast-forwardします。`codex plugin marketplace upgrade tooluseproxy --json`後に、Plugin versionがalpha.3へ変わること、古いcacheが除かれること、`PLUGIN_DATA/events.db`が残ること、明示`init --codex`でmigration backupを作ってactiveになることを確認します。外部networkや実secretは使いません。
+
+公開運用では同じmoving refとして保護branch `public-alpha`を使います。このbranchはreview済み・CI green・公開済みのrelease commitだけへfast-forwardし、force pushと削除を禁止します。immutable tagによるversion固定も引き続き提供します。
+
+### Artifact transition and rollback
+
 Codex CLIを介さずartifactのcode transitionを検証します。
 
 ```bash
@@ -51,3 +65,13 @@ python3.11 scripts/rehearse_plugin_lifecycle.py \
 rollbackは新schema DBを旧runtimeで無理にdowngradeしません。upgrade後DBをそのまま保持し、pre-migration backupから別data directoryを作るため、rollback失敗時も新しい履歴を上書きしません。
 
 runnerはHook payloadを直接渡すだけで、BashやMCP tool自体を実行しません。summaryはversion、commit、artifact SHA-256、schema version、value-free checksだけを返し、synthetic markerがstdout / stderrへ現れた場合は失敗します。Hook definition trustは自動化・迂回せずmanual gateとして残します。
+
+## release channelの更新手順
+
+1. `main`でversion、Plugin manifest、package metadataを揃え、全CIをgreenにする
+2. immutable tagとGitHub prereleaseを作り、artifact、SHA256SUMS、SBOMを公開・検証する
+3. release commitだけを`public-alpha`へfast-forwardするPRを作る
+4. required checksと差分を確認してmergeする
+5. cleanなisolated `CODEX_HOME`でinstallと`marketplace upgrade`を再検証する
+
+`main`や未公開commitへ`public-alpha`を向けません。channel更新とrelease artifact公開の順序を逆転させません。

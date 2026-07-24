@@ -1,7 +1,7 @@
 # ToolUseProxy five-minute quickstart
 
-This quickstart installs the public alpha from the immutable
-`v0.1.0-alpha.3` tag. Do not substitute the mutable `main` branch.
+This quickstart installs the public alpha from the protected `public-alpha`
+release channel. Do not substitute the mutable development branch `main`.
 
 ## 1. Prerequisites
 
@@ -24,14 +24,17 @@ It does not replace manual Hook trust or actual-tool Phase B testing.
 
 ## 3. Install the public Plugin
 
-Add the tagged repository marketplace and install ToolUseProxy:
+Add the public-alpha release channel and install ToolUseProxy:
 
 ```bash
-codex plugin marketplace add mani1261790/ToolUseProxy --ref v0.1.0-alpha.3
+codex plugin marketplace add mani1261790/ToolUseProxy --ref public-alpha
 codex plugin add tooluseproxy@tooluseproxy
 ```
 
 Start a new Codex task in the workspace you want to monitor. Review the exact Hook definition shown by Codex and trust it only if the Plugin source and version are the ones you intended to install. ToolUseProxy does not bypass this review.
+
+For a reproducible version pin, use `--ref v0.1.0-alpha.3` instead. A pinned
+tag does not advance to a future version.
 
 For development from a checkout, replace the first command with
 `codex plugin marketplace add "$PWD"`. Do not use a mutable remote branch as a
@@ -63,11 +66,23 @@ The agent runs bounded offline `protect scan`. It must not display source values
 
 Do not approve a proposal you do not understand. `init`, setup permission, or permission to edit another file does not approve a protected source.
 
-## 6. Confirm status and retention
+## 6. Confirm status, updates, and retention
 
 After an explicit approval, ask the agent to run `status` again. The approved source becomes active for the next analysis run in that workspace.
 
 PreToolUse blocking remains off by default; the quickstart does not silently enable enforcement. Use the full [Plugin onboarding guide](https://github.com/mani1261790/ToolUseProxy/blob/main/docs/%E8%A8%AD%E5%AE%9A/Plugin%E5%B0%8E%E5%85%A5.md) before enabling it.
+
+Updates from `public-alpha` are explicit:
+
+```bash
+codex plugin marketplace upgrade tooluseproxy
+codex plugin list --json
+```
+
+After an update, review changed Hook definitions, start a new Codex task, and
+run `doctor` and `status`. Run `init --codex` only if they report that a schema
+migration is required. This CLI flow is tested; the Codex Desktop / GUI update
+experience is not yet verified.
 
 To remove Plugin code:
 
