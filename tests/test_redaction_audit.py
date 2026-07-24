@@ -12,6 +12,7 @@ from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
+import hook_monitor.runtime.pre_tool_policy as pre_tool_policy
 from hook_monitor.analysis.adapters.mcp_profiles import (
     DEFAULT_MCP_PROFILE_REGISTRY,
     McpFieldSpec,
@@ -2864,18 +2865,38 @@ class RedactionAuditTest(unittest.TestCase):
     def test_completed_linkage_migration_does_not_repair_missing_table(
         self,
     ) -> None:
+        preview_errors: list[str] = []
+        original_store_preview = pre_tool_policy._store_mcp_redaction_preview
+
+        def capture_preview_error(*args, **kwargs):
+            try:
+                return original_store_preview(*args, **kwargs)
+            except Exception as exc:
+                preview_errors.append(f"{type(exc).__name__}: {exc}")
+                raise
+
         original_event = self._record(
             self.workspace_a,
             tool_use_id="missing-linkage-table-owner",
             tool_name=PROFILED_TOOL,
             tool_input={"content": SECRET},
         )
-        self._assert_deny_without_rewrite(self._evaluate_mcp(original_event))
+        with patch.object(
+            pre_tool_policy,
+            "_store_mcp_redaction_preview",
+            side_effect=capture_preview_error,
+        ):
+            self._assert_deny_without_rewrite(self._evaluate_mcp(original_event))
         assert original_event.workspace_id is not None
-        preview = self.store.list_redaction_plans(
+        previews = self.store.list_redaction_plans(
             workspace_id=original_event.workspace_id,
             tool_use_id=original_event.tool_use_id,
-        )[0]
+        )
+        self.assertTrue(
+            previews,
+            f"preview plan fixture is missing; errors={preview_errors!r}",
+        )
+        preview = previews[0]
         with sqlite3.connect(self.db_path) as connection:
             connection.execute("DROP TABLE redaction_decision_links")
 
