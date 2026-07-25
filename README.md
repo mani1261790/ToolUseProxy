@@ -6,6 +6,7 @@ Codexのtool useをローカルで観測し、protected sourceから外部tool�
 
 > 現在は`0.1.0-alpha.3` public alphaです。中核機能、再現可能な配布物、Apache-2.0の配布契約は整いましたが、完全なDLPではなく、manual Phase Bの説明UX、Desktop / GUI、Linux実Codex task、Windows実機は引き続き検証中です。
 
+- [研究紹介スライド（初めて知る方向け）](https://mani1261790.github.io/ToolUseProxy/slides/tooluseproxy-research.html)
 - [Codex Pluginとして試す](docs/設定/Plugin導入.md)
 - [5分quickstart / Five-minute quickstart](QUICKSTART.md)
 - 30秒synthetic demo: `python3.11 scripts/demo_plugin.py`
