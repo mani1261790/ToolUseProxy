@@ -108,7 +108,7 @@ project単位では、trustedなrepositoryの`.codex/hooks.json`へ次のよう�
 
 `PostToolUse`はtool responseを三値のoutcomeへ分類し、成功を確認できた`apply_patch`またはBash writeだけをsnapshot候補にします。`Stop`は最終応答の`final_answer` sinkを評価します。`PreToolUse`は既定では記録だけですが、`TOOLUSEPROXY_PRE_TOOL_POLICY=1`を設定すると、実payloadを確認済みの`Bash`を実行前に評価します。MCPはさらに`TOOLUSEPROXY_PRE_TOOL_MCP_POLICY=1`を設定した場合だけ評価します。
 
-file-backedな`curl --data-binary @relative-file`には、POSIXでcomponent-safeに実行前snapshotを読むresolverと、解決値を返さないpayload evidence契約があります。opt-inのshadow modeではproduction PreToolUseからこのevidenceを観測できますが、Hookのallow / denyは変更しません。file-backed operandは既存graph上では引き続き`coarse_fallback`であり、Hookが送信bytesを保護済みとは扱いません。resolver内部のpath race、Hook後にtarget toolがfileを再読込するTOCTOU、値非保持契約は[Sink payload evidenceの設計](../設計/SinkPayloadEvidence.md)を参照してください。
+file-backedな`curl --data-binary @relative-file`には、POSIXでcomponent-safeに実行前snapshotを読むresolverと、解決値を返さないpayload evidence契約があります。opt-inのshadow modeではallow / denyを変えずに観測し、別の明示opt-inではevaluated exact / exact-substringだけを実行前denyへ接続します。file-backed operandは既存graph上では引き続き`coarse_fallback`であり、no-matchやunsupportedを保護済みとは扱いません。resolver内部のpath race、Hook後にtarget toolがfileを再読込するTOCTOU、値非保持契約は[Sink payload evidenceの設計](../設計/SinkPayloadEvidence.md)を参照してください。
 
 ## 使い方
 
@@ -367,7 +367,21 @@ python3 scripts/report_sink_payload_shadow.py \
   --db /absolute/path/to/events.db
 ```
 
-このresolverが取得するのは実行前のfile snapshotです。Hook完了後にfileが変わるTOCTOUを解消せず、実際にcurlが送ったbytesも証明しません。したがって、現行Hookではfile-backed operandを引き続き`coarse_fallback`として扱い、no-matchを送信の安全証明とは表示しません。
+このresolverが取得するのは実行前のfile snapshotです。Hook完了後にfileが変わるTOCTOUを解消せず、実際にcurlが送ったbytesも証明しません。したがって、既存graphではfile-backed operandを引き続き`coarse_fallback`として扱い、no-matchを送信の安全証明とは表示しません。
+
+### File-backed payload exact-only enforcement
+
+TUIで検証済みのexact evidenceだけを実行前denyへ接続する場合は、Bash policyとenforcementを明示opt-inにします。既定値は無効です。
+
+```text
+TOOLUSEPROXY_PRE_TOOL_POLICY=1 TOOLUSEPROXY_PRE_TOOL_FILE_PAYLOAD_EXACT_ENFORCEMENT=1 python3 /absolute/path/to/ToolUseProxy/hooks/monitor_pre_tool.py
+```
+
+対象はcurrent Bash eventの`curl --data-binary @relative-file`です。`resolution_status`と`comparison_status`がともに`evaluated`、extractionが`resolved_file`、snapshotが`pre_execution_file_snapshot`であり、active source chunkとの`resolved_payload_exact`または`resolved_payload_exact_substring`がある場合だけcritical blockを返します。一般的なshingle、token equivalent、embedding / semantic類似はこのdenyへ接続しません。
+
+public no-match、unsupported、上限超過、resolver例外は新しいdenyを作らず、先に確定したlineage policyのallow / warn / blockを維持します。exact evidence確定後に監査保存だけが失敗した場合は外部side effectを許可せずdenyを維持します。shadow flagも同時に有効化した場合は同じ一回のfile snapshot比較から値なし観測を保存し、payloadを二重に読みません。
+
+denyは「file-backed external payloadにprotected contentが見つかった」と説明し、参照fileから保護内容を除くかpublic payloadを選ぶよう案内します。ただし実行前snapshotとcurlが後で読むbytesの一致は証明しないため、TOCTOUの制限は残ります。既定有効化は別のgo / no-go判断です。
 
 MCP Hookのmatcherは、たとえば`^mcp__.*$`、または対象を絞った`^mcp__github__.*$`を使用します。実CodexのMCP payloadは`tool_name: mcp__<server>__<tool>`で、`tool_input`にはMCP toolへ渡すraw argumentsが入ります。adapterが外部送信と分類するwrite-like toolだけがsinkとなり、read-only toolは記録して通過させます。MCP tool名はUTF-8で4 KiBを上限とし、超過時はartifact / sinkをmaterializeする前に`tool_name_bytes_exceeded`でdenyします。tool名自体が1 MiBのraw read上限を跨いで後続`cwd`を読めない場合も、明示`TOOLUSEPROXY_WORKSPACE_ROOT`が有効ならそのrootだけを早期deny scopeとして検証します。
 

@@ -93,7 +93,7 @@ resolver v2はstaticな`--data-binary @relative-file`だけを対象にし、wor
 
 取得するのは`pre_execution_file_snapshot`です。解決値は比較中だけ保持し、payload evidenceへはworkspace、sink、segment、resolution / comparison status、snapshot semantics、件数、byte数、source chunk ID、exact / exact substring match method、処理時間、値なしreasonだけを返します。payload本文とpayload由来hashは返しません。comparisonは512 source chunk、1件32 KiB、合計512 KiBを上限にし、token equivalent、shingle、semanticはこのcontractへ含めません。
 
-component-wise openはresolver内部のpath raceを防ぎますが、Hook確認後にfileが変わるTOCTOUは残るため、curlが同じbytesを送った証明ではありません。production Hookではopt-in shadow観測にだけ接続し、既存static extractorとpolicyは引き続きfile-backed operandを`coarse_fallback`として扱います。詳細は[Sink payload evidenceの設計](../設計/SinkPayloadEvidence.md)を参照してください。
+component-wise openはresolver内部のpath raceを防ぎますが、Hook確認後にfileが変わるTOCTOUは残るため、curlが同じbytesを送った証明ではありません。production Hookではopt-in shadow観測に加え、別flagでexact / exact-substringだけをdenyへ接続できます。既存graphは引き続きfile-backed operandを`coarse_fallback`として扱い、semantic、unsupported、no-matchを保護済みとは表示しません。詳細は[Sink payload evidenceの設計](../設計/SinkPayloadEvidence.md)を参照してください。
 
 ## Privacyと再現性
 
@@ -104,7 +104,7 @@ lineage profileは既存のsource-ingestion評価entrypointを使い、同じraw
 ## 次の実装
 
 1. [#44](https://github.com/mani1261790/ToolUseProxy/issues/44)でpayload evidence契約とcomponent-safe readerを固定する
-2. [#45](https://github.com/mani1261790/ToolUseProxy/issues/45)でproduction shadow metricsを測り、exact-only opt-in enforcementを判断する
+2. [#45](https://github.com/mani1261790/ToolUseProxy/issues/45)でexact-only opt-in enforcementの自動・human Phase Bを完了し、既定有効化を判断する
 3. [#46](https://github.com/mani1261790/ToolUseProxy/issues/46)でdevelopment splitのlocal semantic backend候補とhard negativeをobserve-only比較する
 4. [#38](https://github.com/mani1261790/ToolUseProxy/issues/38)でGit outgoing object resolverを別surfaceとして追加する
 5. [#37](https://github.com/mani1261790/ToolUseProxy/issues/37)でsession / compaction / subagent境界を追加する

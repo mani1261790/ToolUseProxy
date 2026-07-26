@@ -25,7 +25,7 @@ payload本文、payload由来hash、raw commandの複製、file pathはevidence�
 
 比較には既存のsource-binding lexical profileを使いますが、evidenceへ採用するmethodは`exact`と`substring`だけです。token equivalent、shingle、embeddingはこのcontractへ含めません。resolved valueのSHA-256はin-process比較にだけ使い、hash自体はevidenceへ返しません。
 
-このcontractはproductionのopt-in shadow modeへ接続済みですが、policy enforcementへは未接続です。`PreToolUse`のdeny、allow、Hook outputは変更せず、shadow metricsと将来のexact-only enforcementが利用する接続点を固定します。
+このcontractはproductionのopt-in shadow modeと、別の明示opt-in exact-only enforcementへ接続済みです。shadowだけでは`PreToolUse`のdeny、allow、Hook outputを変更しません。enforcementは評価済みのresolved-file exact / exact-substring evidenceだけをcritical blockへ昇格させ、semanticやunsupported入力をblockしません。
 
 ## Shadow observation
 
@@ -33,7 +33,7 @@ payload本文、payload由来hash、raw commandの複製、file pathはevidence�
 
 shadow用SQLite tableへ保存するのは、status、有限のreason、snapshot semantics、件数・byte数のbucket、strongest exact match種別、match件数、処理時間、baseline / shadow actionの集約値です。ephemeral evidenceが持つsource chunk IDもshadow tableには保存しません。payload本文、raw command、path、payload由来hashを複製しないため、shadow追加によってdurable plaintextの範囲を広げません。
 
-現在policyの判断とHook outputを先に確定し、その後にresolverとshadow writeを独立したfail-soft境界で実行します。shadow schema drift、10 msでfail-fastするSQLite lock、resolver / validation / write例外は観測だけを欠落させ、すでに確定したallow / denyを変更しません。同一Pre event / sink / segment / evidence versionは最初の観測をimmutableに保持します。
+現在lineage policyの判断とHook outputを先に確定し、その後にresolverを一回だけ実行します。shadow schema drift、10 msでfail-fastするSQLite lock、resolver / validation / write例外は観測だけを欠落させ、lineage policyを変更しません。exact enforcementが有効でもresolver / comparison失敗は新しいdenyを作らず、lineage policyを維持します。exact evidence確定後のpolicy audit失敗だけは外部side effectを許可せずdenyを維持します。同一Pre event / sink / segment / evidence versionのshadowは最初の観測をimmutableに保持します。
 
 `scripts/report_sink_payload_shadow.py`はidentityを出さず、status、match、decision diff、payload size bucket、p50 / p95 / p99 / max latencyだけをJSONで集計します。`would_block`は「現在のexact-only候補」であり、遮断が実行された意味ではありません。
 

@@ -252,6 +252,9 @@ def run_hook(
                 current_event=event,
                 enabled_adapters=enabled_pre_tool_adapters,
                 sink_payload_shadow_enabled=_sink_payload_shadow_enabled(),
+                sink_payload_exact_enforcement_enabled=(
+                    _sink_payload_exact_enforcement_enabled()
+                ),
             )
         except Exception as exc:  # pragma: no cover - defensive hook boundary
             _report_policy_failure("pre-tool", exc)
@@ -313,6 +316,14 @@ def _pre_tool_mcp_policy_enabled() -> bool:
 def _sink_payload_shadow_enabled() -> bool:
     configured = os.environ.get(
         "TOOLUSEPROXY_PRE_TOOL_FILE_PAYLOAD_SHADOW",
+        "0",
+    )
+    return configured.lower() in {"1", "true", "yes", "on"}
+
+
+def _sink_payload_exact_enforcement_enabled() -> bool:
+    configured = os.environ.get(
+        "TOOLUSEPROXY_PRE_TOOL_FILE_PAYLOAD_EXACT_ENFORCEMENT",
         "0",
     )
     return configured.lower() in {"1", "true", "yes", "on"}
