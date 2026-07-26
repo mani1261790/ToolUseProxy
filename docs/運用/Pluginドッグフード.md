@@ -148,6 +148,8 @@ python3.11 scripts/manual_sink_payload_shadow.py verify \
 
 verifierはTUI session、exact fake sink command、Pre / Post identity、二つのmarker、shadow observationを相互確認します。合格時は`allow->would_allow`と`allow->would_block`が各1件、resolution / comparisonは各2件evaluated、policy blockは0です。出力はidentityや値を含まず、status / match / decision diff / payload size bucket / latencyの集約だけです。
 
+2026-07-27のfresh TUI human runは`status: passed`でした。public / protectedのfile-backed callはshadow modeのため両方実行され、`allow->would_allow`と`allow->would_block`が各1件、resolution / comparisonは各2件evaluated、policy blockは0件でした。TUI session、exact command、Pre / Post identity、二つのside effect、tool output、shadow observationはすべて一致し、assistant出力とshadow tableへのraw protected value露出は0件でした。観測latencyはp50 `0.705 ms`、p95 / max `0.746 ms`です。この結果はTUIのopt-in shadow観測を合格とするものであり、実行前block、Desktop / GUI、TOCTOU解消を証明しません。
+
 Codex Desktop / GUIは同じ成功へ読み替えません。次のpreflightは共有`CODEX_HOME`を変更せず、isolated Plugin / Hook dataとshadow opt-inをDesktop hookへ渡すsupported launcherが存在するかだけを判定します。
 
 ```bash
