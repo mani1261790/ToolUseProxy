@@ -12,7 +12,7 @@ Python 3.11または3.12の開発環境で実行します。
 
 ```bash
 python -m hook_monitor.evaluation.sink_benchmark_cli \
-  --dataset tests/fixtures/sink_benchmark/v1 \
+  --dataset tests/fixtures/sink_benchmark/v1_1 \
   --split all \
   --format text \
   --check
@@ -35,13 +35,13 @@ python -m hook_monitor.evaluation.sink_benchmark_cli \
 | Profile | 現在の入力 |
 | --- | --- |
 | `direct_lexical` | Bash command全体、MCP arguments、final answer本文 |
-| `resolved_lexical` | 静的に抽出できるcurl body、MCP arguments、final answer本文 |
+| `resolved_lexical` | 静的curl body、評価専用のbounded `--data-binary @file` snapshot、MCP arguments、final answer本文 |
 | `resolved_semantic` | resolved payloadへ任意のlocal embedding backendを追加。既定CLIでは未設定 |
 | `lineage_assisted` | source-ingestion v3のproduction runtime graphによる到達判定 |
 
 semantic profileはrunner APIへbackendを渡せる設計ですが、CLIとHookでは有効にしていません。semantic-onlyの自動blockも行いません。
 
-## Dataset v1
+## Dataset
 
 `tests/fixtures/sink_benchmark/v1`には12件あります。
 
@@ -53,36 +53,57 @@ semantic profileはrunner APIへbackendを渡せる設計ですが、CLIとHook�
 
 case metadataとraw Hook lifecycle fixtureは分離しています。raw lifecycleは既存のsource-ingestion v3 loaderで検証し、caseの正解label、sink、action、observe-only指定が一致しなければ読み込みを拒否します。
 
-## 初期baseline
+v1.1も12件で、各splitのBash正例・負例をfile-backed payloadへ置き換えています。public fileは`workspace_files`で明示的にmaterializeし、protected sourceを上書きするpath、workspace外path、重複path、上限超過をloaderが拒否します。
 
-全12ケース、local semantic backendなしの結果です。
+v1.1 dataset digestは`62747858a46e59be2c67ec8a02387448f6192d85e361c58e5c9eec8c427f8fe0`です。
+
+## 指標
+
+各profileは次の2種類を分けて報告します。
+
+- `evaluated_only`: payloadを解決できたcase内での比較器精度
+- `end_to_end`: unsupported / unavailableをfail-openのallowとして含めた製品全体の精度
+
+これにより、payload coverageが増えた結果と、比較器自体のprecision / recallを混同しません。`payload_resolution`にはresolvable case数、解決数、resolution recall、値なしのunsupported reason件数を保存します。
+
+## v1.1結果
+
+全12ケース、local semantic backendなしのend-to-end結果です。
 
 | Profile | 評価可能 | Precision | Recall | F1 |
 | --- | ---: | ---: | ---: | ---: |
-| direct lexical | 12 / 12 | 1.00 | 0.50 | 0.667 |
-| resolved lexical | 11 / 12 | 1.00 | 0.60 | 0.750 |
+| direct lexical | 12 / 12 | 1.00 | 0.333 | 0.500 |
+| resolved lexical | 12 / 12 | 1.00 | 0.667 | 0.800 |
 | resolved semantic | 0 / 12 | - | - | - |
-| current runtime lineage | 12 / 12 | 1.00 | 0.50 | 0.667 |
+| current runtime lineage | 12 / 12 | 1.00 | 0.333 | 0.500 |
+
+payload resolutionは4 / 4、unsupportedは0、raw fixture exposureは0です。resolved profileはdevelopment / validationのfile-backed正例2件をdirect profileから回収し、file-backed負例2件をallowのまま維持しました。
 
 ここから分かるのは次の3点です。
 
-1. exactなinline credential / MCP argumentは現行方式で検出できます。
-2. paraphraseはlexicalと現行lineageのどちらでもまだ検出できません。
-3. `curl --data-binary @file`はstatic body extractorがfileを読まないため、resolved profileでも`unsupported`です。
+1. `--data-binary @relative-file`の現在snapshotを読むと、inline command比較では見えない正例を回収できます。
+2. 現行runtime lineageはfile本文を解決しないため、このcorpusではdirect profileを改善しません。
+3. paraphraseはresolved lexicalと現行lineageのどちらでも検出できません。
 
-semanticが0件なのは「全件不一致」ではなく、backend未設定なので`unavailable`です。file referenceも推測でnegativeにせず、coverageから外して理由を残します。
+semanticが0件なのは「全件不一致」ではなく、backend未設定なので`unavailable`です。
+
+## File resolverの境界
+
+resolver v1は評価専用です。staticな`--data-binary @relative-file`だけを対象にし、workspace内のregular UTF-8 fileを1値32 KiB、32値、合計128 KiB以内で読みます。workspace外、`..`、symlink、`@-`、dynamic operand、非regular file、非UTF-8、NUL、上限超過は値なしreason付きでunsupportedにします。shell、subprocess、curl、networkは実行しません。
+
+取得するのは`pre_execution_payload_snapshot`です。Hook確認後にfileが変わるTOCTOUがあるため、curlが同じbytesを送った証明ではありません。production Hookへは未接続で、既存static extractorは引き続きfile-backed operandを`coarse_fallback`として扱います。
 
 ## Privacyと再現性
 
-reportへ含めるのはcase ID、分類、判定、score、集約値だけです。source本文、protected value、raw command、raw MCP arguments、final answer本文は出力しません。評価中のsource materializationは一時directory内だけで行い、target tool、shell、networkを実行しません。
+reportへ含めるのはcase ID、分類、判定、score、集約値だけです。source本文、protected value、workspace file、raw command、raw MCP arguments、final answer本文は出力しません。評価中のmaterializationは一時directory内だけで行い、target tool、shell、networkを実行しません。
 
 lineage profileは既存のsource-ingestion評価entrypointを使い、同じraw Hook eventsに対するfull rebuildとincremental updateの一致を確認します。
 
 ## 次の実装
 
-1. file-backed HTTP bodyをboundedに解決するresolverを評価側で追加する
-2. development splitだけでlocal semantic backend候補を比較する
-3. validation splitを最後に開き、precision、recall、action、latencyを確認する
+1. development splitだけでlocal semantic backend候補を比較する
+2. semantic hard negativeとlatency / privacy contractを固定する
+3. file resolverをproductionへ接続するか、TOCTOUを理由に評価専用で維持するか判断する
 4. [#37](https://github.com/mani1261790/ToolUseProxy/issues/37)でsession / compaction / subagent境界を追加する
 5. [#38](https://github.com/mani1261790/ToolUseProxy/issues/38)でGit outgoing object resolverを別surfaceとして追加する
 

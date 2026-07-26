@@ -17,7 +17,9 @@ from hook_monitor.evaluation.sink_benchmark_dataset import (
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_DATASET_ROOT = REPO_ROOT / "tests" / "fixtures" / "sink_benchmark" / "v1"
+DEFAULT_DATASET_ROOT = (
+    REPO_ROOT / "tests" / "fixtures" / "sink_benchmark" / "v1_1"
+)
 
 
 def main(argv: list[str] | None = None) -> int:

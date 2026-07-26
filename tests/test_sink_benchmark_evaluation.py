@@ -24,6 +24,9 @@ from hook_monitor.evaluation.sink_benchmark_dataset import (
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DATASET_ROOT = REPO_ROOT / "tests" / "fixtures" / "sink_benchmark" / "v1"
+DATASET_V1_1_ROOT = (
+    REPO_ROOT / "tests" / "fixtures" / "sink_benchmark" / "v1_1"
+)
 CLI_MODULE = "hook_monitor.evaluation.sink_benchmark_cli"
 
 
@@ -49,17 +52,24 @@ class SinkBenchmarkEvaluationTest(unittest.TestCase):
         self.assertEqual("all", report["dataset"]["split"])
         self.assertTrue(report["summary"]["quality_gate_passed"])
         self.assertFalse(report["summary"]["semantic_backend_available"])
-        self.assertEqual(
-            ["validation-http-file-reference-leak"],
-            report["summary"]["unsupported_resolved_case_ids"],
-        )
+        self.assertEqual([], report["summary"]["unsupported_resolved_case_ids"])
         self.assertEqual(
             0.5,
-            report["metrics"][PROFILE_DIRECT]["all"]["detection"]["recall"],
+            report["metrics"][PROFILE_DIRECT]["all"]["end_to_end"]["detection"][
+                "recall"
+            ],
         )
         self.assertEqual(
-            0.6,
-            report["metrics"][PROFILE_RESOLVED]["all"]["detection"]["recall"],
+            0.666667,
+            report["metrics"][PROFILE_RESOLVED]["all"]["evaluated_only"][
+                "detection"
+            ]["recall"],
+        )
+        self.assertEqual(
+            0.666667,
+            report["metrics"][PROFILE_RESOLVED]["all"]["end_to_end"]["detection"][
+                "recall"
+            ],
         )
         self.assertEqual(
             0,
@@ -67,7 +77,13 @@ class SinkBenchmarkEvaluationTest(unittest.TestCase):
         )
         self.assertEqual(
             0.5,
-            report["metrics"][PROFILE_LINEAGE]["all"]["detection"]["recall"],
+            report["metrics"][PROFILE_LINEAGE]["all"]["end_to_end"]["detection"][
+                "recall"
+            ],
+        )
+        self.assertEqual(
+            1.0,
+            report["payload_resolution"]["resolution_recall"],
         )
         self.assertTrue(
             report["lineage_reference"]["full_incremental_parity_passed"]
@@ -81,11 +97,21 @@ class SinkBenchmarkEvaluationTest(unittest.TestCase):
         )
         metric = report["metrics"][PROFILE_SEMANTIC]["all"]
 
-        self.assertEqual(11, metric["coverage"]["evaluated"])
-        self.assertEqual(1, metric["coverage"]["unsupported"])
-        self.assertEqual(1.0, metric["detection"]["precision"])
-        self.assertEqual(1.0, metric["detection"]["recall"])
-        self.assertEqual(1.0, metric["action_accuracy"])
+        self.assertEqual(12, metric["coverage"]["evaluated"])
+        self.assertEqual(0, metric["coverage"]["unsupported"])
+        self.assertEqual(
+            1.0,
+            metric["evaluated_only"]["detection"]["precision"],
+        )
+        self.assertEqual(
+            1.0,
+            metric["evaluated_only"]["detection"]["recall"],
+        )
+        self.assertEqual(1.0, metric["evaluated_only"]["action_accuracy"])
+        self.assertEqual(
+            1.0,
+            metric["end_to_end"]["detection"]["recall"],
+        )
         self.assertEqual(
             [
                 "dev-final-paraphrase-leak",
@@ -97,6 +123,37 @@ class SinkBenchmarkEvaluationTest(unittest.TestCase):
         )
         self.assertTrue(report["configuration"]["semantic_observe_only"])
 
+    def test_file_backed_corpus_measures_resolver_improvement(self) -> None:
+        dataset = load_sink_benchmark_dataset(DATASET_V1_1_ROOT)
+        report = evaluate_sink_benchmark(dataset, split=None)
+        direct = report["metrics"][PROFILE_DIRECT]["all"]["end_to_end"]
+        resolved = report["metrics"][PROFILE_RESOLVED]["all"]["end_to_end"]
+
+        self.assertTrue(report["summary"]["quality_gate_passed"])
+        self.assertEqual(1.0, report["payload_resolution"]["resolution_recall"])
+        self.assertEqual([], report["summary"]["unsupported_resolved_case_ids"])
+        self.assertEqual(0.333333, direct["detection"]["recall"])
+        self.assertEqual(0.666667, resolved["detection"]["recall"])
+        self.assertEqual(1.0, resolved["detection"]["precision"])
+        self.assertEqual(
+            [
+                "dev-http-file-credential-leak",
+                "validation-http-file-reference-leak",
+            ],
+            report["deltas"]["resolved_over_direct"]["recovered_positive_ids"],
+        )
+        self.assertEqual(
+            [],
+            report["deltas"]["resolved_over_direct"][
+                "introduced_false_positive_ids"
+            ],
+        )
+        serialized = json.dumps(report, ensure_ascii=False, sort_keys=True)
+        for case in dataset.cases:
+            for workspace_file in case.workspace_files:
+                self.assertNotIn(workspace_file.content, serialized)
+                self.assertNotIn(workspace_file.path, serialized)
+
     def test_report_contains_no_fixture_content_or_target_payload(self) -> None:
         serialized = json.dumps(self.report, ensure_ascii=False, sort_keys=True)
         rendered = render_sink_benchmark_report(self.report)
@@ -107,12 +164,16 @@ class SinkBenchmarkEvaluationTest(unittest.TestCase):
             sensitive_literals = {
                 case.ingestion.source.content,
                 *case.ingestion.source.protected_values,
+                *(item.content for item in case.workspace_files),
                 json.dumps(target, ensure_ascii=False, sort_keys=True),
             }
             for literal in sensitive_literals:
                 with self.subTest(case=case.case_id):
                     self.assertNotIn(literal, serialized)
                     self.assertNotIn(literal, rendered)
+            for workspace_file in case.workspace_files:
+                self.assertNotIn(workspace_file.path, serialized)
+                self.assertNotIn(workspace_file.path, rendered)
 
     def test_evaluator_reuses_public_source_ingestion_harness(self) -> None:
         real_evaluate = sink_benchmark_evaluation.evaluate_source_ingestion
