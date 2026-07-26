@@ -108,6 +108,8 @@ project単位では、trustedなrepositoryの`.codex/hooks.json`へ次のよう�
 
 `PostToolUse`はtool responseを三値のoutcomeへ分類し、成功を確認できた`apply_patch`またはBash writeだけをsnapshot候補にします。`Stop`は最終応答の`final_answer` sinkを評価します。`PreToolUse`は既定では記録だけですが、`TOOLUSEPROXY_PRE_TOOL_POLICY=1`を設定すると、実payloadを確認済みの`Bash`を実行前に評価します。MCPはさらに`TOOLUSEPROXY_PRE_TOOL_MCP_POLICY=1`を設定した場合だけ評価します。
 
+file-backedな`curl --data-binary @relative-file`には、POSIXでcomponent-safeに実行前snapshotを読むresolverと、解決値を返さないpayload evidence契約があります。ただし現在はproduction policyへ未接続です。file-backed operandは既存graph上では引き続き`coarse_fallback`であり、Hookが送信bytesを保護済みとは扱いません。resolver内部のpath race、Hook後にtarget toolがfileを再読込するTOCTOU、値非保持契約は[Sink payload evidenceの設計](../設計/SinkPayloadEvidence.md)を参照してください。
+
 ## 使い方
 
 Codex の GUI か設定ファイルで、次の command を指定します。`/absolute/path/to/workspace`は保護対象projectの絶対pathへ置き換えます。
