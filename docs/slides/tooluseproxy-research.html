@@ -3,9 +3,9 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="初見の学生に向けてToolUseProxy研究を説明するHTMLスライド">
+  <meta name="description" content="大規模DLPの課題からToolUseProxyの2つの検知方式まで、初見の学生に向けて説明するHTMLスライド">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%232563eb'/%3E%3Cpath d='M16 7 9 10v5c0 4.4 2.9 7.3 7 8.8 4.1-1.5 7-4.4 7-8.8v-5l-7-3Z' fill='none' stroke='white' stroke-width='2.2' stroke-linejoin='round'/%3E%3Cpath d='m12.5 15.6 2.1 2.1 4.5-4.7' fill='none' stroke='white' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
-  <title>ToolUseProxy — AIエージェントの情報流を追跡・検知・制御する</title>
+  <title>ToolUseProxy — 個人開発と研究のための情報流ガードレール</title>
   <style>
     :root {
       --paper: #f7f8f4;
@@ -2289,6 +2289,358 @@
       border-radius: 0;
     }
 
+    /* Product story: flat editorial layouts without decorative icons or card rails. */
+    .plain-intro {
+      display: grid;
+      grid-template-columns: minmax(0, 1.2fr) minmax(280px, 0.8fr);
+      align-items: end;
+      gap: clamp(32px, 7vw, 96px);
+    }
+
+    .plain-intro-note {
+      padding: 28px 0 6px;
+      border-top: 1px solid var(--ink);
+    }
+
+    .plain-intro-note strong {
+      display: block;
+      margin-bottom: 12px;
+      color: var(--blue);
+      font-size: 14px;
+      letter-spacing: 0.08em;
+    }
+
+    .plain-intro-note p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 15px;
+      line-height: 1.75;
+    }
+
+    .dlp-bands {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      background: #efefeb;
+    }
+
+    .dlp-band {
+      min-height: 310px;
+      padding: 26px;
+    }
+
+    .dlp-band + .dlp-band {
+      border-left: 1px solid #c9c9c2;
+    }
+
+    .eyebrow-number {
+      display: block;
+      margin-bottom: 86px;
+      color: var(--blue);
+      font-size: 13px;
+      font-variant-numeric: tabular-nums;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+    }
+
+    .dlp-band h3 {
+      font-size: 19px;
+    }
+
+    .dlp-band p {
+      margin: 10px 0 0;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.7;
+    }
+
+    .context-compare {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 18px;
+    }
+
+    .context-column {
+      min-height: 350px;
+      padding: clamp(24px, 3vw, 38px);
+      background: #efefeb;
+    }
+
+    .context-column.private {
+      background: var(--ink);
+      color: #ffffff;
+    }
+
+    .context-label {
+      display: block;
+      margin-bottom: 76px;
+      color: var(--blue);
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0.11em;
+      text-transform: uppercase;
+    }
+
+    .context-column.private .context-label {
+      color: #aac6f4;
+    }
+
+    .command-line {
+      display: block;
+      margin: 20px 0;
+      padding: 15px 18px;
+      background: #ffffff;
+      color: var(--ink);
+      font-family: var(--mono);
+      font-size: clamp(14px, 1.5vw, 18px);
+      line-height: 1.5;
+      overflow-wrap: anywhere;
+    }
+
+    .context-column p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 15px;
+      line-height: 1.75;
+    }
+
+    .context-column.private p {
+      color: #d6d6d1;
+    }
+
+    .judgement-line {
+      margin-top: 18px;
+      padding: 15px 18px;
+      background: var(--blue-soft);
+      color: var(--ink);
+      font-size: 14px;
+      font-weight: 700;
+      line-height: 1.65;
+    }
+
+    .flow-principle {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      background: #efefeb;
+    }
+
+    .flow-principle-step {
+      min-height: 270px;
+      padding: 28px;
+    }
+
+    .flow-principle-step + .flow-principle-step {
+      border-left: 1px solid #c9c9c2;
+    }
+
+    .flow-principle-step strong {
+      display: block;
+      margin: 86px 0 10px;
+      font-size: 20px;
+    }
+
+    .flow-principle-step p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.7;
+    }
+
+    .product-promise {
+      display: grid;
+      grid-template-columns: minmax(0, 1.15fr) minmax(280px, 0.85fr);
+      gap: 18px;
+    }
+
+    .promise-statement {
+      min-height: 390px;
+      padding: clamp(30px, 4vw, 48px);
+      background: var(--blue);
+      color: #ffffff;
+    }
+
+    .promise-statement .context-label {
+      color: #d9e7ff;
+    }
+
+    .promise-statement blockquote {
+      margin: 0;
+      font-size: clamp(28px, 3.4vw, 46px);
+      font-weight: 800;
+      letter-spacing: -0.035em;
+      line-height: 1.4;
+      text-wrap: balance;
+    }
+
+    .plain-list {
+      display: grid;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+      background: #efefeb;
+    }
+
+    .plain-list li {
+      display: grid;
+      grid-template-columns: 90px 1fr;
+      gap: 18px;
+      align-items: baseline;
+      padding: 22px 24px;
+      border-bottom: 1px solid #c9c9c2;
+    }
+
+    .plain-list li:last-child {
+      border-bottom: 0;
+    }
+
+    .plain-list strong {
+      color: var(--blue);
+      font-family: var(--mono);
+      font-size: 12px;
+    }
+
+    .plain-list span {
+      color: var(--ink);
+      font-size: 14px;
+      font-weight: 650;
+      line-height: 1.6;
+    }
+
+    .approach-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 18px;
+    }
+
+    .approach-panel {
+      min-height: 390px;
+      padding: clamp(26px, 3vw, 38px);
+      background: #efefeb;
+    }
+
+    .approach-panel:nth-child(2) {
+      background: var(--blue-soft);
+    }
+
+    .approach-panel .context-label {
+      margin-bottom: 62px;
+    }
+
+    .approach-panel h3 {
+      max-width: 430px;
+      font-size: clamp(24px, 2.5vw, 34px);
+      letter-spacing: -0.025em;
+    }
+
+    .approach-panel > p {
+      margin: 12px 0 24px;
+      color: var(--muted);
+      font-size: 15px;
+      line-height: 1.75;
+    }
+
+    .approach-flow {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1px;
+      background: #bfc2c7;
+    }
+
+    .approach-flow span {
+      min-height: 72px;
+      padding: 14px 12px;
+      background: #ffffff;
+      font-family: var(--mono);
+      font-size: 12px;
+      font-weight: 700;
+      line-height: 1.5;
+    }
+
+    .contrast-table {
+      display: grid;
+      background: #efefeb;
+    }
+
+    .contrast-row {
+      display: grid;
+      grid-template-columns: 190px repeat(2, minmax(0, 1fr));
+      min-height: 72px;
+      border-bottom: 1px solid #c9c9c2;
+    }
+
+    .contrast-row:last-child {
+      border-bottom: 0;
+    }
+
+    .contrast-row > * {
+      display: flex;
+      padding: 16px 20px;
+      align-items: center;
+      font-size: 14px;
+      line-height: 1.6;
+    }
+
+    .contrast-row > * + * {
+      border-left: 1px solid #c9c9c2;
+    }
+
+    .contrast-row.header {
+      min-height: 58px;
+      background: var(--ink);
+      color: #ffffff;
+    }
+
+    .contrast-row strong {
+      color: var(--blue);
+      font-size: 13px;
+    }
+
+    .contrast-row.header strong {
+      color: #ffffff;
+    }
+
+    .fit-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 18px;
+    }
+
+    .fit-block {
+      min-height: 350px;
+      padding: clamp(26px, 3vw, 38px);
+      background: #efefeb;
+    }
+
+    .fit-block.limit {
+      background: var(--ink);
+      color: #ffffff;
+    }
+
+    .fit-block .context-label {
+      margin-bottom: 62px;
+    }
+
+    .fit-block.limit .context-label {
+      color: #aac6f4;
+    }
+
+    .fit-block ul {
+      display: grid;
+      gap: 16px;
+      margin: 0;
+      padding-left: 20px;
+    }
+
+    .fit-block li {
+      padding-left: 4px;
+      color: var(--muted);
+      font-size: 15px;
+      line-height: 1.7;
+    }
+
+    .fit-block.limit li {
+      color: #d6d6d1;
+    }
+
     @media (max-width: 900px) {
       .hero-grid,
       .question-grid,
@@ -2298,8 +2650,33 @@
       .score-layout,
       .status-layout,
       .takeaway,
-      .demo-grid {
+      .demo-grid,
+      .plain-intro,
+      .product-promise,
+      .approach-grid,
+      .fit-grid {
         grid-template-columns: 1fr;
+      }
+
+      .dlp-bands {
+        grid-template-columns: repeat(2, 1fr);
+      }
+
+      .dlp-band:nth-child(3) {
+        border-left: 0;
+        border-top: 1px solid #c9c9c2;
+      }
+
+      .dlp-band:nth-child(4) {
+        border-top: 1px solid #c9c9c2;
+      }
+
+      .context-compare {
+        grid-template-columns: 1fr;
+      }
+
+      .contrast-row {
+        grid-template-columns: 150px repeat(2, minmax(0, 1fr));
       }
 
       .hero-visual {
@@ -2379,6 +2756,10 @@
         font-size: 16px;
       }
 
+      .hero-title .accent {
+        white-space: normal;
+      }
+
       .hero-visual {
         min-height: 300px;
         transform: scale(0.86);
@@ -2392,8 +2773,53 @@
       .arch,
       .approval-flow,
       .boundary-grid,
-      .evaluation-grid {
+      .evaluation-grid,
+      .dlp-bands,
+      .flow-principle {
         grid-template-columns: 1fr;
+      }
+
+      .dlp-band,
+      .dlp-band + .dlp-band,
+      .dlp-band:nth-child(3),
+      .dlp-band:nth-child(4),
+      .flow-principle-step,
+      .flow-principle-step + .flow-principle-step {
+        min-height: 0;
+        border: 0;
+        border-bottom: 1px solid #c9c9c2;
+      }
+
+      .dlp-band:last-child,
+      .flow-principle-step:last-child {
+        border-bottom: 0;
+      }
+
+      .eyebrow-number,
+      .flow-principle-step strong,
+      .context-label,
+      .approach-panel .context-label,
+      .fit-block .context-label {
+        margin-bottom: 28px;
+      }
+
+      .flow-principle-step strong {
+        margin-top: 0;
+      }
+
+      .approach-flow,
+      .contrast-row {
+        grid-template-columns: 1fr;
+      }
+
+      .contrast-row > * + * {
+        border-top: 1px solid #c9c9c2;
+        border-left: 0;
+      }
+
+      .plain-list li {
+        grid-template-columns: 1fr;
+        gap: 6px;
       }
 
       .graph-board {
@@ -2624,374 +3050,299 @@
 
   <header class="topbar" aria-hidden="true">
     <div class="brand">
-      <span>ToolUseProxy Research</span>
+      <span>ToolUseProxy / Product Overview</span>
     </div>
     <div class="section-label" id="section-label">INTRODUCTION</div>
   </header>
 
-  <main class="deck" id="deck" aria-label="ToolUseProxy研究発表スライド">
+  <main class="deck" id="deck" aria-label="ToolUseProxy製品紹介スライド">
     <section class="slide is-active" id="slide-1" data-section="INTRODUCTION" aria-label="スライド1 表紙">
-      <div class="slide-inner hero-grid">
+      <div class="slide-inner plain-intro">
         <div class="hero-title reveal">
-          <p class="kicker">Research Presentation / 2026</p>
-          <h1>AIエージェントの<br><span class="accent">情報の流れ</span>を守る</h1>
-          <p class="lead">Codexのツール利用をローカルで観測し、秘密情報が外部へ届くまでの経路を<strong>追跡・検知・制御</strong>する研究実装。</p>
-          <div class="meta-row" aria-label="研究の基本情報">
-            <span class="pill"><svg aria-hidden="true"><use href="#i-terminal"></use></svg>Codex Hooks</span>
-            <span class="pill"><svg aria-hidden="true"><use href="#i-route"></use></svg>Information Flow</span>
-            <span class="pill"><svg aria-hidden="true"><use href="#i-lock"></use></svg>Local-first</span>
+          <p class="kicker">Product Overview / 2026</p>
+          <h1>AIエージェントは、<br><span class="accent">何を外へ持ち出したのか。</span></h1>
+          <p class="lead">ToolUseProxyは、個人開発や研究の現場で、エージェントが扱った情報の<strong>由来・経路・送信先</strong>をローカルに追跡する情報流ガードレールです。</p>
+          <div class="meta-row" aria-label="資料の要点">
+            <span class="pill">FOR STUDENTS</span>
+            <span class="pill">LOCAL-FIRST</span>
+            <span class="pill">LINEAGE + SINK-FIRST</span>
           </div>
         </div>
-        <div class="hero-visual reveal" aria-hidden="true">
-          <div class="hero-orbit"></div>
-          <svg class="hero-shield"><use href="#i-shield"></use></svg>
-          <div class="orbit-card source"><svg><use href="#i-file"></use></svg>.env</div>
-          <div class="orbit-card tool"><svg><use href="#i-cpu"></use></svg>Codex</div>
-          <div class="orbit-card answer"><svg><use href="#i-send"></use></svg>final answer</div>
-          <div class="orbit-card trace"><svg><use href="#i-route"></use></svg>lineage</div>
-        </div>
+        <aside class="plain-intro-note reveal">
+          <strong>この資料でわかること</strong>
+          <p>既存DLPの役割、個人導入が難しい理由、情報流を見る意義、そしてToolUseProxyが採る2つの検知方式。</p>
+        </aside>
       </div>
     </section>
 
-    <section class="slide" id="slide-2" data-section="BACKGROUND" aria-label="スライド2 背景">
+    <section class="slide" id="slide-2" data-section="DLP OVERVIEW" aria-label="スライド2 大規模DLPの概要">
       <div class="slide-inner">
         <div class="slide-head">
           <div>
-            <p class="kicker">01 / Background</p>
-            <h2>便利さと危険は、<br>同じ作業の中にある</h2>
+            <p class="kicker">01 / Existing DLP</p>
+            <h2>大規模DLPは、組織全体の<br>「機密情報の出口」を管理する</h2>
           </div>
           <span class="slide-no">02 / 13</span>
         </div>
-        <div class="story-board reveal">
-          <article class="story-card" data-step="01">
-            <div class="icon-box"><svg aria-hidden="true"><use href="#i-file"></use></svg></div>
-            <div>
-              <h3>秘密情報を読む</h3>
-              <p>開発支援のため、エージェントは設定ファイルや実行結果を読むことがある。</p>
-            </div>
-          </article>
-          <div class="arrow-bridge" aria-hidden="true"><svg><use href="#i-arrow-right"></use></svg></div>
-          <article class="story-card" data-step="02">
-            <div class="icon-box"><svg aria-hidden="true"><use href="#i-cpu"></use></svg></div>
-            <div>
-              <h3>推論してツールを使う</h3>
-              <p>ファイル編集、shell、MCP、最終回答など、複数の操作を連続して行う。</p>
-            </div>
-          </article>
-          <div class="arrow-bridge" aria-hidden="true"><svg><use href="#i-arrow-right"></use></svg></div>
-          <article class="story-card risk" data-step="03">
-            <div class="icon-box"><svg aria-hidden="true"><use href="#i-send"></use></svg></div>
-            <div>
-              <h3>外へ送ってしまう？</h3>
-              <p>値そのものだけでなく、加工・転記された情報も外部toolや回答へ届き得る。</p>
-            </div>
-          </article>
+        <div class="dlp-bands reveal" aria-label="大規模DLPの代表的な4機能">
+          <article class="dlp-band"><span class="eyebrow-number">01</span><h3>見つける</h3><p>文書、メール、クラウド、端末から機密情報を識別する。</p></article>
+          <article class="dlp-band"><span class="eyebrow-number">02</span><h3>分類する</h3><p>ラベルや規則を使い、どの情報をどの強さで守るか定義する。</p></article>
+          <article class="dlp-band"><span class="eyebrow-number">03</span><h3>監視する</h3><p>メール送信、アップロード、コピーなど複数の経路を横断して確認する。</p></article>
+          <article class="dlp-band"><span class="eyebrow-number">04</span><h3>制御する</h3><p>監査、警告、暗号化、遮断をポリシーに沿って実行する。</p></article>
         </div>
-        <div class="risk-banner reveal">
-          <strong>「読める」≠「送ってよい」</strong>
-          <span>権限内の操作であっても、情報がどこから来てどこへ向かったかを確認する必要がある。</span>
-        </div>
+        <p class="source-note">Reference: <a href="https://learn.microsoft.com/en-us/purview/dlp-learn-about-dlp">Microsoft Purview — Learn about data loss prevention</a></p>
       </div>
     </section>
 
-    <section class="slide" id="slide-3" data-section="RESEARCH QUESTION" aria-label="スライド3 研究課題">
+    <section class="slide" id="slide-3" data-section="ADOPTION GAP" aria-label="スライド3 個人導入の難しさ">
       <div class="slide-inner">
         <div class="slide-head">
           <div>
-            <p class="kicker">02 / Research Question</p>
-            <h2>研究の問い</h2>
+            <p class="kicker">02 / Adoption Gap</p>
+            <h2>しかし、個人開発や研究には<br>大規模DLPは重すぎる</h2>
           </div>
           <span class="slide-no">03 / 13</span>
         </div>
-        <div class="question-grid">
-          <div class="big-question reveal">
-            <span class="label">Main question</span>
-            <blockquote>AIエージェントの作業を壊さずに、秘密情報の流出経路を説明し、必要な場面だけ止められるか？</blockquote>
-          </div>
-          <div class="subquestions reveal">
-            <article class="subquestion card">
-              <span class="number">Q1</span>
-              <div><h3>観測できるか</h3><p>ツール入力・出力・最終回答を、同じ作業の流れとして記録できるか。</p></div>
-            </article>
-            <article class="subquestion card">
-              <span class="number">Q2</span>
-              <div><h3>経路を説明できるか</h3><p>保護対象から外部送信候補まで、どの操作を経由したか再構築できるか。</p></div>
-            </article>
-            <article class="subquestion card">
-              <span class="number">Q3</span>
-              <div><h3>適切に介入できるか</h3><p>常に遮断せず、危険度とHookの位置に応じて記録・再確認・拒否を選べるか。</p></div>
-            </article>
-          </div>
+        <div class="context-compare">
+          <article class="context-column reveal">
+            <span class="context-label">Enterprise DLP</span>
+            <h3>組織の基盤として運用</h3>
+            <p>管理対象端末、ID、クラウド、分類ルール、監査担当、例外申請までを一体で整備する。広く守れる一方、設計と継続運用が前提になる。</p>
+          </article>
+          <article class="context-column private reveal">
+            <span class="context-label">Individual / Research</span>
+            <h3>小さく、すぐ試したい</h3>
+            <p>守りたいのは未公開コード、研究ノート、実験データ。専任管理者や統一された端末管理はなく、導入コストが研究そのものを上回りやすい。</p>
+          </article>
         </div>
-        <p class="source-note">Related concepts: provenance / information-flow control / runtime guardrails</p>
+        <div class="judgement-line reveal">必要なのは、大規模DLPの置き換えではなく、エージェントの作業範囲に絞った軽量な観測と判断です。</div>
       </div>
     </section>
 
-    <section class="slide" id="slide-4" data-section="PROPOSAL" aria-label="スライド4 提案手法の概要">
+    <section class="slide" id="slide-4" data-section="WHY FLOW" aria-label="スライド4 情報流を見る意義">
       <div class="slide-inner">
         <div class="slide-head">
           <div>
-            <p class="kicker">03 / Proposal</p>
-            <h2>提案：見張る、辿る、止める</h2>
+            <p class="kicker">03 / Why Information Flow</p>
+            <h2>同じコマンドでも、<br>流出かどうかは決められない</h2>
           </div>
           <span class="slide-no">04 / 13</span>
         </div>
-        <div class="stage-grid">
-          <article class="stage-card card reveal" data-number="1">
-            <div class="icon-box"><svg aria-hidden="true"><use href="#i-eye"></use></svg></div>
-            <h3>Trace</h3>
-            <p>Codex Hooksからtool useを記録し、「何を読んで、何を作り、どこへ渡したか」を残す。</p>
-            <span class="stage-tag">observe</span>
+        <div class="context-compare">
+          <article class="context-column reveal">
+            <span class="context-label">Case A / Public code</span>
+            <h3>公開済みの修正を送る</h3>
+            <code class="command-line">git push origin main</code>
+            <p>公開リポジトリへ、すでに公開可能と判断したコードを送る。通常の開発操作として妥当。</p>
           </article>
-          <article class="stage-card card detect reveal" data-number="2">
-            <div class="icon-box"><svg aria-hidden="true"><use href="#i-route"></use></svg></div>
-            <h3>Detect</h3>
-            <p>構造化adapterと文字列類似度を組み合わせ、protected sourceからsinkまでの経路を探す。</p>
-            <span class="stage-tag">explain</span>
-          </article>
-          <article class="stage-card card stop reveal" data-number="3">
-            <div class="icon-box"><svg aria-hidden="true"><use href="#i-stop"></use></svg></div>
-            <h3>Stop</h3>
-            <p>最終回答の再確認、またはopt-in時の外部送信拒否として、危険な経路へ介入する。</p>
-            <span class="stage-tag">intervene</span>
+          <article class="context-column private reveal">
+            <span class="context-label">Case B / Private research</span>
+            <h3>未公開情報を含む変更を送る</h3>
+            <code class="command-line">git push origin main</code>
+            <p>同じコマンドでも、未発表の研究メモや秘密値が混ざっていれば外部流出になり得る。</p>
           </article>
         </div>
-        <p class="source-note">Source: <a href="../設計/アーキテクチャ.md">docs/設計/アーキテクチャ.md</a></p>
+        <div class="judgement-line reveal">操作名だけでは足りない。判断には「何に由来する情報が、どの経路で、どこへ送られたか」が必要です。</div>
       </div>
     </section>
 
-    <section class="slide" id="slide-5" data-section="SYSTEM DESIGN" aria-label="スライド5 システム構成">
+    <section class="slide" id="slide-5" data-section="INFORMATION FLOW" aria-label="スライド5 情報流の考え方">
       <div class="slide-inner">
         <div class="slide-head">
           <div>
-            <p class="kicker">04 / System Design</p>
-            <h2>Codexの外側に、<br>ローカルな観測層を置く</h2>
+            <p class="kicker">04 / Information Flow</p>
+            <h2>見るべきものは、<br>内容だけでなく「流れ」</h2>
           </div>
           <span class="slide-no">05 / 13</span>
         </div>
-        <div class="arch reveal" aria-label="ToolUseProxyのアーキテクチャ">
-          <div class="arch-column">
-            <div class="arch-title"><svg aria-hidden="true"><use href="#i-cpu"></use></svg>Codex</div>
-            <div class="arch-item"><strong>PreToolUse</strong><span>実行前のtool input</span></div>
-            <div class="arch-item"><strong>PostToolUse</strong><span>実行後のtool response</span></div>
-            <div class="arch-item"><strong>Stop</strong><span>最終回答</span></div>
-          </div>
-          <div class="arch-column highlight">
-            <div class="arch-title"><svg aria-hidden="true"><use href="#i-eye"></use></svg>Runtime</div>
-            <div class="arch-item"><strong>parse / normalize</strong><span>payloadを共通形式へ</span></div>
-            <div class="arch-item"><strong>artifact / resource</strong><span>情報と操作を抽出</span></div>
-            <div class="arch-item"><strong>SQLite</strong><span>workspace・session単位で保存</span></div>
-          </div>
-          <div class="arch-column">
-            <div class="arch-title"><svg aria-hidden="true"><use href="#i-route"></use></svg>Analysis</div>
-            <div class="arch-item"><strong>tool adapters</strong><span>構造が分かるedgeを優先</span></div>
-            <div class="arch-item"><strong>similarity</strong><span>文字列の依存候補を探索</span></div>
-            <div class="arch-item"><strong>lineage graph</strong><span>sourceからsinkへ伝播</span></div>
-          </div>
-          <div class="arch-column policy">
-            <div class="arch-title"><svg aria-hidden="true"><use href="#i-shield"></use></svg>Policy</div>
-            <div class="arch-item"><strong>allow</strong><span>通常どおり継続</span></div>
-            <div class="arch-item"><strong>continue_review</strong><span>回答を作り直す</span></div>
-            <div class="arch-item"><strong>deny</strong><span>外部送信を実行前に拒否</span></div>
-          </div>
+        <div class="flow-principle reveal" aria-label="情報流を構成する3要素">
+          <article class="flow-principle-step"><span class="context-label">Source</span><strong>どこから来たか</strong><p>.env、未公開コード、研究ノート、実験データなど、情報の由来。</p></article>
+          <article class="flow-principle-step"><span class="context-label">Use / Transform</span><strong>どう使われたか</strong><p>ToolUse、ファイル読込、編集、要約、コマンド生成など、途中の操作。</p></article>
+          <article class="flow-principle-step"><span class="context-label">Sink</span><strong>どこへ出るか</strong><p>Git push、外部MCP、HTTP送信、最終回答など、情報が届く出口。</p></article>
         </div>
-        <div class="note-line reveal"><svg aria-hidden="true"><use href="#i-lock"></use></svg>解析・保存はローカル。Hook内のnetwork access、remote embedding、telemetryは使わない。</div>
-        <p class="source-note">Source: <a href="../設計/アーキテクチャ.md">アーキテクチャ概要</a> / <a href="../../PRIVACY.md">PRIVACY.md</a></p>
+        <div class="judgement-line reveal">Source → 操作 → Sinkが一本につながったとき、初めて「その送信が危険な理由」を説明できます。</div>
       </div>
     </section>
 
-    <section class="slide" id="slide-6" data-section="TRACE" aria-label="スライド6 情報流グラフ">
+    <section class="slide" id="slide-6" data-section="TOOLUSEPROXY" aria-label="スライド6 ToolUseProxyの紹介">
       <div class="slide-inner">
         <div class="slide-head">
           <div>
-            <p class="kicker">05 / Trace</p>
-            <h2>ログではなく、<br>「経路」として見る</h2>
+            <p class="kicker">05 / ToolUseProxy</p>
+            <h2>エージェントの外側に置く、<br>ローカルな観測レイヤー</h2>
           </div>
           <span class="slide-no">06 / 13</span>
         </div>
-        <div class="graph-layout">
-          <div class="flow-table reveal" aria-label="protected sourceから最終回答までの情報流の例">
-            <div class="flow-row"><span class="flow-index">01</span><strong>source_chunk</strong><span>.envから、ユーザーが保護対象として選んだ値を読み込む。</span></div>
-            <div class="flow-row"><span class="flow-index">02</span><strong>Bash output</strong><span>catの出力として同じ情報が現れたことを記録する。</span></div>
-            <div class="flow-row"><span class="flow-index">03</span><strong>apply_patch</strong><span>別ファイルへの編集に使われた場合はresourceとの関係を残す。</span></div>
-            <div class="flow-row"><span class="flow-index">04</span><strong>final_answer</strong><span>最終回答へ届いた場合、外向きsink候補として評価する。</span></div>
+        <div class="product-promise">
+          <div class="promise-statement reveal">
+            <span class="context-label">Core proposition</span>
+            <blockquote>作業をすべて止めるのではなく、情報の由来と出口をつなぎ、危険な場面だけ説明して介入する。</blockquote>
           </div>
-          <div class="graph-legend reveal">
-            <article class="legend-card card">
-              <span class="mini-label">Provenance</span>
-              <h3>由来を残す</h3>
-              <p>結果だけでなく、どのevent・artifact・resourceから導かれたかをedgeとして保存する。</p>
-            </article>
-            <article class="legend-card card">
-              <span class="mini-label">Lineage</span>
-              <h3>危険経路を説明する</h3>
-              <p>「秘密らしい文字があった」ではなく、source → 操作 → sinkの順で説明できる。</p>
-            </article>
-          </div>
+          <ul class="plain-list reveal" aria-label="ToolUseProxyの特徴">
+            <li><strong>LOCAL</strong><span>解析と記録を手元で行う</span></li>
+            <li><strong>AGENT-AWARE</strong><span>ToolUseと最終回答を同じ流れで観測</span></li>
+            <li><strong>EXPLAINABLE</strong><span>秘密らしさだけでなく到達経路を提示</span></li>
+            <li><strong>SELECTIVE</strong><span>記録、再確認、拒否を段階的に選択</span></li>
+          </ul>
         </div>
-        <p class="source-note">Conceptual basis: W3C PROV / provenance traces. Implementation: <a href="../設計/情報流追跡.md">情報流追跡</a></p>
+        <p class="source-note">Source: <a href="../../README.md">README</a> / <a href="../設計/アーキテクチャ.md">アーキテクチャ概要</a></p>
       </div>
     </section>
 
-    <section class="slide" id="slide-7" data-section="DETECT" aria-label="スライド7 検知方法">
+    <section class="slide" id="slide-7" data-section="TWO APPROACHES" aria-label="スライド7 2つの検知方式">
       <div class="slide-inner">
         <div class="slide-head">
           <div>
-            <p class="kicker">06 / Detect</p>
-            <h2>完全一致だけでは、<br>情報の変形を追えない</h2>
+            <p class="kicker">06 / Two Approaches</p>
+            <h2>ToolUseProxyは、<br>2つの方向から確かめる</h2>
           </div>
           <span class="slide-no">07 / 13</span>
         </div>
-        <div class="detector-layout">
-          <div class="ladder reveal" aria-label="類似度判定の段階">
-            <div class="rung"><span class="rung-number">01</span><strong>exact</strong><span>正規化後も同じ文字列</span></div>
-            <div class="rung"><span class="rung-number">02</span><strong>substring</strong><span>長い出力やcommand内に値が含まれる</span></div>
-            <div class="rung"><span class="rung-number">03</span><strong>token equivalent</strong><span>区切りや表記が変わってもtoken列が等しい</span></div>
-            <div class="rung"><span class="rung-number">04</span><strong>shingle</strong><span>部分列の重なりから候補を絞る</span></div>
-            <div class="rung"><span class="rung-number">+</span><strong>tool adapter</strong><span>pathや送信fieldを理解できる場合は構造的edgeを優先</span></div>
-          </div>
-          <aside class="finding-card reveal" aria-label="検知結果の例">
-            <div class="finding-head"><strong>finding / 0042</strong><span class="severity">critical</span></div>
-            <div class="finding-path">
-              <div>protected source</div>
-              <div>Bash tool_output</div>
-              <div>external sink</div>
-            </div>
-            <p class="finding-foot">検知結果には経路、sink種別、score、判断理由を残し、policyが介入方法を選ぶ。</p>
-          </aside>
+        <div class="approach-grid">
+          <article class="approach-panel reveal">
+            <span class="context-label">Approach 1</span>
+            <h3>Lineage方式</h3>
+            <p>Sourceから出発し、ToolUseやファイル操作を辿って、外部sinkへ到達したかを見る。</p>
+            <div class="approach-flow" aria-label="Lineage方式の流れ"><span>protected<br>source</span><span>tool / file<br>operations</span><span>external<br>sink</span></div>
+          </article>
+          <article class="approach-panel reveal">
+            <span class="context-label">Approach 2</span>
+            <h3>Sink-first方式</h3>
+            <p>外部sinkで実際に送られるpayloadを取り出し、登録済みのsecretと直接比較する。</p>
+            <div class="approach-flow" aria-label="Sink-first方式の流れ"><span>outgoing<br>payload</span><span>exact / partial<br>matching</span><span>registered<br>secret</span></div>
+          </article>
         </div>
-        <p class="source-note">Source: <a href="../設計/漏えい検知.md">漏えい検知</a> / <a href="../運用/類似度評価.md">類似度評価</a></p>
       </div>
     </section>
 
-    <section class="slide" id="slide-8" data-section="INTERVENTION" aria-label="スライド8 介入と明示承認">
+    <section class="slide" id="slide-8" data-section="LINEAGE" aria-label="スライド8 Lineage方式">
       <div class="slide-inner">
         <div class="slide-head">
           <div>
-            <p class="kicker">07 / Intervention</p>
-            <h2>強さの違う介入を、<br>安全な順に使う</h2>
+            <p class="kicker">07 / Lineage</p>
+            <h2>Lineage方式：<br>「なぜ危険か」を経路で示す</h2>
           </div>
           <span class="slide-no">08 / 13</span>
+        </div>
+        <div class="graph-layout">
+          <div class="flow-table reveal" aria-label="Lineage方式による情報流の例">
+            <div class="flow-row"><span class="flow-index">01</span><strong>protected source</strong><span>未公開の研究設定を保護対象として登録する。</span></div>
+            <div class="flow-row"><span class="flow-index">02</span><strong>ToolUse / file</strong><span>読込、出力、編集をevent・artifact・resourceとして関連付ける。</span></div>
+            <div class="flow-row"><span class="flow-index">03</span><strong>external sink</strong><span>Git pushや外部送信へ経路が到達したかを判定する。</span></div>
+          </div>
+          <ul class="plain-list reveal" aria-label="Lineage方式で分かること">
+            <li><strong>WHY</strong><span>その送信が危険な理由</span></li>
+            <li><strong>HOW</strong><span>どの操作を経由したか</span></li>
+            <li><strong>WHERE</strong><span>どのsinkへ到達したか</span></li>
+          </ul>
+        </div>
+        <p class="source-note">Source: <a href="../設計/情報流追跡.md">情報流追跡</a></p>
+      </div>
+    </section>
+
+    <section class="slide" id="slide-9" data-section="SINK-FIRST" aria-label="スライド9 Sink-first方式">
+      <div class="slide-inner">
+        <div class="slide-head">
+          <div>
+            <p class="kicker">08 / Sink-first</p>
+            <h2>Sink-first方式：<br>「何を送るか」を出口で確かめる</h2>
+          </div>
+          <span class="slide-no">09 / 13</span>
+        </div>
+        <div class="graph-layout">
+          <div class="flow-table reveal" aria-label="Sink-first方式による検知の流れ">
+            <div class="flow-row"><span class="flow-index">01</span><strong>identify sink</strong><span>外部MCPや送信commandなど、外へ出る操作を見つける。</span></div>
+            <div class="flow-row"><span class="flow-index">02</span><strong>extract payload</strong><span>URL、body、引数、stdinなど、実際の送信部分を取り出す。</span></div>
+            <div class="flow-row"><span class="flow-index">03</span><strong>compare secret</strong><span>登録secretとの完全一致・包含・表記差を比較する。</span></div>
+          </div>
+          <ul class="plain-list reveal" aria-label="Sink-first方式の特徴">
+            <li><strong>DIRECT</strong><span>送信直前のpayloadを直接確認</span></li>
+            <li><strong>FOCUSED</strong><span>外部sinkだけに検査を絞れる</span></li>
+            <li><strong>LIMIT</strong><span>未知の変形や未登録情報には弱い</span></li>
+          </ul>
+        </div>
+        <p class="source-note">Source: <a href="../設計/漏えい検知.md">漏えい検知</a></p>
+      </div>
+    </section>
+
+    <section class="slide" id="slide-10" data-section="COMBINATION" aria-label="スライド10 2方式の組み合わせ">
+      <div class="slide-inner">
+        <div class="slide-head">
+          <div>
+            <p class="kicker">09 / Combination</p>
+            <h2>2つを組み合わせると、<br>判断に根拠が生まれる</h2>
+          </div>
+          <span class="slide-no">10 / 13</span>
+        </div>
+        <div class="contrast-table reveal" role="table" aria-label="Lineage方式とSink-first方式の比較">
+          <div class="contrast-row header" role="row"><strong role="columnheader">比較</strong><strong role="columnheader">Lineage</strong><strong role="columnheader">Sink-first</strong></div>
+          <div class="contrast-row" role="row"><strong role="rowheader">出発点</strong><span role="cell">守る情報の由来</span><span role="cell">外へ出るpayload</span></div>
+          <div class="contrast-row" role="row"><strong role="rowheader">強み</strong><span role="cell">変形や転記を含む経路を説明しやすい</span><span role="cell">実際の送信内容を直接確認できる</span></div>
+          <div class="contrast-row" role="row"><strong role="rowheader">弱み</strong><span role="cell">観測できない操作では経路が切れる</span><span role="cell">未登録・大きく変形した情報には弱い</span></div>
+          <div class="contrast-row" role="row"><strong role="rowheader">組み合わせ</strong><span role="cell">「なぜ危険か」を説明</span><span role="cell">「何を送るか」を確認</span></div>
+        </div>
+        <div class="judgement-line reveal">経路の証拠と出口の証拠が揃うほど、通常操作を誤って止めずに、危険な送信へ絞って介入できます。</div>
+      </div>
+    </section>
+
+    <section class="slide" id="slide-11" data-section="INTERVENTION" aria-label="スライド11 段階的な介入">
+      <div class="slide-inner">
+        <div class="slide-head">
+          <div>
+            <p class="kicker">10 / Intervention</p>
+            <h2>常に遮断せず、<br>根拠の強さに合わせて介入する</h2>
+          </div>
+          <span class="slide-no">11 / 13</span>
         </div>
         <div class="policy-timeline">
           <article class="policy-card card reveal">
             <span class="hook">PostToolUse</span>
-            <div class="icon-box"><svg aria-hidden="true"><use href="#i-database"></use></svg></div>
             <h3>記録する</h3>
-            <p>実行後のeventとbounded evidenceを保存し、後から経路を再構築する。</p>
-            <span class="default">DEFAULT: ON</span>
+            <p>ToolUseとファイル操作を保存し、後から情報流を再構築する。</p>
+            <span class="default">OBSERVE</span>
           </article>
           <article class="policy-card card review reveal">
             <span class="hook">Stop</span>
-            <div class="icon-box"><svg aria-hidden="true"><use href="#i-user-check"></use></svg></div>
-            <h3>回答を再確認する</h3>
-            <p>criticalな経路が最終回答に届いた場合、Codexへ修正版の生成を求める。</p>
-            <span class="default">ALPHA: ON</span>
+            <h3>再確認する</h3>
+            <p>最終回答へ危険な経路が届いたとき、値を出さない回答へ作り直す。</p>
+            <span class="default">REVIEW</span>
           </article>
           <article class="policy-card card block reveal">
             <span class="hook">PreToolUse</span>
-            <div class="icon-box"><svg aria-hidden="true"><use href="#i-stop"></use></svg></div>
-            <h3>実行前に拒否する</h3>
-            <p>criticalなBash / MCP外部送信だけを、実際に送られる前にdenyする。</p>
-            <span class="default">DEFAULT: OPT-IN</span>
+            <h3>拒否する</h3>
+            <p>外部送信payloadに強い根拠がある場合だけ、実行前に止める。</p>
+            <span class="default">OPT-IN BLOCK</span>
           </article>
         </div>
-        <p class="source-note">Safe default: runtime rewrite/redactは無効。複数Hook後の最終入力を証明できないため、曖昧な書換えを行わない。</p>
+        <p class="source-note">何を守るかは人が明示承認する。無承認の自動登録、Hook中のworkspace-wide scan、曖昧なruntime書換えは行わない。</p>
       </div>
     </section>
 
-    <section class="slide" id="slide-9" data-section="HUMAN CONTROL" aria-label="スライド9 保護ソースの登録">
+    <section class="slide" id="slide-12" data-section="FIT & LIMITS" aria-label="スライド12 対象と限界">
       <div class="slide-inner">
         <div class="slide-head">
           <div>
-            <p class="kicker">08 / Human Control</p>
-            <h2>何を守るかは、<br>エージェントが勝手に決めない</h2>
-          </div>
-          <span class="slide-no">09 / 13</span>
-        </div>
-        <div class="approval-flow reveal" aria-label="保護ソースを登録する4段階">
-          <article class="approval-step"><span class="step-no">STEP 1</span><h3>Offline scan</h3><p>.env / JSON候補を上限付きで探索。Hook実行中には行わない。</p></article>
-          <article class="approval-step"><span class="step-no">STEP 2</span><h3>Value-free提案</h3><p>相対path、selector、検出理由だけを提示。値そのものは表示しない。</p></article>
-          <article class="approval-step human"><span class="step-no">STEP 3</span><h3>人が明示承認</h3><p>提示されたexact proposalを1件ずつ確認し、approve / reject / ignoreを選ぶ。</p></article>
-          <article class="approval-step commit"><span class="step-no">STEP 4</span><h3>Atomic登録</h3><p>承認後だけmanifestへ原子的に追加。途中変更やstale proposalは拒否する。</p></article>
-        </div>
-        <div class="nonnegotiable reveal"><svg aria-hidden="true"><use href="#i-lock"></use></svg>一括承認なし・無承認の自動登録なし・Hook中のworkspace-wide scanなし</div>
-        <p class="source-note">Source: <a href="../設定/Plugin導入.md">Codex Plugin 導入</a></p>
-      </div>
-    </section>
-
-    <section class="slide" id="slide-10" data-section="EXPERIMENT" aria-label="スライド10 観測実験の手順">
-      <div class="slide-inner">
-        <div class="slide-head">
-          <div>
-            <p class="kicker">09 / Experiment A</p>
-            <h2>実装を確かめるための、<br>観測実験の手順</h2>
-          </div>
-          <span class="slide-no">10 / 13</span>
-        </div>
-        <div class="experiment-grid">
-          <div class="method-stack reveal">
-            <article class="method-item"><span class="method-label">Observe</span><strong>Hook payload</strong><p>実際のtool input・tool response・最終回答を共通形式で記録できるか。</p></article>
-            <article class="method-item"><span class="method-label">Reconstruct</span><strong>Information flow</strong><p>記録したeventからsource・artifact・resource・sinkの関係を再構築できるか。</p></article>
-            <article class="method-item"><span class="method-label">Intervene</span><strong>Policy behavior</strong><p>危険な経路と安全な経路に対し、意図したpolicy判断が行われるか。</p></article>
-          </div>
-          <article class="experiment-story reveal">
-            <div class="event-sequence">
-              <div class="event-dot">01</div><div class="event-content"><strong>合成した保護情報を用意する</strong><span>実際のsecretは使わず、挙動を追いやすいダミー文字列を用いる。</span></div>
-              <div class="event-dot">02</div><div class="event-content"><strong>代表的なtool useを行う</strong><span>Bash・ファイル編集・最終回答など、情報が移動する操作を実行する。</span></div>
-              <div class="event-dot">03</div><div class="event-content"><strong>保存された経路を再構築する</strong><span>Hook payloadからartifact、resource、sinkまでの関係を確認する。</span></div>
-              <div class="event-dot last">04</div><div class="event-content"><strong>policy判断と副作用を照合する</strong><span>記録・再確認・拒否が、想定した境界で働くかを比較する。</span></div>
-            </div>
-          </article>
-        </div>
-        <p class="source-note">Source: <a href="../調査/Codex実Hook観測実験.md">Codex実Hook観測実験</a></p>
-      </div>
-    </section>
-
-    <section class="slide" id="slide-11" data-section="EVALUATION" aria-label="スライド11 評価設計">
-      <div class="slide-inner">
-        <div class="slide-head">
-          <div>
-            <p class="kicker">10 / Experiment B</p>
-            <h2>評価は、三つの観点に分ける</h2>
-          </div>
-          <span class="slide-no">11 / 13</span>
-        </div>
-        <div class="evaluation-grid reveal">
-          <article class="evaluation-item"><span class="evaluation-label">A / QUALITY</span><h3>検知品質</h3><p>情報の対応付け、候補探索、sourceからsinkまでの到達判定を分けて確認する。</p></article>
-          <article class="evaluation-item"><span class="evaluation-label">B / CONSISTENCY</span><h3>再現性</h3><p>全体再解析と差分解析で、同じ情報流とpolicy判断を再現できるかを確認する。</p></article>
-          <article class="evaluation-item"><span class="evaluation-label">C / SAFETY</span><h3>安全性</h3><p>誤った遮断やprivacy exposureを見落とさず、通常タスクへの影響も評価する。</p></article>
-        </div>
-        <div class="evaluation-note reveal">合成データによる再現可能な評価と、未知の実世界データを使う外部holdoutは分けて扱う。</div>
-        <p class="source-note">Source: <a href="../運用/類似度評価.md">類似度評価</a> / <a href="../運用/外部holdout評価.md">外部holdout評価</a></p>
-      </div>
-    </section>
-
-    <section class="slide" id="slide-12" data-section="LIMITATIONS" aria-label="スライド12 安全境界と今後の課題">
-      <div class="slide-inner">
-        <div class="slide-head">
-          <div>
-            <p class="kicker">11 / Limitations</p>
-            <h2>できることと、<br>できないことを分ける</h2>
+            <p class="kicker">11 / Fit & Limits</p>
+            <h2>大規模DLPの代替ではなく、<br>個人のエージェント作業に絞る</h2>
           </div>
           <span class="slide-no">12 / 13</span>
         </div>
-        <div class="boundary-grid">
-          <article class="boundary-card card reveal">
-            <div class="card-head"><svg aria-hidden="true"><use href="#i-check"></use></svg><h3>Local-first</h3></div>
-            <p>ToolUseProxy自身はnetwork request、remote embedding、telemetryを行わない。</p>
+        <div class="fit-grid">
+          <article class="fit-block reveal">
+            <span class="context-label">Good fit</span>
+            <ul>
+              <li>未公開コードや研究ノートを扱う学生・研究者</li>
+              <li>ローカルでcoding agentを試す個人開発者</li>
+              <li>どの操作から情報が外へ出たかを説明したい場面</li>
+            </ul>
           </article>
-          <article class="boundary-card card reveal">
-            <div class="card-head"><svg aria-hidden="true"><use href="#i-check"></use></svg><h3>説明可能な介入</h3></div>
-            <p>sourceからsinkまでの経路、score、判断理由を監査可能な形で残す。</p>
-          </article>
-          <article class="boundary-card card limit reveal">
-            <div class="card-head"><svg aria-hidden="true"><use href="#i-alert"></use></svg><h3>完全なDLPではない</h3></div>
-            <p>未知tool、意味的な言い換え、解析失敗を完全には扱えない。内部例外では原則fail-open。</p>
-          </article>
-          <article class="boundary-card card limit reveal">
-            <div class="card-head"><svg aria-hidden="true"><use href="#i-alert"></use></svg><h3>ローカル保存にもリスク</h3></div>
-            <p>SQLiteにraw payloadやprotected textが平文で残り得る。自動retentionやsecure eraseは未搭載。</p>
+          <article class="fit-block limit reveal">
+            <span class="context-label">Not a complete DLP</span>
+            <ul>
+              <li>組織全体の端末・メール・クラウドを一括管理しない</li>
+              <li>未知toolや意味的な言い換えを完全には検知できない</li>
+              <li>ローカル監査データ自体にも適切な管理が必要</li>
+            </ul>
           </article>
         </div>
         <p class="source-note">Source: <a href="../../SUPPORT.md">SUPPORT.md</a> / <a href="../../PRIVACY.md">PRIVACY.md</a></p>
@@ -3001,14 +3352,14 @@
     <section class="slide" id="slide-13" data-section="CONCLUSION" aria-label="スライド13 結論">
       <div class="slide-inner takeaway">
         <div class="takeaway-mark reveal" aria-hidden="true">
-          <div class="takeaway-statement">守る前に、<br>まず辿れる<br>ようにする。</div>
+          <div class="takeaway-statement">出口だけでなく、<br>そこへ至る流れを<br>守る。</div>
         </div>
         <div class="takeaway-copy reveal">
           <p class="kicker">12 / Conclusion</p>
-          <h2>安全に速く進むための、情報流ガードレール</h2>
-          <p class="lead">ToolUseProxyは、AIエージェントを単に止める研究ではない。<strong>情報の由来と経路を見える形にし、人が理解できる境界で介入する</strong>ための研究である。</p>
-          <div class="three-words" aria-label="研究の3つの要点">
-            <span>TRACE</span><span>DETECT</span><span>STOP</span>
+          <h2>個人開発と研究にも、説明できる情報流ガードレールを</h2>
+          <p class="lead">ToolUseProxyは、<strong>Lineage方式で経路を辿り、Sink-first方式で実際の送信内容を確かめる</strong>。大規模DLPを持てない現場でも、AIエージェントを安全に使うための判断材料をつくります。</p>
+          <div class="three-words" aria-label="製品の3つの要点">
+            <span>TRACE</span><span>COMPARE</span><span>INTERVENE</span>
           </div>
         </div>
       </div>
