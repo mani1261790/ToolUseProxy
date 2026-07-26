@@ -25,7 +25,17 @@ payload本文、payload由来hash、raw commandの複製、file pathはevidence�
 
 比較には既存のsource-binding lexical profileを使いますが、evidenceへ採用するmethodは`exact`と`substring`だけです。token equivalent、shingle、embeddingはこのcontractへ含めません。resolved valueのSHA-256はin-process比較にだけ使い、hash自体はevidenceへ返しません。
 
-このcontractはproduction policyへ未接続です。`PreToolUse`のdeny、allow、Hook outputは変更せず、次のshadow modeとexact-only enforcementが利用する接続点だけを固定します。
+このcontractはproductionのopt-in shadow modeへ接続済みですが、policy enforcementへは未接続です。`PreToolUse`のdeny、allow、Hook outputは変更せず、shadow metricsと将来のexact-only enforcementが利用する接続点を固定します。
+
+## Shadow observation
+
+`TOOLUSEPROXY_PRE_TOOL_FILE_PAYLOAD_SHADOW=1`は、current Bash eventの`curl` HTTP sinkだけを観測します。現在のruntime解析が使ったactive source chunksを`RuntimeAnalysisResult`から直接受け取り、manifest更新後のstale chunkや別workspaceのchunkを別queryで混ぜません。
+
+shadow用SQLite tableへ保存するのは、status、有限のreason、snapshot semantics、件数・byte数のbucket、strongest exact match種別、match件数、処理時間、baseline / shadow actionの集約値です。ephemeral evidenceが持つsource chunk IDもshadow tableには保存しません。payload本文、raw command、path、payload由来hashを複製しないため、shadow追加によってdurable plaintextの範囲を広げません。
+
+現在policyの判断とHook outputを先に確定し、その後にresolverとshadow writeを独立したfail-soft境界で実行します。shadow schema drift、10 msでfail-fastするSQLite lock、resolver / validation / write例外は観測だけを欠落させ、すでに確定したallow / denyを変更しません。同一Pre event / sink / segment / evidence versionは最初の観測をimmutableに保持します。
+
+`scripts/report_sink_payload_shadow.py`はidentityを出さず、status、match、decision diff、payload size bucket、p50 / p95 / p99 / max latencyだけをJSONで集計します。`would_block`は「現在のexact-only候補」であり、遮断が実行された意味ではありません。
 
 ## Bounded file resolver
 
@@ -60,6 +70,6 @@ component-wise openが防ぐのはresolver自身のpath解決raceです。Hook�
 ## 次の接続
 
 1. [#44](https://github.com/mani1261790/ToolUseProxy/issues/44)でcontractとcomponent-safe readerを固定する
-2. [#45](https://github.com/mani1261790/ToolUseProxy/issues/45)で値なしshadow metricsを実測する
-3. validation precision、false block、latency、privacy gateを満たしたexact matchだけopt-in blockへ接続する
+2. [#45](https://github.com/mani1261790/ToolUseProxy/issues/45)の値なしshadow modeでmetricsを実測する
+3. validation precision、false block、latency、privacy gateを満たしたexact matchだけ、別のopt-inでblockへ接続する
 4. [#46](https://github.com/mani1261790/ToolUseProxy/issues/46)のsemantic matchはobserve-onlyで別評価する
