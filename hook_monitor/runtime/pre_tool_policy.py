@@ -14,6 +14,9 @@ from hook_monitor.analysis.adapters.mcp_profiles import (
     inspect_mcp_input,
 )
 from hook_monitor.analysis.leak_detection import LeakFinding, detect_leaks
+from hook_monitor.analysis.sink_payload_evidence import (
+    inspect_bash_sink_payload_evidence,
+)
 from hook_monitor.policy.codex_output import (
     render_codex_hook_output,
     select_strongest_decision,
@@ -25,11 +28,16 @@ from hook_monitor.policy.redaction_preview import (
 )
 from hook_monitor.runtime.incremental_analysis import (
     RUNTIME_GRAPH_DETECTOR_VERSION,
+    RuntimeAnalysisResult,
     update_runtime_analysis,
 )
 from hook_monitor.runtime.models import AnalysisRun, NormalizedEvent, SinkCandidate
 from hook_monitor.runtime.policy_audit import store_policy_decision
 from hook_monitor.runtime.redaction_audit import store_redaction_preview_plan
+from hook_monitor.runtime.sink_payload_shadow import (
+    build_sink_payload_shadow_observation,
+    store_sink_payload_shadow_observations,
+)
 from hook_monitor.runtime.storage import EventStore
 
 
@@ -133,6 +141,7 @@ def evaluate_pre_tool_hook_policy(
     *,
     current_event: NormalizedEvent,
     enabled_adapters: frozenset[str] = DEFAULT_PRE_TOOL_ADAPTERS,
+    sink_payload_shadow_enabled: bool = False,
     minimum_path_score: float = 0.15,
     leak_min_score: float = 0.3,
 ) -> dict[str, object]:
@@ -208,6 +217,20 @@ def evaluate_pre_tool_hook_policy(
         except Exception:
             # A preview-only failure must never weaken the already-rendered block.
             pass
+    if current_adapter == "bash" and sink_payload_shadow_enabled:
+        try:
+            _store_bash_sink_payload_shadow(
+                store,
+                current_event=current_event,
+                runtime_result=runtime_result,
+                current_sinks=tuple(current_sinks),
+                baseline_action=(
+                    selected.action if selected is not None else "allow"
+                ),
+            )
+        except Exception:
+            # Observation must never change the already-rendered policy output.
+            pass
     return hook_output
 
 
@@ -280,3 +303,66 @@ def _current_external_sinks(
             or sink.tool_use_id == current_event.tool_use_id
         )
     ]
+
+
+def _store_bash_sink_payload_shadow(
+    store: EventStore,
+    *,
+    current_event: NormalizedEvent,
+    runtime_result: RuntimeAnalysisResult,
+    current_sinks: tuple[SinkCandidate, ...],
+    baseline_action: str,
+) -> None:
+    tool_input = current_event.raw_payload.get("tool_input")
+    if not isinstance(tool_input, dict):
+        return
+    command = tool_input.get("command")
+    if not isinstance(command, str) or not command:
+        return
+    if (
+        current_event.workspace_root is None
+        or current_event.workspace_execution_cwd is None
+        or current_event.workspace_id is None
+        or current_event.session_id is None
+    ):
+        return
+    current_http_sinks = tuple(
+        sink
+        for sink in current_sinks
+        if sink.sink_type == "external_http_request"
+        and sink.metadata.get("matched_program") == "curl"
+    )
+    sink_node_ids_by_segment: dict[int, str] = {}
+    for sink in current_http_sinks:
+        segment_index = sink.metadata.get("segment_index")
+        if type(segment_index) is not int or segment_index < 0:
+            raise ValueError("current curl sink has no segment identity")
+        if segment_index in sink_node_ids_by_segment:
+            raise ValueError("current curl segment has multiple sink identities")
+        sink_node_ids_by_segment[segment_index] = sink.node_id
+    if not sink_node_ids_by_segment:
+        return
+    evidence = inspect_bash_sink_payload_evidence(
+        command,
+        workspace_root=Path(current_event.workspace_root),
+        execution_cwd=Path(current_event.workspace_execution_cwd),
+        workspace_id=current_event.workspace_id,
+        sink_node_ids_by_segment=sink_node_ids_by_segment,
+        source_chunks=runtime_result.source_chunks,
+    )
+    observations = tuple(
+        observation
+        for item in evidence
+        if (
+            observation := build_sink_payload_shadow_observation(
+                item,
+                pre_event_id=current_event.event_id,
+                analysis_run_id=runtime_result.analysis_run.analysis_run_id,
+                session_id=current_event.session_id,
+                tool_use_id=current_event.tool_use_id,
+                baseline_action=baseline_action,
+            )
+        )
+        is not None
+    )
+    store_sink_payload_shadow_observations(store.db_path, observations)
