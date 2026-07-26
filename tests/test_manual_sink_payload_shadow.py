@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from hook_monitor.analysis.sink_payload_evidence import (
     BashSinkPayloadEvidence,
@@ -18,12 +19,15 @@ from hook_monitor.runtime.sink_payload_shadow import (
 from hook_monitor.runtime.storage import EventStore
 from scripts.manual_sink_payload_shadow import (
     CASE_ID,
+    COMMAND_TIMEOUT_SECONDS,
     PROTECTED_FILE,
     PROTECTED_MARKER,
     PUBLIC_FILE,
     PUBLIC_MARKER,
     SURFACE_DESKTOP,
     SURFACE_TUI,
+    ShadowDogfoodFailure,
+    _run_json,
     desktop_preflight,
     prepare_shadow_dogfood,
     verify_shadow_dogfood,
@@ -181,7 +185,11 @@ class ManualSinkPayloadShadowTest(unittest.TestCase):
                         self._session_output("public-call"),
                         self._session_call(
                             "protected-call",
-                            self._command(fake_sink, PROTECTED_FILE),
+                            [
+                                "bash",
+                                "-lc",
+                                self._command(fake_sink, PROTECTED_FILE),
+                            ],
                         ),
                         self._session_output("protected-call"),
                     ]
@@ -199,6 +207,38 @@ class ManualSinkPayloadShadowTest(unittest.TestCase):
             result["metrics"]["decision_diff"],
         )
         self.assertNotIn("PHASE.B.CANARY", json.dumps(result))
+
+    def test_run_json_bounds_command_duration(self) -> None:
+        completed = Mock(returncode=0, stdout="{}")
+        with patch("subprocess.run", return_value=completed) as run:
+            result = _run_json(
+                ["fixture-command"],
+                cwd=Path.cwd(),
+                stage="fixture",
+            )
+
+        self.assertEqual({}, result)
+        self.assertEqual(COMMAND_TIMEOUT_SECONDS, run.call_args.kwargs["timeout"])
+
+    def test_run_json_maps_timeout_to_stable_failure(self) -> None:
+        with (
+            patch(
+                "subprocess.run",
+                side_effect=subprocess.TimeoutExpired(
+                    cmd=["fixture-command"],
+                    timeout=COMMAND_TIMEOUT_SECONDS,
+                ),
+            ),
+            self.assertRaises(ShadowDogfoodFailure) as raised,
+        ):
+            _run_json(
+                ["fixture-command"],
+                cwd=Path.cwd(),
+                stage="fixture",
+            )
+
+        self.assertEqual("fixture", raised.exception.stage)
+        self.assertEqual("command_timeout", raised.exception.code)
 
     @staticmethod
     def _base_prepare(root: Path) -> dict[str, object]:
@@ -339,14 +379,19 @@ class ManualSinkPayloadShadowTest(unittest.TestCase):
         )
 
     @staticmethod
-    def _session_call(call_id: str, command: str) -> str:
+    def _session_call(call_id: str, command: str | list[str]) -> str:
+        arguments = (
+            {"cmd": command}
+            if isinstance(command, str)
+            else {"command": command}
+        )
         return json.dumps(
             {
                 "type": "response_item",
                 "payload": {
                     "type": "function_call",
                     "call_id": call_id,
-                    "arguments": json.dumps({"cmd": command}),
+                    "arguments": json.dumps(arguments),
                 },
             }
         )

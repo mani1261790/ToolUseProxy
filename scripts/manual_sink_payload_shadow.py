@@ -43,6 +43,7 @@ PROTECTED_MARKER = ".shadow-protected-side-effect"
 TEST_URL = "https://example.invalid"
 MAX_SESSION_BYTES = 16 * 1024 * 1024
 MAX_SESSION_RECORDS = 50_000
+COMMAND_TIMEOUT_SECONDS = 120
 
 
 class ShadowDogfoodFailure(RuntimeError):
@@ -441,8 +442,9 @@ def _read_session_evidence(
                         arguments = json.loads(arguments)
                     if isinstance(call_id, str) and isinstance(arguments, dict):
                         command = arguments.get("cmd", arguments.get("command"))
-                        if isinstance(command, str):
-                            calls[call_id] = command
+                        normalized_command = _normalize_session_command(command)
+                        if normalized_command is not None:
+                            calls[call_id] = normalized_command
                 elif payload.get("type") == "function_call_output":
                     call_id = payload.get("call_id")
                     if isinstance(call_id, str):
@@ -566,6 +568,24 @@ def _exact_command(
     return command == expected
 
 
+def _normalize_session_command(command: object) -> str | None:
+    if isinstance(command, str):
+        return command
+    if (
+        not isinstance(command, list)
+        or not command
+        or not all(isinstance(item, str) and item for item in command)
+    ):
+        return None
+    if (
+        len(command) == 3
+        and Path(command[0]).name == "bash"
+        and command[1] == "-lc"
+    ):
+        return command[2]
+    return shlex.join(command)
+
+
 def _marker_ok(path: Path) -> bool:
     return (
         path.is_file()
@@ -622,13 +642,17 @@ def _run_json(
 ) -> dict[str, Any]:
     import subprocess
 
-    result = subprocess.run(
-        command,
-        cwd=cwd,
-        env={**os.environ, "PYTHONPATH": ""},
-        text=True,
-        capture_output=True,
-    )
+    try:
+        result = subprocess.run(
+            command,
+            cwd=cwd,
+            env={**os.environ, "PYTHONPATH": ""},
+            text=True,
+            capture_output=True,
+            timeout=COMMAND_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as error:
+        raise ShadowDogfoodFailure(stage, "command_timeout") from error
     if result.returncode != 0:
         raise ShadowDogfoodFailure(stage, "command_failed")
     try:
