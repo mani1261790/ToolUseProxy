@@ -17,9 +17,12 @@ from hook_monitor.runtime.sink_payload_shadow import (
     store_sink_payload_shadow_observations,
 )
 from hook_monitor.runtime.storage import EventStore
+from hook_monitor.runtime.models import StoredPolicyDecision
 from scripts.manual_sink_payload_shadow import (
     CASE_ID,
     COMMAND_TIMEOUT_SECONDS,
+    EXACT_ENFORCEMENT_CASE_ID,
+    MODE_EXACT_ENFORCEMENT,
     PROTECTED_FILE,
     PROTECTED_MARKER,
     PUBLIC_FILE,
@@ -92,6 +95,40 @@ class ManualSinkPayloadShadowTest(unittest.TestCase):
             )
             state = json.loads((root / "phase-b-state.json").read_text())
             self.assertEqual(CASE_ID, state["case_id"])
+
+    def test_prepare_exact_mode_enables_shadow_and_enforcement(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory) / "exact"
+            base = self._base_prepare(root)
+            with (
+                patch(
+                    "scripts.manual_sink_payload_shadow.prepare_phase_b",
+                    return_value=base,
+                ),
+                patch(
+                    "scripts.manual_sink_payload_shadow._run_json",
+                    return_value={"status": "initialized"},
+                ),
+            ):
+                result = prepare_shadow_dogfood(
+                    root,
+                    surface=SURFACE_TUI,
+                    mode=MODE_EXACT_ENFORCEMENT,
+                )
+
+            self.assertEqual("prepared", result["status"])
+            self.assertEqual(EXACT_ENFORCEMENT_CASE_ID, result["case_id"])
+            launcher = (root / "launch-codex.sh").read_text(encoding="utf-8")
+            self.assertIn(
+                "TOOLUSEPROXY_PRE_TOOL_FILE_PAYLOAD_SHADOW=1",
+                launcher,
+            )
+            self.assertIn(
+                "TOOLUSEPROXY_PRE_TOOL_FILE_PAYLOAD_EXACT_ENFORCEMENT=1",
+                launcher,
+            )
+            prompt = (root / "phase-b-prompt.txt").read_text(encoding="utf-8")
+            self.assertIn("protected call should be blocked", prompt)
 
     def test_verify_requires_two_allowed_calls_and_opposite_shadow_results(
         self,
@@ -240,6 +277,139 @@ class ManualSinkPayloadShadowTest(unittest.TestCase):
         self.assertEqual("fixture", raised.exception.stage)
         self.assertEqual("command_timeout", raised.exception.code)
 
+    def test_verify_exact_mode_requires_block_and_no_protected_effect(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory) / "exact"
+            workspace = root / "workspace"
+            codex_home = root / "codex-home"
+            plugin_data = root / "plugin-data"
+            fake_sink = root / "bin" / "curl"
+            for directory in (
+                workspace,
+                codex_home / "sessions",
+                plugin_data,
+                fake_sink.parent,
+            ):
+                directory.mkdir(parents=True, exist_ok=True)
+            workspace = workspace.resolve()
+            codex_home = codex_home.resolve()
+            plugin_data = plugin_data.resolve()
+            fake_sink = fake_sink.resolve()
+            fake_sink.write_text("#!/bin/sh\n", encoding="utf-8")
+            fake_sink.chmod(0o700)
+            (workspace / PUBLIC_MARKER).write_text(
+                "invoked\n",
+                encoding="utf-8",
+            )
+            state = {
+                "case_id": EXACT_ENFORCEMENT_CASE_ID,
+                "mode": MODE_EXACT_ENFORCEMENT,
+                "surface": SURFACE_TUI,
+                "workspace": str(workspace),
+                "codex_home": str(codex_home),
+                "plugin_data": str(plugin_data),
+                "fake_sink": str(fake_sink),
+                "fake_sink_sha256": self._sha256(fake_sink),
+            }
+            (root / "phase-b-state.json").write_text(
+                json.dumps(state),
+                encoding="utf-8",
+            )
+            store = EventStore(plugin_data / "events.db")
+            store.initialize()
+            public_run = store.start_analysis_run("fixture", {})
+            protected_run = store.start_analysis_run("fixture", {})
+            public_pre, _ = self._record_pair(
+                store,
+                workspace,
+                tool_use_id="public-call",
+                command=self._command(fake_sink, PUBLIC_FILE),
+            )
+            protected_pre, protected_post = self._record_pair(
+                store,
+                workspace,
+                tool_use_id="protected-call",
+                command=self._command(fake_sink, PROTECTED_FILE),
+                record_post=False,
+            )
+            self.assertIsNone(protected_post)
+            store_sink_payload_shadow_observations(
+                store.db_path,
+                (
+                    self._observation(
+                        public_pre.event_id,
+                        "public-call",
+                        public_run,
+                        "sink-public",
+                        matched=False,
+                    ),
+                    self._observation(
+                        protected_pre.event_id,
+                        "protected-call",
+                        protected_run,
+                        "sink-protected",
+                        matched=True,
+                    ),
+                ),
+            )
+            store.upsert_policy_decision(
+                StoredPolicyDecision(
+                    decision_id="decision-protected",
+                    finding_id="finding-protected",
+                    analysis_run_id=protected_run,
+                    hook_event="PreToolUse",
+                    action="block",
+                    severity="critical",
+                    sink_type="external_http_request",
+                    source_node_kind="source_chunk",
+                    source_node_id="source-private",
+                    sink_node_id="sink-protected",
+                    path_score=1.0,
+                    reason=(
+                        "block because an evaluated pre-execution file "
+                        "payload contains exact protected source content"
+                    ),
+                    user_message="protected file payload",
+                    technical_summary="exact",
+                    trace_command="trace",
+                    path_summary=(),
+                )
+            )
+            session = codex_home / "sessions" / "rollout-exact.jsonl"
+            session.write_text(
+                "\n".join(
+                    [
+                        json.dumps(
+                            {
+                                "type": "session_meta",
+                                "payload": {"cwd": str(workspace)},
+                            }
+                        ),
+                        self._session_call(
+                            "public-call",
+                            self._command(fake_sink, PUBLIC_FILE),
+                        ),
+                        self._session_output("public-call"),
+                        self._session_call(
+                            "protected-call",
+                            self._command(fake_sink, PROTECTED_FILE),
+                        ),
+                        self._session_output("protected-call"),
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            result = verify_shadow_dogfood(root)
+
+        self.assertEqual("passed", result["status"], result)
+        self.assertEqual(MODE_EXACT_ENFORCEMENT, result["mode"])
+        self.assertTrue(result["checks"]["policy_block_expected"])
+        self.assertTrue(result["checks"]["protected_side_effect_expected"])
+
     @staticmethod
     def _base_prepare(root: Path) -> dict[str, object]:
         workspace = root / "workspace"
@@ -298,6 +468,7 @@ class ManualSinkPayloadShadowTest(unittest.TestCase):
         *,
         tool_use_id: str,
         command: str,
+        record_post: bool = True,
     ):
         common = {
             "session_id": "shadow-session",
@@ -318,8 +489,10 @@ class ManualSinkPayloadShadowTest(unittest.TestCase):
             workspace_root=str(workspace),
         )
         store.record(pre, [], [])
-        store.record(post, [], [])
-        return pre, post
+        if record_post:
+            store.record(post, [], [])
+            return pre, post
+        return pre, None
 
     @staticmethod
     def _observation(
