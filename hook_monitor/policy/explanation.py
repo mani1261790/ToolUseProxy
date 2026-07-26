@@ -51,6 +51,12 @@ def render_hook_message(explanation: PolicyExplanation) -> str:
 
 
 def _user_message(decision: PolicyDecision) -> str:
+    if decision.evidence_kind == "resolved_file_exact":
+        return (
+            "Protected source content was found in a file-backed external "
+            "payload. Remove protected content from the referenced file or "
+            "choose a public payload before retrying."
+        )
     if decision.sink_type == "final_answer":
         return (
             "Protected source content appears in the final answer. "

@@ -100,7 +100,7 @@ Hook trustで確認する内容、更新チャンネルと固定tagの違い、p
 
 dataset digestは`0e7045219148a9e1ba45073e390802ca21ddb60b6c119afd532c66d76b399822`です。再現方法、split、既知の限界は[類似度評価](docs/運用/類似度評価.md)に記録しています。
 
-Sink-first比較評価では、direct lexical、resolved lexical、任意のlocal semantic、現行runtime lineageを同条件比較します。v1.1のfile-backed corpusでは、direct end-to-end recall `0.333`に対し、評価専用のbounded `--data-binary @file` resolverを加えたresolved recallは`0.667`、precisionは`1.0`、payload resolutionは4 / 4です。resolver v2はPOSIXでcomponent-wiseなdirectory FD traversalを使い、親path差し替えによるworkspace escapeを防ぎます。解決値を返さない[Sink payload evidence契約](docs/設計/SinkPayloadEvidence.md)も追加しましたが、production Hookのblock範囲には未接続です。実行方法、evaluated-only / end-to-end指標、TOCTOUを含む限界は[Sink-first比較評価](docs/運用/Sink-first比較評価.md)を参照してください。
+Sink-first比較評価では、direct lexical、resolved lexical、任意のlocal semantic、現行runtime lineageを同条件比較します。v1.1のfile-backed corpusでは、direct end-to-end recall `0.333`に対し、bounded `--data-binary @file` resolverを加えたresolved recallは`0.667`、precisionは`1.0`、payload resolutionは4 / 4です。resolver v2はPOSIXでcomponent-wiseなdirectory FD traversalを使い、親path差し替えによるworkspace escapeを防ぎます。解決値を返さない[Sink payload evidence契約](docs/設計/SinkPayloadEvidence.md)はproduction Hookのshadow観測と、明示opt-inのexact-only enforcementへ接続しています。既定では無効で、semantic類似、unsupported payload、TOCTOU後の実送信bytesは保護済みと扱いません。実行方法、evaluated-only / end-to-end指標、限界は[Sink-first比較評価](docs/運用/Sink-first比較評価.md)を参照してください。
 
 ## 次に進めること
 
