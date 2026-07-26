@@ -193,7 +193,10 @@ def prepare_shadow_dogfood(
     )
     _replace_private(root / PROMPT_FILENAME, f"{prompt}\n".encode())
     _replace_private(root / GUIDE_FILENAME, guide.encode())
-    _enable_shadow_in_launcher(root / "launch-codex.sh")
+    _enable_shadow_in_launcher(
+        root / "launch-codex.sh",
+        prompt_file=root / PROMPT_FILENAME,
+    )
 
     state.update(
         {
@@ -361,7 +364,11 @@ def _render_guide(*, plugin_root: Path, workspace: Path) -> str:
     )
 
 
-def _enable_shadow_in_launcher(launcher: Path) -> None:
+def _enable_shadow_in_launcher(
+    launcher: Path,
+    *,
+    prompt_file: Path,
+) -> None:
     text = launcher.read_text(encoding="utf-8")
     marker = "export TOOLUSEPROXY_PRE_TOOL_MCP_POLICY=1\n"
     if text.count(marker) != 1:
@@ -370,6 +377,22 @@ def _enable_shadow_in_launcher(launcher: Path) -> None:
         marker,
         marker + "export TOOLUSEPROXY_PRE_TOOL_FILE_PAYLOAD_SHADOW=1\n",
     )
+    review_marker = (
+        "printf '%s' '上のHook説明を理解し、表示内容を確認する準備が"
+        "できたら yes と入力してください: ' >&2\n"
+    )
+    if text.count(review_marker) != 1:
+        raise ShadowDogfoodFailure(
+            "prepare",
+            "launcher_review_prompt_invalid",
+        )
+    copy_block = (
+        "if command -v pbcopy >/dev/null 2>&1; then\n"
+        f"  pbcopy < {shlex.quote(str(prompt_file))}\n"
+        "  printf '%s\\n' 'Shadow dogfood prompt copied to clipboard.' >&2\n"
+        "fi\n"
+    )
+    text = text.replace(review_marker, copy_block + review_marker)
     _replace_private(launcher, text.encode())
     launcher.chmod(0o700)
 

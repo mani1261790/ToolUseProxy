@@ -73,6 +73,8 @@ class ManualSinkPayloadShadowTest(unittest.TestCase):
                 "TOOLUSEPROXY_PRE_TOOL_FILE_PAYLOAD_SHADOW=1",
                 launcher,
             )
+            self.assertIn("pbcopy <", launcher)
+            self.assertIn("phase-b-prompt.txt", launcher)
             prompt = (root / "phase-b-prompt.txt").read_text(encoding="utf-8")
             self.assertIn(f"@{PUBLIC_FILE}", prompt)
             self.assertIn(f"@{PROTECTED_FILE}", prompt)
@@ -219,7 +221,9 @@ class ManualSinkPayloadShadowTest(unittest.TestCase):
         fake_sink.chmod(0o700)
         (root / "launch-codex.sh").write_text(
             "#!/bin/sh\n"
-            "export TOOLUSEPROXY_PRE_TOOL_MCP_POLICY=1\n",
+            "export TOOLUSEPROXY_PRE_TOOL_MCP_POLICY=1\n"
+            "printf '%s' '上のHook説明を理解し、表示内容を確認する準備が"
+            "できたら yes と入力してください: ' >&2\n",
             encoding="utf-8",
         )
         state = {

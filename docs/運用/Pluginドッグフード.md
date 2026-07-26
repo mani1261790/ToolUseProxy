@@ -137,6 +137,8 @@ prepareは既存Phase Bのclean Plugin build、isolated marketplace / `CODEX_HOM
 TOOLUSEPROXY_PRE_TOOL_FILE_PAYLOAD_SHADOW=1
 ```
 
+macOSではlauncherがpreflight後にsynthetic promptを`pbcopy`へ渡します。起動後はHook 3件をreviewし、clipboardのpromptを新しいtaskへ貼り付けます。prompt本文やsource値をterminal commandとして組み立て直す必要はありません。
+
 taskではpayload fileを読まず、fake sinkへ`--data-binary @shadow-public.txt`と`--data-binary @.env.phase-b`を1回ずつ送ります。shadowはobserve-onlyなので両方にPostToolUseとlocal side effectが必要です。protected callをblockしたrun、system curlを使ったrun、source値をassistant messageへ含めたrunは不合格です。
 
 ```bash
