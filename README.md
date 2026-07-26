@@ -4,7 +4,7 @@ Codexのtool useをローカルで観測し、外部sinkへ送られるpayload�
 
 本プロジェクトは、[SecHack365](https://sechack365.nict.go.jp/)での研究・開発成果物です。
 
-> 現在は`0.1.0-alpha.3` public alphaです。中核機能、再現可能な配布物、Apache-2.0の配布契約は整いましたが、完全なDLPではなく、manual Phase Bの説明UX、Desktop / GUI、Linux実Codex task、Windows実機は引き続き検証中です。
+> 現在は`0.1.0-alpha.3` public alphaです。中核機能、再現可能な配布物、Apache-2.0の配布契約、CLI TUIでのfile-backed exact-only enforcement検証は整いましたが、完全なDLPではありません。Desktop / GUI、adapter外のnetwork egress、Linux実Codex task、Windows実機は引き続き検証中です。
 
 - [研究紹介スライド（初めて知る方向け）](https://mani1261790.github.io/ToolUseProxy/slides/tooluseproxy-research.html)
 - [Codex Pluginとして試す](docs/設定/Plugin導入.md)
@@ -19,6 +19,7 @@ Codexのtool useをローカルで観測し、外部sinkへ送られるpayload�
 - [Release候補の作成と検証](docs/運用/Release候補.md)
 - [現在地と実装ロードマップ](docs/運用/実装タスク.md)
 - [Sink中心の情報流評価計画](docs/調査/Sink中心の情報流評価計画.md)
+- [Network egress観測とAudit改善計画](docs/調査/NetworkEgress観測とAudit改善計画.md)
 - [Sink-first比較評価の実行方法](docs/運用/Sink-first比較評価.md)
 - [ドキュメント索引](docs/索引.md)
 - [GitHub Project](https://github.com/users/mani1261790/projects/1)
@@ -45,7 +46,8 @@ ToolUseProxyはLLM内部の状態や因果的な情報流を直接観測する�
 | 3. Stop | alpha実装済み | Stopの`continue_review`と、opt-inのBash / MCP PreToolUse denyを提供。runtime redactは無効 |
 | Plugin化 | alpha.3 | installable package、relocatable Plugin、`PLUGIN_ROOT` / `PLUGIN_DATA`、初期化・診断・traceを実装 |
 | protected source登録 | 明示承認型を実装済み | `scan` / `suggest` → exact proposal → `approve` / `reject` / `ignore`。無承認登録はしない |
-| Public alpha | `0.1.0-alpha.3` | Apache-2.0、checksum / SBOM、archive内部、CI Action、hash-locked build、Git履歴監査、upgrade / rollback、自動dogfoodを完了。CLI TUIのmanual Phase B説明UX、Desktop / GUI、cross-platform実機、少人数pilotは継続課題 |
+| Public alpha | `0.1.0-alpha.3` | Apache-2.0、checksum / SBOM、archive内部、CI Action、hash-locked build、Git履歴監査、upgrade / rollback、自動dogfoodを完了。CLI TUIのfile-backed shadow / exact-only Phase Bは合格。Desktop / GUI、cross-platform実機、少人数pilotは継続課題 |
+| 外部sink coverage | adapter allowlist | 既知のBash / MCP / Search等を分類。任意programの実network接続を網羅しているわけではなく、実接続との偽陰性率は未測定 |
 
 設計全体は[アーキテクチャ概要](docs/設計/アーキテクチャ.md)、詳細な完了範囲と残作業は[実装タスク計画](docs/運用/実装タスク.md)を参照してください。
 
@@ -75,7 +77,7 @@ sh "<PLUGIN_ROOT>/hooks/run_cli.sh" doctor --workspace "$PWD" --data-dir "<PLUGI
 sh "<PLUGIN_ROOT>/hooks/run_cli.sh" status --workspace "$PWD" --data-dir "<PLUGIN_DATA>"
 ```
 
-Hook trustで確認する内容、更新チャンネルと固定tagの違い、protected sourceの候補発見・承認、rollback、削除時のdata保持を含む完全な手順は[Plugin導入](docs/設定/Plugin導入.md)にあります。Codex CLIのMarketplace更新は実機検証済みですが、Codex Desktop / GUIの更新操作は未検証です。checkoutから開発版を試す場合だけ、local marketplaceとして絶対pathを指定してください。
+Hook trustで確認する内容、更新チャンネルと固定tagの違い、protected sourceの候補発見・承認、rollback、削除時のdata保持を含む完全な手順は[Plugin導入](docs/設定/Plugin導入.md)にあります。Codex Desktopはlocal Pluginを利用できる公式surfaceですが、ToolUseProxyのinstall・Hook review・block・updateを通したDesktop Phase Bは未完了です。Codex CLIのMarketplace更新は実機検証済みです。
 
 ## 安全側の既定値
 
@@ -106,12 +108,14 @@ Sink-first比較評価では、direct lexical、resolved lexical、任意のloca
 
 優先順位の正本は[実装タスク計画](docs/運用/実装タスク.md)とGitHub Issues / Projectです。
 
-1. [#36](https://github.com/mani1261790/ToolUseProxy/issues/36): sink-only / semantic / lineage-assistedを同じcorpusで比較する
-2. [#44](https://github.com/mani1261790/ToolUseProxy/issues/44)・[#45](https://github.com/mani1261790/ToolUseProxy/issues/45): 値非保持のpayload evidenceからexact-only enforcementを段階導入する
-3. [#46](https://github.com/mani1261790/ToolUseProxy/issues/46): local semantic backendをobserve-onlyで比較する
-4. [#37](https://github.com/mani1261790/ToolUseProxy/issues/37): session / compaction / subagent境界の精度低下を測る
-5. [#38](https://github.com/mani1261790/ToolUseProxy/issues/38): Git pushの実payloadとbranch / worktree / 複数人開発を評価する
-6. [#18](https://github.com/mani1261790/ToolUseProxy/issues/18)・[#19](https://github.com/mani1261790/ToolUseProxy/issues/19): Desktop / GUI dogfoodと少人数pilotを継続する
+1. [#52](https://github.com/mani1261790/ToolUseProxy/issues/52): workspace単位のruntime設定を`PLUGIN_DATA`へ永続化し、環境変数だけに依存しない検証境界を作る
+2. [#53](https://github.com/mani1261790/ToolUseProxy/issues/53): Codex Desktopで標準Plugin install、Hook review、public allow / protected block、update / removeをPhase B検証する
+3. [#54](https://github.com/mani1261790/ToolUseProxy/issues/54): adapter分類と実network egressをobserve-onlyで突き合わせ、外部sink判定の偽陰性を測る
+4. [#55](https://github.com/mani1261790/ToolUseProxy/issues/55): Auditログを人間がlabelし、active learning・クラスタリング・rule miningで未知patternの調査を効率化する
+5. [#38](https://github.com/mani1261790/ToolUseProxy/issues/38)でGit pushのoutgoing objectとbranch / worktree / 複数人開発を評価する
+6. [#46](https://github.com/mani1261790/ToolUseProxy/issues/46)でlocal semantic backendをobserve-only比較し、[#37](https://github.com/mani1261790/ToolUseProxy/issues/37)でsession境界を測る
+
+個別Issue番号と着手状況は[実装タスク計画](docs/運用/実装タスク.md)と[GitHub Project](https://github.com/users/mani1261790/projects/1)を正本にします。
 
 ## 研究の考え方
 

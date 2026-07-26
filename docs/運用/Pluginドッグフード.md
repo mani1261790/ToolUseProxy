@@ -163,13 +163,15 @@ python3.11 scripts/manual_sink_payload_shadow.py prepare \
 
 同日のfresh TUI exact-enforcement human runも`status: passed`でした。public callは実行されside effectとPostToolUseを各1件残し、protected callは`resolved_payload_exact_substring`によりPreToolUseでblockされ、side effectとPostToolUseは0件でした。resolution / comparisonは各2件evaluated、exact policy blockは1件、assistant出力とshadow tableへのraw protected value露出は0件です。観測latencyはp50 `0.765 ms`、p95 / max `0.874 ms`でした。この結果はTUIの明示opt-in exact-only enforcementを合格とするものであり、既定有効化、Desktop / GUI、semantic match、unsupported payload、TOCTOU解消を証明しません。
 
-Codex Desktop / GUIは同じ成功へ読み替えません。次のpreflightは共有`CODEX_HOME`を変更せず、isolated Plugin / Hook dataとshadow opt-inをDesktop hookへ渡すsupported launcherが存在するかだけを判定します。
+Codex Desktop / GUIは同じ成功へ読み替えません。Desktop自体はlocal Plugin workflowの対象ですが、現在のharnessが要求するisolated `CODEX_HOME`注入とは別問題です。次のpreflightは共有`CODEX_HOME`を変更せず、isolated Plugin / Hook dataとshadow opt-inをDesktop Hookへ渡すlauncherが存在するかだけを判定します。
 
 ```bash
 python3.11 scripts/manual_sink_payload_shadow.py desktop-preflight
 ```
 
-2026-07-26時点のlocal環境では、isolated `CODEX_HOME`とopt-in環境変数の両方がDesktop Hookへ届くことを証明できるlauncherが見つからないため、`unsupported: isolated_desktop_hook_environment_unavailable`です。公式のPlugin対応はlocal command Hookの同等性を単独では証明しません。共有中のCodex Pluginやglobal環境変数をdogfoodのために書き換えず、supportedなDesktop test boundaryが確認できるまで未検証を維持します。
+2026-07-27時点のlocal環境では、isolated `CODEX_HOME`とopt-in環境変数の両方がDesktop Hookへ届くことを証明できるlauncherが見つからないため、`unsupported: isolated_desktop_hook_environment_unavailable`です。これは「DesktopでPluginを使えない」という意味ではなく、「CLI用の隔離harnessをそのままDesktopへ流用できない」という意味です。
+
+次のDesktop専用Phase Bでは、環境変数flagを前提にせず、workspace単位のruntime設定を`PLUGIN_DATA`へ保存したうえで、標準のDesktop Plugin installを使います。専用synthetic workspaceでPlugin source / version、3 Hookのreview、doctor / status、public allow、protected exact block、marker / DB / session照合、update / disable / removeを検証します。共有環境を使うため、変更前のPlugin一覧と設定を記録し、検証後に元へ戻すplanを先に提示します。
 
 verify結果を保存した後は、prepare出力の`logout_command`でisolated `CODEX_HOME`からlogoutします。失敗調査中はrootを保持できますが、調査完了後は認証cacheとraw local sessionを含むため、必要なaggregate evidenceを残してrootを明示的に削除します。削除はverifierが自動で行いません。
 
