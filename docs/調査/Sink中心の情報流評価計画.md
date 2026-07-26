@@ -187,8 +187,10 @@ Issue #36の最初のsliceとして、production policyを変更しない独立b
 - v1では`curl @file`を推測解決せず`unsupported`と明示
 - v1.1では評価専用のbounded `--data-binary @file` resolverを追加
 - evaluated-onlyと、unsupportedをfail-openとして含むend-to-end指標を分離
+- resolver v2ではPOSIX component-wise directory FD traversal、1 command 8 file reference、200 ms budgetを固定
+- 値を返さずworkspace / snapshot semantics / source chunk ID / exact match / aggregate costだけを持つpayload evidence契約を追加
 
-v1.1の全12ケースでは、direct end-to-end recallは`0.333`、resolved lexicalは`0.667`、現行runtime lineageは`0.333`でした。resolved precisionは`1.0`、file-backed payload resolutionは4 / 4、raw fixture exposureは0です。resolverが取得するのは実行前snapshotであり、TOCTOUを解消せず実送信bytesを証明しないため、production Hookには未接続です。再現方法は[Sink-first比較評価](../運用/Sink-first比較評価.md)に記載します。
+v1.1の全12ケースでは、direct end-to-end recallは`0.333`、resolved lexicalは`0.667`、現行runtime lineageは`0.333`でした。resolved precisionは`1.0`、file-backed payload resolutionは4 / 4、raw fixture exposureは0です。component-wise openはresolver内部の親path差し替えを防ぎますが、resolverが取得するのは実行前snapshotであり、Hook後にtarget toolが再読込するTOCTOUと実送信bytesの同一性は解消しません。そのためproduction Hookには未接続です。再現方法は[Sink-first比較評価](../運用/Sink-first比較評価.md)、evidence境界は[Sink payload evidence](../設計/SinkPayloadEvidence.md)に記載します。
 
 ## 今は保証しないこと
 

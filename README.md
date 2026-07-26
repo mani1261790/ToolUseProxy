@@ -100,16 +100,18 @@ Hook trustで確認する内容、更新チャンネルと固定tagの違い、p
 
 dataset digestは`0e7045219148a9e1ba45073e390802ca21ddb60b6c119afd532c66d76b399822`です。再現方法、split、既知の限界は[類似度評価](docs/運用/類似度評価.md)に記録しています。
 
-Sink-first比較評価では、direct lexical、resolved lexical、任意のlocal semantic、現行runtime lineageを同条件比較します。v1.1のfile-backed corpusでは、direct end-to-end recall `0.333`に対し、評価専用のbounded `--data-binary @file` resolverを加えたresolved recallは`0.667`、precisionは`1.0`、payload resolutionは4 / 4です。これはproduction Hookの保護範囲ではなく、今後の接続判断に使う評価結果です。実行方法、evaluated-only / end-to-end指標、TOCTOUを含む限界は[Sink-first比較評価](docs/運用/Sink-first比較評価.md)を参照してください。
+Sink-first比較評価では、direct lexical、resolved lexical、任意のlocal semantic、現行runtime lineageを同条件比較します。v1.1のfile-backed corpusでは、direct end-to-end recall `0.333`に対し、評価専用のbounded `--data-binary @file` resolverを加えたresolved recallは`0.667`、precisionは`1.0`、payload resolutionは4 / 4です。resolver v2はPOSIXでcomponent-wiseなdirectory FD traversalを使い、親path差し替えによるworkspace escapeを防ぎます。解決値を返さない[Sink payload evidence契約](docs/設計/SinkPayloadEvidence.md)も追加しましたが、production Hookのblock範囲には未接続です。実行方法、evaluated-only / end-to-end指標、TOCTOUを含む限界は[Sink-first比較評価](docs/運用/Sink-first比較評価.md)を参照してください。
 
 ## 次に進めること
 
 優先順位の正本は[実装タスク計画](docs/運用/実装タスク.md)とGitHub Issues / Projectです。
 
 1. [#36](https://github.com/mani1261790/ToolUseProxy/issues/36): sink-only / semantic / lineage-assistedを同じcorpusで比較する
-2. [#37](https://github.com/mani1261790/ToolUseProxy/issues/37): session / compaction / subagent境界の精度低下を測る
-3. [#38](https://github.com/mani1261790/ToolUseProxy/issues/38): Git pushの実payloadとbranch / worktree / 複数人開発を評価する
-4. [#18](https://github.com/mani1261790/ToolUseProxy/issues/18)・[#19](https://github.com/mani1261790/ToolUseProxy/issues/19): Desktop / GUI dogfoodと少人数pilotを継続する
+2. [#44](https://github.com/mani1261790/ToolUseProxy/issues/44)・[#45](https://github.com/mani1261790/ToolUseProxy/issues/45): 値非保持のpayload evidenceからexact-only enforcementを段階導入する
+3. [#46](https://github.com/mani1261790/ToolUseProxy/issues/46): local semantic backendをobserve-onlyで比較する
+4. [#37](https://github.com/mani1261790/ToolUseProxy/issues/37): session / compaction / subagent境界の精度低下を測る
+5. [#38](https://github.com/mani1261790/ToolUseProxy/issues/38): Git pushの実payloadとbranch / worktree / 複数人開発を評価する
+6. [#18](https://github.com/mani1261790/ToolUseProxy/issues/18)・[#19](https://github.com/mani1261790/ToolUseProxy/issues/19): Desktop / GUI dogfoodと少人数pilotを継続する
 
 ## 研究の考え方
 

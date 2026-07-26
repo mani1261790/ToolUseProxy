@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import errno
 import os
 import stat
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
@@ -21,8 +23,13 @@ from hook_monitor.analysis.bash_submission import (
 )
 
 
-BASH_SUBMISSION_RESOLVER_VERSION = "bash-submission-resolver-v1-data-binary-file"
+BASH_SUBMISSION_RESOLVER_VERSION = (
+    "bash-submission-resolver-v2-component-safe-data-binary-file"
+)
 MAX_BASH_SUBMISSION_PATH_BYTES = 4 * 1024
+MAX_BASH_SUBMISSION_FILE_REFERENCES = 8
+DEFAULT_BASH_SUBMISSION_RESOLUTION_TIME_BUDGET_MS = 200
+MAX_BASH_SUBMISSION_RESOLUTION_TIME_BUDGET_MS = 1000
 
 _KNOWN_ONE_ARGUMENT_OPTIONS = frozenset({"-X", "--request"})
 _KNOWN_NO_ARGUMENT_OPTIONS = frozenset(
@@ -49,6 +56,7 @@ _KNOWN_NO_ARGUMENT_OPTIONS = frozenset(
         "--verbose",
     }
 )
+_OS_OPEN_SUPPORTS_DIR_FD = os.open in os.supports_dir_fd
 
 
 @dataclass(frozen=True)
@@ -60,19 +68,36 @@ class BashResolvedSubmission:
     unsupported_reason: str | None = None
 
 
+@dataclass
+class _ResolutionBudget:
+    deadline: float
+    remaining_values: int = MAX_BASH_SUBMISSION_VALUES
+    remaining_bytes: int = MAX_BASH_SUBMISSION_TOTAL_BYTES
+    remaining_file_references: int = MAX_BASH_SUBMISSION_FILE_REFERENCES
+
+
 def resolve_bash_http_submissions(
     command: str,
     *,
     workspace_root: Path,
     execution_cwd: Path,
+    time_budget_ms: int = DEFAULT_BASH_SUBMISSION_RESOLUTION_TIME_BUDGET_MS,
 ) -> tuple[BashResolvedSubmission, ...]:
     """Resolve a narrow, bounded subset of file-backed curl bodies.
 
-    The resolver never executes shell syntax or target tools. Version 1 accepts
+    The resolver never executes shell syntax or target tools. Version 2 accepts
     only static ``--data-binary @relative-file`` operands inside the workspace.
     File contents are returned only to the in-process caller and must not be
     persisted or rendered.
     """
+    if (
+        type(time_budget_ms) is not int
+        or not 1 <= time_budget_ms <= MAX_BASH_SUBMISSION_RESOLUTION_TIME_BUDGET_MS
+    ):
+        raise ValueError("time_budget_ms must be between 1 and 1000")
+    budget = _ResolutionBudget(
+        deadline=time.monotonic() + time_budget_ms / 1000,
+    )
     plan = parse_bash_command_plan(command)
     if plan is None:
         return ()
@@ -102,6 +127,10 @@ def resolve_bash_http_submissions(
             continue
         static = static_by_segment.get(segment.index)
         if static is not None and static.extraction == "static_values":
+            reason = _consume_values(static.submitted_values, budget)
+            if reason is not None:
+                resolved.append(_unsupported(segment, reason))
+                continue
             resolved.append(
                 BashResolvedSubmission(
                     segment_index=segment.index,
@@ -116,6 +145,7 @@ def resolve_bash_http_submissions(
                 segment,
                 workspace_root=workspace,
                 execution_cwd=cwd,
+                budget=budget,
             )
         )
     return tuple(resolved)
@@ -126,6 +156,7 @@ def _resolve_file_backed_segment(
     *,
     workspace_root: Path,
     execution_cwd: Path,
+    budget: _ResolutionBudget,
 ) -> BashResolvedSubmission:
     if any(
         not token.is_static_literal
@@ -136,10 +167,11 @@ def _resolve_file_backed_segment(
 
     words = list(bash_segment_command_tokens(segment))
     values: list[str] = []
-    total_bytes = 0
     resolved_file = False
     index = 1
     while index < len(words):
+        if time.monotonic() >= budget.deadline:
+            return _unsupported(segment, "resolution_time_budget_exceeded")
         token = words[index]
         word = token.value
         if word == "--":
@@ -185,10 +217,15 @@ def _resolve_file_backed_segment(
             reference = operand.value[1:]
             if reference == "-":
                 return _unsupported(segment, "stdin_file_reference")
+            if budget.remaining_file_references <= 0:
+                return _unsupported(segment, "file_reference_limit_exceeded")
+            budget.remaining_file_references -= 1
             file_value, reason = _read_workspace_file(
                 reference,
                 workspace_root=workspace_root,
                 execution_cwd=execution_cwd,
+                deadline=budget.deadline,
+                remaining_total_bytes=budget.remaining_bytes,
             )
             if reason is not None:
                 return _unsupported(segment, reason)
@@ -198,15 +235,10 @@ def _resolve_file_backed_segment(
         else:
             value = operand.value
 
-        value_bytes = len(value.encode("utf-8"))
-        if (
-            value_bytes > MAX_BASH_SUBMISSION_VALUE_BYTES
-            or len(values) >= MAX_BASH_SUBMISSION_VALUES
-            or total_bytes + value_bytes > MAX_BASH_SUBMISSION_TOTAL_BYTES
-        ):
-            return _unsupported(segment, "resolved_payload_limit_exceeded")
+        reason = _consume_values((value,), budget)
+        if reason is not None:
+            return _unsupported(segment, reason)
         values.append(value)
-        total_bytes += value_bytes
 
     if not values or not resolved_file:
         return _unsupported(segment, "file_backed_payload_not_resolved")
@@ -223,7 +255,11 @@ def _read_workspace_file(
     *,
     workspace_root: Path,
     execution_cwd: Path,
+    deadline: float,
+    remaining_total_bytes: int,
 ) -> tuple[str | None, str | None]:
+    if time.monotonic() >= deadline:
+        return None, "resolution_time_budget_exceeded"
     try:
         encoded_reference = reference.encode("utf-8")
     except UnicodeEncodeError:
@@ -240,49 +276,50 @@ def _read_workspace_file(
         return None, "file_reference_outside_workspace"
     candidate = execution_cwd / relative
     try:
-        candidate.relative_to(workspace_root)
+        relative_to_workspace = candidate.relative_to(workspace_root)
     except ValueError:
         return None, "file_reference_outside_workspace"
 
-    current = workspace_root
-    candidate_mode: int | None = None
-    try:
-        relative_to_workspace = candidate.relative_to(workspace_root)
-        for part in relative_to_workspace.parts:
-            current = current / part
-            candidate_mode = current.lstat().st_mode
-            if stat.S_ISLNK(candidate_mode):
-                return None, "file_reference_symlink"
-    except FileNotFoundError:
-        return None, "file_reference_missing"
-    except OSError:
-        return None, "file_reference_unavailable"
-    if candidate_mode is None or not stat.S_ISREG(candidate_mode):
-        return None, "file_reference_not_regular"
-
-    flags = os.O_RDONLY
-    if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
-    try:
-        descriptor = os.open(candidate, flags)
-    except FileNotFoundError:
-        return None, "file_reference_missing"
-    except OSError:
-        return None, "file_reference_unavailable"
+    if not component_safe_file_resolution_supported():
+        return None, "component_safe_open_unavailable"
+    descriptor, open_reason = _open_component_safe_file(
+        workspace_root,
+        relative_to_workspace.parts,
+    )
+    if open_reason is not None:
+        return None, open_reason
+    assert descriptor is not None
     try:
         before = os.fstat(descriptor)
         if not stat.S_ISREG(before.st_mode):
             return None, "file_reference_not_regular"
-        if before.st_size > MAX_BASH_SUBMISSION_VALUE_BYTES:
+        read_limit = min(
+            MAX_BASH_SUBMISSION_VALUE_BYTES,
+            remaining_total_bytes,
+        )
+        if before.st_size > read_limit:
             return None, "resolved_payload_limit_exceeded"
-        with os.fdopen(descriptor, "rb", closefd=False) as handle:
-            raw = handle.read(MAX_BASH_SUBMISSION_VALUE_BYTES + 1)
+        raw_parts: list[bytes] = []
+        captured_bytes = 0
+        while True:
+            if time.monotonic() >= deadline:
+                return None, "resolution_time_budget_exceeded"
+            chunk = os.read(descriptor, min(8192, read_limit + 1 - captured_bytes))
+            if not chunk:
+                break
+            raw_parts.append(chunk)
+            captured_bytes += len(chunk)
+            if captured_bytes > read_limit:
+                return None, "resolved_payload_limit_exceeded"
+        raw = b"".join(raw_parts)
         after = os.fstat(descriptor)
     except OSError:
         return None, "file_reference_unavailable"
     finally:
         os.close(descriptor)
 
+    if time.monotonic() >= deadline:
+        return None, "resolution_time_budget_exceeded"
     if len(raw) > MAX_BASH_SUBMISSION_VALUE_BYTES:
         return None, "resolved_payload_limit_exceeded"
     before_signature = (
@@ -306,6 +343,97 @@ def _read_workspace_file(
     if "\x00" in text:
         return None, "resolved_payload_not_text"
     return text, None
+
+
+def component_safe_file_resolution_supported() -> bool:
+    return (
+        _OS_OPEN_SUPPORTS_DIR_FD
+        and hasattr(os, "O_DIRECTORY")
+        and hasattr(os, "O_NOFOLLOW")
+    )
+
+
+def _open_component_safe_file(
+    workspace_root: Path,
+    relative_parts: tuple[str, ...],
+) -> tuple[int | None, str | None]:
+    if not relative_parts or any(part in {"", ".", ".."} for part in relative_parts):
+        return None, "invalid_file_reference"
+
+    directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    file_flags = os.O_RDONLY | os.O_NOFOLLOW
+    if hasattr(os, "O_CLOEXEC"):
+        directory_flags |= os.O_CLOEXEC
+        file_flags |= os.O_CLOEXEC
+    if hasattr(os, "O_NONBLOCK"):
+        file_flags |= os.O_NONBLOCK
+
+    opened_directories: list[int] = []
+    try:
+        current_directory = os.open(workspace_root, directory_flags)
+        opened_directories.append(current_directory)
+        for part in relative_parts[:-1]:
+            try:
+                current_directory = os.open(
+                    part,
+                    directory_flags,
+                    dir_fd=current_directory,
+                )
+            except OSError as exc:
+                return None, _component_open_error(exc, parent=True)
+            opened_directories.append(current_directory)
+        try:
+            descriptor = os.open(
+                relative_parts[-1],
+                file_flags,
+                dir_fd=current_directory,
+            )
+        except OSError as exc:
+            return None, _component_open_error(exc, parent=False)
+        return descriptor, None
+    except FileNotFoundError:
+        return None, "file_reference_missing"
+    except OSError:
+        return None, "file_reference_unavailable"
+    finally:
+        for directory in reversed(opened_directories):
+            os.close(directory)
+
+
+def _component_open_error(exc: OSError, *, parent: bool) -> str:
+    if exc.errno == errno.ENOENT:
+        return "file_reference_missing"
+    if exc.errno == errno.ELOOP:
+        return "file_reference_symlink"
+    if exc.errno == errno.ENOTDIR:
+        return (
+            "file_reference_parent_not_directory"
+            if parent
+            else "file_reference_not_regular"
+        )
+    return "file_reference_unavailable"
+
+
+def _consume_values(
+    values: tuple[str, ...],
+    budget: _ResolutionBudget,
+) -> str | None:
+    for value in values:
+        if time.monotonic() >= budget.deadline:
+            return "resolution_time_budget_exceeded"
+        try:
+            value_bytes = len(value.encode("utf-8"))
+        except UnicodeEncodeError:
+            return "resolved_payload_not_utf8"
+        if (
+            value_bytes > MAX_BASH_SUBMISSION_VALUE_BYTES
+            or budget.remaining_values <= 0
+            or value_bytes > budget.remaining_bytes
+        ):
+            return "resolved_payload_limit_exceeded"
+        budget.remaining_values -= 1
+        budget.remaining_bytes -= value_bytes
+    return None
 
 
 def _unsupported(segment: BashSegment, reason: str) -> BashResolvedSubmission:

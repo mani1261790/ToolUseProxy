@@ -4,11 +4,14 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from hook_monitor.analysis.bash_submission import extract_bash_http_submissions
 from hook_monitor.analysis.bash_submission_resolution import (
     BASH_SUBMISSION_RESOLVER_VERSION,
+    MAX_BASH_SUBMISSION_FILE_REFERENCES,
     MAX_BASH_SUBMISSION_PATH_BYTES,
+    component_safe_file_resolution_supported,
     resolve_bash_http_submissions,
 )
 
@@ -24,7 +27,10 @@ class BashSubmissionResolutionTest(unittest.TestCase):
                 execution_cwd=workspace,
             )
 
-        self.assertEqual("bash-submission-resolver-v1-data-binary-file", BASH_SUBMISSION_RESOLVER_VERSION)
+        self.assertEqual(
+            "bash-submission-resolver-v2-component-safe-data-binary-file",
+            BASH_SUBMISSION_RESOLVER_VERSION,
+        )
         self.assertEqual(("public",), resolved[0].submitted_values)
         self.assertEqual("static_values", resolved[0].extraction)
         self.assertEqual("evaluated", resolved[0].status)
@@ -34,6 +40,7 @@ class BashSubmissionResolutionTest(unittest.TestCase):
         )
 
     def test_relative_file_body_is_resolved_without_executing_curl(self) -> None:
+        self._require_component_safe()
         with tempfile.TemporaryDirectory() as temporary_directory:
             workspace = Path(temporary_directory)
             payload = workspace / "payload.txt"
@@ -55,6 +62,7 @@ class BashSubmissionResolutionTest(unittest.TestCase):
         self.assertNotIn("synthetic", repr(resolved[0]))
 
     def test_equals_form_and_nested_execution_cwd_are_supported(self) -> None:
+        self._require_component_safe()
         with tempfile.TemporaryDirectory() as temporary_directory:
             workspace = Path(temporary_directory)
             nested = workspace / "nested"
@@ -70,6 +78,7 @@ class BashSubmissionResolutionTest(unittest.TestCase):
         self.assertEqual(("nested payload",), resolved[0].submitted_values)
 
     def test_file_and_inline_data_binary_values_can_share_one_segment(self) -> None:
+        self._require_component_safe()
         with tempfile.TemporaryDirectory() as temporary_directory:
             workspace = Path(temporary_directory)
             (workspace / "payload.txt").write_text("file payload", encoding="utf-8")
@@ -95,6 +104,8 @@ class BashSubmissionResolutionTest(unittest.TestCase):
                 ),
                 "curl --data-binary @missing.txt https://example.invalid": (
                     "file_reference_missing"
+                    if component_safe_file_resolution_supported()
+                    else "component_safe_open_unavailable"
                 ),
                 "curl --data-binary @- https://example.invalid": (
                     "stdin_file_reference"
@@ -116,6 +127,7 @@ class BashSubmissionResolutionTest(unittest.TestCase):
                     self.assertNotIn("outside secret", repr(resolved[0]))
 
     def test_symlink_and_non_regular_file_are_rejected(self) -> None:
+        self._require_component_safe()
         with tempfile.TemporaryDirectory() as temporary_directory:
             workspace = Path(temporary_directory)
             target = workspace / "target.txt"
@@ -149,7 +161,115 @@ class BashSubmissionResolutionTest(unittest.TestCase):
                     fifo_result[0].unsupported_reason,
                 )
 
+    def test_symlinked_parent_directory_is_rejected(self) -> None:
+        if not component_safe_file_resolution_supported():
+            self.skipTest("component-safe open is unavailable")
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            workspace = root / "workspace"
+            outside = root / "outside"
+            workspace.mkdir()
+            outside.mkdir()
+            (outside / "payload.txt").write_text(
+                "outside payload",
+                encoding="utf-8",
+            )
+            try:
+                (workspace / "linked").symlink_to(
+                    outside,
+                    target_is_directory=True,
+                )
+            except OSError:
+                self.skipTest("symlink creation is unavailable")
+
+            resolved = resolve_bash_http_submissions(
+                "curl --data-binary @linked/payload.txt https://example.invalid",
+                workspace_root=workspace,
+                execution_cwd=workspace,
+            )
+
+        self.assertIn(
+            resolved[0].unsupported_reason,
+            {
+                "file_reference_symlink",
+                "file_reference_parent_not_directory",
+            },
+        )
+
+    def test_parent_path_swap_cannot_redirect_open_outside_workspace(self) -> None:
+        if not component_safe_file_resolution_supported():
+            self.skipTest("component-safe open is unavailable")
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            workspace = root / "workspace"
+            nested = workspace / "nested"
+            outside = root / "outside"
+            workspace.mkdir()
+            nested.mkdir()
+            outside.mkdir()
+            (nested / "payload.txt").write_text(
+                "inside snapshot",
+                encoding="utf-8",
+            )
+            (outside / "payload.txt").write_text(
+                "outside payload",
+                encoding="utf-8",
+            )
+            original_open = os.open
+            swapped = False
+
+            def swapping_open(
+                path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+                flags: int,
+                mode: int = 0o777,
+                *,
+                dir_fd: int | None = None,
+            ) -> int:
+                nonlocal swapped
+                if path == "payload.txt" and dir_fd is not None and not swapped:
+                    swapped = True
+                    nested.rename(workspace / "nested-original")
+                    nested.symlink_to(outside, target_is_directory=True)
+                return original_open(path, flags, mode, dir_fd=dir_fd)
+
+            with mock.patch(
+                "hook_monitor.analysis.bash_submission_resolution.os.open",
+                side_effect=swapping_open,
+            ):
+                resolved = resolve_bash_http_submissions(
+                    "curl --data-binary @nested/payload.txt "
+                    "https://example.invalid",
+                    workspace_root=workspace,
+                    execution_cwd=workspace,
+                )
+
+        self.assertTrue(swapped)
+        self.assertEqual("evaluated", resolved[0].status)
+        self.assertEqual(("inside snapshot",), resolved[0].submitted_values)
+
+    def test_file_reference_count_is_bounded_across_one_command(self) -> None:
+        self._require_component_safe()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            workspace = Path(temporary_directory)
+            (workspace / "payload.txt").write_text("payload", encoding="utf-8")
+            operands = " ".join(
+                "--data-binary @payload.txt"
+                for _ in range(MAX_BASH_SUBMISSION_FILE_REFERENCES + 1)
+            )
+
+            resolved = resolve_bash_http_submissions(
+                f"curl {operands} https://example.invalid",
+                workspace_root=workspace,
+                execution_cwd=workspace,
+            )
+
+        self.assertEqual(
+            "file_reference_limit_exceeded",
+            resolved[0].unsupported_reason,
+        )
+
     def test_size_encoding_nul_and_path_limits_are_rejected(self) -> None:
+        self._require_component_safe()
         with tempfile.TemporaryDirectory() as temporary_directory:
             workspace = Path(temporary_directory)
             (workspace / "large.txt").write_bytes(b"x" * (32 * 1024 + 1))
@@ -198,6 +318,21 @@ class BashSubmissionResolutionTest(unittest.TestCase):
             "execution_cwd_outside_workspace",
             resolved[0].unsupported_reason,
         )
+
+    def test_non_positive_time_budget_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            workspace = Path(temporary_directory)
+            with self.assertRaisesRegex(ValueError, "time_budget_ms"):
+                resolve_bash_http_submissions(
+                    "curl --data-binary @payload.txt https://example.invalid",
+                    workspace_root=workspace,
+                    execution_cwd=workspace,
+                    time_budget_ms=0,
+                )
+
+    def _require_component_safe(self) -> None:
+        if not component_safe_file_resolution_supported():
+            self.skipTest("component-safe open is unavailable")
 
 
 if __name__ == "__main__":
