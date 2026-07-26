@@ -1,6 +1,6 @@
 # ToolUseProxy
 
-Codexのtool useをローカルで観測し、protected sourceから外部toolや最終回答までの情報流を追跡・検知・制御するための研究実装です。
+Codexのtool useをローカルで観測し、外部sinkへ送られるpayloadとprotected sourceの内容対応を検査し、必要に応じてprovenanceを補助証拠として流出を検知・制御する研究実装です。
 
 本プロジェクトは、[SecHack365](https://sechack365.nict.go.jp/)での研究・開発成果物です。
 
@@ -18,6 +18,7 @@ Codexのtool useをローカルで観測し、protected sourceから外部tool�
 - [Plugin upgrade / rollback rehearsal](docs/運用/Pluginライフサイクル.md)
 - [Release候補の作成と検証](docs/運用/Release候補.md)
 - [現在地と実装ロードマップ](docs/運用/実装タスク.md)
+- [Sink中心の情報流評価計画](docs/調査/Sink中心の情報流評価計画.md)
 - [ドキュメント索引](docs/索引.md)
 - [GitHub Project](https://github.com/users/mani1261790/projects/1)
 
@@ -31,6 +32,8 @@ Codexのtool useをローカルで観測し、protected sourceから外部tool�
 - coding agentが値を表示せず候補を提案し、ユーザーの明示承認後だけmanifestへ原子的に登録する
 
 Hook内のnetwork access、remote embedding、telemetryは使いません。runtimeによるtool inputの書換えは、複数Hook間で最終入力を証明できないため意図的に無効です。
+
+ToolUseProxyはLLM内部の状態や因果的な情報流を直接観測するものではありません。現在のgraphは、tool I/O、file operation、内容一致・類似から作る観測境界上のprovenance推定です。今後は[sink-first、provenance-assistedの比較評価](docs/調査/Sink中心の情報流評価計画.md)により、直接payload検査へsemantic comparisonやlineageを加える実効価値を測ります。
 
 ## 現在地
 
@@ -100,14 +103,14 @@ dataset digestは`0e7045219148a9e1ba45073e390802ca21ddb60b6c119afd532c66d76b3998
 
 優先順位の正本は[実装タスク計画](docs/運用/実装タスク.md)とGitHub Issues / Projectです。
 
-1. [#18](https://github.com/mani1261790/ToolUseProxy/issues/18): CLI TUIで自己完結型command承認説明を再検証する
-2. [#18](https://github.com/mani1261790/ToolUseProxy/issues/18): Desktop / GUIでHook review、command承認、実tool blockを別に検証する
-3. [#19](https://github.com/mani1261790/ToolUseProxy/issues/19): 少人数pilotでinstall / update / removeと説明UXのfeedbackを集める
-4. [#19](https://github.com/mani1261790/ToolUseProxy/issues/19): repository外holdoutとcross-platform実Codex taskを評価する
+1. [#36](https://github.com/mani1261790/ToolUseProxy/issues/36): sink-only / semantic / lineage-assistedを同じcorpusで比較する
+2. [#37](https://github.com/mani1261790/ToolUseProxy/issues/37): session / compaction / subagent境界の精度低下を測る
+3. [#38](https://github.com/mani1261790/ToolUseProxy/issues/38): Git pushの実payloadとbranch / worktree / 複数人開発を評価する
+4. [#18](https://github.com/mani1261790/ToolUseProxy/issues/18)・[#19](https://github.com/mani1261790/ToolUseProxy/issues/19): Desktop / GUI dogfoodと少人数pilotを継続する
 
 ## 研究の考え方
 
-API keyのように文字列patternで判別しやすい秘密だけでなく、未公開コード、研究ノート、Git diff、設計方針など「由来によってprivateになる情報」を対象にします。そのため、出力文字列だけを見るのではなく、どの入力・tool resultからどのtool input・最終回答へ移ったかを根拠に判断します。
+API keyのように文字列patternで判別しやすい秘密だけでなく、未公開コード、研究ノート、Git diff、設計方針など「由来によってprivateになる情報」を対象にします。流出防止では外部sinkの実payloadを最初に検査し、file参照、Git object、多段変換など直接比較だけで説明できない場合にlineageを補助証拠として使います。
 
 研究は次の順に進めてきました。
 
@@ -115,7 +118,7 @@ API keyのように文字列patternで判別しやすい秘密だけでなく、
 2. Detect: protected sourceからsinkまでの到達を検知・説明する
 3. Stop: 十分な根拠がある境界だけ、確認・差戻し・遮断へ接続する
 
-現在は3段階の中核を維持しながら、第三者が安全に導入・更新・削除できるproductizationと、未知の反例に対するprecision hardeningへ進んでいます。
+現在は3段階の中核を維持しながら、sink直接検査だけで止められる範囲、semantic comparisonの追加効果、lineageが必要になる境界を分離評価しています。lineageを作ること自体ではなく、外部流出の検出率・誤停止・説明可能性を改善することを成功条件にします。
 
 ## 対象
 
