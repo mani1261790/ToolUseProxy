@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "dataset_id": "sink-benchmark-v1",
+  "dataset_version": "1.0.0",
+  "description": "Synthetic sink-first benchmark with direct, resolved, semantic, and lineage profiles.",
+  "ingestion_dataset": "ingestion",
+  "files": {
+    "cases": "cases.jsonl"
+  }
+}

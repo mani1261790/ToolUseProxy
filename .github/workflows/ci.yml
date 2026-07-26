@@ -152,6 +152,14 @@ jobs:
           --format text
           --check
 
+      - name: Check sink-first benchmark foundation
+        run: >-
+          python -m hook_monitor.evaluation.sink_benchmark_cli
+          --dataset tests/fixtures/sink_benchmark/v1
+          --split all
+          --format text
+          --check
+
       - name: Check protected-source discovery development gate
         run: >-
           python -m hook_monitor.evaluation.protected_source_discovery_cli
