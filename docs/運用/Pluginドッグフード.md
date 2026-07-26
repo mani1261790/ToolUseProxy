@@ -161,6 +161,8 @@ python3.11 scripts/manual_sink_payload_shadow.py prepare \
 
 2026-07-27のfresh TUI human runは`status: passed`でした。public / protectedのfile-backed callはshadow modeのため両方実行され、`allow->would_allow`と`allow->would_block`が各1件、resolution / comparisonは各2件evaluated、policy blockは0件でした。TUI session、exact command、Pre / Post identity、二つのside effect、tool output、shadow observationはすべて一致し、assistant出力とshadow tableへのraw protected value露出は0件でした。観測latencyはp50 `0.705 ms`、p95 / max `0.746 ms`です。この結果はTUIのopt-in shadow観測を合格とするものであり、実行前block、Desktop / GUI、TOCTOU解消を証明しません。
 
+同日のfresh TUI exact-enforcement human runも`status: passed`でした。public callは実行されside effectとPostToolUseを各1件残し、protected callは`resolved_payload_exact_substring`によりPreToolUseでblockされ、side effectとPostToolUseは0件でした。resolution / comparisonは各2件evaluated、exact policy blockは1件、assistant出力とshadow tableへのraw protected value露出は0件です。観測latencyはp50 `0.765 ms`、p95 / max `0.874 ms`でした。この結果はTUIの明示opt-in exact-only enforcementを合格とするものであり、既定有効化、Desktop / GUI、semantic match、unsupported payload、TOCTOU解消を証明しません。
+
 Codex Desktop / GUIは同じ成功へ読み替えません。次のpreflightは共有`CODEX_HOME`を変更せず、isolated Plugin / Hook dataとshadow opt-inをDesktop hookへ渡すsupported launcherが存在するかだけを判定します。
 
 ```bash
