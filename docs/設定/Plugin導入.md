@@ -34,7 +34,9 @@ Codex CLIはPluginごとの自動更新commandではなく、登録済みGit mar
 | public alpha更新チャンネル | `public-alpha` | 通常のdogfood / pilot | `marketplace upgrade`で明示更新 |
 | immutable version固定 | `v0.1.0-alpha.3` | 再現実験、監査、rollback | tagは動かないため自動的に別versionへ進まない |
 
-`public-alpha`はreview済み・CI green・公開済みのalpha release commitだけへfast-forwardする保護branchです。開発途中の`main`を実行元にはしません。更新は自動ではなく、ユーザーがcommandを実行した時だけ行われます。Codex Desktop / GUIの更新導線は未検証なので、この文書が保証するのはCodex CLIです。
+`public-alpha`はreview済み・CI green・公開済みのalpha release commitだけへfast-forwardする保護branchです。開発途中の`main`を実行元にはしません。更新は自動ではなく、ユーザーがcommandを実行した時だけ行われます。
+
+Codex Desktopはrepositoryの`.agents/plugins/marketplace.json`を使うlocal Plugin workflowの対象です。ただし、「DesktopがPluginをinstallできること」と「ToolUseProxyの3 Hook、承認表示、PreToolUse block、更新後のdata保持がCLIと同じ条件で動くこと」は別の主張です。後者のToolUseProxy Desktop Phase Bは未完了なので、現時点で実機保証するinstall / update手順はCodex CLIに限定します。
 
 SQLite schemaはv4のままなので、alpha.3への更新だけを理由にDB migrationや`init`を再実行する必要はありません。将来SQLite schema更新を伴うreleaseで`doctor` / `status`がupgrade必要と報告した場合だけ、Hook外で明示的な`init --codex`を実行します。更新後は新しいHook definitionをreview・trustして新しいtaskを開始し、`doctor` / `status`を実行してください。
 

@@ -124,6 +124,7 @@ Source × Transformation × Boundary × Sink
 ## 指標
 
 - sink payload extraction recall
+- adapter externality recallとunknown egress rate
 - leak detection precision / recall / F1
 - policy action accuracy
 - false block件数
@@ -168,13 +169,16 @@ Gitでは次を別々に評価します。
 
 ## 実装判断の順序
 
-1. [#36](https://github.com/mani1261790/ToolUseProxy/issues/36)でsink-only / semantic / lineage-assistedの評価契約を固定する
-2. [#37](https://github.com/mani1261790/ToolUseProxy/issues/37)でsession / compaction / subagent境界を測る
-3. [#38](https://github.com/mani1261790/ToolUseProxy/issues/38)でGit payloadと複数人開発を測る
-4. 結果に基づき[#39](https://github.com/mani1261790/ToolUseProxy/issues/39)のbounded reconcileを実装するか判断する
-5. local semantic backendはobserve-onlyのprivacy / latency / precision gateを通った場合だけproduction候補にする
+1. [#52](https://github.com/mani1261790/ToolUseProxy/issues/52)でworkspace単位のruntime設定を固定する
+2. [#53](https://github.com/mani1261790/ToolUseProxy/issues/53)でDesktopの実Hook境界を検証する
+3. [#54](https://github.com/mani1261790/ToolUseProxy/issues/54)でadapter分類と実network egressの差分を測る
+4. [#38](https://github.com/mani1261790/ToolUseProxy/issues/38)でGit payloadと複数人開発を測る
+5. [#46](https://github.com/mani1261790/ToolUseProxy/issues/46)でlocal semantic backendをobserve-only比較する
+6. [#55](https://github.com/mani1261790/ToolUseProxy/issues/55)でAuditログの人間reviewをactive learning / rule miningで効率化する
+7. [#37](https://github.com/mani1261790/ToolUseProxy/issues/37)でsession / compaction / subagent境界を測る
+8. 結果に基づき[#39](https://github.com/mani1261790/ToolUseProxy/issues/39)のbounded reconcileを実装するか判断する
 
-## 2026-07-26時点の実装
+## 2026-07-27時点の実装
 
 Issue #36の最初のsliceとして、production policyを変更しない独立benchmark foundationを実装しました。
 
@@ -190,7 +194,9 @@ Issue #36の最初のsliceとして、production policyを変更しない独立b
 - resolver v2ではPOSIX component-wise directory FD traversal、1 command 8 file reference、200 ms budgetを固定
 - 値を返さずworkspace / snapshot semantics / source chunk ID / exact match / aggregate costだけを持つpayload evidence契約を追加
 
-v1.1の全12ケースでは、direct end-to-end recallは`0.333`、resolved lexicalは`0.667`、現行runtime lineageは`0.333`でした。resolved precisionは`1.0`、file-backed payload resolutionは4 / 4、raw fixture exposureは0です。component-wise openはresolver内部の親path差し替えを防ぎますが、resolverが取得するのは実行前snapshotであり、Hook後にtarget toolが再読込するTOCTOUと実送信bytesの同一性は解消しません。そのためproduction Hookには未接続です。再現方法は[Sink-first比較評価](../運用/Sink-first比較評価.md)、evidence境界は[Sink payload evidence](../設計/SinkPayloadEvidence.md)に記載します。
+v1.1の全12ケースでは、direct end-to-end recallは`0.333`、resolved lexicalは`0.667`、現行runtime lineageは`0.333`でした。resolved precisionは`1.0`、file-backed payload resolutionは4 / 4、raw fixture exposureは0です。component-wise openはresolver内部の親path差し替えを防ぎますが、resolverが取得するのは実行前snapshotであり、Hook後にtarget toolが再読込するTOCTOUと実送信bytesの同一性は解消しません。
+
+production Hookには、値非保持のshadow観測と、別flagで明示opt-inするexact-only enforcementを接続済みです。2026-07-27のCLI TUI Phase Bではpublic side effect 1、protected side effect 0、exact policy block 1、raw protected value exposure 0を確認しました。semantic、unsupported payload、TOCTOU後の実送信bytes、Desktop / GUI、既定有効化は保証しません。再現方法は[Sink-first比較評価](../運用/Sink-first比較評価.md)、evidence境界は[Sink payload evidence](../設計/SinkPayloadEvidence.md)に記載します。
 
 ## 今は保証しないこと
 
