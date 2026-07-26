@@ -15,7 +15,10 @@ from hook_monitor.evaluation.source_ingestion_dataset import (
 )
 
 
-DATASET_SCHEMA_BY_VERSION = {"1.0.0": 1}
+DATASET_SCHEMA_BY_VERSION = {
+    "1.0.0": 1,
+    "1.1.0": 2,
+}
 SUPPORTED_SPLITS = frozenset({"development", "validation"})
 SOURCE_KINDS = frozenset(
     {
@@ -70,10 +73,27 @@ _CASE_KEYS = frozenset(
         "rationale",
     }
 )
+_CASE_KEYS_V2 = _CASE_KEYS | {"workspace_files"}
+_WORKSPACE_FILE_KEYS = frozenset({"path", "content"})
+_MAX_WORKSPACE_FILE_BYTES = 32 * 1024
+_MAX_WORKSPACE_FILES_TOTAL_BYTES = 128 * 1024
+_FORBIDDEN_SECRET_PATTERNS = (
+    ("AWS access key", re.compile(r"\bAKIA[0-9A-Z]{16}\b")),
+    ("GitHub token", re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}\b")),
+    ("OpenAI-style token", re.compile(r"\bsk-[A-Za-z0-9_-]{20,}\b")),
+    ("Slack token", re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b")),
+    ("private key", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")),
+)
 
 
 class SinkBenchmarkDatasetError(ValueError):
     """Raised when a sink benchmark fixture violates its public contract."""
+
+
+@dataclass(frozen=True)
+class SinkBenchmarkWorkspaceFile:
+    path: str
+    content: str
 
 
 @dataclass(frozen=True)
@@ -90,6 +110,7 @@ class SinkBenchmarkCase:
     observe_only: bool
     tags: tuple[str, ...]
     rationale: str
+    workspace_files: tuple[SinkBenchmarkWorkspaceFile, ...]
     ingestion: SourceIngestionScenario
 
 
@@ -200,7 +221,12 @@ def _parse_case(
 ) -> SinkBenchmarkCase:
     if not isinstance(value, dict):
         raise SinkBenchmarkDatasetError(f"{location}: case must be an object")
-    _require_exact_keys(value, _CASE_KEYS, location)
+    case_keys = (
+        _CASE_KEYS_V2
+        if DATASET_SCHEMA_BY_VERSION[dataset_version] == 2
+        else _CASE_KEYS
+    )
+    _require_exact_keys(value, case_keys, location)
     if value["schema_version"] != DATASET_SCHEMA_BY_VERSION[dataset_version]:
         raise SinkBenchmarkDatasetError(f"{location}: schema_version mismatch")
     if value["dataset_version"] != dataset_version:
@@ -236,6 +262,11 @@ def _parse_case(
     observe_only = _require_bool(value["observe_only"], "observe_only", location)
     tags = _require_tags(value["tags"], location)
     rationale = _require_text(value["rationale"], "rationale", location)
+    workspace_files = _parse_workspace_files(
+        value.get("workspace_files", []),
+        location,
+        source_path=ingestion.source.path,
+    )
 
     if split != ingestion.split:
         raise SinkBenchmarkDatasetError(f"{location}: split differs from ingestion case")
@@ -273,8 +304,81 @@ def _parse_case(
         observe_only=observe_only,
         tags=tags,
         rationale=rationale,
+        workspace_files=workspace_files,
         ingestion=ingestion,
     )
+
+
+def _parse_workspace_files(
+    value: Any,
+    location: object,
+    *,
+    source_path: str,
+) -> tuple[SinkBenchmarkWorkspaceFile, ...]:
+    if not isinstance(value, list):
+        raise SinkBenchmarkDatasetError(
+            f"{location}: workspace_files must be a list"
+        )
+    files: list[SinkBenchmarkWorkspaceFile] = []
+    total_bytes = 0
+    for index, item in enumerate(value):
+        item_location = f"{location}.workspace_files[{index}]"
+        if not isinstance(item, dict):
+            raise SinkBenchmarkDatasetError(
+                f"{item_location}: workspace file must be an object"
+            )
+        _require_exact_keys(item, _WORKSPACE_FILE_KEYS, item_location)
+        relative_path = _require_relative_path(
+            item["path"],
+            "path",
+            item_location,
+        )
+        if relative_path == Path("."):
+            raise SinkBenchmarkDatasetError(
+                f"{item_location}: workspace file path must name a file"
+            )
+        path_text = relative_path.as_posix()
+        if path_text == source_path:
+            raise SinkBenchmarkDatasetError(
+                f"{item_location}: workspace file must not replace source"
+            )
+        content = _require_text(item["content"], "content", item_location)
+        for label, pattern in _FORBIDDEN_SECRET_PATTERNS:
+            if pattern.search(content):
+                raise SinkBenchmarkDatasetError(
+                    f"{item_location}: workspace file matches forbidden {label}"
+                )
+        content_bytes = len(content.encode("utf-8"))
+        if content_bytes > _MAX_WORKSPACE_FILE_BYTES:
+            raise SinkBenchmarkDatasetError(
+                f"{item_location}: workspace file exceeds byte limit"
+            )
+        total_bytes += content_bytes
+        if total_bytes > _MAX_WORKSPACE_FILES_TOTAL_BYTES:
+            raise SinkBenchmarkDatasetError(
+                f"{location}: workspace files exceed total byte limit"
+            )
+        files.append(
+            SinkBenchmarkWorkspaceFile(
+                path=path_text,
+                content=content,
+            )
+        )
+    paths = [item.path for item in files]
+    if len(paths) != len(set(paths)):
+        raise SinkBenchmarkDatasetError(
+            f"{location}: workspace file paths must be unique"
+        )
+    all_paths = [Path(source_path), *(Path(path) for path in paths)]
+    if any(
+        left in right.parents or right in left.parents
+        for index, left in enumerate(all_paths)
+        for right in all_paths[index + 1 :]
+    ):
+        raise SinkBenchmarkDatasetError(
+            f"{location}: workspace file paths must not overlap"
+        )
+    return tuple(files)
 
 
 def _validate_coverage(cases: tuple[SinkBenchmarkCase, ...], location: Path) -> None:

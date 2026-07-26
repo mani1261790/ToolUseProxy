@@ -344,6 +344,8 @@ shell変数、command substitution、glob / brace / tilde展開、body以外のd
 
 この抽出はshell、subprocess、networkを実行せず、fileも読みません。上限は1 segmentあたり32値、1値32 KiB、合計128 KiBです。projection値を追加fragment、DB row、評価report本文へ複製しません。
 
+Sink-first評価runnerには、staticな`--data-binary @relative-file`だけをworkspace内でboundedに読む独立resolverがありますが、production Hookへは接続していません。これは実行前のfile snapshotが検出率をどれだけ改善するか測るためのもので、Hook完了後にfileが変わるTOCTOUを解消せず、実際にcurlが送ったbytesも証明しません。したがって、現行Hookではfile-backed operandを引き続き`coarse_fallback`として扱います。
+
 MCP Hookのmatcherは、たとえば`^mcp__.*$`、または対象を絞った`^mcp__github__.*$`を使用します。実CodexのMCP payloadは`tool_name: mcp__<server>__<tool>`で、`tool_input`にはMCP toolへ渡すraw argumentsが入ります。adapterが外部送信と分類するwrite-like toolだけがsinkとなり、read-only toolは記録して通過させます。MCP tool名はUTF-8で4 KiBを上限とし、超過時はartifact / sinkをmaterializeする前に`tool_name_bytes_exceeded`でdenyします。tool名自体が1 MiBのraw read上限を跨いで後続`cwd`を読めない場合も、明示`TOOLUSEPROXY_WORKSPACE_ROOT`が有効ならそのrootだけを早期deny scopeとして検証します。
 
 現在eventの`event_id`、`sequence_no`、`tool_use_id`、adapter種別が一致するexternal sinkだけを評価します。過去eventの未解消findingを理由に現在の呼出しを止めません。

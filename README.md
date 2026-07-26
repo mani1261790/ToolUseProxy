@@ -100,7 +100,7 @@ Hook trustで確認する内容、更新チャンネルと固定tagの違い、p
 
 dataset digestは`0e7045219148a9e1ba45073e390802ca21ddb60b6c119afd532c66d76b399822`です。再現方法、split、既知の限界は[類似度評価](docs/運用/類似度評価.md)に記録しています。
 
-Sink-first比較評価のv1 foundationでは、合成12ケースをdirect lexical、resolved lexical、任意のlocal semantic、現行runtime lineageで同条件比較します。初期baselineはdirect recall `0.50`、resolved recall `0.60`、lineage recall `0.50`で、file-backedな`curl @file`は未解決として報告します。これは精度達成済みのgateではなく、今後の改善量を測る基準です。実行方法と読み方は[Sink-first比較評価](docs/運用/Sink-first比較評価.md)を参照してください。
+Sink-first比較評価では、direct lexical、resolved lexical、任意のlocal semantic、現行runtime lineageを同条件比較します。v1.1のfile-backed corpusでは、direct end-to-end recall `0.333`に対し、評価専用のbounded `--data-binary @file` resolverを加えたresolved recallは`0.667`、precisionは`1.0`、payload resolutionは4 / 4です。これはproduction Hookの保護範囲ではなく、今後の接続判断に使う評価結果です。実行方法、evaluated-only / end-to-end指標、TOCTOUを含む限界は[Sink-first比較評価](docs/運用/Sink-first比較評価.md)を参照してください。
 
 ## 次に進めること
 

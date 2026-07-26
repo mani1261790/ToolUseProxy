@@ -184,9 +184,11 @@ Issue #36の最初のsliceとして、production policyを変更しない独立b
 - source-ingestion v3の実runtime harnessを再利用し、full / incremental parityを同時確認
 - reportへsource本文、protected value、raw target payloadを含めないprivacy gate
 - semanticはobserve-onlyで、backend未設定時は精度0として扱わず`unavailable`と明示
-- `curl @file`は推測解決せず`unsupported`と明示
+- v1では`curl @file`を推測解決せず`unsupported`と明示
+- v1.1では評価専用のbounded `--data-binary @file` resolverを追加
+- evaluated-onlyと、unsupportedをfail-openとして含むend-to-end指標を分離
 
-初期baselineの全12ケースでは、direct lexical recallは`0.50`、resolved lexicalは評価可能な11ケース上で`0.60`、現行runtime lineageは`0.50`でした。false positiveは0です。この数字は「完成した精度」ではなく、payload resolver、semantic、lineageが今後どれだけ改善するかを測る起点です。再現方法は[Sink-first比較評価](../運用/Sink-first比較評価.md)に記載します。
+v1.1の全12ケースでは、direct end-to-end recallは`0.333`、resolved lexicalは`0.667`、現行runtime lineageは`0.333`でした。resolved precisionは`1.0`、file-backed payload resolutionは4 / 4、raw fixture exposureは0です。resolverが取得するのは実行前snapshotであり、TOCTOUを解消せず実送信bytesを証明しないため、production Hookには未接続です。再現方法は[Sink-first比較評価](../運用/Sink-first比較評価.md)に記載します。
 
 ## 今は保証しないこと
 

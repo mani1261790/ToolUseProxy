@@ -8,7 +8,10 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any, Iterable
 
-from hook_monitor.analysis.bash_submission import extract_bash_http_submissions
+from hook_monitor.analysis.bash_submission_resolution import (
+    BASH_SUBMISSION_RESOLVER_VERSION,
+    resolve_bash_http_submissions,
+)
 from hook_monitor.analysis.chunking import build_source_chunks
 from hook_monitor.analysis.leak_detection import LeakFinding, severity_for_score
 from hook_monitor.analysis.similarity import (
@@ -26,7 +29,7 @@ from hook_monitor.runtime.models import ProtectedSource, SourceChunk
 from hook_monitor.runtime.normalize import normalize_text
 
 
-RUNNER_VERSION = "sink-benchmark-v1"
+RUNNER_VERSION = "sink-benchmark-v2-end-to-end-metrics"
 PROFILE_DIRECT = "direct_lexical"
 PROFILE_RESOLVED = "resolved_lexical"
 PROFILE_SEMANTIC = "resolved_semantic"
@@ -86,7 +89,7 @@ def evaluate_sink_benchmark(
         ),
     }
     report = {
-        "schema_version": 1,
+        "schema_version": 2,
         "runner_version": RUNNER_VERSION,
         "dataset": {
             "id": dataset.dataset_id,
@@ -105,10 +108,15 @@ def evaluate_sink_benchmark(
             "network_execution": False,
             "target_tool_execution": False,
             "semantic_observe_only": True,
+            "file_resolution_mode": "evaluation_only",
+            "payload_snapshot_semantics": "pre_execution",
+            "production_policy_connected": False,
             "lineage_runner_version": lineage_report["runner_version"],
+            "bash_submission_resolver_version": BASH_SUBMISSION_RESOLVER_VERSION,
         },
         "metrics": metrics,
         "deltas": deltas,
+        "payload_resolution": _payload_resolution_metrics(case_reports),
         "lineage_reference": {
             "full_incremental_parity_passed": lineage_report["metrics"][
                 "full_incremental_parity"
@@ -136,6 +144,10 @@ def evaluate_sink_benchmark(
                 case_report["profiles"][PROFILE_RESOLVED]["status"]
                 in {"evaluated", "unsupported"}
                 for case_report in case_reports
+            )
+            and (
+                dataset.dataset_version == "1.0.0"
+                or not report["payload_resolution"]["unsupported_resolvable_ids"]
             )
         ),
         "semantic_backend_available": embedding_backend is not None,
@@ -165,14 +177,19 @@ def render_sink_benchmark_report(report: dict[str, Any]) -> str:
     ]
     for profile in PROFILE_NAMES:
         metric = report["metrics"][profile]["all"]
-        reach = metric["detection"]
+        evaluated = metric["evaluated_only"]
+        end_to_end = metric["end_to_end"]
+        evaluated_reach = evaluated["detection"]
+        end_to_end_reach = end_to_end["detection"]
         lines.append(
             f"{profile} coverage={metric['coverage']['evaluated']}/"
             f"{metric['coverage']['total']} "
-            f"precision={_format_ratio(reach['precision'])} "
-            f"recall={_format_ratio(reach['recall'])} "
-            f"f1={_format_ratio(reach['f1'])} "
-            f"action_accuracy={_format_ratio(metric['action_accuracy'])}"
+            f"evaluated_recall={_format_ratio(evaluated_reach['recall'])} "
+            f"end_to_end_precision={_format_ratio(end_to_end_reach['precision'])} "
+            f"end_to_end_recall={_format_ratio(end_to_end_reach['recall'])} "
+            f"end_to_end_f1={_format_ratio(end_to_end_reach['f1'])} "
+            f"end_to_end_action_accuracy="
+            f"{_format_ratio(end_to_end['action_accuracy'])}"
         )
     unsupported = report["summary"]["unsupported_resolved_case_ids"]
     lines.extend(
@@ -209,6 +226,10 @@ def _evaluate_case(
     ) as temporary_directory:
         workspace = Path(temporary_directory) / "workspace"
         workspace.mkdir()
+        for workspace_file in case.workspace_files:
+            fixture_path = workspace / workspace_file.path
+            fixture_path.parent.mkdir(parents=True, exist_ok=True)
+            fixture_path.write_text(workspace_file.content, encoding="utf-8")
         source_path = workspace / case.ingestion.source.path
         source_path.parent.mkdir(parents=True, exist_ok=True)
         source_path.write_text(case.ingestion.source.content, encoding="utf-8")
@@ -224,7 +245,9 @@ def _evaluate_case(
         target_payload = case.ingestion.events[-1].payload
         direct_values = _direct_payload_values(case, target_payload)
         resolved_values, unsupported_reason = _resolved_payload_values(
-            case, target_payload
+            case,
+            target_payload,
+            workspace=workspace,
         )
 
         direct = _evaluate_values(
@@ -323,17 +346,31 @@ def _direct_payload_values(
 def _resolved_payload_values(
     case: SinkBenchmarkCase,
     payload: dict[str, Any],
+    *,
+    workspace: Path,
 ) -> tuple[tuple[str, ...], str | None]:
     if case.ingestion.expected_adapter != "bash":
         return _direct_payload_values(case, payload), None
     command = payload.get("tool_input", {}).get("command")
     if not isinstance(command, str):
         return (), "bash_command_missing"
-    projections = extract_bash_http_submissions(command)
+    projections = resolve_bash_http_submissions(
+        command,
+        workspace_root=workspace,
+        execution_cwd=workspace,
+    )
     if not projections:
         return (), "bash_http_payload_not_projected"
-    if any(projection.extraction == "coarse_fallback" for projection in projections):
-        return (), "dynamic_or_file_backed_bash_payload"
+    unsupported = next(
+        (
+            projection.unsupported_reason
+            for projection in projections
+            if projection.status == "unsupported"
+        ),
+        None,
+    )
+    if unsupported is not None:
+        return (), unsupported
     return (
         tuple(
             value
@@ -464,44 +501,13 @@ def _profile_metrics(
     selected = [
         case for case in cases if include_observe_only or not case["observe_only"]
     ]
-    evaluated = [
+    evaluated_cases = [
         case for case in selected if case["profiles"][profile]["status"] == "evaluated"
-    ]
-    true_positive_ids = [
-        case["id"]
-        for case in evaluated
-        if case["expected_leak"] and case["profiles"][profile]["detected"]
-    ]
-    false_positive_ids = [
-        case["id"]
-        for case in evaluated
-        if not case["expected_leak"] and case["profiles"][profile]["detected"]
-    ]
-    false_negative_ids = [
-        case["id"]
-        for case in evaluated
-        if case["expected_leak"] and not case["profiles"][profile]["detected"]
-    ]
-    true_negative_ids = [
-        case["id"]
-        for case in evaluated
-        if not case["expected_leak"] and not case["profiles"][profile]["detected"]
-    ]
-    tp = len(true_positive_ids)
-    fp = len(false_positive_ids)
-    fn = len(false_negative_ids)
-    precision = _ratio(tp, tp + fp)
-    recall = _ratio(tp, tp + fn)
-    f1 = _ratio(2 * precision * recall, precision + recall)
-    action_mismatch_ids = [
-        case["id"]
-        for case in evaluated
-        if case["profiles"][profile]["action"] != case["recommended_action"]
     ]
     return {
         "coverage": {
             "total": len(selected),
-            "evaluated": len(evaluated),
+            "evaluated": len(evaluated_cases),
             "unsupported": sum(
                 case["profiles"][profile]["status"] == "unsupported"
                 for case in selected
@@ -511,6 +517,66 @@ def _profile_metrics(
                 for case in selected
             ),
         },
+        "evaluated_only": _scored_profile_metrics(
+            evaluated_cases,
+            profile,
+            unresolved_as_allow=False,
+        ),
+        "end_to_end": _scored_profile_metrics(
+            selected,
+            profile,
+            unresolved_as_allow=True,
+        ),
+    }
+
+
+def _scored_profile_metrics(
+    cases: list[dict[str, Any]],
+    profile: str,
+    *,
+    unresolved_as_allow: bool,
+) -> dict[str, Any]:
+    def detected(case: dict[str, Any]) -> bool:
+        return case["profiles"][profile]["detected"] is True
+
+    def action(case: dict[str, Any]) -> str | None:
+        result = case["profiles"][profile]["action"]
+        if result is None and unresolved_as_allow:
+            return "allow"
+        return result
+
+    true_positive_ids = [
+        case["id"]
+        for case in cases
+        if case["expected_leak"] and detected(case)
+    ]
+    false_positive_ids = [
+        case["id"]
+        for case in cases
+        if not case["expected_leak"] and detected(case)
+    ]
+    false_negative_ids = [
+        case["id"]
+        for case in cases
+        if case["expected_leak"] and not detected(case)
+    ]
+    true_negative_ids = [
+        case["id"]
+        for case in cases
+        if not case["expected_leak"] and not detected(case)
+    ]
+    tp = len(true_positive_ids)
+    fp = len(false_positive_ids)
+    fn = len(false_negative_ids)
+    precision = _ratio(tp, tp + fp)
+    recall = _ratio(tp, tp + fn)
+    f1 = _ratio(2 * precision * recall, precision + recall)
+    action_mismatch_ids = [
+        case["id"]
+        for case in cases
+        if action(case) != case["recommended_action"]
+    ]
+    return {
         "detection": {
             "true_positive": tp,
             "false_positive": fp,
@@ -523,10 +589,38 @@ def _profile_metrics(
             "false_negative_ids": false_negative_ids,
         },
         "action_accuracy": _ratio(
-            len(evaluated) - len(action_mismatch_ids),
-            len(evaluated),
+            len(cases) - len(action_mismatch_ids),
+            len(cases),
         ),
         "action_mismatch_ids": action_mismatch_ids,
+    }
+
+
+def _payload_resolution_metrics(cases: list[dict[str, Any]]) -> dict[str, Any]:
+    resolvable = [
+        case for case in cases if case["payload_visibility"] == "resolvable"
+    ]
+    resolved = [
+        case
+        for case in resolvable
+        if case["profiles"][PROFILE_RESOLVED]["status"] == "evaluated"
+    ]
+    unsupported = [
+        case
+        for case in resolvable
+        if case["profiles"][PROFILE_RESOLVED]["status"] == "unsupported"
+    ]
+    reason_counts: dict[str, int] = {}
+    for case in unsupported:
+        reason = case["profiles"][PROFILE_RESOLVED]["unsupported_reason"]
+        key = reason if isinstance(reason, str) else "unspecified"
+        reason_counts[key] = reason_counts.get(key, 0) + 1
+    return {
+        "resolvable_case_count": len(resolvable),
+        "resolved_resolvable_count": len(resolved),
+        "resolution_recall": _ratio(len(resolved), len(resolvable)),
+        "unsupported_resolvable_ids": [case["id"] for case in unsupported],
+        "unsupported_reason_counts": dict(sorted(reason_counts.items())),
     }
 
 
@@ -570,6 +664,7 @@ def _privacy_exposure_ids(
         sensitive_values = (
             case.ingestion.source.content,
             *case.ingestion.source.protected_values,
+            *(item.content for item in case.workspace_files),
             *_direct_payload_values(
                 case,
                 case.ingestion.events[-1].payload,
