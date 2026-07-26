@@ -174,6 +174,20 @@ Gitでは次を別々に評価します。
 4. 結果に基づき[#39](https://github.com/mani1261790/ToolUseProxy/issues/39)のbounded reconcileを実装するか判断する
 5. local semantic backendはobserve-onlyのprivacy / latency / precision gateを通った場合だけproduction候補にする
 
+## 2026-07-26時点の実装
+
+Issue #36の最初のsliceとして、production policyを変更しない独立benchmark foundationを実装しました。
+
+- `tests/fixtures/sink_benchmark/v1`にdevelopment / validation各6件を固定
+- 各splitでBash、MCP、final answerの正例・負例を必須化
+- direct lexical、resolved lexical、任意のlocal semantic、現行runtime lineageを同じcaseで比較
+- source-ingestion v3の実runtime harnessを再利用し、full / incremental parityを同時確認
+- reportへsource本文、protected value、raw target payloadを含めないprivacy gate
+- semanticはobserve-onlyで、backend未設定時は精度0として扱わず`unavailable`と明示
+- `curl @file`は推測解決せず`unsupported`と明示
+
+初期baselineの全12ケースでは、direct lexical recallは`0.50`、resolved lexicalは評価可能な11ケース上で`0.60`、現行runtime lineageは`0.50`でした。false positiveは0です。この数字は「完成した精度」ではなく、payload resolver、semantic、lineageが今後どれだけ改善するかを測る起点です。再現方法は[Sink-first比較評価](../運用/Sink-first比較評価.md)に記載します。
+
 ## 今は保証しないこと
 
 - LLM内部の完全なtaint tracking
