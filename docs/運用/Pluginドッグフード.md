@@ -121,6 +121,39 @@ verify出力はroot path、source hash、candidate ID、tool input、raw canary�
 
 その後のhuman runでは7項目は出ましたが、`- ラベル: 長い文章`が連続し、承認時に読みづらいという評価でした。また`doctor`の一時的な`OperationalError`後もagentがscanと送信テストへ進み、protected callは遮断されませんでした。DBはrun終了後にSQLite `quick_check`とdoctorが正常へ戻り、恒久破損ではありませんでしたが、このrunは明確に不合格です。次の改修では縦型Markdown cardを採用しましたが、TUIの承認導線ではMarkdown記号がそのまま見え、改行も判断に利用できないことがhuman runで判明しました。このためMarkdown cardを廃止し、改行がすべて消えても読める全角ラベル区切りの短いplain textへ変更します。異常時に送信テストへ進まず停止する契約は維持します。
 
+## File-backed payload shadow Phase B
+
+Issue #45のshadow modeは、onboarding用Phase Bと分離して評価します。onboarding harnessは静的literalのdenyを確認するため、意図的に`@file`を禁止しています。file-backed shadow caseでは逆に、synthetic protected/public fileを絶対pathのlocal fake `curl`へ渡し、現在policyは両方をallowしたまま、shadowだけが`would_block` / `would_allow`を1件ずつ記録することを確認します。
+
+```bash
+python3.11 scripts/manual_sink_payload_shadow.py prepare \
+  --surface codex_cli_tui \
+  --root /absolute/path/outside/repository/tooluseproxy-file-shadow
+```
+
+prepareは既存Phase Bのclean Plugin build、isolated marketplace / `CODEX_HOME`、Hook trust preflightを再利用します。workspaceはsynthetic `.env.phase-b`の選択keyを事前登録し、public fileとprotected file、networkへ接続しないfake sinkを作ります。TUI launcherだけに次のopt-inを渡します。
+
+```text
+TOOLUSEPROXY_PRE_TOOL_FILE_PAYLOAD_SHADOW=1
+```
+
+taskではpayload fileを読まず、fake sinkへ`--data-binary @shadow-public.txt`と`--data-binary @.env.phase-b`を1回ずつ送ります。shadowはobserve-onlyなので両方にPostToolUseとlocal side effectが必要です。protected callをblockしたrun、system curlを使ったrun、source値をassistant messageへ含めたrunは不合格です。
+
+```bash
+python3.11 scripts/manual_sink_payload_shadow.py verify \
+  --root /absolute/path/outside/repository/tooluseproxy-file-shadow
+```
+
+verifierはTUI session、exact fake sink command、Pre / Post identity、二つのmarker、shadow observationを相互確認します。合格時は`allow->would_allow`と`allow->would_block`が各1件、resolution / comparisonは各2件evaluated、policy blockは0です。出力はidentityや値を含まず、status / match / decision diff / payload size bucket / latencyの集約だけです。
+
+Codex Desktop / GUIは同じ成功へ読み替えません。次のpreflightは共有`CODEX_HOME`を変更せず、isolated Plugin / Hook dataとshadow opt-inをDesktop hookへ渡すsupported launcherが存在するかだけを判定します。
+
+```bash
+python3.11 scripts/manual_sink_payload_shadow.py desktop-preflight
+```
+
+2026-07-26時点のlocal環境では、isolated `CODEX_HOME`とopt-in環境変数の両方がDesktop Hookへ届くことを証明できるlauncherが見つからないため、`unsupported: isolated_desktop_hook_environment_unavailable`です。公式のPlugin対応はlocal command Hookの同等性を単独では証明しません。共有中のCodex Pluginやglobal環境変数をdogfoodのために書き換えず、supportedなDesktop test boundaryが確認できるまで未検証を維持します。
+
 verify結果を保存した後は、prepare出力の`logout_command`でisolated `CODEX_HOME`からlogoutします。失敗調査中はrootを保持できますが、調査完了後は認証cacheとraw local sessionを含むため、必要なaggregate evidenceを残してrootを明示的に削除します。削除はverifierが自動で行いません。
 
 immutable alpha.1と現在release候補のupgrade / rollback / disable / removeは[Pluginライフサイクル](Pluginライフサイクル.md)の独立runnerで検証します。
