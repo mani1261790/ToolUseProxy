@@ -78,7 +78,7 @@ sh "<PLUGIN_ROOT>/hooks/run_cli.sh" doctor --workspace "$PWD" --data-dir "<PLUGI
 sh "<PLUGIN_ROOT>/hooks/run_cli.sh" status --workspace "$PWD" --data-dir "<PLUGIN_DATA>"
 ```
 
-Hook trustで確認する内容、更新チャンネルと固定tagの違い、protected sourceの候補発見・承認、rollback、削除時のdata保持を含む完全な手順は[Plugin導入](docs/設定/Plugin導入.md)にあります。Codex Desktopはlocal Pluginを利用できる公式surfaceですが、ToolUseProxyのinstall・Hook review・block・updateを通したDesktop Phase Bは未完了です。Codex CLIのMarketplace更新は実機検証済みです。
+Hook trustで確認する内容、更新チャンネルと固定tagの違い、protected sourceの候補発見・承認、rollback、削除時のdata保持を含む完全な手順は[Plugin導入](docs/設定/Plugin導入.md)にあります。Codex Desktopはlocal Pluginを利用できる公式surfaceで、[Desktop専用Phase B harness](docs/運用/DesktopPhaseB.md)まで実装済みですが、人がinstall・Hook review・block・remove / reinstallを完走する検証と異version updateは未完了です。Codex CLIのMarketplace更新は実機検証済みです。
 
 ## 安全側の既定値
 
