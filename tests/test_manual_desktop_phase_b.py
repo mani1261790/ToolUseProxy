@@ -25,6 +25,7 @@ from scripts.manual_desktop_phase_b import (
     DesktopPhaseBFailure,
     _assert_no_tooluseproxy_collision,
     _extract_plugin_artifact,
+    _installed_plugin_storage_kind,
     _load_state,
     _marker_count,
     _parse_session,
@@ -126,6 +127,48 @@ class ManualDesktopPhaseBTest(unittest.TestCase):
 
             self.assertEqual("shared_state_changed", raised.exception.code)
             run_json.assert_not_called()
+
+    def test_prepare_returns_desktop_search_without_unsupported_deep_link(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory).resolve()
+            token = "confirmation"
+            before = self._shared_state()
+            after = self._shared_state()
+            after["marketplace_names"] = [
+                "tooluseproxy-desktop-phase-b"
+            ]
+            state = self._state(root, "planned")
+            state["plan_confirmation_sha256"] = self._text_hash(token)
+            state["before"] = before
+            state["plugin_version"] = "0.1.0-alpha.3"
+            _write_state(root, state)
+
+            with (
+                patch(
+                    "scripts.manual_desktop_phase_b._capture_shared_state",
+                    side_effect=(before, after),
+                ),
+                patch(
+                    "scripts.manual_desktop_phase_b._run_json",
+                    return_value={
+                        "marketplaceName": (
+                            "tooluseproxy-desktop-phase-b"
+                        )
+                    },
+                ),
+            ):
+                result = prepare_desktop_phase_b(
+                    root,
+                    confirmation_token=token,
+                )
+
+            self.assertEqual(
+                "Home > Plugins > search",
+                result["desktop_install"]["navigation"],
+            )
+            self.assertNotIn("install_url", result["local_only"])
 
     def test_state_never_persists_protected_value(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -382,6 +425,48 @@ class ManualDesktopPhaseBTest(unittest.TestCase):
                     / ".codex-plugin"
                     / "plugin.json"
                 ).is_file()
+            )
+
+    def test_local_marketplace_plugin_is_valid_installed_storage(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory).resolve()
+            marketplace = root / "marketplace"
+            plugin_root = marketplace / "tooluseproxy"
+            plugin_root.mkdir(parents=True)
+            state = {
+                "marketplace": str(marketplace),
+                "codex_home": str(root / "codex-home"),
+            }
+
+            self.assertEqual(
+                "local_marketplace",
+                _installed_plugin_storage_kind(
+                    plugin_root,
+                    state=state,
+                ),
+            )
+
+    def test_installed_storage_refuses_unrelated_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory).resolve()
+            marketplace = root / "marketplace"
+            (marketplace / "tooluseproxy").mkdir(parents=True)
+            unrelated = root / "unrelated"
+            unrelated.mkdir()
+            state = {
+                "marketplace": str(marketplace),
+                "codex_home": str(root / "codex-home"),
+            }
+
+            with self.assertRaises(DesktopPhaseBFailure) as raised:
+                _installed_plugin_storage_kind(
+                    unrelated,
+                    state=state,
+                )
+
+            self.assertEqual(
+                "installed_root_outside_allowed_storage",
+                raised.exception.code,
             )
 
     def test_cleanup_refuses_paths_outside_phase_b_root(self) -> None:
