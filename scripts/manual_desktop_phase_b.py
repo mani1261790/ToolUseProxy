@@ -435,10 +435,6 @@ def prepare_desktop_phase_b(
             "marketplace_add",
             "shared_state_delta_unexpected",
         )
-    install_url = (
-        "codex://plugins/install/?marketplace="
-        + urllib.parse.quote(MARKETPLACE_NAME, safe="")
-    )
     return {
         "schema_version": REPORT_SCHEMA_VERSION,
         "status": "marketplace_added",
@@ -446,11 +442,18 @@ def prepare_desktop_phase_b(
         "surface": SURFACE,
         "shared_codex_home_mutated": True,
         "next": (
-            "Open the Desktop install flow, install only the Phase B plugin, "
-            "then run checkpoint-installed."
+            "From Desktop Home open Plugins, search for ToolUseProxy, "
+            "install only the Phase B marketplace result, then run "
+            "checkpoint-installed."
         ),
+        "desktop_install": {
+            "navigation": "Home > Plugins > search",
+            "query": "ToolUseProxy",
+            "expected_marketplace": MARKETPLACE_NAME,
+            "expected_plugin_id": PLUGIN_ID,
+            "expected_version": state["plugin_version"],
+        },
         "local_only": {
-            "install_url": install_url,
             "guide_file": str(root / GUIDE_FILENAME),
         },
     }
@@ -489,11 +492,17 @@ def checkpoint_installed(root_argument: Path) -> dict[str, Any]:
         )
     installed_root = Path(installed_path).expanduser().resolve()
     codex_home = Path(str(state["codex_home"])).resolve()
-    if (
-        not installed_root.is_dir()
-        or not installed_root.is_relative_to(codex_home)
-        or _tree_sha256(installed_root) != state["plugin_tree_sha256"]
-    ):
+    try:
+        storage_kind = _installed_plugin_storage_kind(
+            installed_root,
+            state=state,
+        )
+    except DesktopPhaseBFailure as error:
+        raise DesktopPhaseBFailure(
+            "checkpoint_installed",
+            "installed_plugin_identity_mismatch",
+        ) from error
+    if _tree_sha256(installed_root) != state["plugin_tree_sha256"]:
         raise DesktopPhaseBFailure(
             "checkpoint_installed",
             "installed_plugin_identity_mismatch",
@@ -505,6 +514,7 @@ def checkpoint_installed(root_argument: Path) -> dict[str, Any]:
         )
     state["stage"] = "plugin_installed"
     state["installed_plugin_root"] = str(installed_root)
+    state["installed_plugin_storage_kind"] = storage_kind
     state["session_snapshot"] = _session_snapshot(codex_home)
     _write_state(root, state)
     _write_desktop_guidance(root, state)
@@ -749,10 +759,27 @@ def checkpoint_removed(root_argument: Path) -> dict[str, Any]:
             "managed_data_not_retained",
         )
     installed_root = Path(str(state["installed_plugin_root"]))
-    if installed_root.exists():
+    storage_kind = state.get("installed_plugin_storage_kind")
+    if storage_kind == "codex_cache" and installed_root.exists():
         raise DesktopPhaseBFailure(
             "checkpoint_removed",
             "plugin_cache_not_removed",
+        )
+    if (
+        storage_kind == "local_marketplace"
+        and (
+            not installed_root.is_dir()
+            or _tree_sha256(installed_root) != state["plugin_tree_sha256"]
+        )
+    ):
+        raise DesktopPhaseBFailure(
+            "checkpoint_removed",
+            "local_plugin_source_changed",
+        )
+    if storage_kind not in {"codex_cache", "local_marketplace"}:
+        raise DesktopPhaseBFailure(
+            "checkpoint_removed",
+            "installed_storage_kind_invalid",
         )
     settings = _read_runtime_settings(
         database,
@@ -772,7 +799,12 @@ def checkpoint_removed(root_argument: Path) -> dict[str, Any]:
         "schema_version": REPORT_SCHEMA_VERSION,
         "status": "plugin_removed_data_retained",
         "surface": SURFACE,
-        "plugin_code_present": False,
+        "plugin_registration_present": False,
+        "plugin_source_storage": (
+            "local_marketplace_source_retained"
+            if storage_kind == "local_marketplace"
+            else "codex_cache_removed"
+        ),
         "managed_data_present": True,
         "runtime_settings_revision_retained": True,
         "next": (
@@ -814,8 +846,18 @@ def checkpoint_reinstalled(root_argument: Path) -> dict[str, Any]:
             "installed_path_missing",
         )
     installed_root = Path(installed_path).expanduser().resolve()
+    try:
+        storage_kind = _installed_plugin_storage_kind(
+            installed_root,
+            state=state,
+        )
+    except DesktopPhaseBFailure as error:
+        raise DesktopPhaseBFailure(
+            "checkpoint_reinstalled",
+            "installed_plugin_identity_mismatch",
+        ) from error
     if (
-        not installed_root.is_dir()
+        storage_kind != state.get("installed_plugin_storage_kind")
         or _tree_sha256(installed_root) != state["plugin_tree_sha256"]
         or installed.get("version") != state["plugin_version"]
     ):
@@ -883,10 +925,28 @@ def checkpoint_final_removed(root_argument: Path) -> dict[str, Any]:
             "checkpoint_final_removed",
             "desktop_plugin_still_installed",
         )
-    if Path(str(state["installed_plugin_root"])).exists():
+    installed_root = Path(str(state["installed_plugin_root"]))
+    storage_kind = state.get("installed_plugin_storage_kind")
+    if storage_kind == "codex_cache" and installed_root.exists():
         raise DesktopPhaseBFailure(
             "checkpoint_final_removed",
             "plugin_cache_not_removed",
+        )
+    if (
+        storage_kind == "local_marketplace"
+        and (
+            not installed_root.is_dir()
+            or _tree_sha256(installed_root) != state["plugin_tree_sha256"]
+        )
+    ):
+        raise DesktopPhaseBFailure(
+            "checkpoint_final_removed",
+            "local_plugin_source_changed",
+        )
+    if storage_kind not in {"codex_cache", "local_marketplace"}:
+        raise DesktopPhaseBFailure(
+            "checkpoint_final_removed",
+            "installed_storage_kind_invalid",
         )
     plugin_data = Path(str(state["plugin_data"]))
     if not (plugin_data / "events.db").is_file():
@@ -1347,6 +1407,33 @@ def _find_plugin(
     if len(matches) > 1:
         raise DesktopPhaseBFailure("plugin_inventory", "plugin_duplicate")
     return matches[0] if matches else None
+
+
+def _installed_plugin_storage_kind(
+    installed_root: Path,
+    *,
+    state: dict[str, Any],
+) -> str:
+    installed_root = installed_root.resolve()
+    if not installed_root.is_dir() or installed_root.is_symlink():
+        raise DesktopPhaseBFailure(
+            "plugin_inventory",
+            "installed_root_unavailable",
+        )
+    local_root = (
+        Path(str(state["marketplace"])) / PLUGIN_NAME
+    ).resolve()
+    if installed_root == local_root:
+        return "local_marketplace"
+    codex_home = Path(str(state["codex_home"])).resolve()
+    if installed_root != codex_home and installed_root.is_relative_to(
+        codex_home
+    ):
+        return "codex_cache"
+    raise DesktopPhaseBFailure(
+        "plugin_inventory",
+        "installed_root_outside_allowed_storage",
+    )
 
 
 def _extract_plugin_artifact(artifact: Path, destination: Path) -> None:

@@ -38,7 +38,9 @@ python3.11 scripts/manual_desktop_phase_b.py prepare \
   --confirmation-token '<planが返したtoken>'
 ```
 
-`prepare`が変更するのは、共有Codex configへの専用local marketplace追加だけです。返された`local_only.install_url`をCodex Desktopで開き、表示されるsourceとversionがguideに一致するPluginだけをinstallします。その後、次を実行します。
+`prepare`が変更するのは、共有Codex configへの専用local marketplace追加だけです。Codex DesktopのHomeから`Plugins`を開き、`ToolUseProxy`を検索します。設定画面の`Plugins`はinstall済み一覧であり、新規installの検索導線ではありません。表示されるsourceとversionがguideに一致するPhase B marketplaceのPluginだけをinstallします。その後、次を実行します。
+
+現行DesktopではPlugin名`ToolUseProxy`とmarketplace表示名`ToolUseProxy Desktop Phase B`が別の検索結果に見える場合があります。install後は画面上の件数だけで判断せず、CLI inventoryが`tooluseproxy@tooluseproxy-desktop-phase-b`の1件だけであることをcheckpointで確定します。local marketplaceはPluginを`~/.codex`へ複製せず、検証rootのsourceを直接参照する場合があります。この場合、removeで消えるのはPlugin登録であり、local source本体は最終cleanupまで保持されます。
 
 ```bash
 python3.11 scripts/manual_desktop_phase_b.py checkpoint-installed \
@@ -74,7 +76,7 @@ python3.11 scripts/manual_desktop_phase_b.py checkpoint-removed \
   --root /Users/mani/.tooluseproxy-dogfood/desktop-phase-b-YYYYMMDD
 ```
 
-同じ専用Pluginをinstall URLから再installし、同一版reinstall後に同じdataと設定revisionを再利用できることを確認します。
+同じ専用PluginをHomeの`Plugins`検索から再installし、同一版reinstall後に同じdataと設定revisionを再利用できることを確認します。
 
 ```bash
 python3.11 scripts/manual_desktop_phase_b.py checkpoint-reinstalled \
