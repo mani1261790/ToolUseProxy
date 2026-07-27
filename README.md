@@ -45,6 +45,7 @@ ToolUseProxyはLLM内部の状態や因果的な情報流を直接観測する�
 | 2. Detect | 中核完了 | protected source binding、lineage、finding、policy、類似度profile v2.1を実装 |
 | 3. Stop | alpha実装済み | Stopの`continue_review`と、opt-inのBash / MCP PreToolUse denyを提供。runtime redactは無効 |
 | Plugin化 | alpha.3 | installable package、relocatable Plugin、`PLUGIN_ROOT` / `PLUGIN_DATA`、初期化・診断・traceを実装 |
+| runtime設定 | 実装済み | workspace単位のboolean設定、環境変数override、revision付き更新、値なし監査、Plugin再導入後の保持 |
 | protected source登録 | 明示承認型を実装済み | `scan` / `suggest` → exact proposal → `approve` / `reject` / `ignore`。無承認登録はしない |
 | Public alpha | `0.1.0-alpha.3` | Apache-2.0、checksum / SBOM、archive内部、CI Action、hash-locked build、Git履歴監査、upgrade / rollback、自動dogfoodを完了。CLI TUIのfile-backed shadow / exact-only Phase Bは合格。Desktop / GUI、cross-platform実機、少人数pilotは継続課題 |
 | 外部sink coverage | adapter allowlist | 既知のBash / MCP / Search等を分類。任意programの実network接続を網羅しているわけではなく、実接続との偽陰性率は未測定 |
@@ -108,12 +109,11 @@ Sink-first比較評価では、direct lexical、resolved lexical、任意のloca
 
 優先順位の正本は[実装タスク計画](docs/運用/実装タスク.md)とGitHub Issues / Projectです。
 
-1. [#52](https://github.com/mani1261790/ToolUseProxy/issues/52): workspace単位のruntime設定を`PLUGIN_DATA`へ永続化し、環境変数だけに依存しない検証境界を作る
-2. [#53](https://github.com/mani1261790/ToolUseProxy/issues/53): Codex Desktopで標準Plugin install、Hook review、public allow / protected block、update / removeをPhase B検証する
-3. [#54](https://github.com/mani1261790/ToolUseProxy/issues/54): adapter分類と実network egressをobserve-onlyで突き合わせ、外部sink判定の偽陰性を測る
-4. [#55](https://github.com/mani1261790/ToolUseProxy/issues/55): Auditログを人間がlabelし、active learning・クラスタリング・rule miningで未知patternの調査を効率化する
-5. [#38](https://github.com/mani1261790/ToolUseProxy/issues/38)でGit pushのoutgoing objectとbranch / worktree / 複数人開発を評価する
-6. [#46](https://github.com/mani1261790/ToolUseProxy/issues/46)でlocal semantic backendをobserve-only比較し、[#37](https://github.com/mani1261790/ToolUseProxy/issues/37)でsession境界を測る
+1. [#53](https://github.com/mani1261790/ToolUseProxy/issues/53): Codex Desktopで標準Plugin install、Hook review、public allow / protected block、update / removeをPhase B検証する
+2. [#54](https://github.com/mani1261790/ToolUseProxy/issues/54): adapter分類と実network egressをobserve-onlyで突き合わせ、外部sink判定の偽陰性を測る
+3. [#55](https://github.com/mani1261790/ToolUseProxy/issues/55): Auditログを人間がlabelし、active learning・クラスタリング・rule miningで未知patternの調査を効率化する
+4. [#38](https://github.com/mani1261790/ToolUseProxy/issues/38)でGit pushのoutgoing objectとbranch / worktree / 複数人開発を評価する
+5. [#46](https://github.com/mani1261790/ToolUseProxy/issues/46)でlocal semantic backendをobserve-only比較し、[#37](https://github.com/mani1261790/ToolUseProxy/issues/37)でsession境界を測る
 
 個別Issue番号と着手状況は[実装タスク計画](docs/運用/実装タスク.md)と[GitHub Project](https://github.com/users/mani1261790/projects/1)を正本にします。
 

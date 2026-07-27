@@ -157,6 +157,49 @@ def prepare_shadow_dogfood(
     )
     if init.get("status") != "initialized":
         raise ShadowDogfoodFailure("workspace_init", "init_status_invalid")
+    settings = _run_json(
+        [
+            sys.executable,
+            str(plugin_root / "tooluseproxy_plugin.py"),
+            "config",
+            "show",
+            "--workspace",
+            str(workspace),
+            "--data-dir",
+            str(plugin_data),
+            "--json",
+        ],
+        cwd=workspace,
+        stage="runtime_settings_show",
+    )
+    settings_revision = _required_revision(settings, "runtime_settings_show")
+    setting_keys = ["pre-tool-policy", "file-payload-shadow"]
+    if mode == MODE_EXACT_ENFORCEMENT:
+        setting_keys.append("file-payload-exact-enforcement")
+    for setting_key in setting_keys:
+        settings = _run_json(
+            [
+                sys.executable,
+                str(plugin_root / "tooluseproxy_plugin.py"),
+                "config",
+                "set",
+                setting_key,
+                "on",
+                "--expected-revision",
+                settings_revision,
+                "--workspace",
+                str(workspace),
+                "--data-dir",
+                str(plugin_data),
+                "--json",
+            ],
+            cwd=workspace,
+            stage=f"runtime_settings_set_{setting_key}",
+        )
+        settings_revision = _required_revision(
+            settings,
+            f"runtime_settings_set_{setting_key}",
+        )
     _replace_private(
         workspace / "protected_sources.json",
         (
@@ -211,10 +254,9 @@ def prepare_shadow_dogfood(
     )
     _replace_private(root / PROMPT_FILENAME, f"{prompt}\n".encode())
     _replace_private(root / GUIDE_FILENAME, guide.encode())
-    _enable_payload_policy_in_launcher(
+    _prepare_persistent_policy_launcher(
         root / "launch-codex.sh",
         prompt_file=root / PROMPT_FILENAME,
-        mode=mode,
     )
 
     case_id = (
@@ -231,6 +273,7 @@ def prepare_shadow_dogfood(
             "public_file": str(workspace / PUBLIC_FILE),
             "public_marker": str(workspace / PUBLIC_MARKER),
             "protected_marker": str(workspace / PROTECTED_MARKER),
+            "runtime_settings_revision": settings_revision,
         }
     )
     _replace_private(
@@ -428,23 +471,22 @@ def _render_guide(*, plugin_root: Path, workspace: Path, mode: str) -> str:
     )
 
 
-def _enable_payload_policy_in_launcher(
+def _prepare_persistent_policy_launcher(
     launcher: Path,
     *,
     prompt_file: Path,
-    mode: str,
 ) -> None:
     text = launcher.read_text(encoding="utf-8")
-    marker = "export TOOLUSEPROXY_PRE_TOOL_MCP_POLICY=1\n"
-    if text.count(marker) != 1:
+    pre_tool_marker = "export TOOLUSEPROXY_PRE_TOOL_POLICY=1\n"
+    if text.count(pre_tool_marker) not in {0, 1}:
         raise ShadowDogfoodFailure("prepare", "launcher_contract_invalid")
-    payload_flags = "export TOOLUSEPROXY_PRE_TOOL_FILE_PAYLOAD_SHADOW=1\n"
-    if mode == MODE_EXACT_ENFORCEMENT:
-        payload_flags += (
-            "export "
-            "TOOLUSEPROXY_PRE_TOOL_FILE_PAYLOAD_EXACT_ENFORCEMENT=1\n"
-        )
-    text = text.replace(marker, marker + payload_flags)
+    text = text.replace(pre_tool_marker, "")
+    forbidden_flags = (
+        "TOOLUSEPROXY_PRE_TOOL_FILE_PAYLOAD_SHADOW",
+        "TOOLUSEPROXY_PRE_TOOL_FILE_PAYLOAD_EXACT_ENFORCEMENT",
+    )
+    if any(flag in text for flag in forbidden_flags):
+        raise ShadowDogfoodFailure("prepare", "launcher_contract_invalid")
     review_marker = (
         "printf '%s' '上のHook説明を理解し、表示内容を確認する準備が"
         "できたら yes と入力してください: ' >&2\n"
@@ -463,6 +505,17 @@ def _enable_payload_policy_in_launcher(
     text = text.replace(review_marker, copy_block + review_marker)
     _replace_private(launcher, text.encode())
     launcher.chmod(0o700)
+
+
+def _required_revision(payload: dict[str, Any], stage: str) -> str:
+    revision = payload.get("settings_revision")
+    if (
+        not isinstance(revision, str)
+        or len(revision) != 64
+        or any(character not in "0123456789abcdef" for character in revision)
+    ):
+        raise ShadowDogfoodFailure(stage, "settings_revision_invalid")
+    return revision
 
 
 def _read_session_evidence(
