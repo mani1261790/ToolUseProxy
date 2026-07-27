@@ -29,7 +29,7 @@ payload本文、payload由来hash、raw commandの複製、file pathはevidence�
 
 ## Shadow observation
 
-`TOOLUSEPROXY_PRE_TOOL_FILE_PAYLOAD_SHADOW=1`は、current Bash eventの`curl` HTTP sinkだけを観測します。現在のruntime解析が使ったactive source chunksを`RuntimeAnalysisResult`から直接受け取り、manifest更新後のstale chunkや別workspaceのchunkを別queryで混ぜません。
+workspace設定`file-payload-shadow=on`は、current Bash eventの`curl` HTTP sinkだけを観測します。互換用の`TOOLUSEPROXY_PRE_TOOL_FILE_PAYLOAD_SHADOW=1`も同じ機能を有効化し、環境変数がworkspace設定より優先されます。現在のruntime解析が使ったactive source chunksを`RuntimeAnalysisResult`から直接受け取り、manifest更新後のstale chunkや別workspaceのchunkを別queryで混ぜません。
 
 shadow用SQLite tableへ保存するのは、status、有限のreason、snapshot semantics、件数・byte数のbucket、strongest exact match種別、match件数、処理時間、baseline / shadow actionの集約値です。ephemeral evidenceが持つsource chunk IDもshadow tableには保存しません。payload本文、raw command、path、payload由来hashを複製しないため、shadow追加によってdurable plaintextの範囲を広げません。
 

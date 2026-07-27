@@ -65,7 +65,7 @@ class ManualSinkPayloadShadowTest(unittest.TestCase):
                 ),
                 patch(
                     "scripts.manual_sink_payload_shadow._run_json",
-                    return_value={"status": "initialized"},
+                    side_effect=self._prepare_runtime_responses(3),
                 ),
             ):
                 result = prepare_shadow_dogfood(
@@ -76,8 +76,9 @@ class ManualSinkPayloadShadowTest(unittest.TestCase):
             self.assertEqual("prepared", result["status"])
             self.assertEqual(CASE_ID, result["case_id"])
             launcher = (root / "launch-codex.sh").read_text(encoding="utf-8")
-            self.assertIn(
-                "TOOLUSEPROXY_PRE_TOOL_FILE_PAYLOAD_SHADOW=1",
+            self.assertNotIn("TOOLUSEPROXY_PRE_TOOL_POLICY", launcher)
+            self.assertNotIn(
+                "TOOLUSEPROXY_PRE_TOOL_FILE_PAYLOAD_SHADOW",
                 launcher,
             )
             self.assertIn("pbcopy <", launcher)
@@ -95,6 +96,7 @@ class ManualSinkPayloadShadowTest(unittest.TestCase):
             )
             state = json.loads((root / "phase-b-state.json").read_text())
             self.assertEqual(CASE_ID, state["case_id"])
+            self.assertEqual("2" * 64, state["runtime_settings_revision"])
 
     def test_prepare_exact_mode_enables_shadow_and_enforcement(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -107,7 +109,7 @@ class ManualSinkPayloadShadowTest(unittest.TestCase):
                 ),
                 patch(
                     "scripts.manual_sink_payload_shadow._run_json",
-                    return_value={"status": "initialized"},
+                    side_effect=self._prepare_runtime_responses(4),
                 ),
             ):
                 result = prepare_shadow_dogfood(
@@ -119,12 +121,13 @@ class ManualSinkPayloadShadowTest(unittest.TestCase):
             self.assertEqual("prepared", result["status"])
             self.assertEqual(EXACT_ENFORCEMENT_CASE_ID, result["case_id"])
             launcher = (root / "launch-codex.sh").read_text(encoding="utf-8")
-            self.assertIn(
-                "TOOLUSEPROXY_PRE_TOOL_FILE_PAYLOAD_SHADOW=1",
+            self.assertNotIn("TOOLUSEPROXY_PRE_TOOL_POLICY", launcher)
+            self.assertNotIn(
+                "TOOLUSEPROXY_PRE_TOOL_FILE_PAYLOAD_SHADOW",
                 launcher,
             )
-            self.assertIn(
-                "TOOLUSEPROXY_PRE_TOOL_FILE_PAYLOAD_EXACT_ENFORCEMENT=1",
+            self.assertNotIn(
+                "TOOLUSEPROXY_PRE_TOOL_FILE_PAYLOAD_EXACT_ENFORCEMENT",
                 launcher,
             )
             prompt = (root / "phase-b-prompt.txt").read_text(encoding="utf-8")
@@ -431,6 +434,7 @@ class ManualSinkPayloadShadowTest(unittest.TestCase):
         fake_sink.chmod(0o700)
         (root / "launch-codex.sh").write_text(
             "#!/bin/sh\n"
+            "export TOOLUSEPROXY_PRE_TOOL_POLICY=1\n"
             "export TOOLUSEPROXY_PRE_TOOL_MCP_POLICY=1\n"
             "printf '%s' '上のHook説明を理解し、表示内容を確認する準備が"
             "できたら yes と入力してください: ' >&2\n",
@@ -460,6 +464,20 @@ class ManualSinkPayloadShadowTest(unittest.TestCase):
                 "launch_command": "launch",
             }
         }
+
+    @staticmethod
+    def _prepare_runtime_responses(setting_count: int) -> list[dict[str, str]]:
+        return [
+            {"status": "initialized"},
+            {"status": "ok", "settings_revision": "0" * 64},
+            *[
+                {
+                    "status": "updated",
+                    "settings_revision": str(index) * 64,
+                }
+                for index in range(1, setting_count)
+            ],
+        ]
 
     @staticmethod
     def _record_pair(

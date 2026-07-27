@@ -72,6 +72,12 @@ After an explicit approval, ask the agent to run `status` again. The approved so
 
 PreToolUse blocking remains off by default; the quickstart does not silently enable enforcement. Use the full [Plugin onboarding guide](https://github.com/mani1261790/ToolUseProxy/blob/main/docs/%E8%A8%AD%E5%AE%9A/Plugin%E5%B0%8E%E5%85%A5.md) before enabling it.
 
+Runtime policy settings can be stored per workspace in `PLUGIN_DATA` with
+revision-checked `config show`, `config set`, and `config unset` commands.
+Environment variables remain compatible overrides. See the
+[workspace runtime settings guide](docs/%E8%A8%AD%E5%AE%9A/Runtime%E8%A8%AD%E5%AE%9A.md)
+for the exact keys, dependencies, and audit behavior.
+
 Updates from `public-alpha` are explicit:
 
 ```bash

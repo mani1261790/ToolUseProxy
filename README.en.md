@@ -15,6 +15,7 @@ ToolUseProxy is licensed under the [Apache License 2.0](LICENSE).
 - Suggests `.env` and JSON protected-source entries without displaying their values.
 - Requires explicit approval before changing `protected_sources.json`.
 - Can deny high-confidence Bash or MCP disclosures when opt-in enforcement is enabled.
+- Stores allowlisted boolean runtime policy settings per workspace with revision-checked updates and value-free audit history.
 - Uses no Hook-time network service, remote embedding, or ToolUseProxy telemetry.
 
 ## Install the Plugin

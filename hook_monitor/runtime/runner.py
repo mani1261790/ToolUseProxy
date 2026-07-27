@@ -4,6 +4,7 @@ import json
 import os
 import re
 import shlex
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -29,6 +30,15 @@ from hook_monitor.runtime.pre_tool_policy import (
     evaluate_pre_tool_hook_policy,
     pre_tool_adapter,
     render_mcp_input_limit_deny,
+)
+from hook_monitor.runtime.settings import (
+    FILE_PAYLOAD_EXACT_ENFORCEMENT_KEY,
+    FILE_PAYLOAD_SHADOW_KEY,
+    PRE_TOOL_POLICY_KEY,
+    EffectiveRuntimeSettings,
+    RuntimeSettingsError,
+    empty_workspace_runtime_settings,
+    resolve_effective_runtime_settings,
 )
 from hook_monitor.runtime.storage import EventStore, SchemaCompatibilityError
 from hook_monitor.runtime.snapshot_capture import (
@@ -187,10 +197,40 @@ def run_hook(
             else None
         ),
     )
-    enabled_pre_tool_adapters = _enabled_pre_tool_adapters()
+    early_pre_tool_adapters = _enabled_pre_tool_adapters(
+        resolve_effective_runtime_settings(
+            empty_workspace_runtime_settings(
+                event.workspace_id or "unregistered"
+            ),
+            os.environ,
+        )
+    )
+    event_pre_tool_adapter = pre_tool_adapter(event.tool_name)
     if (
         phase == "pre_tool_use"
-        and pre_tool_adapter(event.tool_name) in enabled_pre_tool_adapters
+        and event_pre_tool_adapter == "mcp"
+        and event_pre_tool_adapter in early_pre_tool_adapters
+        and _runtime_policy_workspace_enabled(event)
+    ):
+        bounded_input_guard = evaluate_pre_tool_input_bounds(
+            event,
+            enabled_adapters=early_pre_tool_adapters,
+        )
+        if bounded_input_guard.disposition == "deny":
+            print(json.dumps(bounded_input_guard.hook_output, ensure_ascii=False))
+            return 0
+        if bounded_input_guard.disposition == "bypass":
+            return 0
+    if allow_schema_migration:
+        store.initialize()
+    effective_runtime_settings = _effective_runtime_settings(store, event)
+    enabled_pre_tool_adapters = _enabled_pre_tool_adapters(
+        effective_runtime_settings
+    )
+    if (
+        phase == "pre_tool_use"
+        and event_pre_tool_adapter in enabled_pre_tool_adapters
+        and event_pre_tool_adapter != "mcp"
         and _runtime_policy_workspace_enabled(event)
     ):
         bounded_input_guard = evaluate_pre_tool_input_bounds(
@@ -208,8 +248,6 @@ def run_hook(
     extraction = extract_tool_operations(event, artifacts, fragments)
     fragments.extend(extraction.fragments)
 
-    if allow_schema_migration:
-        store.initialize()
     post_outcome: ToolOutcome | None = None
     post_snapshots: list[ResourceSnapshot] = []
     post_operation_ids: tuple[str, ...] = ()
@@ -251,9 +289,13 @@ def run_hook(
                 Path(event.workspace_root or ""),
                 current_event=event,
                 enabled_adapters=enabled_pre_tool_adapters,
-                sink_payload_shadow_enabled=_sink_payload_shadow_enabled(),
+                sink_payload_shadow_enabled=effective_runtime_settings.enabled(
+                    FILE_PAYLOAD_SHADOW_KEY
+                ),
                 sink_payload_exact_enforcement_enabled=(
-                    _sink_payload_exact_enforcement_enabled()
+                    effective_runtime_settings.enabled(
+                        FILE_PAYLOAD_EXACT_ENFORCEMENT_KEY
+                    )
                 ),
             )
         except Exception as exc:  # pragma: no cover - defensive hook boundary
@@ -313,27 +355,34 @@ def _pre_tool_mcp_policy_enabled() -> bool:
     return configured.lower() in {"1", "true", "yes", "on"}
 
 
-def _sink_payload_shadow_enabled() -> bool:
-    configured = os.environ.get(
-        "TOOLUSEPROXY_PRE_TOOL_FILE_PAYLOAD_SHADOW",
-        "0",
-    )
-    return configured.lower() in {"1", "true", "yes", "on"}
+def _effective_runtime_settings(
+    store: EventStore,
+    event: NormalizedEvent,
+) -> EffectiveRuntimeSettings:
+    workspace_id = event.workspace_id
+    if workspace_id is None:
+        return resolve_effective_runtime_settings(
+            empty_workspace_runtime_settings("unregistered"),
+            os.environ,
+        )
+    try:
+        state = store.get_workspace_runtime_settings(
+            workspace_id,
+            busy_timeout_ms=10,
+        )
+    except (RuntimeSettingsError, OSError, sqlite3.Error) as exc:
+        _report_policy_failure("runtime settings", exc)
+        state = empty_workspace_runtime_settings(workspace_id)
+    return resolve_effective_runtime_settings(state, os.environ)
 
 
-def _sink_payload_exact_enforcement_enabled() -> bool:
-    configured = os.environ.get(
-        "TOOLUSEPROXY_PRE_TOOL_FILE_PAYLOAD_EXACT_ENFORCEMENT",
-        "0",
-    )
-    return configured.lower() in {"1", "true", "yes", "on"}
-
-
-def _enabled_pre_tool_adapters() -> frozenset[str]:
-    if not _pre_tool_policy_enabled():
+def _enabled_pre_tool_adapters(
+    settings: EffectiveRuntimeSettings,
+) -> frozenset[str]:
+    if not settings.enabled(PRE_TOOL_POLICY_KEY):
         return frozenset()
     adapters = {"bash"}
-    if _pre_tool_mcp_policy_enabled():
+    if _pre_tool_policy_enabled() and _pre_tool_mcp_policy_enabled():
         adapters.add("mcp")
     return frozenset(adapters)
 

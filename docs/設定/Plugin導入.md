@@ -124,7 +124,7 @@ sh "<PLUGIN_ROOT>/hooks/run_cli.sh" init --codex --data-dir "<PLUGIN_DATA>"
 
 このcommandは次を行います。
 
-- `PLUGIN_DATA/events.db`を候補の承認予約と監査tableを含むschema v4へ初期化または明示的にmigrationする
+- `PLUGIN_DATA/events.db`を候補、監査、workspace runtime設定を含むschema v6へ初期化または明示的にmigrationする
 - 古いschemaをmigrationする前にSQLite backupを作る
 - canonical workspace rootをDBへ登録する
 - `protected_sources.json`がない場合だけ、schema v2の空manifestをatomicに作る
@@ -153,6 +153,8 @@ sh "<PLUGIN_ROOT>/hooks/run_cli.sh" status \
 - runtime redact / `updatedInput`: 無効
 
 protected sourceは初期化時やHook実行中には自動登録しません。初期化が作るのは空のmanifestだけです。
+
+PreToolUseとfile-backed payload policyは、環境変数だけでなくworkspace単位の永続設定でも明示opt-inできます。現在値、変更方法、優先順位、revision競合の扱いは[Workspace runtime設定](Runtime設定.md)を参照してください。
 
 ### legacy manifestの明示migration
 

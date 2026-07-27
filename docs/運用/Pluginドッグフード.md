@@ -131,10 +131,11 @@ python3.11 scripts/manual_sink_payload_shadow.py prepare \
   --root /absolute/path/outside/repository/tooluseproxy-file-shadow
 ```
 
-prepareは既存Phase Bのclean Plugin build、isolated marketplace / `CODEX_HOME`、Hook trust preflightを再利用します。workspaceはsynthetic `.env.phase-b`の選択keyを事前登録し、public fileとprotected file、networkへ接続しないfake sinkを作ります。TUI launcherだけに次のopt-inを渡します。
+prepareは既存Phase Bのclean Plugin build、isolated marketplace / `CODEX_HOME`、Hook trust preflightを再利用します。workspaceはsynthetic `.env.phase-b`の選択keyを事前登録し、public fileとprotected file、networkへ接続しないfake sinkを作ります。policyは環境変数をlauncherへ渡さず、`PLUGIN_DATA/events.db`へ次のworkspace設定として保存します。
 
 ```text
-TOOLUSEPROXY_PRE_TOOL_FILE_PAYLOAD_SHADOW=1
+pre-tool-policy=on
+file-payload-shadow=on
 ```
 
 macOSではlauncherがpreflight後にsynthetic promptを`pbcopy`へ渡します。起動後はHook 3件をreviewし、clipboardのpromptを新しいtaskへ貼り付けます。prompt本文やsource値をterminal commandとして組み立て直す必要はありません。
@@ -157,7 +158,7 @@ python3.11 scripts/manual_sink_payload_shadow.py prepare \
   --root /absolute/path/outside/repository/tooluseproxy-file-exact
 ```
 
-このmodeでもshadow観測を併用し、同じ一回のfile snapshot比較を検証材料にします。public callだけがmarkerとPostToolUseを作り、protected callはexact evidenceによるpolicy block 1件を作って、markerもPostToolUseも作らないことが合格条件です。実行後は同じ`verify --root ...`を使います。これによりTUI表示だけを成功根拠にせず、session、Hook DB、shadow observation、local side effectを相互照合します。
+このmodeでは`file-payload-exact-enforcement=on`もworkspace設定へ保存し、shadow観測を併用して同じ一回のfile snapshot比較を検証材料にします。public callだけがmarkerとPostToolUseを作り、protected callはexact evidenceによるpolicy block 1件を作って、markerもPostToolUseも作らないことが合格条件です。実行後は同じ`verify --root ...`を使います。これによりTUI表示だけを成功根拠にせず、session、Hook DB、shadow observation、local side effectを相互照合します。
 
 2026-07-27のfresh TUI human runは`status: passed`でした。public / protectedのfile-backed callはshadow modeのため両方実行され、`allow->would_allow`と`allow->would_block`が各1件、resolution / comparisonは各2件evaluated、policy blockは0件でした。TUI session、exact command、Pre / Post identity、二つのside effect、tool output、shadow observationはすべて一致し、assistant出力とshadow tableへのraw protected value露出は0件でした。観測latencyはp50 `0.705 ms`、p95 / max `0.746 ms`です。この結果はTUIのopt-in shadow観測を合格とするものであり、実行前block、Desktop / GUI、TOCTOU解消を証明しません。
 
@@ -171,7 +172,7 @@ python3.11 scripts/manual_sink_payload_shadow.py desktop-preflight
 
 2026-07-27時点のlocal環境では、isolated `CODEX_HOME`とopt-in環境変数の両方がDesktop Hookへ届くことを証明できるlauncherが見つからないため、`unsupported: isolated_desktop_hook_environment_unavailable`です。これは「DesktopでPluginを使えない」という意味ではなく、「CLI用の隔離harnessをそのままDesktopへ流用できない」という意味です。
 
-次のDesktop専用Phase Bでは、環境変数flagを前提にせず、workspace単位のruntime設定を`PLUGIN_DATA`へ保存したうえで、標準のDesktop Plugin installを使います。専用synthetic workspaceでPlugin source / version、3 Hookのreview、doctor / status、public allow、protected exact block、marker / DB / session照合、update / disable / removeを検証します。共有環境を使うため、変更前のPlugin一覧と設定を記録し、検証後に元へ戻すplanを先に提示します。
+workspace単位のruntime設定とTUI harnessへの接続は実装済みです。次のDesktop専用Phase Bでは、同じ永続設定を使って標準のDesktop Plugin installを検証します。専用synthetic workspaceでPlugin source / version、3 Hookのreview、doctor / status、public allow、protected exact block、marker / DB / session照合、update / disable / removeを確認します。共有環境を使うため、変更前のPlugin一覧と設定を記録し、検証後に元へ戻すplanを先に提示します。
 
 verify結果を保存した後は、prepare出力の`logout_command`でisolated `CODEX_HOME`からlogoutします。失敗調査中はrootを保持できますが、調査完了後は認証cacheとraw local sessionを含むため、必要なaggregate evidenceを残してrootを明示的に削除します。削除はverifierが自動で行いません。
 
