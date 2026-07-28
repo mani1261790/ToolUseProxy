@@ -52,6 +52,9 @@ class PluginArtifactTest(unittest.TestCase):
                 marketplace = json.loads(
                     archive.read(".agents/plugins/marketplace.json").decode("utf-8")
                 )
+                hooks = json.loads(
+                    archive.read("tooluseproxy/hooks/hooks.json").decode("utf-8")
+                )
 
             self.assertEqual(sorted(names), names)
             self.assertEqual(len(names), len(set(names)))
@@ -79,6 +82,14 @@ class PluginArtifactTest(unittest.TestCase):
             self.assertNotIn("tooluseproxy/hooks/monitor_stop.py", names)
             self.assertFalse(
                 [name for name in names if name.startswith("tooluseproxy/hook_monitor/evaluation/")]
+            )
+            self.assertIn(
+                "exec_command",
+                hooks["hooks"]["PreToolUse"][0]["matcher"],
+            )
+            self.assertIn(
+                "exec_command",
+                hooks["hooks"]["PostToolUse"][0]["matcher"],
             )
             for name in names:
                 parts = set(Path(name).parts)

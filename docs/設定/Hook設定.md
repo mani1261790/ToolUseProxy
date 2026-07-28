@@ -98,6 +98,8 @@ project単位では、trustedなrepositoryの`.codex/hooks.json`へ次のよう�
 
 `matcher`は正規表現です。`PreToolUse`と`PostToolUse`ではtool名に適用されますが、`Stop`ではmatcherがサポートされないため省略します。MCPも観測する場合は、対象serverを絞った`^mcp__<server>__.*$`などのmatcher groupを追加します。Codexはtimeoutを省略すると600秒を使用するため、この軽量Hookでは明示的に5秒へ制限します。commandはsessionの`cwd`で実行され、複数のmatching command hookは並行起動されます。project-local Hookは実行前に定義内容をtrustする必要があります。
 
+tool名はCodex surfaceとversionの契約です。CLI TUIではshell操作を`Bash`として実Hook観測していますが、2026-07-28のCodex Desktop sessionでは同じ種類のlocal shell実行が`exec_command`として記録されました。現在のpublic alpha matcherは`Bash`だけをshell runtimeへ通すため、Desktop対応を主張する前に、matcher、Hook payload、`cmd`から既存`command`解析への正規化、PreToolUse denyの全てを同じ実機runで確認します。Plugin installやHook trustだけを発火・保護の証拠にはしません。
+
 ## 置いてあるもの
 
 - `hooks/monitor_pre_tool.py`

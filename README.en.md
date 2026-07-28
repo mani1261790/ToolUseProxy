@@ -34,7 +34,7 @@ codex plugin marketplace upgrade tooluseproxy
 codex plugin list --json
 ```
 
-Use the immutable `v0.1.0-alpha.3` tag instead of `public-alpha` when reproducible version pinning matters. A pinned tag does not move when the marketplace is upgraded. Review the exact Hook definitions after installation or an update before trusting them. Then follow the [five-minute quickstart](QUICKSTART.md) to initialize ToolUseProxy and review the first protected-source proposal. The CLI update path is tested; the Codex Desktop / GUI update experience is not yet verified.
+Use the immutable `v0.1.0-alpha.3` tag instead of `public-alpha` when reproducible version pinning matters. A pinned tag does not move when the marketplace is upgraded. Review the exact Hook definitions after installation or an update before trusting them. Then follow the [five-minute quickstart](QUICKSTART.md) to initialize ToolUseProxy and review the first protected-source proposal. The CLI update path is tested. On Codex Desktop, Plugin installation and Hook trust persistence were observed, but the Desktop `exec_command` path did not trigger the current `Bash` Hook in either Full Access or Default mode. Desktop protection is therefore not supported yet.
 
 ## Try the synthetic preview
 

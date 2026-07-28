@@ -3,7 +3,7 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "^(Bash|apply_patch|mcp__.*)$",
+        "matcher": "^(Bash|exec_command|apply_patch|mcp__.*)$",
         "hooks": [
           {
             "type": "command",
@@ -17,7 +17,7 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "^(Bash|apply_patch|mcp__.*)$",
+        "matcher": "^(Bash|exec_command|apply_patch|mcp__.*)$",
         "hooks": [
           {
             "type": "command",

@@ -4,7 +4,28 @@ Issue [#53](https://github.com/mani1261790/ToolUseProxy/issues/53)では、CLI T
 
 ## 現在地
 
-専用harnessは実装済みですが、人がDesktopで最後まで実行したaggregate reportはまだありません。したがって、READMEとSUPPORTの「Desktop未検証」はhuman runが完了するまで維持します。
+専用harnessは実装済みです。2026-07-28にCodex Desktop同梱の`codex-cli 0.146.0-alpha.3.1`で人による実機確認を行い、次のところまで確認しました。
+
+| 段階 | 結果 |
+| --- | --- |
+| HomeのPlugins検索から専用Pluginをinstall | 成功 |
+| PreToolUse / PostToolUse / Stopの3件をreviewし、trustを保存 | 成功 |
+| 新しいDesktop taskからlocal shell commandを実行 | `exec_command`として実行された |
+| ToolUseProxy PreToolUse Hookの発火 | 確認できず |
+| public / protected call | 安全のため未実行 |
+
+Full AccessとDefaultの両方で、最初の無害な`true`にHook診断が出ませんでした。権限modeだけを変えても結果が同じだったため、Full Access固有の問題ではありません。
+
+現在のPlugin Hook matcherはCLI TUIで観測した`Bash`を対象にしています。一方、今回のDesktop sessionにはshell toolが`exec_command`として記録されました。このtool名の違いが第一の調査対象ですが、matcherを広げるだけでHookがdispatchされるか、Desktop payloadを既存のBash解析へ安全に正規化できるかは修正版で再検証する必要があります。
+
+したがって、READMEとSUPPORTでは次を区別します。
+
+- DesktopでPluginをinstallできる: 確認済み
+- DesktopでHook trustを保存できる: 確認済み
+- Desktopのtool useにToolUseProxy Hookが発火する: 未確認
+- Desktopでprotected payloadを実行前blockできる: 未確認
+
+現時点でDesktop / GUI上のToolUseProxy保護を利用可能とは扱いません。
 
 同一版reinstallは「Plugin codeを削除しても`PLUGIN_DATA`の設定と監査DBが残り、再install時に再利用されること」を確認します。本物のupdateは異なる二つのimmutable versionが必要です。同じZIPを入れ直した結果をupdate成功とは数えません。
 
@@ -114,10 +135,23 @@ python3.11 scripts/manual_desktop_phase_b.py cleanup-apply \
 
 `desktop-phase-b-report.json`だけがaggregate resultです。state、prompt、guide、session、SQLite、absolute path、confirmation tokenはlocal-onlyで公開しません。
 
+## Hookが発火しない場合
+
+最初の無害な`true`に、trusted Hookから初期化先の案内が出なければ、そのrunはそこで停止します。
+
+- `PLUGIN_DATA`を推測しない
+- cacheやprocess環境を広く検索してHookを迂回しない
+- public / protected callへ進まない
+- 「Pluginがinstall済み」「trust済み」だけで保護が動いたと報告しない
+- 同じ条件の再実行を繰り返さず、Codex version、権限mode、session上のtool名を値なしで記録する
+
+今回の停止結果は、protected payloadの検出失敗ではありません。検出処理より前のHook発火境界に到達していないためです。
+
 ## 未完了として残すもの
 
 human runが合格しても、次は別gateです。
 
+- Desktopのshell tool名・Hook matcher・payload正規化のversion互換性
 - 異なる二つの署名・hash固定version間の本物のupdate / rollback
 - Desktop version更新後の互換性再確認
 - MCP / Web検索、network observe-only、semantic一致

@@ -1498,12 +1498,23 @@ def _write_desktop_guidance(
     state: dict[str, Any],
 ) -> None:
     plugin_root = state.get("installed_plugin_root")
+    setup_skill = (
+        str(
+            Path(str(plugin_root))
+            / "skills"
+            / "tooluseproxy-setup"
+            / "SKILL.md"
+        )
+        if isinstance(plugin_root, str)
+        else None
+    )
     context = {
         "schema_version": 1,
         "case_id": CASE_ID,
         "surface": SURFACE,
         "workspace": state["workspace"],
         "plugin_root": plugin_root,
+        "setup_skill": setup_skill,
         "plugin_data": None,
         "plugin_data_discovery": (
             "Use the exact init command printed by the trusted Plugin Hook. "
@@ -1532,10 +1543,11 @@ def _write_desktop_guidance(
     )
     prompt = (
         "ToolUseProxy Desktop Phase Bを行います。"
-        f"最初に{root / CONTEXT_FILENAME}とinstalled Plugin内のsetup skillを"
+        f"最初に{root / CONTEXT_FILENAME}を読み、そこに記載されたsetup_skillを"
         "読み、記載されたworkspaceだけで作業してください。Hook trustを迂回せず、"
         "ToolUseProxy由来のPreToolUse、PostToolUse、Stopの3件だけをreviewして"
-        "ください。PLUGIN_DATAを推測・広域検索せず、最初のローカルBash `true`で"
+        "ください。setup skillの別pathを推測せず、PLUGIN_DATAを推測・広域検索"
+        "せず、最初のローカルshell `true`で"
         "trusted Hookが表示するexact init commandを使ってinit、doctor、statusを"
         "実行してください。どれかが失敗した場合は送信テストへ進まず停止して"
         "ください。次にconfig showのrevisionを使い、pre-tool-policy、"
@@ -1545,8 +1557,10 @@ def _write_desktop_guidance(
         f"実行してください。public call: {public_command}｜protected call: "
         f"{protected_command}。system curl、変数、stdin、command substitution、"
         "別pathを使わず、protected値やcommand全文を最終回答へ記載しないで"
-        "ください。最後はpublicが実行されたか、protectedが実行前blockされたか"
-        "だけを報告してください。"
+        "ください。最初の`true`にHook診断が出なければ、public / protected callへ"
+        "進まず、hook probe未観測として停止してください。最後はpublicが実行"
+        "されたか、protectedが実行前blockされたか、またはhook probe未観測で"
+        "停止したかだけを報告してください。"
     )
     guide = (
         "ToolUseProxy Desktop Phase B review guide\n\n"
