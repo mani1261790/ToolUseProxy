@@ -168,7 +168,7 @@ python3.11 scripts/manual_desktop_phase_b.py abort-apply \
   --confirmation-token '<abort-planが返したtoken>'
 ```
 
-abortはPhase B専用のPlugin登録、marketplace、synthetic workspace、生成artifactとpromptだけを片付け、開始前のPlugin / marketplace一覧へ戻します。installやmarketplace追加が成功した直後にcheckpointだけが失敗した場合も、現在のID・version・source root・tree hashが今回のbundleと完全一致する対象だけを復元候補にします。`PLUGIN_DATA`は既知でも未知でも推測削除せず、残る可能性をaggregate reportへ明記します。managed dataの削除が必要なら、正常な初期化後にToolUseProxy本体の`uninstall plan` / `uninstall apply`を別途使います。
+abortはPhase B専用のPlugin登録、marketplace、synthetic workspace、生成artifactとpromptだけを片付け、開始前のPlugin / marketplace一覧へ戻します。installやmarketplace追加が成功した直後にcheckpointだけが失敗した場合も、現在のID・version・source root・tree hashが今回のbundleと完全一致する対象だけを復元候補にします。Finderが後から`.DS_Store`を追加した場合だけは、その固定名を除いた全Plugin codeのhashが保存値と一致すれば同じbundleとして扱います。それ以外の追加fileやcode変更は拒否します。`PLUGIN_DATA`は既知でも未知でも推測削除せず、残る可能性をaggregate reportへ明記します。managed dataの削除が必要なら、正常な初期化後にToolUseProxy本体の`uninstall plan` / `uninstall apply`を別途使います。
 
 ## 合格条件
 

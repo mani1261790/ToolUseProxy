@@ -2620,8 +2620,10 @@ def _assert_abort_phase_b_identity(
             or source_root is None
             or not expected_root_matches
             or not storage_valid
-            or _tree_sha256(source_root)
-            != state.get("plugin_tree_sha256")
+            or not _abort_plugin_tree_matches(
+                source_root,
+                expected_sha256=state.get("plugin_tree_sha256"),
+            )
         ):
             raise DesktopPhaseBFailure(
                 "abort_plan",
@@ -2660,6 +2662,21 @@ def _assert_abort_phase_b_identity(
             "abort_plan",
             "unexpected_phase_b_marketplace",
         )
+
+
+def _abort_plugin_tree_matches(
+    plugin_root: Path,
+    *,
+    expected_sha256: object,
+) -> bool:
+    if not isinstance(expected_sha256, str):
+        return False
+    if _tree_sha256(plugin_root) == expected_sha256:
+        return True
+    return (
+        _tree_sha256_ignoring_macos_metadata(plugin_root)
+        == expected_sha256
+    )
 
 
 def _abort_state_matches(
@@ -4614,13 +4631,32 @@ def _text_sha256(value: str) -> str:
 
 
 def _tree_sha256(root: Path) -> str:
+    return _tree_sha256_filtered(root, ignored_names=frozenset())
+
+
+def _tree_sha256_ignoring_macos_metadata(root: Path) -> str:
+    return _tree_sha256_filtered(
+        root,
+        ignored_names=frozenset({".DS_Store"}),
+    )
+
+
+def _tree_sha256_filtered(
+    root: Path,
+    *,
+    ignored_names: frozenset[str],
+) -> str:
     if not root.is_dir() or root.is_symlink():
         raise DesktopPhaseBFailure("tree_hash", "tree_unavailable")
     digest = hashlib.sha256()
     files = sorted(
         path
         for path in root.rglob("*")
-        if path.is_file() and not path.is_symlink()
+        if (
+            path.is_file()
+            and not path.is_symlink()
+            and path.name not in ignored_names
+        )
     )
     for path in files:
         relative = path.relative_to(root).as_posix().encode()

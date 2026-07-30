@@ -32,6 +32,7 @@ from scripts.manual_desktop_phase_b import (
     SURFACE,
     SYNTHETIC_CANARY,
     DesktopPhaseBFailure,
+    _abort_plugin_tree_matches,
     _assert_no_tooluseproxy_collision,
     _desktop_plugin_hooks,
     _desktop_phase_b_test_version,
@@ -643,6 +644,8 @@ class ManualDesktopPhaseBTest(unittest.TestCase):
                 "VALUE = 1\n",
                 encoding="utf-8",
             )
+            plugin_tree_sha256 = _tree_sha256(plugin_root)
+            (plugin_root / ".DS_Store").write_bytes(b"finder metadata")
             workspace = root / "workspace"
             workspace.mkdir()
             before = self._shared_state()
@@ -668,7 +671,7 @@ class ManualDesktopPhaseBTest(unittest.TestCase):
                     "workspace": str(workspace),
                     "marketplace": str(marketplace),
                     "plugin_version": "0.1.0-alpha.3",
-                    "plugin_tree_sha256": _tree_sha256(plugin_root),
+                    "plugin_tree_sha256": plugin_tree_sha256,
                     "installed_plugin_root": None,
                 }
             )
@@ -689,6 +692,30 @@ class ManualDesktopPhaseBTest(unittest.TestCase):
                 expected_stage="abort_planned",
             )
             self.assertTrue(persisted["abort_plugin_expected"])
+
+    def test_abort_tree_fallback_ignores_only_macos_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            plugin_root = Path(temporary_directory) / "plugin"
+            plugin_root.mkdir()
+            code = plugin_root / "plugin.py"
+            code.write_text("VALUE = 1\n", encoding="utf-8")
+            expected = _tree_sha256(plugin_root)
+            (plugin_root / ".DS_Store").write_bytes(b"finder metadata")
+
+            self.assertTrue(
+                _abort_plugin_tree_matches(
+                    plugin_root,
+                    expected_sha256=expected,
+                )
+            )
+
+            code.write_text("VALUE = 2\n", encoding="utf-8")
+            self.assertFalse(
+                _abort_plugin_tree_matches(
+                    plugin_root,
+                    expected_sha256=expected,
+                )
+            )
 
     def test_cleanup_plan_binds_inventory_and_apply_uses_reviewed_token(
         self,
