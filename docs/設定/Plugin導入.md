@@ -139,6 +139,11 @@ Full Accessは必須条件ではありません。1コマンド単位の昇格�
 許可するmodeを明示的に選びます。`Operation not permitted`の後に別pathや広い
 commandへ自動的に変えて再試行しません。
 
+なお、agentが`require_escalated`相当を付けたことと、hostが個別承認UIを表示した
+ことは同じではありません。Codex DesktopがUIを表示せず実行する場合もあるため、
+検証時はsessionのtool argumentsと、人が実際に見た画面を別々に記録します。
+承認UIが出なかった場合は「理解した」と推測せず、`not shown`として扱います。
+
 続けて、同じworkspaceとdata directoryを指定して診断します。
 
 ```bash
