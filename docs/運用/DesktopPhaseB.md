@@ -4,7 +4,7 @@ Issue [#53](https://github.com/mani1261790/ToolUseProxy/issues/53)では、CLI T
 
 ## 現在地
 
-専用harnessは実装済みです。2026-07-28と2026-07-30にCodex Desktop同梱の`codex-cli 0.146.0-alpha.3.1`で人による実機確認を行いました。7月30日の最新runまでの結果は次のとおりです。
+専用harnessは実装済みです。2026-07-28と2026-07-30にCodex Desktop同梱の`codex-cli 0.146.0-alpha.3.1`で人による実機確認を行いました。7月30日の停止原因を再調査した結果は次のとおりです。
 
 | 段階 | 結果 |
 | --- | --- |
@@ -14,9 +14,8 @@ Issue [#53](https://github.com/mani1261790/ToolUseProxy/issues/53)では、CLI T
 | Desktop task履歴上のlocal shell名 | `exec_command` |
 | Hook matcherに渡るcanonical tool名 | `Bash` |
 | 最新定義のtrusted Hook probe | PreToolUse / PostToolUse / Stop各1回、余分なtool call 0件で成功 |
-| `workspace-write`でのPlugin data操作 | 10コマンドすべてに1回限定の`require_escalated`と日本語の理由を付けて発行 |
-| 個別commandの承認UI | 表示されず、ユーザー入力なしで進行。理由はsession記録だけでは断定しない |
-| public / protected call | publicは実行、protectedはPreToolUseが実行前block |
+| `workspace-write`での`init` | agentが権限昇格を要求せず通常実行し、workspace外のPlugin dataで`Operation not permitted`となり安全停止 |
+| public / protected call | 安全のため未実行 |
 
 以前は、Full AccessとDefaultの両方で最初の無害な`true`に初期化案内が表示されなかったことから、DesktopのHook dispatcherまで到達していない可能性を疑いました。しかし、これは根拠として不十分でした。PreToolUse / PostToolUseは定義変更によってtrustが無効になっており、正常終了したHookのstderrはDesktop画面へ表示されないためです。
 
@@ -24,9 +23,7 @@ Desktopのtask履歴で使われる`exec_command`は、Hook matcherのtool名で
 
 最新runでは、3 Hookの`trustStatus`と定義hashを機械確認した後、値を含まない専用markerでPreToolUse、PostToolUse、Stop各1件を確認できました。markerはrun固有nonceでhash化したsession IDとtool-use IDに結び付き、別taskのHook eventでは合格できません。UIに診断が表示されるかどうかは合格条件にしていません。
 
-以前のrunは、`workspace-write`のDesktop taskからworkspace外の`PLUGIN_DATA`へ通常権限で`init`し、OS拒否で停止しました。setup skillとPhase B promptを直した最新runでは、Plugin dataを実際に触る10コマンドすべてが`require_escalated`、空でない日本語の理由、再利用可能な`prefix_rule`なしで発行され、初期化からprotected blockまで完走しました。
-
-ただし、これは「各コマンドに一時的な権限昇格要求が付いた」という機械確認です。今回のDesktopでは個別承認UI自体が表示されず、ユーザーは入力していません。Desktopが自動的に許可した理由はsession記録だけでは断定できません。harnessは今後、承認UIが見えた場合の`yes` / `no`に加えて`not-shown`を記録し、`ux_status: not_observed`として機能合格と分離します。
+次の停止点はsandbox境界です。`workspace-write`のDesktop taskからworkspace外の`PLUGIN_DATA`へ`init`するには、対象commandだけの明示的な権限昇格が必要です。setup skillは説明文を作りましたが、exec toolを昇格要求付きで呼ぶ指示がなく、通常権限で実行してOS拒否となりました。Full Accessを前提にせず、最初から1コマンド単位の承認を要求するようskillとPhase B promptを修正し、更新版で再検証します。
 
 Plugin自体も、未初期化・Python不足・runtime起動失敗・内部policy評価失敗などの非active診断をstderrではなくCodexが解釈できるphase別JSON stdoutで返すように改修しました。例外本文とHook inputは診断へ含めません。これは利用者へ次の操作を伝えるための改善です。一方、dispatchの合否は引き続きmarkerで判定し、診断が画面に見えたかどうかとは分離します。
 
@@ -40,10 +37,9 @@ Plugin自体も、未初期化・Python不足・runtime起動失敗・内部poli
 - DesktopのHook matcherでshellを表すcanonical名: `Bash`
 - Desktopのtool useにToolUseProxy Hookが発火する: trusted probeで確認済み
 - workspace外のPlugin dataへ通常権限で初期化できる: できない。1コマンド単位の権限昇格が必要
-- Desktopでprotected payloadを実行前blockできる: 確認済み
-- 個別commandの承認UIを人が理解できる: 今回はUIが表示されず未観測
+- Desktopでprotected payloadを実行前blockできる: 未確認
 
-Desktop / GUI上で今回のfile-backed exact-only保護が動くことは確認できました。ただし、承認UX、disable / remove、同一版reinstallを終えるまではDesktop Phase B全体の合格とは扱いません。
+現時点でDesktop / GUI上のToolUseProxy保護を利用可能とは扱いません。
 
 同一版reinstallは「Plugin codeを削除しても`PLUGIN_DATA`の設定と監査DBが残り、再install時に再利用されること」を確認します。本物のupdateは異なる二つのimmutable versionが必要です。同じZIPを入れ直した結果をupdate成功とは数えません。
 
@@ -116,14 +112,12 @@ task完了後、理解度を本人の評価で記録します。
 python3.11 scripts/manual_desktop_phase_b.py verify \
   --root /Users/mani/.tooluseproxy-dogfood/desktop-phase-b-YYYYMMDD \
   --hook-review-understood yes \
-  --command-approval-understood not-shown \
+  --command-approval-understood yes \
   --block-explanation-understood yes \
   --additional-question-count 0
 ```
 
-承認UIが表示された場合だけ`yes`または`no`を指定し、表示されなければ`not-shown`を指定します。`not-shown`は理解できなかったという意味ではなく、評価対象のUIが観測できなかったという意味です。
-
-`functional_status`と`ux_status`は別判定です。機能が正しくても説明を理解できなければ`needs_followup`、承認UIが表示されなければ`not_observed`となり、コマンドの終了codeは1です。この場合も証跡は保存され、次のlifecycle確認へ進めますが、Phase B全体の合格とは扱いません。
+`functional_status`と`ux_status`は別判定です。機能が正しくても説明を理解できなければ`needs_followup`となり、コマンドの終了codeは1です。この場合も証跡は保存され、次のlifecycle確認へ進めますが、Phase B合格とは扱いません。
 
 Desktopで専用Pluginをdisableしてから確認します。
 
@@ -192,7 +186,6 @@ abortはPhase B専用のPlugin登録、marketplace、synthetic workspace、生�
 - workspace runtime設定3項目が有効で、remove / reinstall後も同じrevision
 - assistant、全tool input、tool output、shadow tableへのraw synthetic value露出が0
 - 指定したread / setup / public / protected call以外のtool callが0
-- Plugin dataを触る全CLI callが1回限定の権限昇格、空でない理由、再利用可能なprefixなし
 - Hook review、command承認、block説明を人が理解できる
 - Phase B Plugin / marketplace / managed dataを削除し、開始前の無関係な一覧を保持する
 
