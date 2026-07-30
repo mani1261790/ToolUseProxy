@@ -4,24 +4,26 @@ Issue [#53](https://github.com/mani1261790/ToolUseProxy/issues/53)では、CLI T
 
 ## 現在地
 
-専用harnessは実装済みです。2026-07-28にCodex Desktop同梱の`codex-cli 0.146.0-alpha.3.1`で人による実機確認を行い、次のところまで確認しました。
+専用harnessは実装済みです。2026-07-28と2026-07-30にCodex Desktop同梱の`codex-cli 0.146.0-alpha.3.1`で人による実機確認を行い、次のところまで確認しました。
 
 | 段階 | 結果 |
 | --- | --- |
 | HomeのPlugins検索から専用Pluginをinstall | 成功 |
 | PreToolUse / PostToolUse / Stopの3件をreviewし、trustを保存 | 成功 |
 | 新しいDesktop taskからlocal shell commandを実行 | `exec_command`として実行された |
+| `exec_command` matcherと`tool_input.cmd`互換レイヤーを含むPluginをinstall | 成功 |
 | ToolUseProxy PreToolUse Hookの発火 | 確認できず |
 | public / protected call | 安全のため未実行 |
 
-Full AccessとDefaultの両方で、最初の無害な`true`にHook診断が出ませんでした。権限modeだけを変えても結果が同じだったため、Full Access固有の問題ではありません。
+Full AccessとDefaultの両方で、最初の無害な`true`にHook診断が出ませんでした。さらに2026-07-30のfresh runでは、`exec_command`を明示的に含むHook定義がinstallされ、Desktop sessionでも`true`のtool名が`exec_command`であることを確認しましたが、Hook診断は観測されませんでした。権限modeやmatcher名だけでは説明できず、DesktopのPlugin Hook dispatcherがこのtool実行経路を呼び出すかが次の確認点です。
 
-現在のPlugin Hook matcherはCLI TUIで観測した`Bash`を対象にしています。一方、今回のDesktop sessionにはshell toolが`exec_command`として記録されました。このtool名の違いが第一の調査対象ですが、matcherを広げるだけでHookがdispatchされるか、Desktop payloadを既存のBash解析へ安全に正規化できるかは修正版で再検証する必要があります。
+ToolUseProxy側では、CLI TUIの`Bash`に加えてDesktop sessionの`exec_command`をmatcherへ追加し、`tool_input.cmd`を既存のshell解析へ渡す互換レイヤーを実装しました。単体・結合テストでは同じpayloadがexternal sinkとfile-backed exact matchへ到達します。ただし実DesktopではHook processの起動自体を確認できていないため、この互換レイヤーより手前で停止しています。次は最小の診断Hookを使ってCodex Desktop側のdispatch可否を切り分け、必要ならCodex側へ再現手順を報告します。
 
 したがって、READMEとSUPPORTでは次を区別します。
 
 - DesktopでPluginをinstallできる: 確認済み
 - DesktopでHook trustを保存できる: 確認済み
+- Desktop用matcherとpayloadをToolUseProxy内部で解析できる: 自動テストで確認済み
 - Desktopのtool useにToolUseProxy Hookが発火する: 未確認
 - Desktopでprotected payloadを実行前blockできる: 未確認
 

@@ -78,7 +78,7 @@ sh "<PLUGIN_ROOT>/hooks/run_cli.sh" doctor --workspace "$PWD" --data-dir "<PLUGI
 sh "<PLUGIN_ROOT>/hooks/run_cli.sh" status --workspace "$PWD" --data-dir "<PLUGIN_DATA>"
 ```
 
-Hook trustで確認する内容、更新チャンネルと固定tagの違い、protected sourceの候補発見・承認、rollback、削除時のdata保持を含む完全な手順は[Plugin導入](docs/設定/Plugin導入.md)にあります。Codex Desktopはlocal Pluginを利用できるsurfaceで、[Desktop専用Phase B harness](docs/運用/DesktopPhaseB.md)まで実装済みです。2026-07-28の実機確認では、Pluginの検索・installと3 Hookのtrust保存には成功しましたが、Desktopが記録したshell tool名は`exec_command`で、`Bash`を対象とする現在のHookは発火しませんでした。Full AccessとDefaultの両方で同じ結果です。したがって、現時点ではDesktop / GUI上のToolUseProxy保護を利用可能とは扱いません。Codex CLIのMarketplace更新と保護動作は実機検証済みです。
+Hook trustで確認する内容、更新チャンネルと固定tagの違い、protected sourceの候補発見・承認、rollback、削除時のdata保持を含む完全な手順は[Plugin導入](docs/設定/Plugin導入.md)にあります。Codex Desktopはlocal Pluginを利用できるsurfaceで、[Desktop専用Phase B harness](docs/運用/DesktopPhaseB.md)まで実装済みです。2026-07-30の実機再検証では、Pluginの検索・install、3 Hookのtrust保存、`exec_command`を含むmatcherと`cmd` payload互換レイヤーの読み込みまでは確認しました。しかし、Desktopが`true`を`exec_command`として実行してもHook診断は発生しませんでした。matcherだけでなくDesktop側のPlugin Hook dispatch境界を確認する必要があります。したがって、現時点ではDesktop / GUI上のToolUseProxy保護を利用可能とは扱いません。Codex CLIのMarketplace更新と保護動作は実機検証済みです。
 
 ## 安全側の既定値
 

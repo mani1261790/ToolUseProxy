@@ -20,14 +20,18 @@ plain language:
 Explain that command Hooks run outside the Codex sandbox with the user's local
 permissions. ToolUseProxy's Hook implementation writes to its local data
 directory and does not make network requests, but the user must still verify
-the source is `Plugin - tooluseproxy@tooluseproxy`, exactly three ToolUseProxy
-Hooks are present, and every ToolUseProxy command points inside the expected
-installed Plugin root. In an isolated manual Phase B harness, those three must
-be the only pending Hooks. Outside that harness, if unrelated Hooks are also
-pending, do not use `Trust all`; review the three ToolUseProxy entries
-individually. Explain that trust applies to the exact definitions currently
-shown and changed definitions require review again. If any ToolUseProxy source,
-count, or path differs, tell the user not to trust and stop setup.
+the Plugin source, exactly three ToolUseProxy Hooks, and every ToolUseProxy
+command path. For a normal installation, the expected source is
+`Plugin - tooluseproxy@tooluseproxy`. If a manual Phase B context declares
+`expected_plugin_id`, use `Plugin - <expected_plugin_id>` instead; never replace
+that context-specific ID with the normal installation ID. Every command must
+point inside the expected installed Plugin root. In an isolated manual Phase B
+harness, those three must be the only pending Hooks. Outside that harness, if
+unrelated Hooks are also pending, do not use `Trust all`; review the three
+ToolUseProxy entries individually. Explain that trust applies to the exact
+definitions currently shown and changed definitions require review again. If
+any ToolUseProxy source, count, or path differs, tell the user not to trust and
+stop setup.
 
 Before requesting permission to run any `run_cli.sh` or `run_cli.cmd` command,
 explain the operation in plain language. The explanation must let a person
@@ -78,10 +82,12 @@ shell command to decide.
 2. Confirm that the ToolUseProxy Plugin Hook definition has been reviewed and trusted in Codex. Do not bypass Hook trust.
 3. If the workspace belongs to a manual Phase B harness and the prompt names a
    mode `0600` `phase-b-context.json`, read that exact file first. Use only its
-   `workspace`, `plugin_root`, `plugin_data`, and `test_sink` paths. Do not use
-   `ps`, inspect parent-process environments, or broadly search outside the
-   workspace to rediscover those paths. If the context conflicts with the
-   current workspace or a Hook diagnostic, stop and explain the mismatch.
+   `workspace`, `plugin_root`, `plugin_data`, and `test_sink` as filesystem
+   paths. Use `expected_plugin_id`, `expected_plugin_version`, `setup_skill`,
+   and `surface` only as identity and workflow metadata. Do not use `ps`,
+   inspect parent-process environments, or broadly search outside the workspace
+   to rediscover those paths. If the context conflicts with the current
+   workspace or a Hook diagnostic, stop and explain the mismatch.
    Otherwise, resolve the absolute Plugin root from this skill's location; it
    is two directories above `skills/tooluseproxy-setup`. On macOS/Linux, run
    every command through `sh "<PLUGIN_ROOT>/hooks/run_cli.sh"`. The general

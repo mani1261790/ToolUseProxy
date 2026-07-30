@@ -36,7 +36,7 @@ Codex CLIはPluginごとの自動更新commandではなく、登録済みGit mar
 
 `public-alpha`はreview済み・CI green・公開済みのalpha release commitだけへfast-forwardする保護branchです。開発途中の`main`を実行元にはしません。更新は自動ではなく、ユーザーがcommandを実行した時だけ行われます。
 
-Codex Desktopはrepositoryの`.agents/plugins/marketplace.json`を使うlocal Plugin workflowの対象です。ただし、「DesktopがPluginをinstallできること」と「ToolUseProxyの3 Hook、承認表示、PreToolUse block、更新後のdata保持がCLIと同じ条件で動くこと」は別の主張です。2026-07-28の実機確認ではinstallと3 Hookのtrust保存までは成功しましたが、Desktopの`exec_command`実行にHookが発火せず、送信テスト前に停止しました。現時点で実機保証する保護動作とinstall / update手順はCodex CLIに限定します。
+Codex Desktopはrepositoryの`.agents/plugins/marketplace.json`を使うlocal Plugin workflowの対象です。ただし、「DesktopがPluginをinstallできること」と「ToolUseProxyの3 Hook、承認表示、PreToolUse block、更新後のdata保持がCLIと同じ条件で動くこと」は別の主張です。2026-07-30の実機再検証ではinstallと3 Hookのtrust保存に加え、`exec_command` matcherと`tool_input.cmd`互換レイヤーを含むPluginが読み込まれたことを確認しました。それでもDesktopの`exec_command`実行でHook診断は観測されず、送信テスト前に停止しました。現時点で実機保証する保護動作とinstall / update手順はCodex CLIに限定します。
 
 SQLite schemaはv4のままなので、alpha.3への更新だけを理由にDB migrationや`init`を再実行する必要はありません。将来SQLite schema更新を伴うreleaseで`doctor` / `status`がupgrade必要と報告した場合だけ、Hook外で明示的な`init --codex`を実行します。更新後は新しいHook definitionをreview・trustして新しいtaskを開始し、`doctor` / `status`を実行してください。
 

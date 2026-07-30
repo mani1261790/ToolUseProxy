@@ -166,6 +166,21 @@ class DesktopToolCompatibilityTest(unittest.TestCase):
             self.assertIn("setup_skill", prompt)
             self.assertIn("hook probe未観測", prompt)
 
+    def test_setup_skill_uses_phase_b_plugin_identity(self) -> None:
+        skill = (
+            Path(__file__).parents[1]
+            / "skills"
+            / "tooluseproxy-setup"
+            / "SKILL.md"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("expected_plugin_id", skill)
+        self.assertIn("Plugin - <expected_plugin_id>", skill)
+        self.assertIn(
+            "never replace\nthat context-specific ID",
+            skill,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
