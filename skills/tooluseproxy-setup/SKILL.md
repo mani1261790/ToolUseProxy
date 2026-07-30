@@ -78,6 +78,19 @@ verification in the summary. Tell the user to reject if the command differs from
 the named operation or scope. The user must not need to understand the long
 shell command to decide.
 
+If a `run_cli.sh` or `run_cli.cmd` command must read or write `PLUGIN_DATA`
+outside the current sandbox's writable roots, do not first try the command with
+ordinary sandbox permissions. Request the host's explicit, one-command
+out-of-sandbox approval for that exact command. On an `exec_command` interface
+that exposes `sandbox_permissions`, set it to `require_escalated` and provide a
+short plain-language justification consistent with the permission summary.
+Do not treat Full Access as a prerequisite and do not use it merely to avoid a
+per-command decision. If the current surface offers no per-command escalation,
+stop before execution and explain that the user must either run the exact
+reviewed command themselves or deliberately choose a surface/mode that grants
+the required local path. Never retry an `Operation not permitted` result with a
+broader command or different path.
+
 1. Confirm that the current directory is the intended workspace root.
 2. Confirm that the ToolUseProxy Plugin Hook definition has been reviewed and trusted in Codex. Do not bypass Hook trust.
 3. If the workspace belongs to a manual Phase B harness and the prompt names a

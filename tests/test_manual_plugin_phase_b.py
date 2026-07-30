@@ -253,6 +253,12 @@ class ManualPluginPhaseBTest(unittest.TestCase):
         self.assertIn("long `sh ...`", skill)
         self.assertIn("self-contained", skill)
         self.assertIn("exact command arguments", skill)
+        self.assertIn("do not first try the command with", skill)
+        self.assertIn("sandbox_permissions", skill)
+        self.assertIn("require_escalated", skill)
+        self.assertIn("Do not treat Full Access as a prerequisite", skill)
+        self.assertIn("offers no per-command escalation", skill)
+        self.assertIn("Never retry an `Operation not permitted`", skill)
         self.assertNotIn(
             "説明済みの操作をinstalled Pluginから実行する",
             skill,

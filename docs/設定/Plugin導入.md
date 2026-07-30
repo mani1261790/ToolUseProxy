@@ -130,6 +130,15 @@ sh "<PLUGIN_ROOT>/hooks/run_cli.sh" init --codex --data-dir "<PLUGIN_DATA>"
 - `protected_sources.json`がない場合だけ、schema v2の空manifestをatomicに作る
 - 既存の有効なmanifestは変更しない
 
+`PLUGIN_DATA`は通常workspace外にあります。Codexが
+`workspace-write`で動いている場合、coding agentはこのcommandを通常権限で先に
+試してはいけません。対象commandだけに対するsandbox外実行の承認を要求し、
+`exec_command`に`require_escalated`相当の機構があるsurfaceではそれを使います。
+Full Accessは必須条件ではありません。1コマンド単位の昇格手段がないsurfaceでは
+実行前に停止し、利用者が確認済みcommandを自分で実行するか、必要なlocal pathを
+許可するmodeを明示的に選びます。`Operation not permitted`の後に別pathや広い
+commandへ自動的に変えて再試行しません。
+
 続けて、同じworkspaceとdata directoryを指定して診断します。
 
 ```bash

@@ -55,6 +55,7 @@ from scripts.manual_desktop_phase_b import (
     _remove_phase_b_tree,
     _shared_state_matches,
     _tree_sha256,
+    _write_desktop_guidance,
     _write_state,
     apply_abort,
     apply_cleanup,
@@ -89,6 +90,41 @@ class ManualDesktopPhaseBTest(unittest.TestCase):
                 nonce="fedcba987654",
             ),
         )
+
+    def test_desktop_prompt_requires_per_command_sandbox_escalation(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory).resolve()
+            root.mkdir(exist_ok=True)
+            workspace = root / "workspace"
+            plugin_root = root / "plugin"
+            plugin_data = root / "plugin-data"
+            marketplace = root / "marketplace"
+            workspace.mkdir()
+            plugin_root.mkdir()
+            marketplace.mkdir()
+            _write_desktop_guidance(
+                root,
+                {
+                    "workspace": str(workspace),
+                    "hook_plugin_root": str(plugin_root),
+                    "marketplace": str(marketplace),
+                    "installed_plugin_root": str(plugin_root),
+                    "plugin_data": str(plugin_data),
+                    "fake_sink": str(root / "bin" / "curl"),
+                    "plugin_version": "0.1.0-alpha.3.desktop-phase-b.test",
+                },
+            )
+
+            prompt = (root / "desktop-phase-b-prompt.txt").read_text(
+                encoding="utf-8"
+            )
+
+            self.assertIn("通常のsandbox権限で先に試さず", prompt)
+            self.assertIn("1コマンド限定の明示的な権限昇格", prompt)
+            self.assertIn("Full Accessを前提にせず", prompt)
+            self.assertIn("権限昇格手段がない場合は実行せず停止", prompt)
 
     def test_hooks_list_requires_exact_trusted_phase_b_hooks(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

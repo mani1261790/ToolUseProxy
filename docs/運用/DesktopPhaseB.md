@@ -13,14 +13,17 @@ Issue [#53](https://github.com/mani1261790/ToolUseProxy/issues/53)では、CLI T
 | その後に変更したPreToolUse / PostToolUse定義 | `trustStatus: modified`。再reviewされておらず実行対象外 |
 | Desktop task履歴上のlocal shell名 | `exec_command` |
 | Hook matcherに渡るcanonical tool名 | `Bash` |
-| ToolUseProxy Hookの実行結果 | 以前のrunからは判定できない |
+| 最新定義のtrusted Hook probe | PreToolUse / PostToolUse / Stop各1回、余分なtool call 0件で成功 |
+| `workspace-write`での`init` | agentが権限昇格を要求せず通常実行し、workspace外のPlugin dataで`Operation not permitted`となり安全停止 |
 | public / protected call | 安全のため未実行 |
 
 以前は、Full AccessとDefaultの両方で最初の無害な`true`に初期化案内が表示されなかったことから、DesktopのHook dispatcherまで到達していない可能性を疑いました。しかし、これは根拠として不十分でした。PreToolUse / PostToolUseは定義変更によってtrustが無効になっており、正常終了したHookのstderrはDesktop画面へ表示されないためです。
 
 Desktopのtask履歴で使われる`exec_command`は、Hook matcherのtool名ではありません。CodexがPreToolUse / PostToolUseへ渡すcanonical名はDesktopでも`Bash`です。したがってPluginのmatcherは`Bash`を使い、`exec_command`へ変更しません。ToolUseProxy内部の互換レイヤーはsession由来payloadなどの解析用として保持しますが、Hookを有効にする条件とは分けます。
 
-次のrunでは、3 Hookの`trustStatus`がすべて`trusted`で定義hashが変わっていないことを先に機械確認します。その後、値を含まない専用markerでPreToolUse 1件、PostToolUse 1件、Stop 1件以上を確認します。markerはrun固有nonceでhash化したsession IDとtool-use IDに結び付け、別taskのHook eventを混ぜて合格できないようにします。probe中も、指定workspaceの単独`true`以外は通常のToolUseProxy Hookへstdinを保存せずそのまま渡します。UIにstderrが表示されることは合格条件にしません。このprobeを通過した場合だけ、public / protected callへ進みます。
+最新runでは、3 Hookの`trustStatus`と定義hashを機械確認した後、値を含まない専用markerでPreToolUse、PostToolUse、Stop各1件を確認できました。markerはrun固有nonceでhash化したsession IDとtool-use IDに結び付き、別taskのHook eventでは合格できません。UIに診断が表示されるかどうかは合格条件にしていません。
+
+次の停止点はsandbox境界です。`workspace-write`のDesktop taskからworkspace外の`PLUGIN_DATA`へ`init`するには、対象commandだけの明示的な権限昇格が必要です。setup skillは説明文を作りましたが、exec toolを昇格要求付きで呼ぶ指示がなく、通常権限で実行してOS拒否となりました。Full Accessを前提にせず、最初から1コマンド単位の承認を要求するようskillとPhase B promptを修正し、更新版で再検証します。
 
 Plugin自体も、未初期化・Python不足・runtime起動失敗・内部policy評価失敗などの非active診断をstderrではなくCodexが解釈できるphase別JSON stdoutで返すように改修しました。例外本文とHook inputは診断へ含めません。これは利用者へ次の操作を伝えるための改善です。一方、dispatchの合否は引き続きmarkerで判定し、診断が画面に見えたかどうかとは分離します。
 
@@ -32,7 +35,8 @@ Plugin自体も、未初期化・Python不足・runtime起動失敗・内部poli
 - Desktopで最初のHook reviewを行える: 確認済み
 - Hook定義を変更すると再reviewが必要になる: 確認済み
 - DesktopのHook matcherでshellを表すcanonical名: `Bash`
-- Desktopのtool useにToolUseProxy Hookが発火する: 最新定義を再trustしたprobeで再確認が必要
+- Desktopのtool useにToolUseProxy Hookが発火する: trusted probeで確認済み
+- workspace外のPlugin dataへ通常権限で初期化できる: できない。1コマンド単位の権限昇格が必要
 - Desktopでprotected payloadを実行前blockできる: 未確認
 
 現時点でDesktop / GUI上のToolUseProxy保護を利用可能とは扱いません。
@@ -49,6 +53,7 @@ Plugin自体も、未初期化・Python不足・runtime起動失敗・内部poli
 - Hook trustは迂回せず、Desktopで人が3件をreviewする
 - PreToolUse / PostToolUse / Stopの`trustStatus`がすべて`trusted`であることを、送信テスト前に機械確認する。`modified` / `untrusted`なら停止する
 - Desktop task履歴の`exec_command`をHook matcher名として流用せず、canonicalな`Bash`定義を確認する
+- workspace外のPlugin dataへ書くsetup commandは通常権限で先に試さず、exactな1コマンドだけのsandbox昇格を要求する
 - test sinkはnetworkへ接続せず、synthetic workspace内のmarkerだけを更新する
 - verifierはDesktop session、Hook定義hash、dispatch marker、Hook DB、side-effect marker、Plugin source / versionを相互照合する
 - verifierは全tool inputも確認し、指定context / setup skillのread、exactなToolUseProxy setup command、public / protected test call以外のWeb・MCP・編集・任意shellが1件でもあれば不合格にする
