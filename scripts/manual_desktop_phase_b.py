@@ -52,6 +52,8 @@ SYNTHETIC_CANARY = "DESKTOP.PHASE.B.CANARY.91F7A4C2"
 MAX_SESSION_FILES = 32
 MAX_SESSION_BYTES = 16 * 1024 * 1024
 MAX_SESSION_RECORDS = 50_000
+MAX_SESSION_META_RECORDS = 8
+MAX_SESSION_META_LINE_BYTES = 256 * 1024
 COMMAND_TIMEOUT_SECONDS = 180
 EXPECTED_RUNTIME_SETTINGS = {
     "pre-tool-policy": True,
@@ -3563,6 +3565,8 @@ def _read_desktop_probe_session(
         )
     matches: list[dict[str, Any]] = []
     for path in changed:
+        if not _session_meta_matches_workspace(path, workspace=workspace):
+            continue
         if path.stat().st_size > MAX_SESSION_BYTES:
             raise DesktopPhaseBFailure(
                 "checkpoint_hook_probe",
@@ -3595,6 +3599,36 @@ def _read_desktop_probe_session(
         **match,
         "relative_paths": [match["relative_path"]],
     }
+
+
+def _session_meta_matches_workspace(
+    path: Path,
+    *,
+    workspace: Path,
+) -> bool:
+    try:
+        with path.open("rb") as handle:
+            for _ in range(MAX_SESSION_META_RECORDS):
+                line = handle.readline(MAX_SESSION_META_LINE_BYTES + 1)
+                if not line or len(line) > MAX_SESSION_META_LINE_BYTES:
+                    return False
+                try:
+                    record = json.loads(line)
+                except (UnicodeError, json.JSONDecodeError):
+                    continue
+                if record.get("type") != "session_meta":
+                    continue
+                payload = record.get("payload")
+                return (
+                    isinstance(payload, dict)
+                    and payload.get("cwd") == str(workspace)
+                )
+    except OSError as error:
+        raise DesktopPhaseBFailure(
+            "checkpoint_hook_probe",
+            "session_read_failed",
+        ) from error
+    return False
 
 
 def _parse_probe_session(

@@ -47,6 +47,7 @@ from scripts.manual_desktop_phase_b import (
     _phase_b_delta_matches,
     _plugin_data_from_session,
     _probe_id_hash,
+    _read_desktop_probe_session,
     _read_hook_evidence,
     _read_probe_event_counts,
     _read_probe_plugin_data,
@@ -1367,6 +1368,105 @@ class ManualDesktopPhaseBTest(unittest.TestCase):
                     "output_raw_value_absent": True,
                 },
                 parsed,
+            )
+
+    def test_probe_session_ignores_oversized_unrelated_session(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory).resolve()
+            codex_home = root / "codex-home"
+            session_root = codex_home / "sessions"
+            workspace = root / "workspace"
+            unrelated_workspace = root / "unrelated"
+            session_root.mkdir(parents=True)
+            workspace.mkdir()
+            unrelated_workspace.mkdir()
+            unrelated = session_root / "unrelated.jsonl"
+            unrelated.write_text(
+                json.dumps(
+                    {
+                        "type": "session_meta",
+                        "payload": {
+                            "id": "unrelated",
+                            "cwd": str(unrelated_workspace),
+                        },
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            with unrelated.open("ab") as handle:
+                handle.truncate(16 * 1024 * 1024 + 1)
+            probe = session_root / "probe.jsonl"
+            records = [
+                {
+                    "type": "session_meta",
+                    "payload": {
+                        "id": "probe-session",
+                        "cwd": str(workspace),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "exec_command",
+                        "call_id": "probe",
+                        "arguments": json.dumps({"cmd": "true"}),
+                    },
+                },
+                self._function_output("probe", "completed"),
+            ]
+            probe.write_text(
+                "".join(
+                    json.dumps(record) + "\n" for record in records
+                ),
+                encoding="utf-8",
+            )
+
+            parsed = _read_desktop_probe_session(
+                codex_home,
+                before={},
+                workspace=workspace,
+            )
+
+            self.assertEqual("probe-session", parsed["session_id"])
+            self.assertEqual(["probe.jsonl"], parsed["relative_paths"])
+
+    def test_probe_session_rejects_oversized_matching_session(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory).resolve()
+            codex_home = root / "codex-home"
+            session_root = codex_home / "sessions"
+            workspace = root / "workspace"
+            session_root.mkdir(parents=True)
+            workspace.mkdir()
+            probe = session_root / "probe.jsonl"
+            probe.write_text(
+                json.dumps(
+                    {
+                        "type": "session_meta",
+                        "payload": {
+                            "id": "probe-session",
+                            "cwd": str(workspace),
+                        },
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            with probe.open("ab") as handle:
+                handle.truncate(16 * 1024 * 1024 + 1)
+
+            with self.assertRaises(DesktopPhaseBFailure) as raised:
+                _read_desktop_probe_session(
+                    codex_home,
+                    before={},
+                    workspace=workspace,
+                )
+
+            self.assertEqual(
+                "session_size_exceeded",
+                raised.exception.code,
             )
 
     def test_collision_check_refuses_any_tooluseproxy_plugin(self) -> None:
