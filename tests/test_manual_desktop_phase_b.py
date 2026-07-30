@@ -64,6 +64,14 @@ from scripts.manual_desktop_phase_b import (
 
 
 class ManualDesktopPhaseBTest(unittest.TestCase):
+    def setUp(self) -> None:
+        desktop_binary = patch(
+            "scripts.manual_desktop_phase_b._desktop_codex_binary",
+            return_value=Path("/mock/Codex.app/Contents/Resources/codex"),
+        )
+        desktop_binary.start()
+        self.addCleanup(desktop_binary.stop)
+
     def test_phase_b_version_is_unique_semver_prerelease(self) -> None:
         self.assertEqual(
             "0.1.0-alpha.3.desktop-phase-b.012345abcdef",
