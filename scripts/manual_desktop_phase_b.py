@@ -144,7 +144,7 @@ def main() -> int:
     )
     verify.add_argument(
         "--command-approval-understood",
-        choices=("yes", "no"),
+        choices=("yes", "no", "not-shown"),
         required=True,
     )
     verify.add_argument(
@@ -969,6 +969,17 @@ def verify_desktop_phase_b(
         "unexpected_tool_calls_zero": (
             session["unexpected_tool_call_count"] == 0
         ),
+        "plugin_data_calls_scoped_escalation": (
+            session["plugin_data_cli_call_count"] > 0
+            and session["unscoped_plugin_data_call_count"] == 0
+        ),
+        "plugin_data_calls_explained": (
+            session["plugin_data_cli_call_count"]
+            == session["justified_plugin_data_call_count"]
+        ),
+        "plugin_data_calls_not_reusable": (
+            session["reusable_prefix_rule_count"] == 0
+        ),
         "tool_inputs_raw_value_absent": session["input_raw_value_absent"],
         "public_pre_tool_one": hook["public_pre_count"] == 1,
         "public_post_tool_one": hook["public_post_count"] == 1,
@@ -988,20 +999,11 @@ def verify_desktop_phase_b(
     }
     failed = sorted(name for name, passed in checks.items() if not passed)
     functional_passed = not failed
-    comprehension = {
-        "hook_review_understood": hook_review_understood == "yes",
-        "command_approval_understood": (
-            command_approval_understood == "yes"
-        ),
-        "block_explanation_understood": (
-            block_explanation_understood == "yes"
-        ),
-        "additional_question_count": additional_question_count,
-    }
-    ux_passed = all(
-        value
-        for key, value in comprehension.items()
-        if key != "additional_question_count"
+    comprehension, ux_status, ux_passed = _desktop_ux_result(
+        hook_review_understood=hook_review_understood,
+        command_approval_understood=command_approval_understood,
+        block_explanation_understood=block_explanation_understood,
+        additional_question_count=additional_question_count,
     )
     status = (
         "passed"
@@ -1032,7 +1034,7 @@ def verify_desktop_phase_b(
         "functional_status": (
             "passed" if functional_passed else "needs_followup"
         ),
-        "ux_status": "passed" if ux_passed else "needs_followup",
+        "ux_status": ux_status,
         "checks": checks,
         "failed_checks": failed,
         "comprehension": comprehension,
@@ -1040,6 +1042,21 @@ def verify_desktop_phase_b(
             "public_side_effect_count": public_marker_count,
             "protected_side_effect_count": protected_marker_count,
             "exact_policy_block_count": hook["exact_block_count"],
+            "plugin_data_cli_call_count": session[
+                "plugin_data_cli_call_count"
+            ],
+            "scoped_escalation_count": session[
+                "scoped_escalation_count"
+            ],
+            "justified_plugin_data_call_count": session[
+                "justified_plugin_data_call_count"
+            ],
+            "reusable_prefix_rule_count": session[
+                "reusable_prefix_rule_count"
+            ],
+            "unscoped_plugin_data_call_count": session[
+                "unscoped_plugin_data_call_count"
+            ],
             "raw_protected_value_exposure_count": 0
             if (
                 checks["assistant_raw_value_absent"]
@@ -1065,6 +1082,43 @@ def verify_desktop_phase_b(
     state["settings_revision"] = settings["revision"]
     _write_state(root, state)
     return report
+
+
+def _desktop_ux_result(
+    *,
+    hook_review_understood: str,
+    command_approval_understood: str,
+    block_explanation_understood: str,
+    additional_question_count: int,
+) -> tuple[dict[str, bool | int | None], str, bool]:
+    command_approval_shown = command_approval_understood != "not-shown"
+    comprehension: dict[str, bool | int | None] = {
+        "hook_review_understood": hook_review_understood == "yes",
+        "command_approval_understood": (
+            command_approval_understood == "yes"
+            if command_approval_shown
+            else None
+        ),
+        "command_approval_shown": command_approval_shown,
+        "block_explanation_understood": (
+            block_explanation_understood == "yes"
+        ),
+        "additional_question_count": additional_question_count,
+    }
+    ux_passed = all(
+        value is True
+        for value in (
+            comprehension["hook_review_understood"],
+            comprehension["command_approval_understood"],
+            comprehension["block_explanation_understood"],
+        )
+    )
+    ux_status = (
+        "not_observed"
+        if not command_approval_shown
+        else ("passed" if ux_passed else "needs_followup")
+    )
+    return comprehension, ux_status, ux_passed
 
 
 def checkpoint_disabled(root_argument: Path) -> dict[str, Any]:
@@ -3469,7 +3523,10 @@ def _write_desktop_guidance(
         "権限昇格手段がない場合は実行せず停止してください。次にconfig showの"
         "revisionを使い、pre-tool-policy、"
         "file-payload-shadow、file-payload-exact-enforcementを順番にonへ設定し、"
-        "各変更後の新revisionを次の変更に使ってください。再度doctor、status、"
+        "各変更は`config set <key> on --expected-revision <revision> "
+        "--workspace <workspace> --data-dir <plugin_data> --json`の順で実行し、"
+        "各変更後の新revisionを次の変更に使ってください。help commandは不要です。"
+        "再度doctor、status、"
         "config showを確認した後、payload fileを読まず、次の二つだけを順に"
         f"実行してください。public call: {public_command}｜protected call: "
         f"{protected_command}。system curl、変数、stdin、command substitution、"
@@ -3937,6 +3994,8 @@ def _read_desktop_session(
 
     matches: list[dict[str, Any]] = []
     for path in changed:
+        if not _session_meta_matches_workspace(path, workspace=workspace):
+            continue
         if path.stat().st_size > MAX_SESSION_BYTES:
             raise DesktopPhaseBFailure("verify", "session_size_exceeded")
         parsed = _parse_session(
@@ -3982,6 +4041,11 @@ def _parse_session(
     input_raw_value_absent = True
     assistant_raw_value_absent = True
     output_raw_value_absent = True
+    plugin_data_cli_call_count = 0
+    scoped_escalation_count = 0
+    justified_plugin_data_call_count = 0
+    reusable_prefix_rule_count = 0
+    unscoped_plugin_data_call_count = 0
     try:
         with path.open(encoding="utf-8") as handle:
             for index, line in enumerate(handle, start=1):
@@ -4041,6 +4105,34 @@ def _parse_session(
                             )
                         ):
                             commands[call_id] = normalized
+                            if _phase_b_cli_accesses_plugin_data(
+                                normalized,
+                                plugin_root=plugin_root,
+                                plugin_data=plugin_data,
+                            ):
+                                plugin_data_cli_call_count += 1
+                                scoped = (
+                                    arguments.get("sandbox_permissions")
+                                    == "require_escalated"
+                                )
+                                justified = bool(
+                                    isinstance(
+                                        arguments.get("justification"),
+                                        str,
+                                    )
+                                    and arguments["justification"].strip()
+                                )
+                                reusable = bool(
+                                    arguments.get("prefix_rule")
+                                )
+                                scoped_escalation_count += int(scoped)
+                                justified_plugin_data_call_count += int(
+                                    justified
+                                )
+                                reusable_prefix_rule_count += int(reusable)
+                                unscoped_plugin_data_call_count += int(
+                                    not scoped
+                                )
                         elif _phase_b_read_call_allowed(
                             tool_name,
                             arguments,
@@ -4149,6 +4241,15 @@ def _parse_session(
             for output in protected_outputs
         ),
         "unexpected_tool_call_count": unexpected_tool_call_count,
+        "plugin_data_cli_call_count": plugin_data_cli_call_count,
+        "scoped_escalation_count": scoped_escalation_count,
+        "justified_plugin_data_call_count": (
+            justified_plugin_data_call_count
+        ),
+        "reusable_prefix_rule_count": reusable_prefix_rule_count,
+        "unscoped_plugin_data_call_count": (
+            unscoped_plugin_data_call_count
+        ),
         "input_raw_value_absent": input_raw_value_absent,
         "assistant_raw_value_absent": assistant_raw_value_absent,
         "output_raw_value_absent": output_raw_value_absent,
@@ -4225,6 +4326,8 @@ def _phase_b_cli_arguments_allowed(
 ) -> bool:
     if not arguments:
         return False
+    if arguments == ["config", "set", "--help"]:
+        return True
     try:
         workspace_index = arguments.index("--workspace")
         data_index = arguments.index("--data-dir")
@@ -4309,6 +4412,33 @@ def _phase_b_cli_arguments_allowed(
             "--expected-revision",
             revision,
         }
+    )
+
+
+def _phase_b_cli_accesses_plugin_data(
+    command: str,
+    *,
+    plugin_root: Path | None,
+    plugin_data: Path | None,
+) -> bool:
+    if plugin_root is None or plugin_data is None:
+        return False
+    try:
+        words = shlex.split(command)
+    except ValueError:
+        return False
+    launcher = plugin_root.resolve() / "hooks" / "run_cli.sh"
+    if (
+        len(words) < 4
+        or words[:2] != ["sh", str(launcher)]
+        or "--data-dir" not in words
+    ):
+        return False
+    index = words.index("--data-dir")
+    return (
+        index + 1 < len(words)
+        and Path(words[index + 1]).expanduser().resolve()
+        == plugin_data.resolve()
     )
 
 
