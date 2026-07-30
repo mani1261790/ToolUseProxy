@@ -36,7 +36,7 @@ Codex CLIはPluginごとの自動更新commandではなく、登録済みGit mar
 
 `public-alpha`はreview済み・CI green・公開済みのalpha release commitだけへfast-forwardする保護branchです。開発途中の`main`を実行元にはしません。更新は自動ではなく、ユーザーがcommandを実行した時だけ行われます。
 
-Codex Desktopはrepositoryの`.agents/plugins/marketplace.json`を使うlocal Plugin workflowの対象です。ただし、「DesktopがPluginをinstallできること」と「ToolUseProxyの3 Hook、承認表示、PreToolUse block、更新後のdata保持がCLIと同じ条件で動くこと」は別の主張です。2026-07-30の実機再検証ではinstallと3 Hookのtrust保存に加え、`exec_command` matcherと`tool_input.cmd`互換レイヤーを含むPluginが読み込まれたことを確認しました。それでもDesktopの`exec_command`実行でHook診断は観測されず、送信テスト前に停止しました。現時点で実機保証する保護動作とinstall / update手順はCodex CLIに限定します。
+Codex Desktopはrepositoryの`.agents/plugins/marketplace.json`を使うlocal Plugin workflowの対象です。ただし、「DesktopがPluginをinstallできること」と「ToolUseProxyの3 Hook、PreToolUse block、更新後のdata保持がCLIと同じ条件で動くこと」は別の主張です。2026-07-30の実機runでは、定義変更後のPreToolUse / PostToolUseが`trustStatus: modified`のままで、実行可能な`trusted`状態ではありませんでした。Desktop task履歴のshell名`exec_command`もHook matcher名ではなく、Hook APIのcanonical名は`Bash`です。さらに正常終了したHookのstderrはDesktop画面へ表示されないため、案内が見えないことだけでは発火を判断できません。最新定義3件の再trustとmarker / Hook DBによる再検証が終わるまで、実機保証する保護動作とinstall / update手順はCodex CLIに限定します。hosted Web SearchもPreToolUse / PostToolUse Hookの対象外です。
 
 SQLite schemaはv4のままなので、alpha.3への更新だけを理由にDB migrationや`init`を再実行する必要はありません。将来SQLite schema更新を伴うreleaseで`doctor` / `status`がupgrade必要と報告した場合だけ、Hook外で明示的な`init --codex`を実行します。更新後は新しいHook definitionをreview・trustして新しいtaskを開始し、`doctor` / `status`を実行してください。
 
@@ -55,7 +55,7 @@ versionを固定する場合は最初のcommandを次に置き換えます。
 codex plugin marketplace add mani1261790/ToolUseProxy --ref v0.1.0-alpha.3
 ```
 
-install後はCodexが表示するPlugin source、version、3つのHook definitionを確認してtrustします。ToolUseProxyはこのreviewを迂回しません。release artifact、checksum、SBOM、release notesは[`v0.1.0-alpha.3`](https://github.com/mani1261790/ToolUseProxy/releases/tag/v0.1.0-alpha.3)で確認できます。
+install後はCodexが表示するPlugin source、version、3つのHook definitionを確認してtrustします。ToolUseProxyはこのreviewを迂回しません。以前trustしたHookでも、matcher、command、sourceなどの定義が変わると`modified`になり、再reviewが必要です。release artifact、checksum、SBOM、release notesは[`v0.1.0-alpha.3`](https://github.com/mani1261790/ToolUseProxy/releases/tag/v0.1.0-alpha.3)で確認できます。
 
 ### CLIで更新する
 
@@ -112,11 +112,11 @@ codex plugin add tooluseproxy@tooluseproxy
 
 builderはruntime fileを明示的に選び、`.git`、`.github`、tests、内部設計docs、scripts、cache、virtual environment、local DB、legacy Hook entrypointをZIPへ含めません。展開したmarketplace rootにはREADME、support、privacy / security契約、Apache-2.0 LICENSEを含め、install済みPluginにもLICENSEを残します。公開済みZIPを利用する場合はReleaseのSHA256SUMSと照合してください。
 
-installまたはHook定義の更新後は、Codexが示すHook definitionを確認してtrustします。ToolUseProxyはこのreviewを迂回しません。新しいPlugin componentとskillを確実に読み込むため、trust後は新しいtaskを開始します。
+installまたはHook定義の更新後は、Codexが示すHook definitionを確認してtrustします。ToolUseProxyはこのreviewを迂回しません。PreToolUse / PostToolUse / Stopがすべて`trusted`であり、`modified` / `untrusted`が残っていないことを確認してください。新しいPlugin componentとskillを確実に読み込むため、trust後は新しいtaskを開始します。
 
 ## 初期化
 
-Plugin Hookは未初期化DBを検出してもschema migrationやworkspace変更を行わず、fail-openで終了します。その際、`PLUGIN_ROOT`と`PLUGIN_DATA`から作った初期化commandをstderrへ表示します。対象workspaceのrootへ移動し、表示されたcommandを実行してください。形式は次の通りです。
+Plugin Hookは未初期化DBを検出してもschema migrationやworkspace変更を行わず、fail-openで終了します。その際、`PLUGIN_ROOT`と`PLUGIN_DATA`から作った初期化commandを、Codex Hook契約に沿うphase別JSONとしてstdoutへ返します。PreToolUse / PostToolUseでは`additionalContext`、Stopではadvisoryな`systemMessage`を使い、denyや入力書き換えは行いません。Python不足、runtime起動失敗、内部policy評価失敗も同じJSON契約で通知し、例外本文やHook inputは診断へ含めません。以前のstderrだけに出す形式はDesktopで表示されないため廃止しました。ただし、案内の表示自体をdispatch証拠にはせず、Desktopでは[Desktop Phase B](../運用/DesktopPhaseB.md)のtrusted probeが記録したdata pathだけを使います。cacheやprocess環境から`PLUGIN_DATA`を推測しません。案内に含まれるcommandの形式は次の通りです。
 
 ```bash
 sh "<PLUGIN_ROOT>/hooks/run_cli.sh" init --codex --data-dir "<PLUGIN_DATA>"
@@ -292,7 +292,9 @@ pre-release候補で実際のHook trust、agent説明、実tool invocationを検
 ## trustとfailure時の挙動
 
 - 未trustのPlugin HookはCodex側でskipされます
-- Python 3.11が見つからない場合、launcherは理由をstderrへ出してfail-openします
+- 一度trustした定義でも、matcherやcommandなどが変わると`modified`になり、再reviewするまでskipされます
+- Desktopでは正常終了したHookのstderrが画面へ表示されないため、Pluginの非active診断はphase別JSON stdoutを使います。表示の有無だけでは発火を判定しません
+- Python 3.11 / 3.12が見つからない場合も、launcherは同じ非blocking JSONで理由を返してfail-openします
 - DBがない、古い、新しすぎる、不完全な場合、runtime HookはDBを変更せずfail-openします
 - SQLite migrationは`init`だけ、protected source manifestのv1→v2 migrationは明示承認後の`protect migrate apply`だけが行い、通常のPlugin HookはDDL、backfill、manifest migrationを実行しません
 - 壊れたmanifestや未登録workspaceは`doctor/status`でactive扱いにしません

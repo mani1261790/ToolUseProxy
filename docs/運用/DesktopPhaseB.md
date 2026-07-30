@@ -4,27 +4,35 @@ Issue [#53](https://github.com/mani1261790/ToolUseProxy/issues/53)では、CLI T
 
 ## 現在地
 
-専用harnessは実装済みです。2026-07-28と2026-07-30にCodex Desktop同梱の`codex-cli 0.146.0-alpha.3.1`で人による実機確認を行い、次のところまで確認しました。
+専用harnessは実装済みです。2026-07-28と2026-07-30にCodex Desktop同梱の`codex-cli 0.146.0-alpha.3.1`で人による実機確認を行いました。7月30日の停止原因を再調査した結果は次のとおりです。
 
 | 段階 | 結果 |
 | --- | --- |
 | HomeのPlugins検索から専用Pluginをinstall | 成功 |
-| PreToolUse / PostToolUse / Stopの3件をreviewし、trustを保存 | 成功 |
-| 新しいDesktop taskからlocal shell commandを実行 | `exec_command`として実行された |
-| `exec_command` matcherと`tool_input.cmd`互換レイヤーを含むPluginをinstall | 成功 |
-| ToolUseProxy PreToolUse Hookの発火 | 確認できず |
+| 最初のPreToolUse / PostToolUse / Stopをreview | 成功 |
+| その後に変更したPreToolUse / PostToolUse定義 | `trustStatus: modified`。再reviewされておらず実行対象外 |
+| Desktop task履歴上のlocal shell名 | `exec_command` |
+| Hook matcherに渡るcanonical tool名 | `Bash` |
+| ToolUseProxy Hookの実行結果 | 以前のrunからは判定できない |
 | public / protected call | 安全のため未実行 |
 
-Full AccessとDefaultの両方で、最初の無害な`true`にHook診断が出ませんでした。さらに2026-07-30のfresh runでは、`exec_command`を明示的に含むHook定義がinstallされ、Desktop sessionでも`true`のtool名が`exec_command`であることを確認しましたが、Hook診断は観測されませんでした。権限modeやmatcher名だけでは説明できず、DesktopのPlugin Hook dispatcherがこのtool実行経路を呼び出すかが次の確認点です。
+以前は、Full AccessとDefaultの両方で最初の無害な`true`に初期化案内が表示されなかったことから、DesktopのHook dispatcherまで到達していない可能性を疑いました。しかし、これは根拠として不十分でした。PreToolUse / PostToolUseは定義変更によってtrustが無効になっており、正常終了したHookのstderrはDesktop画面へ表示されないためです。
 
-ToolUseProxy側では、CLI TUIの`Bash`に加えてDesktop sessionの`exec_command`をmatcherへ追加し、`tool_input.cmd`を既存のshell解析へ渡す互換レイヤーを実装しました。単体・結合テストでは同じpayloadがexternal sinkとfile-backed exact matchへ到達します。ただし実DesktopではHook processの起動自体を確認できていないため、この互換レイヤーより手前で停止しています。次は最小の診断Hookを使ってCodex Desktop側のdispatch可否を切り分け、必要ならCodex側へ再現手順を報告します。
+Desktopのtask履歴で使われる`exec_command`は、Hook matcherのtool名ではありません。CodexがPreToolUse / PostToolUseへ渡すcanonical名はDesktopでも`Bash`です。したがってPluginのmatcherは`Bash`を使い、`exec_command`へ変更しません。ToolUseProxy内部の互換レイヤーはsession由来payloadなどの解析用として保持しますが、Hookを有効にする条件とは分けます。
+
+次のrunでは、3 Hookの`trustStatus`がすべて`trusted`で定義hashが変わっていないことを先に機械確認します。その後、値を含まない専用markerでPreToolUse 1件、PostToolUse 1件、Stop 1件以上を確認します。markerはrun固有nonceでhash化したsession IDとtool-use IDに結び付け、別taskのHook eventを混ぜて合格できないようにします。probe中も、指定workspaceの単独`true`以外は通常のToolUseProxy Hookへstdinを保存せずそのまま渡します。UIにstderrが表示されることは合格条件にしません。このprobeを通過した場合だけ、public / protected callへ進みます。
+
+Plugin自体も、未初期化・Python不足・runtime起動失敗・内部policy評価失敗などの非active診断をstderrではなくCodexが解釈できるphase別JSON stdoutで返すように改修しました。例外本文とHook inputは診断へ含めません。これは利用者へ次の操作を伝えるための改善です。一方、dispatchの合否は引き続きmarkerで判定し、診断が画面に見えたかどうかとは分離します。
+
+この切り分けは、Desktop同梱版と同じ`rust-v0.146.0-alpha.3.1`のCodex sourceでも確認しました。`exec_command` handlerはHook呼び出し時にcanonical名`Bash`へ変換され、Hook discoveryは`modified`な定義をactive command一覧へ含めません。PreToolUseのcommand HookはstdoutのJSONを応答として読みます。根拠は[exec_command handler](https://github.com/openai/codex/blob/rust-v0.146.0-alpha.3.1/codex-rs/core/src/tools/handlers/unified_exec/exec_command.rs#L408-L418)、[canonical Hook名](https://github.com/openai/codex/blob/rust-v0.146.0-alpha.3.1/codex-rs/core/src/tools/hook_names.rs#L53-L56)、[Hook discovery](https://github.com/openai/codex/blob/rust-v0.146.0-alpha.3.1/codex-rs/hooks/src/engine/discovery.rs#L535-L585)、[PreToolUse実行](https://github.com/openai/codex/blob/rust-v0.146.0-alpha.3.1/codex-rs/hooks/src/events/pre_tool_use.rs#L207-L293)です。
 
 したがって、READMEとSUPPORTでは次を区別します。
 
 - DesktopでPluginをinstallできる: 確認済み
-- DesktopでHook trustを保存できる: 確認済み
-- Desktop用matcherとpayloadをToolUseProxy内部で解析できる: 自動テストで確認済み
-- Desktopのtool useにToolUseProxy Hookが発火する: 未確認
+- Desktopで最初のHook reviewを行える: 確認済み
+- Hook定義を変更すると再reviewが必要になる: 確認済み
+- DesktopのHook matcherでshellを表すcanonical名: `Bash`
+- Desktopのtool useにToolUseProxy Hookが発火する: 最新定義を再trustしたprobeで再確認が必要
 - Desktopでprotected payloadを実行前blockできる: 未確認
 
 現時点でDesktop / GUI上のToolUseProxy保護を利用可能とは扱いません。
@@ -36,11 +44,16 @@ ToolUseProxy側では、CLI TUIの`Bash`に加えてDesktop sessionの`exec_comm
 - 最初の`plan`は共有`~/.codex`を変更しない
 - ToolUseProxyのPluginまたは同名系marketplaceが既にあれば衝突として停止する
 - 検証用marketplaceは`tooluseproxy-desktop-phase-b`、Plugin IDは`tooluseproxy@tooluseproxy-desktop-phase-b`へ分離する
+- 計測用launcherを加えたbundleにはrunごとの一意なSemVer prereleaseを付け、同じrelease version名の古いDesktop cacheを再利用しない
 - 共有configとPlugin / marketplace一覧は変更直前にも比較し、plan後に変化していれば停止する
 - Hook trustは迂回せず、Desktopで人が3件をreviewする
+- PreToolUse / PostToolUse / Stopの`trustStatus`がすべて`trusted`であることを、送信テスト前に機械確認する。`modified` / `untrusted`なら停止する
+- Desktop task履歴の`exec_command`をHook matcher名として流用せず、canonicalな`Bash`定義を確認する
 - test sinkはnetworkへ接続せず、synthetic workspace内のmarkerだけを更新する
-- verifierはDesktop session、Hook DB、side-effect marker、Plugin source / versionを相互照合する
-- cleanupはPhase B専用dataとmarketplaceだけを削除し、無関係なPlugin / marketplaceを保持する
+- verifierはDesktop session、Hook定義hash、dispatch marker、Hook DB、side-effect marker、Plugin source / versionを相互照合する
+- verifierは全tool inputも確認し、指定context / setup skillのread、exactなToolUseProxy setup command、public / protected test call以外のWeb・MCP・編集・任意shellが1件でもあれば不合格にする
+- cleanup-planでmanaged dataの件数・file数・byte数・未管理entry数とexact uninstall tokenを固定し、apply中に別の削除planへ差し替えない
+- cleanupはPhase B専用dataとmarketplaceだけを削除し、未管理dataと無関係なPlugin / marketplaceを保持する。途中失敗時はdata削除前後・marketplace削除前後の保存済み段階から再開する
 
 実secretや普段のworkspaceでは実行しません。rootはrepository外の本人だけが読める絶対pathを使います。
 
@@ -63,14 +76,30 @@ python3.11 scripts/manual_desktop_phase_b.py prepare \
 
 `prepare`が変更するのは、共有Codex configへの専用local marketplace追加だけです。Codex DesktopのHomeから`Plugins`を開き、`ToolUseProxy`を検索します。設定画面の`Plugins`はinstall済み一覧であり、新規installの検索導線ではありません。表示されるsourceとversionがguideに一致するPhase B marketplaceのPluginだけをinstallします。その後、次を実行します。
 
-現行DesktopではPlugin名`ToolUseProxy`とmarketplace表示名`ToolUseProxy Desktop Phase B`が別の検索結果に見える場合があります。install後は画面上の件数だけで判断せず、CLI inventoryが`tooluseproxy@tooluseproxy-desktop-phase-b`の1件だけであることをcheckpointで確定します。local marketplaceはPluginを`~/.codex`へ複製せず、検証rootのsourceを直接参照する場合があります。この場合、removeで消えるのはPlugin登録であり、local source本体は最終cleanupまで保持されます。
+現行DesktopではPlugin名`ToolUseProxy`とmarketplace表示名`ToolUseProxy Desktop Phase B`が別の検索結果に見える場合があります。Phase B版にはrelease versionへrun固有のsuffixを加えたversionが表示されます。install後は画面上の件数だけで判断せず、CLI inventoryが`tooluseproxy@tooluseproxy-desktop-phase-b`の1件だけで、versionがguideと完全一致することをcheckpointで確定します。local marketplaceはPluginを`~/.codex`へ複製せず、検証rootのsourceを直接参照する場合があります。この場合、removeで消えるのはPlugin登録であり、local source本体は最終cleanupまで保持されます。
 
 ```bash
 python3.11 scripts/manual_desktop_phase_b.py checkpoint-installed \
   --root /Users/mani/.tooluseproxy-dogfood/desktop-phase-b-YYYYMMDD
 ```
 
-返された`local_only.task_url`で新しいDesktop taskを開きます。Hook reviewではToolUseProxy由来のPreToolUse、PostToolUse、Stopの3件だけを確認します。source、version、command root、件数が違えばtrustせず停止します。task内では生成済みpromptだけを使い、普段のworkspaceやsystem curlへ置き換えません。
+checkpointが示す3件をCodex DesktopのHook review画面で確認します。ToolUseProxy由来のPreToolUse、PostToolUse、Stopだけを対象にし、source、version、command root、件数が違えばtrustせず停止します。
+
+review後、実際のHook状態を確認します。画面で一度trustを選んだ記憶だけでは進めません。定義変更後の`modified`も未trustとして停止します。
+
+```bash
+python3.11 scripts/manual_desktop_phase_b.py checkpoint-hooks-trusted \
+  --root /Users/mani/.tooluseproxy-dogfood/desktop-phase-b-YYYYMMDD
+```
+
+このcheckpointが返すprobe用taskを開き、生成済みpromptどおり無害な`true`だけを実行します。次のcheckpointは、Desktop画面のstderrではなく、専用launcherが残した値なしmarkerと新しいsessionのhash化IDを照合します。別taskの`true`やStop eventでは合格しません。
+
+```bash
+python3.11 scripts/manual_desktop_phase_b.py checkpoint-hook-probe \
+  --root /Users/mani/.tooluseproxy-dogfood/desktop-phase-b-YYYYMMDD
+```
+
+PreToolUse 1件、PostToolUse 1件、Stop 1件以上、`true` 1件が一致した場合だけ、返された本試験用taskを開きます。probeが失敗した場合はpublic / protected callへ進みません。
 
 task完了後、理解度を本人の評価で記録します。
 
@@ -113,7 +142,7 @@ python3.11 scripts/manual_desktop_phase_b.py checkpoint-final-removed \
   --root /Users/mani/.tooluseproxy-dogfood/desktop-phase-b-YYYYMMDD
 ```
 
-最後に削除対象を先に表示し、別tokenで明示承認します。
+最後に削除対象を先に表示し、別tokenで明示承認します。`cleanup-plan`はこの時点でToolUseProxy本体のvalue-freeなuninstall planも作り、managed entry / file / byte数と未管理entry数、marketplace tree / launcher hashを固定します。`cleanup-apply`は保存済みtokenだけを使い、apply直前にもsource treeとlauncherを再検証します。
 
 ```bash
 python3.11 scripts/manual_desktop_phase_b.py cleanup-plan \
@@ -124,30 +153,51 @@ python3.11 scripts/manual_desktop_phase_b.py cleanup-apply \
   --confirmation-token '<cleanup-planが返したtoken>'
 ```
 
+`cleanup-apply`の途中でprocessやDesktop操作が失敗した場合は、同じrootと同じcleanup tokenで再実行します。harnessはapply直前にもmanaged / unmanaged inventory全体を保存済みplanと比較します。managed dataが既に消えていれば二重削除せず次段階へ進み、marketplaceが既に消えていれば共有inventoryが開始前と一致することを確認して復元処理を続けます。
+
+review後または部分削除後にmanaged inventoryが変わっていれば、その呼び出しでは何も削除せず`cleanup_replan_required`へ移り、残存件数と新しいcleanup tokenを返します。表示された新しいplanを確認し、そのtokenで`cleanup-apply`を再実行してください。未管理entry数が変わっていれば自動replanもせず停止します。新tokenを受け取る前にprocessが終了した場合は、同じrootで`cleanup-plan`を再実行すると、現在の残存planを再照合してtokenだけを安全に再発行します。
+
+`verify`より前に安全停止したrunは、通常のlifecycle cleanupへ進めません。その場合はabort対象を先に確認し、別tokenで明示適用します。
+
+```bash
+python3.11 scripts/manual_desktop_phase_b.py abort-plan \
+  --root /Users/mani/.tooluseproxy-dogfood/desktop-phase-b-YYYYMMDD
+
+python3.11 scripts/manual_desktop_phase_b.py abort-apply \
+  --root /Users/mani/.tooluseproxy-dogfood/desktop-phase-b-YYYYMMDD \
+  --confirmation-token '<abort-planが返したtoken>'
+```
+
+abortはPhase B専用のPlugin登録、marketplace、synthetic workspace、生成artifactとpromptだけを片付け、開始前のPlugin / marketplace一覧へ戻します。installやmarketplace追加が成功した直後にcheckpointだけが失敗した場合も、現在のID・version・source root・tree hashが今回のbundleと完全一致する対象だけを復元候補にします。`PLUGIN_DATA`は既知でも未知でも推測削除せず、残る可能性をaggregate reportへ明記します。managed dataの削除が必要なら、正常な初期化後にToolUseProxy本体の`uninstall plan` / `uninstall apply`を別途使います。
+
 ## 合格条件
 
 - `surface`が`codex_desktop`
+- PreToolUse / PostToolUse / Stopがすべて`trusted`で、probe前後に定義hashが変わらない
+- 無害な`true`のprobeでPreToolUse 1件、PostToolUse 1件、Stop 1件以上
 - public callはPreToolUse、PostToolUse、markerが各1件
 - protected callはPreToolUseとexact blockが各1件、PostToolUseとmarkerが0件
 - file payload shadow observationがpublic / protectedの2件
 - workspace runtime設定3項目が有効で、remove / reinstall後も同じrevision
-- assistant、tool output、shadow tableへのraw synthetic value露出が0
+- assistant、全tool input、tool output、shadow tableへのraw synthetic value露出が0
+- 指定したread / setup / public / protected call以外のtool callが0
 - Hook review、command承認、block説明を人が理解できる
 - Phase B Plugin / marketplace / managed dataを削除し、開始前の無関係な一覧を保持する
 
-`desktop-phase-b-report.json`だけがaggregate resultです。state、prompt、guide、session、SQLite、absolute path、confirmation tokenはlocal-onlyで公開しません。
+`desktop-phase-b-report.json`だけがaggregate resultです。reportにはrelease artifact hashに加え、run固有probeを組み込んだ実際のPlugin tree hashを記録します。state、prompt、guide、session、SQLite、absolute path、confirmation tokenはlocal-onlyで公開しません。
 
-## Hookが発火しない場合
+## Hookを確認できない場合
 
-最初の無害な`true`に、trusted Hookから初期化先の案内が出なければ、そのrunはそこで停止します。
+Desktopでは、正常終了したHookのstderrが画面へ表示されないことがあります。そのため、初期化先の案内が見えないことだけをHook未実行の証拠にしません。`checkpoint-hooks-trusted`と`checkpoint-hook-probe`のどちらかが失敗したrunは、そこで停止します。
 
 - `PLUGIN_DATA`を推測しない
 - cacheやprocess環境を広く検索してHookを迂回しない
 - public / protected callへ進まない
 - 「Pluginがinstall済み」「trust済み」だけで保護が動いたと報告しない
-- 同じ条件の再実行を繰り返さず、Codex version、権限mode、session上のtool名を値なしで記録する
+- `modified`を`trusted`として扱わない
+- 同じ条件の再実行を繰り返さず、Codex version、権限mode、canonical Hook名、trust状態、定義hash、marker件数を値なしで記録する
 
-今回の停止結果は、protected payloadの検出失敗ではありません。検出処理より前のHook発火境界に到達していないためです。
+2026-07-30の停止結果は、protected payloadの検出失敗でもDesktop dispatcherの不具合の証明でもありません。最新のPreToolUse / PostToolUseが再trustされていない状態で、画面に出ないstderrをprobeとしていたため、機能判定に使えないrunです。
 
 ## 未完了として残すもの
 
@@ -156,5 +206,6 @@ human runが合格しても、次は別gateです。
 - Desktopのshell tool名・Hook matcher・payload正規化のversion互換性
 - 異なる二つの署名・hash固定version間の本物のupdate / rollback
 - Desktop version更新後の互換性再確認
-- MCP / Web検索、network observe-only、semantic一致
+- MCP、network observe-only、semantic一致
+- hosted Web Search。現行CodexではPreToolUse / PostToolUse Hookの対象外で、このPhase Bでも遮断を検証しない
 - Linux / Windowsの実surface

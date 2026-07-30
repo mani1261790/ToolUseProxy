@@ -96,11 +96,11 @@ project単位では、trustedなrepositoryの`.codex/hooks.json`へ次のよう�
 `PreToolUse`、`PostToolUse`、`Stop` は Codex が用意している既存イベントです。
 このリポジトリで実装するのは、そこから呼び出される `monitor_pre_tool.py`、`monitor_post_tool.py`、`monitor_stop.py` の中身です。
 
-`matcher`は正規表現です。`PreToolUse`と`PostToolUse`ではtool名に適用されますが、`Stop`ではmatcherがサポートされないため省略します。MCPも観測する場合は、対象serverを絞った`^mcp__<server>__.*$`などのmatcher groupを追加します。Codexはtimeoutを省略すると600秒を使用するため、この軽量Hookでは明示的に5秒へ制限します。commandはsessionの`cwd`で実行され、複数のmatching command hookは並行起動されます。project-local Hookは実行前に定義内容をtrustする必要があります。
+`matcher`は正規表現です。`PreToolUse`と`PostToolUse`ではHook APIのcanonical tool名に適用されますが、`Stop`ではmatcherがサポートされないため省略します。MCPも観測する場合は、対象serverを絞った`^mcp__<server>__.*$`などのmatcher groupを追加します。Codexはtimeoutを省略すると600秒を使用するため、この軽量Hookでは明示的に5秒へ制限します。commandはsessionの`cwd`で実行され、複数のmatching command hookは並行起動されます。project-local Hookは実行前に定義内容をtrustする必要があります。matcherやcommandなどを変更すると、以前のtrustはその新定義へ引き継がれず`modified`になります。再reviewして`trusted`になるまで実行対象として扱いません。
 
-tool名はCodex surfaceとversionの契約です。CLI TUIではshell操作を`Bash`として実Hook観測していますが、Codex Desktop sessionでは同じ種類のlocal shell実行が`exec_command`として記録されました。ToolUseProxyは`Bash + tool_input.command`と`exec_command + tool_input.cmd`を明示的に分けて解析し、raw payloadは書き換えません。2026-07-30の自動テストではDesktop形式のpayloadが既存のshell operation、external sink、file-backed exact policyへ到達することを確認しました。
+tool名は表示面ごとに同じとは限りません。Codex Desktopのtask履歴ではlocal shell実行が`exec_command`として記録されますが、PreToolUse / PostToolUseのmatcherとHook payloadではcanonical名`Bash`を使います。Pluginのmatcherへtask履歴上の`exec_command`をそのまま追加する必要はありません。ToolUseProxyの`exec_command + tool_input.cmd`互換レイヤーは、session由来payloadや互換fixtureの解析用としてraw payloadを変えずに保持します。
 
-一方、同日のCodex Desktop `0.146.0-alpha.3.1`実機runでは、`exec_command`を含むHook定義とtrust記録が存在しても無害な`true`でHook診断が観測されませんでした。これはToolUseProxyのpayload解析より前にあるHook dispatch境界です。Plugin install、trust、matcher一致、内部互換テストだけをDesktop上のHook発火・保護の証拠にはしません。
+2026-07-30のCodex Desktop `0.146.0-alpha.3.1`実機runでは、定義変更後のPreToolUse / PostToolUseが`trustStatus: modified`のままで、実際にはtrust済みではありませんでした。また、正常終了したcommand HookのstderrはDesktop画面へ表示されません。したがって「初期化案内が見えない」だけではHook未実行とは判断できません。現在のlauncher / runtimeは非active診断をphase別JSON stdoutで返しますが、Desktop検証ではUI表示を合格条件にせず、`hooks/list`のtrust状態と定義hashを先に確認し、値を含まないmarkerまたはHook DBでPreToolUse / PostToolUse / Stopを照合します。
 
 ## 置いてあるもの
 
@@ -419,7 +419,7 @@ python3 scripts/cleanup_redaction_audits.py \
 
 SQLiteのforeign key enforcementはprepare専用transaction以外のリポジトリ全体で現在offです。cleanupは`ON DELETE CASCADE`に依存せず、同じtransaction内で`redaction_decision_links`、`redaction_targets`、`redaction_plans`の順に明示削除します。dry-run / executeのJSONは3種類の件数を返します。
 
-native Web SearchはCodex CLI `0.142.5`で`matcher: "*"`を使ってもPreToolUse / PostToolUseに現れなかったため、実行前遮断へは接続していません。Search adapterはsynthetic / imported eventのoffline解析用に残します。
+Codexがhost側で実行するnative / hosted Web Searchは、Codex CLI `0.142.5`で`matcher: "*"`を使ってもPreToolUse / PostToolUseに現れませんでした。したがって現在のToolUseProxy Hookでは観測・実行前遮断できません。Search adapterはsynthetic / imported eventのoffline解析用に残します。
 
 source manifestの基準directoryはeventのcanonical workspace rootです。`protected_sources.json`の相対pathとoperationの相対pathはこのrootに閉じ、実行時cwdはBashなどの相対pathを解決するために別途使います。event、artifact、operation、snapshot、protected source、source chunk、cursor、resource、sink、edge、analysis runは`workspace_id`で分離されます。同じ`session_id`や同じsource設定上の`id`が別workspaceに存在しても混線させません。
 

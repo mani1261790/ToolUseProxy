@@ -23,7 +23,7 @@ from scripts.manual_desktop_phase_b import (
 
 
 class DesktopToolCompatibilityTest(unittest.TestCase):
-    def test_plugin_hooks_match_desktop_exec_command(self) -> None:
+    def test_plugin_hooks_match_canonical_bash_hook_name(self) -> None:
         manifest = json.loads(
             (Path(__file__).parents[1] / "hooks" / "hooks.json").read_text(
                 encoding="utf-8"
@@ -32,7 +32,8 @@ class DesktopToolCompatibilityTest(unittest.TestCase):
 
         for phase in ("PreToolUse", "PostToolUse"):
             matcher = manifest["hooks"][phase][0]["matcher"]
-            self.assertIn("exec_command", matcher)
+            self.assertEqual("^(Bash|apply_patch|mcp__.*)$", matcher)
+            self.assertNotIn("exec_command", matcher)
 
     def test_exec_command_uses_cmd_without_rewriting_raw_payload(self) -> None:
         tool_input = {
@@ -48,7 +49,7 @@ class DesktopToolCompatibilityTest(unittest.TestCase):
         self.assertEqual("bash", pre_tool_adapter("exec_command"))
         self.assertNotIn("command", tool_input)
 
-    def test_shell_command_fields_are_surface_specific(self) -> None:
+    def test_canonical_bash_hook_payload_uses_command_field(self) -> None:
         self.assertEqual(
             "printf cli",
             shell_command_from_input(
@@ -56,16 +57,7 @@ class DesktopToolCompatibilityTest(unittest.TestCase):
                 {"command": "printf cli", "cmd": "ignored"},
             ),
         )
-        self.assertEqual(
-            "printf desktop",
-            shell_command_from_input(
-                "exec_command",
-                {"command": "ignored", "cmd": "printf desktop"},
-            ),
-        )
-        self.assertIsNone(
-            shell_command_from_input("exec_command", {"command": "wrong"})
-        )
+        self.assertEqual("bash", pre_tool_adapter("Bash"))
 
     def test_exec_command_builds_bash_operation_and_http_sink(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -137,13 +129,19 @@ class DesktopToolCompatibilityTest(unittest.TestCase):
                 [sink.sink_type for sink in result.sinks],
             )
 
-    def test_desktop_context_contains_exact_setup_skill_path(self) -> None:
+    def test_desktop_context_uses_active_hook_plugin_root(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
-            plugin_root = root / "installed" / "tooluseproxy"
+            installed_root = root / "marketplace" / "tooluseproxy"
+            hook_root = root / "codex-home" / "plugins" / "cache" / "plugin"
+            plugin_data = (
+                root / "codex-home" / "plugins" / "data" / "tooluseproxy"
+            )
             state = {
                 "workspace": str(root / "workspace"),
-                "installed_plugin_root": str(plugin_root),
+                "installed_plugin_root": str(installed_root),
+                "hook_plugin_root": str(hook_root),
+                "plugin_data": str(plugin_data),
                 "fake_sink": str(root / "bin" / "curl"),
                 "plugin_version": "0.1.0-alpha.3",
             }
@@ -155,16 +153,18 @@ class DesktopToolCompatibilityTest(unittest.TestCase):
             )
             self.assertEqual(
                 str(
-                    plugin_root
+                    hook_root
                     / "skills"
                     / "tooluseproxy-setup"
                     / "SKILL.md"
                 ),
                 context["setup_skill"],
             )
+            self.assertEqual(str(hook_root), context["plugin_root"])
+            self.assertEqual(str(plugin_data), context["plugin_data"])
             prompt = (root / PROMPT_FILENAME).read_text(encoding="utf-8")
             self.assertIn("setup_skill", prompt)
-            self.assertIn("hook probe未観測", prompt)
+            self.assertIn("contextに記録された", prompt)
 
     def test_setup_skill_uses_phase_b_plugin_identity(self) -> None:
         skill = (

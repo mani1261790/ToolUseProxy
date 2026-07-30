@@ -4,7 +4,7 @@ Codexのtool useをローカルで観測し、外部sinkへ送られるpayload�
 
 本プロジェクトは、[SecHack365](https://sechack365.nict.go.jp/)での研究・開発成果物です。
 
-> 現在は`0.1.0-alpha.3` public alphaです。中核機能、再現可能な配布物、Apache-2.0の配布契約、CLI TUIでのfile-backed exact-only enforcement検証は整いましたが、完全なDLPではありません。Codex DesktopではPluginの検索・installとHook trust保存までは確認できましたが、`exec_command`実行時にToolUseProxy Hookが発火せず、保護動作は未確認です。adapter外のnetwork egress、Linux実Codex task、Windows実機も引き続き検証中です。
+> 現在は`0.1.0-alpha.3` public alphaです。中核機能、再現可能な配布物、Apache-2.0の配布契約、CLI TUIでのfile-backed exact-only enforcement検証は整いましたが、完全なDLPではありません。Codex DesktopではPluginの検索・installと最初のHook reviewまでは確認しましたが、定義変更後のPreToolUse / PostToolUseが`modified`のまま再trustされていなかったため、これまでのrunは保護動作の合否を判定できません。adapter外のnetwork egress、hosted Web Search、Linux実Codex task、Windows実機も引き続き検証中です。
 
 - [研究紹介スライド（初めて知る方向け）](https://mani1261790.github.io/ToolUseProxy/slides/tooluseproxy-research.html)
 - [Codex Pluginとして試す](docs/設定/Plugin導入.md)
@@ -47,8 +47,8 @@ ToolUseProxyはLLM内部の状態や因果的な情報流を直接観測する�
 | Plugin化 | alpha.3 | installable package、relocatable Plugin、`PLUGIN_ROOT` / `PLUGIN_DATA`、初期化・診断・traceを実装 |
 | runtime設定 | 実装済み | workspace単位のboolean設定、環境変数override、revision付き更新、値なし監査、Plugin再導入後の保持 |
 | protected source登録 | 明示承認型を実装済み | `scan` / `suggest` → exact proposal → `approve` / `reject` / `ignore`。無承認登録はしない |
-| Public alpha | `0.1.0-alpha.3` | Apache-2.0、checksum / SBOM、archive内部、CI Action、hash-locked build、Git履歴監査、upgrade / rollback、自動dogfoodを完了。CLI TUIのfile-backed shadow / exact-only Phase Bは合格。Desktopはinstall / trustまで確認済みだがHook発火で停止。cross-platform実機、少人数pilotは継続課題 |
-| 外部sink coverage | adapter allowlist | 既知のBash / MCP / Search等を分類。任意programの実network接続を網羅しているわけではなく、実接続との偽陰性率は未測定 |
+| Public alpha | `0.1.0-alpha.3` | Apache-2.0、checksum / SBOM、archive内部、CI Action、hash-locked build、Git履歴監査、upgrade / rollback、自動dogfoodを完了。CLI TUIのfile-backed shadow / exact-only Phase Bは合格。Desktopはinstall済みだが、最新定義の再trustと実Hook probeから再検証が必要。cross-platform実機、少人数pilotは継続課題 |
+| 外部sink coverage | adapter allowlist | 既知のBash / MCP / Search等を分類。任意programの実network接続を網羅せず、hosted Web SearchはPreToolUse / PostToolUse Hookの観測対象外。実接続との偽陰性率は未測定 |
 
 設計全体は[アーキテクチャ概要](docs/設計/アーキテクチャ.md)、詳細な完了範囲と残作業は[実装タスク計画](docs/運用/実装タスク.md)を参照してください。
 
@@ -78,7 +78,7 @@ sh "<PLUGIN_ROOT>/hooks/run_cli.sh" doctor --workspace "$PWD" --data-dir "<PLUGI
 sh "<PLUGIN_ROOT>/hooks/run_cli.sh" status --workspace "$PWD" --data-dir "<PLUGIN_DATA>"
 ```
 
-Hook trustで確認する内容、更新チャンネルと固定tagの違い、protected sourceの候補発見・承認、rollback、削除時のdata保持を含む完全な手順は[Plugin導入](docs/設定/Plugin導入.md)にあります。Codex Desktopはlocal Pluginを利用できるsurfaceで、[Desktop専用Phase B harness](docs/運用/DesktopPhaseB.md)まで実装済みです。2026-07-30の実機再検証では、Pluginの検索・install、3 Hookのtrust保存、`exec_command`を含むmatcherと`cmd` payload互換レイヤーの読み込みまでは確認しました。しかし、Desktopが`true`を`exec_command`として実行してもHook診断は発生しませんでした。matcherだけでなくDesktop側のPlugin Hook dispatch境界を確認する必要があります。したがって、現時点ではDesktop / GUI上のToolUseProxy保護を利用可能とは扱いません。Codex CLIのMarketplace更新と保護動作は実機検証済みです。
+Hook trustで確認する内容、更新チャンネルと固定tagの違い、protected sourceの候補発見・承認、rollback、削除時のdata保持を含む完全な手順は[Plugin導入](docs/設定/Plugin導入.md)にあります。Codex Desktopはlocal Pluginを利用できるsurfaceで、[Desktop専用Phase B harness](docs/運用/DesktopPhaseB.md)まで実装済みです。2026-07-30のrunを再調査すると、定義変更後のPreToolUse / PostToolUseは`trustStatus: modified`で、実行可能な`trusted`状態ではありませんでした。また、Desktopのtask履歴ではlocal shellが`exec_command`と記録されますが、Hook matcherに渡るcanonical tool名は`Bash`です。さらに、正常終了したHookのstderrはDesktop画面へ表示されないため、「初期化案内が見えない」だけではHook未実行と判断できません。最新定義3件のtrust、値を含まないmarkerによるPre / Post / Stop probe、public allow / protected blockを順に再確認するまで、Desktop / GUI上の保護を利用可能とは扱いません。Codex CLIのMarketplace更新と保護動作は実機検証済みです。
 
 ## 安全側の既定値
 
@@ -109,7 +109,7 @@ Sink-first比較評価では、direct lexical、resolved lexical、任意のloca
 
 優先順位の正本は[実装タスク計画](docs/運用/実装タスク.md)とGitHub Issues / Projectです。
 
-1. [#53](https://github.com/mani1261790/ToolUseProxy/issues/53): Codex Desktopの`exec_command`とPlugin Hookの互換性を修正・再検証し、public allow / protected block、update / removeまで完走する
+1. [#53](https://github.com/mani1261790/ToolUseProxy/issues/53): Codex Desktopで最新Hook定義を再trustし、UI表示に依存しないHook probeからpublic allow / protected block、update / removeまで完走する
 2. [#54](https://github.com/mani1261790/ToolUseProxy/issues/54): adapter分類と実network egressをobserve-onlyで突き合わせ、外部sink判定の偽陰性を測る
 3. [#55](https://github.com/mani1261790/ToolUseProxy/issues/55): Auditログを人間がlabelし、active learning・クラスタリング・rule miningで未知patternの調査を効率化する
 4. [#38](https://github.com/mani1261790/ToolUseProxy/issues/38)でGit pushのoutgoing objectとbranch / worktree / 複数人開発を評価する

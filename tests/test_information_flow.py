@@ -859,7 +859,7 @@ class InformationFlowTest(unittest.TestCase):
             operation.outcome_evidence,
         )
         self.assertEqual([], self.store.list_resource_snapshots_for_session("session-1"))
-        self.assertIn("RuntimeError", stderr.getvalue())
+        self.assertIn("post_tool_snapshot_failed", stderr.getvalue())
         self.assertNotIn(SECRET, stderr.getvalue())
 
     def test_post_cwd_mismatch_cannot_capture_another_workspace(self) -> None:
@@ -9739,9 +9739,16 @@ class InformationFlowTest(unittest.TestCase):
             exit_code = run_hook("pre_tool_use")
 
         self.assertEqual(0, exit_code)
-        self.assertEqual("", stdout.getvalue())
-        self.assertIn("RuntimeError", stderr.getvalue())
+        output = json.loads(stdout.getvalue())
+        hook_output = output["hookSpecificOutput"]
+        self.assertEqual("PreToolUse", hook_output["hookEventName"])
+        self.assertIn(
+            "pre_tool_policy_failed",
+            hook_output["additionalContext"],
+        )
+        self.assertEqual("", stderr.getvalue())
         self.assertNotIn(SECRET, stderr.getvalue())
+        self.assertNotIn(SECRET, stdout.getvalue())
 
     def test_post_redaction_confirmation_runs_after_event_and_fails_soft(self) -> None:
         payload = {
@@ -9774,10 +9781,16 @@ class InformationFlowTest(unittest.TestCase):
             exit_code = run_hook("post_tool_use")
 
         self.assertEqual(0, exit_code)
-        self.assertEqual("", stdout.getvalue())
-        self.assertIn("post-redaction confirmation", stderr.getvalue())
-        self.assertIn("RuntimeError", stderr.getvalue())
+        output = json.loads(stdout.getvalue())
+        hook_output = output["hookSpecificOutput"]
+        self.assertEqual("PostToolUse", hook_output["hookEventName"])
+        self.assertIn(
+            "post_redaction_confirmation_failed",
+            hook_output["additionalContext"],
+        )
+        self.assertEqual("", stderr.getvalue())
         self.assertNotIn(SECRET, stderr.getvalue())
+        self.assertNotIn(SECRET, stdout.getvalue())
         with sqlite3.connect(self.db_path) as connection:
             stored = connection.execute(
                 """
@@ -9818,9 +9831,11 @@ class InformationFlowTest(unittest.TestCase):
             exit_code = run_hook("stop")
 
         self.assertEqual(0, exit_code)
-        self.assertEqual("", stdout.getvalue())
-        self.assertIn("RuntimeError", stderr.getvalue())
+        output = json.loads(stdout.getvalue())
+        self.assertIn("stop_policy_failed", output["systemMessage"])
+        self.assertEqual("", stderr.getvalue())
         self.assertNotIn(SECRET, stderr.getvalue())
+        self.assertNotIn(SECRET, stdout.getvalue())
 
     def test_configured_workspace_policy_blocks_pre_and_stop_from_nested_cwd(
         self,
