@@ -2329,7 +2329,10 @@ def _desktop_plugin_hooks(
             hook_root != installed_plugin_root
             and not hook_root.is_relative_to(codex_home)
         )
-        or _tree_sha256(hook_root) != expected_tree_sha256
+        or not _plugin_tree_matches_expected(
+            hook_root,
+            expected_sha256=expected_tree_sha256,
+        )
     ):
         raise DesktopPhaseBFailure(
             "hook_inventory",
@@ -2669,12 +2672,23 @@ def _abort_plugin_tree_matches(
     *,
     expected_sha256: object,
 ) -> bool:
+    return _plugin_tree_matches_expected(
+        plugin_root,
+        expected_sha256=expected_sha256,
+    )
+
+
+def _plugin_tree_matches_expected(
+    plugin_root: Path,
+    *,
+    expected_sha256: object,
+) -> bool:
     if not isinstance(expected_sha256, str):
         return False
     if _tree_sha256(plugin_root) == expected_sha256:
         return True
     return (
-        _tree_sha256_ignoring_macos_metadata(plugin_root)
+        _tree_sha256_ignoring_generated_metadata(plugin_root)
         == expected_sha256
     )
 
@@ -4634,10 +4648,11 @@ def _tree_sha256(root: Path) -> str:
     return _tree_sha256_filtered(root, ignored_names=frozenset())
 
 
-def _tree_sha256_ignoring_macos_metadata(root: Path) -> str:
+def _tree_sha256_ignoring_generated_metadata(root: Path) -> str:
     return _tree_sha256_filtered(
         root,
         ignored_names=frozenset({".DS_Store"}),
+        ignored_directory_names=frozenset({"__pycache__"}),
     )
 
 
@@ -4645,6 +4660,7 @@ def _tree_sha256_filtered(
     root: Path,
     *,
     ignored_names: frozenset[str],
+    ignored_directory_names: frozenset[str] = frozenset(),
 ) -> str:
     if not root.is_dir() or root.is_symlink():
         raise DesktopPhaseBFailure("tree_hash", "tree_unavailable")
@@ -4656,6 +4672,10 @@ def _tree_sha256_filtered(
             path.is_file()
             and not path.is_symlink()
             and path.name not in ignored_names
+            and not any(
+                part in ignored_directory_names
+                for part in path.relative_to(root).parts[:-1]
+            )
         )
     )
     for path in files:
