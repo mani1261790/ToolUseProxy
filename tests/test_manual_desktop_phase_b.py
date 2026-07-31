@@ -1531,6 +1531,24 @@ class ManualDesktopPhaseBTest(unittest.TestCase):
         after["installed_plugin_ids"] = ["other@marketplace"]
         self.assertFalse(_shared_state_matches(before, after))
 
+    def test_shared_state_allows_only_plugin_version_drift(self) -> None:
+        before = self._shared_state()
+        plugin = {
+            "pluginId": "documents@openai-primary-runtime",
+            "name": "documents",
+            "version": "26.727.11326",
+            "enabled": True,
+        }
+        before["plugins"] = [plugin]
+        before["installed_plugin_ids"] = [plugin["pluginId"]]
+        after = self._shared_state()
+        after["plugins"] = [{**plugin, "version": "26.730.11710"}]
+        after["installed_plugin_ids"] = [plugin["pluginId"]]
+
+        self.assertTrue(_shared_state_matches(before, after))
+        after["plugins"][0]["enabled"] = False
+        self.assertFalse(_shared_state_matches(before, after))
+
     def test_phase_b_delta_rejects_unrelated_inventory_change(self) -> None:
         before = self._shared_state()
         current = self._shared_state()

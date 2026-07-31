@@ -17,6 +17,9 @@ Issue [#53](https://github.com/mani1261790/ToolUseProxy/issues/53)では、CLI T
 | `workspace-write`でのPlugin data操作 | 10コマンドすべてに1回限定の`require_escalated`と日本語の理由を付けて発行 |
 | 個別commandの承認UI | 表示されず、ユーザー入力なしで進行。理由はsession記録だけでは断定しない |
 | public / protected call | publicは実行、protectedはPreToolUseが実行前block |
+| disable / remove / 同一版reinstall | 管理DBとruntime設定を保持したまま完走 |
+| final cleanup | Plugin、Marketplace、管理データ、synthetic workspaceを削除。他のPlugin / Marketplace一覧は開始時と一致 |
+| Codex config | 非アクティブなproject / Hook trust履歴が残り、開始時のfile hashには戻らない |
 
 以前は、Full AccessとDefaultの両方で最初の無害な`true`に初期化案内が表示されなかったことから、DesktopのHook dispatcherまで到達していない可能性を疑いました。しかし、これは根拠として不十分でした。PreToolUse / PostToolUseは定義変更によってtrustが無効になっており、正常終了したHookのstderrはDesktop画面へ表示されないためです。
 
@@ -43,7 +46,9 @@ Plugin自体も、未初期化・Python不足・runtime起動失敗・内部poli
 - Desktopでprotected payloadを実行前blockできる: 確認済み
 - 個別commandの承認UIを人が理解できる: 今回はUIが表示されず未観測
 
-Desktop / GUI上で今回のfile-backed exact-only保護が動くことは確認できました。ただし、承認UX、disable / remove、同一版reinstallを終えるまではDesktop Phase B全体の合格とは扱いません。
+Desktop / GUI上で今回のfile-backed exact-only保護が動くことは確認できました。機能とlifecycleは完走しましたが、個別command承認UIは表示されなかったため、承認UXを含むDesktop Phase B全体の合格とは扱いません。
+
+2026-07-31にdisable、remove、同一版reinstall、final remove、cleanupを完走しました。Plugin登録、検証用Marketplace、約111MBの管理データ、synthetic workspaceは削除され、無関係なPlugin / MarketplaceのIDと設定は保持されています。一方、Codexは削除済みworkspaceのproject設定と、削除済みPluginのHook trust履歴を`config.toml`へ残しました。開始時のconfig本文を保存していないため自動編集はせず、`restored_with_inactive_config_residue`としてaggregate reportへ明記しています。該当Pluginが存在しないため、この履歴だけでHookが実行されることはありません。
 
 同一版reinstallは「Plugin codeを削除しても`PLUGIN_DATA`の設定と監査DBが残り、再install時に再利用されること」を確認します。本物のupdateは異なる二つのimmutable versionが必要です。同じZIPを入れ直した結果をupdate成功とは数えません。
 

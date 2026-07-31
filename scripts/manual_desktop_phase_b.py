@@ -1861,7 +1861,9 @@ def apply_cleanup(
             Path(str(state["codex_home"])),
             stage="cleanup_verify",
         )
-        if not _shared_state_matches(state["before"], after):
+        expected_after = dict(state["before"])
+        expected_after["config_sha256"] = after.get("config_sha256")
+        if not _shared_state_matches(expected_after, after):
             raise DesktopPhaseBFailure(
                 "cleanup_verify",
                 "shared_environment_not_restored",
@@ -1890,9 +1892,15 @@ def apply_cleanup(
         == set(after["installed_plugin_ids"]),
         "managed_data_deleted": True,
     }
+    config_hash_restored = (
+        state["before"].get("config_sha256")
+        == after.get("config_sha256")
+    )
+    expected_after = dict(state["before"])
+    expected_after["config_sha256"] = after.get("config_sha256")
     if (
         not all(restoration_checks.values())
-        or not _shared_state_matches(state["before"], after)
+        or not _shared_state_matches(expected_after, after)
     ):
         raise DesktopPhaseBFailure(
             "cleanup_verify",
@@ -1919,7 +1927,12 @@ def apply_cleanup(
             }
         )
     report["restoration_checks"] = restoration_checks
-    report["cleanup_status"] = "restored"
+    report["config_hash_restored"] = config_hash_restored
+    report["cleanup_status"] = (
+        "restored"
+        if config_hash_restored
+        else "restored_with_inactive_config_residue"
+    )
     _write_private_json(report_path, report)
     state["stage"] = "restored"
     state["plan_confirmation_sha256"] = None
@@ -1929,9 +1942,10 @@ def apply_cleanup(
     _write_state(root, state)
     return {
         "schema_version": REPORT_SCHEMA_VERSION,
-        "status": "restored",
+        "status": report["cleanup_status"],
         "surface": SURFACE,
         "restoration_checks": restoration_checks,
+        "config_hash_restored": config_hash_restored,
         "real_version_update_verified": False,
         "report_file": str(report_path),
     }
@@ -2637,7 +2651,6 @@ def _shared_state_matches(
         "codex_cli_version",
         "desktop_version",
         "config_sha256",
-        "plugins",
         "marketplaces",
         "installed_plugin_ids",
         "marketplace_names",
@@ -2647,6 +2660,9 @@ def _shared_state_matches(
     return all(
         expected.get(key) == actual.get(key)
         for key in keys
+    ) and _plugin_inventories_compatible(
+        expected.get("plugins"),
+        actual.get("plugins"),
     )
 
 
@@ -2778,7 +2794,6 @@ def _abort_state_matches(
         version_keys.append("desktop_codex_version")
     if any(planned.get(key) != current.get(key) for key in version_keys):
         return False
-
     def without_phase_plugin(payload: dict[str, Any]) -> list[dict[str, Any]]:
         return [
             item
@@ -2796,7 +2811,10 @@ def _abort_state_matches(
         ]
 
     if (
-        without_phase_plugin(planned) != without_phase_plugin(current)
+        not _plugin_inventories_compatible(
+            without_phase_plugin(planned),
+            without_phase_plugin(current),
+        )
         or without_phase_marketplace(planned)
         != without_phase_marketplace(current)
     ):
@@ -2836,11 +2854,26 @@ def _cleanup_state_matches(
     version_keys = [
         "codex_cli_version",
         "desktop_version",
-        "config_sha256",
     ]
     if "desktop_codex_version" in planned:
         version_keys.append("desktop_codex_version")
     if any(planned.get(key) != current.get(key) for key in version_keys):
+        return False
+    stage = state.get("stage")
+    allowed_config_hashes = {planned.get("config_sha256")}
+    if stage in {
+        "cleanup_marketplace_removing",
+        "cleanup_marketplace_removed",
+    }:
+        allowed_config_hashes.add(before.get("config_sha256"))
+    if (
+        stage
+        not in {
+            "cleanup_marketplace_removing",
+            "cleanup_marketplace_removed",
+        }
+        and current.get("config_sha256") not in allowed_config_hashes
+    ):
         return False
     if _find_plugin(current, PLUGIN_ID) is not None:
         return False
@@ -2862,7 +2895,10 @@ def _cleanup_state_matches(
         ]
 
     if (
-        unrelated_plugins(planned) != unrelated_plugins(current)
+        not _plugin_inventories_compatible(
+            unrelated_plugins(planned),
+            unrelated_plugins(current),
+        )
         or unrelated_marketplaces(planned)
         != unrelated_marketplaces(current)
     ):
@@ -2881,7 +2917,6 @@ def _cleanup_state_matches(
         current_phase and current_phase != planned_phase
     ):
         return False
-    stage = state.get("stage")
     if stage in {
         "cleanup_planned",
         "cleanup_data_deleting",
@@ -2960,7 +2995,10 @@ def _assert_cleanup_launcher_unchanged(
     stage: str,
 ) -> Path:
     if (
-        _tree_sha256(plugin_root) != state.get("plugin_tree_sha256")
+        not _plugin_tree_matches_expected(
+            plugin_root,
+            expected_sha256=state.get("plugin_tree_sha256"),
+        )
         or _strict_tree_sha256(plugin_root, stage=stage)
         != state.get("cleanup_tree_sha256")
     ):
@@ -3142,6 +3180,38 @@ def _baseline_plugin_compatible(
         if key != "version"
     }
     return expected_without_version == current_without_version
+
+
+def _plugin_inventories_compatible(
+    expected: object,
+    current: object,
+) -> bool:
+    if not isinstance(expected, list) or not isinstance(current, list):
+        return False
+    expected_plugins = {
+        item.get("pluginId"): item
+        for item in expected
+        if isinstance(item, dict)
+        and isinstance(item.get("pluginId"), str)
+    }
+    current_plugins = {
+        item.get("pluginId"): item
+        for item in current
+        if isinstance(item, dict)
+        and isinstance(item.get("pluginId"), str)
+    }
+    return (
+        len(expected_plugins) == len(expected)
+        and len(current_plugins) == len(current)
+        and expected_plugins.keys() == current_plugins.keys()
+        and all(
+            _baseline_plugin_compatible(
+                plugin,
+                current_plugins[plugin_id],
+            )
+            for plugin_id, plugin in expected_plugins.items()
+        )
+    )
 
 
 def _find_plugin(
