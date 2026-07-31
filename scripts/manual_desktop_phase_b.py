@@ -1196,7 +1196,10 @@ def checkpoint_removed(root_argument: Path) -> dict[str, Any]:
         storage_kind == "local_marketplace"
         and (
             not installed_root.is_dir()
-            or _tree_sha256(installed_root) != state["plugin_tree_sha256"]
+            or not _plugin_tree_matches_expected(
+                installed_root,
+                expected_sha256=state["plugin_tree_sha256"],
+            )
         )
     ):
         raise DesktopPhaseBFailure(
@@ -1285,7 +1288,10 @@ def checkpoint_reinstalled(root_argument: Path) -> dict[str, Any]:
         ) from error
     if (
         storage_kind != state.get("installed_plugin_storage_kind")
-        or _tree_sha256(installed_root) != state["plugin_tree_sha256"]
+        or not _plugin_tree_matches_expected(
+            installed_root,
+            expected_sha256=state["plugin_tree_sha256"],
+        )
         or installed.get("version") != state["plugin_version"]
     ):
         raise DesktopPhaseBFailure(
@@ -1380,7 +1386,10 @@ def checkpoint_final_removed(root_argument: Path) -> dict[str, Any]:
         storage_kind == "local_marketplace"
         and (
             not installed_root.is_dir()
-            or _tree_sha256(installed_root) != state["plugin_tree_sha256"]
+            or not _plugin_tree_matches_expected(
+                installed_root,
+                expected_sha256=state["plugin_tree_sha256"],
+            )
         )
     ):
         raise DesktopPhaseBFailure(
@@ -1443,7 +1452,10 @@ def plan_cleanup(root_argument: Path) -> dict[str, Any]:
         state=state,
         stage="cleanup_plan",
     )
-    if _tree_sha256(marketplace_plugin_root) != state["plugin_tree_sha256"]:
+    if not _plugin_tree_matches_expected(
+        marketplace_plugin_root,
+        expected_sha256=state["plugin_tree_sha256"],
+    ):
         raise DesktopPhaseBFailure(
             "cleanup_plan",
             "marketplace_plugin_tree_changed",
