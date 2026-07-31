@@ -34,7 +34,9 @@ codex plugin marketplace upgrade tooluseproxy
 codex plugin list --json
 ```
 
-Use the immutable `v0.1.0-alpha.3` tag instead of `public-alpha` when reproducible version pinning matters. A pinned tag does not move when the marketplace is upgraded. Review the exact Hook definitions after installation or an update before trusting them. Then follow the [five-minute quickstart](QUICKSTART.md) to initialize ToolUseProxy and review the first protected-source proposal. The CLI update path is tested; the Codex Desktop / GUI update experience is not yet verified.
+Use the immutable `v0.1.0-alpha.3` tag instead of `public-alpha` when reproducible version pinning matters. A pinned tag does not move when the marketplace is upgraded. Review the exact Hook definitions after installation or an update before trusting them. A changed matcher, command, or source invalidates the earlier trust decision; a Hook with `trustStatus: modified` must be reviewed again. Then follow the [five-minute quickstart](QUICKSTART.md) to initialize ToolUseProxy and review the first protected-source proposal. The CLI update path is tested.
+
+On Codex Desktop, Plugin installation and the initial three-Hook review were observed. A later review of the July 30 run found that the changed `PreToolUse` and `PostToolUse` definitions were still `modified`, not `trusted`, so that run cannot establish whether protection worked. Desktop task history records local shell calls as `exec_command`, while the canonical tool name used by the Hook matcher is `Bash`. Desktop also does not display stderr from a command Hook that exits successfully, so a missing initialization message is not evidence that the Hook was not dispatched. Desktop protection remains unverified until all three Hook definitions are `trusted`, their definition hashes remain stable, a value-free marker confirms one `PreToolUse`, one `PostToolUse`, and at least one `Stop` event, and the public-allow / protected-block checks pass.
 
 ## Try the synthetic preview
 
@@ -53,5 +55,6 @@ The preview does not replace manual Hook review or an actual Codex task.
 - Local SQLite data can contain plaintext Hook payloads and protected-source chunks.
 - Removing the Plugin does not delete local audit data.
 - Protected-source onboarding and manifest migration are supported on macOS and Linux for this alpha, not Windows.
+- Hosted Web Search does not appear in the current `PreToolUse` / `PostToolUse` Hook surface, so ToolUseProxy cannot observe or block it before execution.
 
 Read [support and known limitations](SUPPORT.md), [privacy and retention](PRIVACY.md), [private vulnerability reporting](SECURITY.md), and the [Japanese project documentation](README.md) before using the alpha.

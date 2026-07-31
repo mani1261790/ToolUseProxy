@@ -20,14 +20,18 @@ plain language:
 Explain that command Hooks run outside the Codex sandbox with the user's local
 permissions. ToolUseProxy's Hook implementation writes to its local data
 directory and does not make network requests, but the user must still verify
-the source is `Plugin - tooluseproxy@tooluseproxy`, exactly three ToolUseProxy
-Hooks are present, and every ToolUseProxy command points inside the expected
-installed Plugin root. In an isolated manual Phase B harness, those three must
-be the only pending Hooks. Outside that harness, if unrelated Hooks are also
-pending, do not use `Trust all`; review the three ToolUseProxy entries
-individually. Explain that trust applies to the exact definitions currently
-shown and changed definitions require review again. If any ToolUseProxy source,
-count, or path differs, tell the user not to trust and stop setup.
+the Plugin source, exactly three ToolUseProxy Hooks, and every ToolUseProxy
+command path. For a normal installation, the expected source is
+`Plugin - tooluseproxy@tooluseproxy`. If a manual Phase B context declares
+`expected_plugin_id`, use `Plugin - <expected_plugin_id>` instead; never replace
+that context-specific ID with the normal installation ID. Every command must
+point inside the expected installed Plugin root. In an isolated manual Phase B
+harness, those three must be the only pending Hooks. Outside that harness, if
+unrelated Hooks are also pending, do not use `Trust all`; review the three
+ToolUseProxy entries individually. Explain that trust applies to the exact
+definitions currently shown and changed definitions require review again. If
+any ToolUseProxy source, count, or path differs, tell the user not to trust and
+stop setup.
 
 Before requesting permission to run any `run_cli.sh` or `run_cli.cmd` command,
 explain the operation in plain language. The explanation must let a person
@@ -74,14 +78,29 @@ verification in the summary. Tell the user to reject if the command differs from
 the named operation or scope. The user must not need to understand the long
 shell command to decide.
 
+If a `run_cli.sh` or `run_cli.cmd` command must read or write `PLUGIN_DATA`
+outside the current sandbox's writable roots, do not first try the command with
+ordinary sandbox permissions. Request the host's explicit, one-command
+out-of-sandbox approval for that exact command. On an `exec_command` interface
+that exposes `sandbox_permissions`, set it to `require_escalated` and provide a
+short plain-language justification consistent with the permission summary.
+Do not treat Full Access as a prerequisite and do not use it merely to avoid a
+per-command decision. If the current surface offers no per-command escalation,
+stop before execution and explain that the user must either run the exact
+reviewed command themselves or deliberately choose a surface/mode that grants
+the required local path. Never retry an `Operation not permitted` result with a
+broader command or different path.
+
 1. Confirm that the current directory is the intended workspace root.
 2. Confirm that the ToolUseProxy Plugin Hook definition has been reviewed and trusted in Codex. Do not bypass Hook trust.
 3. If the workspace belongs to a manual Phase B harness and the prompt names a
    mode `0600` `phase-b-context.json`, read that exact file first. Use only its
-   `workspace`, `plugin_root`, `plugin_data`, and `test_sink` paths. Do not use
-   `ps`, inspect parent-process environments, or broadly search outside the
-   workspace to rediscover those paths. If the context conflicts with the
-   current workspace or a Hook diagnostic, stop and explain the mismatch.
+   `workspace`, `plugin_root`, `plugin_data`, and `test_sink` as filesystem
+   paths. Use `expected_plugin_id`, `expected_plugin_version`, `setup_skill`,
+   and `surface` only as identity and workflow metadata. Do not use `ps`,
+   inspect parent-process environments, or broadly search outside the workspace
+   to rediscover those paths. If the context conflicts with the current
+   workspace or a Hook diagnostic, stop and explain the mismatch.
    Otherwise, resolve the absolute Plugin root from this skill's location; it
    is two directories above `skills/tooluseproxy-setup`. On macOS/Linux, run
    every command through `sh "<PLUGIN_ROOT>/hooks/run_cli.sh"`. The general

@@ -32,7 +32,7 @@ POSIX launcherもpackage metadataと同じPython 3.11 / 3.12だけを選びま�
 - release build toolchainは5つのpure Python wheelをexact versionとSHA-256で固定し、lockと異なる環境からのcandidate buildを拒否する
 - public化前にreachable Git blob、commit / tag message、worktreeをaggregate-onlyで監査し、危険file、provider形式credential、未知binary、oversizeを拒否する。形式を持たないsecretや画像内文字の完全検出は保証しない
 - Codex CLI TUI `0.145.0`ではmanual Hook trust、public call、protected PreToolUse block、side effect 0を確認済み。ただし自己完結型command承認説明のhuman再検証は未完了
-- Codex Desktop / GUIはlocal Pluginを利用できる公式surfaceで専用Phase B harnessもありますが、人によるHook review・command承認・PreToolUse block・remove / reinstall・異version更新は未検証。CLI TUIの結果やharness実装だけをGUI対応の根拠にしません
+- Codex Desktop / GUIではlocal Pluginの検索・installと最初の3 Hook reviewを実機確認済み。ただし2026-07-30のrunでは、定義変更後のPreToolUse / PostToolUseが`trustStatus: modified`のままで実行対象外だった。Desktop taskの履歴上はshell toolが`exec_command`と記録されるが、Hook matcherのcanonical tool名は`Bash`である。正常終了したHookのstderrもDesktop画面へ表示されないため、画面上の案内だけでは発火を判定しない。最新定義の再trustとmarker / Hook DBによる再検証が終わるまで、Desktop上の保護を対応済みとは扱わない
 - Linux上の実Codex task、Windows、将来release間のupgrade / rollback反復E2Eは未完了
 
 Codex Plugin APIやHook payloadはToolUseProxyとは別に変更され得ます。未検証のCodex CLI versionで異常が出た場合は、`doctor --json`、Codex version、synthetic payloadで再現し、protected dataを報告へ含めないでください。
@@ -41,7 +41,7 @@ Codex Plugin APIやHook payloadはToolUseProxyとは別に変更され得ます�
 
 | 機能 | 状態 | 境界 |
 | --- | --- | --- |
-| PreToolUse / PostToolUse / Stop記録 | alpha対応 | 初期化不備や内部例外ではCodexを壊さないようfail-open |
+| PreToolUse / PostToolUse / Stop記録 | alpha対応 | trust済みでmatcherに一致するHookが対象。未初期化、Python / runtime起動失敗、内部policy例外の診断は入力や例外本文を含めないphase別JSONで返し、Codexを壊さないようfail-open |
 | `init / doctor / status / trace` | alpha対応 | migrationは通常Hook内では行わない |
 | protected source候補scan | POSIX対応 | bounded offline scan。上限到達時は完全探索と主張しない |
 | candidate approve / reject / ignore | POSIX対応 | 1件ずつのexact proposalと明示承認が必要 |
@@ -54,6 +54,7 @@ Codex Plugin APIやHook payloadはToolUseProxyとは別に変更され得ます�
 ## 既知の制限
 
 - Hookの解析失敗、DB lock、未知schema、未初期化では原則fail-openする
+- hosted Web Searchは現在のPreToolUse / PostToolUse Hookへ現れず、実行前遮断の対象外
 - Bashのshell変数、command substitution、未知option、複雑なpipelineを一般shellとして完全評価しない
 - Codex Hook payloadに信頼できる終了statusがない操作は、write成功を推測せず`unknown`として扱う
 - lexical similarityは意味的な言い換えを一般には検知しない

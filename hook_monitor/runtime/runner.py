@@ -4,7 +4,6 @@ import json
 import os
 import re
 import shlex
-import sqlite3
 import sys
 from pathlib import Path
 
@@ -36,7 +35,6 @@ from hook_monitor.runtime.settings import (
     FILE_PAYLOAD_SHADOW_KEY,
     PRE_TOOL_POLICY_KEY,
     EffectiveRuntimeSettings,
-    RuntimeSettingsError,
     empty_workspace_runtime_settings,
     resolve_effective_runtime_settings,
 )
@@ -71,8 +69,13 @@ def run_hook(
             store.require_runtime_schema()
         except SchemaCompatibilityError as exc:
             print(
-                _schema_inactive_message(exc),
-                file=sys.stderr,
+                json.dumps(
+                    inactive_hook_output(
+                        phase,
+                        _schema_inactive_message(exc),
+                    ),
+                    ensure_ascii=False,
+                )
             )
             return 0
     bounded_pre_tool_input = (
@@ -177,9 +180,13 @@ def run_hook(
             exc.rejection_code,
         )
         return 0
-    except HookPayloadError as exc:
-        print(str(exc), file=sys.stderr)
-        return 1
+    except HookPayloadError:
+        _emit_inactive_hook_output(
+            phase,
+            "hook_payload_invalid",
+            "Codex supplied a Hook payload that ToolUseProxy could not parse",
+        )
+        return 0
 
     payload_cwd = payload.get("cwd")
     configured_root = _configured_workspace_root(
@@ -223,7 +230,15 @@ def run_hook(
             return 0
     if allow_schema_migration:
         store.initialize()
-    effective_runtime_settings = _effective_runtime_settings(store, event)
+    try:
+        effective_runtime_settings = _effective_runtime_settings(store, event)
+    except Exception:  # pragma: no cover - defensive hook boundary
+        _emit_inactive_hook_output(
+            phase,
+            "runtime_settings_failed",
+            "workspace runtime settings could not be loaded",
+        )
+        return 0
     enabled_pre_tool_adapters = _enabled_pre_tool_adapters(
         effective_runtime_settings
     )
@@ -251,15 +266,22 @@ def run_hook(
     post_outcome: ToolOutcome | None = None
     post_snapshots: list[ResourceSnapshot] = []
     post_operation_ids: tuple[str, ...] = ()
+    post_diagnostic: tuple[str, str] | None = None
     if phase == "post_tool_use":
         try:
             (
                 post_outcome,
                 post_snapshots,
                 post_operation_ids,
+                post_diagnostic,
             ) = _prepare_post_tool_evidence(store, event)
-        except Exception as exc:  # pragma: no cover - defensive hook boundary
-            _report_policy_failure("post-tool snapshot", exc)
+        except Exception:  # pragma: no cover - defensive hook boundary
+            _emit_inactive_hook_output(
+                phase,
+                "post_tool_snapshot_failed",
+                "post-tool evidence could not be prepared",
+            )
+            return 0
     store.record(
         event,
         artifacts,
@@ -276,8 +298,18 @@ def run_hook(
     if phase == "post_tool_use":
         try:
             store.confirm_redaction_post_input(event)
-        except Exception as exc:  # pragma: no cover - defensive hook boundary
-            _report_policy_failure("post-redaction confirmation", exc)
+        except Exception:  # pragma: no cover - defensive hook boundary
+            post_diagnostic = (
+                "post_redaction_confirmation_failed",
+                "post-tool redaction confirmation could not be recorded",
+            )
+        if post_diagnostic is not None:
+            _emit_inactive_hook_output(
+                phase,
+                post_diagnostic[0],
+                post_diagnostic[1],
+            )
+            return 0
     if phase == "pre_tool_use" and pre_tool_adapter(
         event.tool_name
     ) in enabled_pre_tool_adapters:
@@ -298,8 +330,12 @@ def run_hook(
                     )
                 ),
             )
-        except Exception as exc:  # pragma: no cover - defensive hook boundary
-            _report_policy_failure("pre-tool", exc)
+        except Exception:  # pragma: no cover - defensive hook boundary
+            _emit_inactive_hook_output(
+                phase,
+                "pre_tool_policy_failed",
+                "pre-tool policy evaluation could not be completed",
+            )
             return 0
         if hook_output:
             print(json.dumps(hook_output, ensure_ascii=False))
@@ -313,8 +349,12 @@ def run_hook(
                 Path(event.workspace_root or ""),
                 current_event_id=event.event_id,
             )
-        except Exception as exc:  # pragma: no cover - defensive hook boundary
-            _report_policy_failure("stop", exc)
+        except Exception:  # pragma: no cover - defensive hook boundary
+            _emit_inactive_hook_output(
+                phase,
+                "stop_policy_failed",
+                "Stop policy evaluation could not be completed",
+            )
             return 0
         if hook_output:
             print(json.dumps(hook_output, ensure_ascii=False))
@@ -365,14 +405,10 @@ def _effective_runtime_settings(
             empty_workspace_runtime_settings("unregistered"),
             os.environ,
         )
-    try:
-        state = store.get_workspace_runtime_settings(
-            workspace_id,
-            busy_timeout_ms=10,
-        )
-    except (RuntimeSettingsError, OSError, sqlite3.Error) as exc:
-        _report_policy_failure("runtime settings", exc)
-        state = empty_workspace_runtime_settings(workspace_id)
+    state = store.get_workspace_runtime_settings(
+        workspace_id,
+        busy_timeout_ms=10,
+    )
     return resolve_effective_runtime_settings(state, os.environ)
 
 
@@ -385,13 +421,6 @@ def _enabled_pre_tool_adapters(
     if _pre_tool_policy_enabled() and _pre_tool_mcp_policy_enabled():
         adapters.add("mcp")
     return frozenset(adapters)
-
-
-def _report_policy_failure(policy_name: str, exc: Exception) -> None:
-    print(
-        f"{policy_name} policy evaluation failed: {type(exc).__name__}",
-        file=sys.stderr,
-    )
 
 
 def _schema_inactive_message(exc: SchemaCompatibilityError) -> str:
@@ -420,6 +449,43 @@ def _schema_inactive_message(exc: SchemaCompatibilityError) -> str:
             )
         )
     return f"{message}\nRun from the workspace root: {command}"
+
+
+def inactive_hook_output(
+    phase: str,
+    message: str,
+) -> dict[str, object]:
+    if phase == "pre_tool_use":
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "additionalContext": message,
+            }
+        }
+    if phase == "post_tool_use":
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": "PostToolUse",
+                "additionalContext": message,
+            }
+        }
+    if phase == "stop":
+        return {"systemMessage": message}
+    raise ValueError(f"unsupported Codex hook phase: {phase}")
+
+
+def _emit_inactive_hook_output(
+    phase: str,
+    code: str,
+    detail: str,
+) -> None:
+    message = f"ToolUseProxy inactive ({code}): {detail}"
+    print(
+        json.dumps(
+            inactive_hook_output(phase, message),
+            ensure_ascii=False,
+        )
+    )
 
 
 def _runtime_policy_workspace_enabled(event: NormalizedEvent) -> bool:
@@ -461,7 +527,10 @@ def _capture_post_tool_evidence(
     store: EventStore,
     event: NormalizedEvent,
 ) -> None:
-    outcome, snapshots, operation_ids = _prepare_post_tool_evidence(store, event)
+    outcome, snapshots, operation_ids, diagnostic = _prepare_post_tool_evidence(
+        store,
+        event,
+    )
     if outcome is None or not operation_ids:
         return
     store.update_tool_operation_outcome(
@@ -471,17 +540,27 @@ def _capture_post_tool_evidence(
         evidence=outcome.evidence,
         resource_snapshots=snapshots,
     )
+    if diagnostic is not None:
+        print(
+            f"ToolUseProxy inactive ({diagnostic[0]}): {diagnostic[1]}",
+            file=sys.stderr,
+        )
 
 
 def _prepare_post_tool_evidence(
     store: EventStore,
     event: NormalizedEvent,
-) -> tuple[ToolOutcome | None, list[ResourceSnapshot], tuple[str, ...]]:
+) -> tuple[
+    ToolOutcome | None,
+    list[ResourceSnapshot],
+    tuple[str, ...],
+    tuple[str, str] | None,
+]:
     if event.workspace_status != "ready":
-        return None, [], ()
+        return None, [], (), None
     operations = store.list_tool_operations_for_post_event(event)
     if not operations:
-        return None, [], ()
+        return None, [], (), None
     outcome = classify_post_tool_outcome(event)
     owner_matches = _validated_operation_owner(
         store,
@@ -489,10 +568,15 @@ def _prepare_post_tool_evidence(
         operations,
     )
     if not owner_matches:
-        return ToolOutcome("unknown", "post_operation_owner_mismatch"), [], ()
+        return (
+            ToolOutcome("unknown", "post_operation_owner_mismatch"),
+            [],
+            (),
+            None,
+        )
     operation_ids = tuple(sorted(operation.operation_id for operation in operations))
     if outcome.status != "succeeded":
-        return outcome, [], operation_ids
+        return outcome, [], operation_ids, None
     try:
         snapshots = capture_operation_snapshots(
             event,
@@ -501,13 +585,22 @@ def _prepare_post_tool_evidence(
             store_plaintext=plaintext_snapshots_enabled(),
         )
     except Exception as exc:  # pragma: no cover - defensive capture boundary
-        _report_policy_failure("post-tool snapshot", exc)
-        outcome = ToolOutcome(
-            outcome.status,
-            f"{outcome.evidence};snapshot_capture_error:{type(exc).__name__}",
+        return (
+            ToolOutcome(
+                outcome.status,
+                (
+                    f"{outcome.evidence};"
+                    f"snapshot_capture_error:{type(exc).__name__}"
+                ),
+            ),
+            [],
+            operation_ids,
+            (
+                "post_tool_snapshot_failed",
+                "post-tool evidence could not be prepared",
+            ),
         )
-        snapshots = []
-    return outcome, snapshots, operation_ids
+    return outcome, snapshots, operation_ids, None
 
 
 def _validated_operation_owner(

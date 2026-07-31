@@ -4,7 +4,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from hook_monitor.analysis.adapters.common import normalize_tool_name
 from hook_monitor.analysis.adapters.mcp import (
     classify_mcp_sink_type,
     parse_mcp_tool_name,
@@ -43,9 +42,12 @@ from hook_monitor.runtime.sink_payload_shadow import (
     store_sink_payload_shadow_observations,
 )
 from hook_monitor.runtime.storage import EventStore
+from hook_monitor.runtime.tool_compat import (
+    is_enforced_shell_tool,
+    shell_command_from_input,
+)
 
 
-ENFORCED_BASH_TOOL_NAMES = {"bash"}
 DEFAULT_PRE_TOOL_ADAPTERS = frozenset({"bash"})
 MCP_INPUT_LIMIT_DENY_REASON = (
     "ToolUseProxy blocked this MCP call because its input exceeds bounded "
@@ -93,7 +95,7 @@ def render_mcp_input_limit_deny(rejection_code: str) -> dict[str, object]:
 
 
 def is_enforced_bash_tool(tool_name: str | None) -> bool:
-    return normalize_tool_name(tool_name) in ENFORCED_BASH_TOOL_NAMES
+    return is_enforced_shell_tool(tool_name)
 
 
 def pre_tool_adapter(tool_name: str | None) -> str | None:
@@ -358,8 +360,8 @@ def _inspect_bash_sink_payload(
     tool_input = current_event.raw_payload.get("tool_input")
     if not isinstance(tool_input, dict):
         return ()
-    command = tool_input.get("command")
-    if not isinstance(command, str) or not command:
+    command = shell_command_from_input(current_event.tool_name, tool_input)
+    if command is None:
         return ()
     if (
         current_event.workspace_root is None

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 from dataclasses import dataclass, replace
 
 from hook_monitor.analysis.bash_file_parser import (
@@ -19,22 +18,16 @@ from hook_monitor.runtime.models import (
     ToolOperation,
 )
 from hook_monitor.runtime.normalize import estimate_token_count, normalize_text
+from hook_monitor.runtime.tool_compat import (
+    SHELL_OPERATION_TOOL_NAMES,
+    normalize_tool_name,
+)
 
 
 @dataclass(frozen=True)
 class OperationExtraction:
     operations: tuple[ToolOperation, ...]
     fragments: tuple[ArtifactFragment, ...]
-
-
-_BASH_OPERATION_TOOL_NAMES = {
-    "bash",
-    "shell",
-    "exec",
-    "command",
-    "terminal",
-    "run_command",
-}
 
 
 def extract_tool_operations(
@@ -45,10 +38,10 @@ def extract_tool_operations(
     """PreToolUse inputを、永続化できる静的operationへ分解する。"""
     if event.phase != "pre_tool_use":
         return OperationExtraction((), ())
-    normalized_tool_name = _normalize_tool_name(event.tool_name)
+    normalized_tool_name = normalize_tool_name(event.tool_name)
     if normalized_tool_name == "apply_patch":
         return _extract_apply_patch_operations(event, artifacts, fragments)
-    if normalized_tool_name in _BASH_OPERATION_TOOL_NAMES:
+    if normalized_tool_name in SHELL_OPERATION_TOOL_NAMES:
         return _extract_bash_operations(event, artifacts, fragments)
     return OperationExtraction((), ())
 
@@ -76,8 +69,8 @@ def build_missing_bash_segment_fragments(
         representative = group[0]
         if (
             representative.phase != "pre_tool_use"
-            or _normalize_tool_name(representative.tool_name)
-            not in _BASH_OPERATION_TOOL_NAMES
+            or normalize_tool_name(representative.tool_name)
+            not in SHELL_OPERATION_TOOL_NAMES
         ):
             continue
         parents = [
@@ -101,14 +94,6 @@ def build_missing_bash_segment_fragments(
             existing_ids.add(fragment.fragment_id)
             missing.append(fragment)
     return tuple(missing)
-
-
-def _normalize_tool_name(tool_name: str | None) -> str:
-    return re.sub(
-        r"[^a-z0-9]+",
-        "_",
-        (tool_name or "").casefold(),
-    ).strip("_")
 
 
 def _extract_apply_patch_operations(
