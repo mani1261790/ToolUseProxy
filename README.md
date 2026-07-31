@@ -16,6 +16,7 @@ Codexのtool useをローカルで観測し、外部sinkへ送られるpayload�
 - [脆弱性の非公開報告](SECURITY.md)
 - [Pluginドッグフード](docs/運用/Pluginドッグフード.md)
 - [Plugin upgrade / rollback rehearsal](docs/運用/Pluginライフサイクル.md)
+- [Codex Desktop update / rollback harness](docs/運用/DesktopUpdateRollback.md)
 - [Release候補の作成と検証](docs/運用/Release候補.md)
 - [現在地と実装ロードマップ](docs/運用/実装タスク.md)
 - [Sink中心の情報流評価計画](docs/調査/Sink中心の情報流評価計画.md)

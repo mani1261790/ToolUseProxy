@@ -1,0 +1,231 @@
+from __future__ import annotations
+
+import json
+import tarfile
+import tempfile
+import unittest
+from pathlib import Path
+
+from scripts.manual_desktop_update_rollback import (
+    MARKETPLACE_NAME,
+    PLUGIN_ID,
+    DesktopUpdateRollbackFailure,
+    _extract_tar_safely,
+    _inventory_delta_matches,
+    _remove_managed_path,
+    _validate_uninstall_plan,
+    inspect_marketplace_artifact,
+)
+
+
+class ManualDesktopUpdateRollbackTest(unittest.TestCase):
+    def test_inspect_marketplace_binds_all_artifact_identities(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory).resolve()
+            marketplace = self._marketplace(root, version="0.1.0-alpha.1")
+            artifact = root / "old-source.tar"
+            artifact.write_bytes(b"immutable old artifact")
+
+            identity = inspect_marketplace_artifact(
+                role="old",
+                marketplace=marketplace,
+                source_commit="2" * 40,
+                source_artifact=artifact,
+                expected_version="0.1.0-alpha.1",
+            )
+
+            self.assertEqual("old", identity.role)
+            self.assertEqual("0.1.0-alpha.1", identity.declared_version)
+            self.assertEqual("0.1.0a1", identity.python_version)
+            self.assertEqual(MARKETPLACE_NAME, identity.marketplace)
+            self.assertEqual(PLUGIN_ID, identity.plugin_id)
+            self.assertEqual(64, len(identity.source_artifact_sha256))
+            self.assertEqual(64, len(identity.plugin_tree_sha256))
+            self.assertEqual(64, len(identity.hook_definition_sha256))
+            self.assertEqual(64, len(identity.launcher_sha256))
+
+    def test_inspect_marketplace_rejects_version_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory).resolve()
+            marketplace = self._marketplace(root, version="0.1.0-alpha.1")
+            artifact = root / "artifact"
+            artifact.write_bytes(b"artifact")
+            with self.assertRaisesRegex(
+                DesktopUpdateRollbackFailure,
+                "plugin_version_invalid",
+            ):
+                inspect_marketplace_artifact(
+                    role="new",
+                    marketplace=marketplace,
+                    source_commit="c" * 40,
+                    source_artifact=artifact,
+                    expected_version="0.1.0-alpha.3",
+                )
+
+    def test_tar_extractor_rejects_parent_escape(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory).resolve()
+            archive = root / "source.tar"
+            payload = root / "payload"
+            payload.write_text("escape", encoding="utf-8")
+            with tarfile.open(archive, "w") as handle:
+                handle.add(payload, arcname="../escape")
+            destination = root / "destination"
+            destination.mkdir()
+            with self.assertRaisesRegex(
+                DesktopUpdateRollbackFailure,
+                "archive_path_invalid",
+            ):
+                _extract_tar_safely(archive, destination)
+            self.assertFalse((root / "escape").exists())
+
+    def test_inventory_delta_preserves_unrelated_plugin_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory).resolve()
+            marketplace = root / "marketplace"
+            marketplace.mkdir()
+            baseline_plugin = {
+                "pluginId": "other@market",
+                "name": "other",
+                "marketplaceName": "market",
+                "version": "1.0.0",
+                "enabled": True,
+                "source": {"source": "local", "path": "/other"},
+            }
+            before = {
+                "codex_cli_version": "codex 1",
+                "desktop_version": "1",
+                "desktop_codex_version": "codex 1",
+                "installed_plugin_ids": ["other@market"],
+                "marketplace_names": ["market"],
+                "plugins": [baseline_plugin],
+            }
+            current = {
+                **before,
+                "installed_plugin_ids": [
+                    "other@market",
+                    "tooluseproxy@tooluseproxy-desktop-update",
+                ],
+                "marketplace_names": [
+                    "market",
+                    "tooluseproxy-desktop-update",
+                ],
+                "plugins": [
+                    {**baseline_plugin, "version": "1.0.1"},
+                    {
+                        "pluginId": "tooluseproxy@tooluseproxy-desktop-update",
+                        "name": "tooluseproxy",
+                    },
+                ],
+                "marketplaces": [
+                    {
+                        "name": "tooluseproxy-desktop-update",
+                        "root": str(marketplace),
+                    }
+                ],
+            }
+            self.assertTrue(
+                _inventory_delta_matches(
+                    before,
+                    current,
+                    plugin_expected=True,
+                    marketplace_root=marketplace,
+                )
+            )
+            current["plugins"][0]["enabled"] = False
+            self.assertFalse(
+                _inventory_delta_matches(
+                    before,
+                    current,
+                    plugin_expected=True,
+                    marketplace_root=marketplace,
+                )
+            )
+
+    def test_uninstall_plan_is_bound_to_exact_data_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            data_dir = Path(temporary_directory).resolve() / "data"
+            payload = {
+                "status": "review_required",
+                "review_required": True,
+                "action": "delete_managed_data",
+                "data_dir": str(data_dir),
+                "managed_entry_count": 4,
+                "managed_file_count": 3,
+                "managed_bytes": 100,
+                "unmanaged_entry_count": 0,
+                "confirmation_token": "a" * 64,
+            }
+            self.assertEqual(
+                "a" * 64,
+                _validate_uninstall_plan(
+                    payload,
+                    data_dir=data_dir,
+                )["confirmation_token"],
+            )
+            payload["data_dir"] = str(data_dir.parent / "other")
+            with self.assertRaisesRegex(
+                DesktopUpdateRollbackFailure,
+                "uninstall_plan_invalid",
+            ):
+                _validate_uninstall_plan(payload, data_dir=data_dir)
+
+    def test_cleanup_path_cannot_escape_run_root(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory).resolve() / "run"
+            root.mkdir()
+            outside = root.parent / "outside"
+            outside.mkdir()
+            with self.assertRaisesRegex(
+                DesktopUpdateRollbackFailure,
+                "cleanup_path_invalid",
+            ):
+                _remove_managed_path(outside, root=root)
+            self.assertTrue(outside.is_dir())
+
+    def _marketplace(self, root: Path, *, version: str) -> Path:
+        marketplace = root / "marketplace"
+        plugin = marketplace / "tooluseproxy"
+        (marketplace / ".agents" / "plugins").mkdir(parents=True)
+        (plugin / ".codex-plugin").mkdir(parents=True)
+        (plugin / "hooks").mkdir()
+        (plugin / "tooluseproxy").mkdir()
+        (marketplace / ".agents" / "plugins" / "marketplace.json").write_text(
+            json.dumps(
+                {
+                    "name": MARKETPLACE_NAME,
+                    "plugins": [
+                        {
+                            "name": "tooluseproxy",
+                            "source": {
+                                "source": "local",
+                                "path": "./tooluseproxy",
+                            },
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        (plugin / ".codex-plugin" / "plugin.json").write_text(
+            json.dumps({"name": "tooluseproxy", "version": version}),
+            encoding="utf-8",
+        )
+        python_version = version.replace("-alpha.", "a")
+        (plugin / "tooluseproxy" / "__init__.py").write_text(
+            f'__version__ = "{python_version}"\n',
+            encoding="utf-8",
+        )
+        (plugin / "hooks" / "hooks.json").write_text(
+            '{"hooks": {}}\n',
+            encoding="utf-8",
+        )
+        (plugin / "hooks" / "run_hook.sh").write_text(
+            "#!/bin/sh\nexit 0\n",
+            encoding="utf-8",
+        )
+        return marketplace
+
+
+if __name__ == "__main__":
+    unittest.main()
