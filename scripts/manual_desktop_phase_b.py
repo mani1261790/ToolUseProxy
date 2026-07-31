@@ -3105,9 +3105,31 @@ def _phase_b_delta_matches(
         if isinstance(item, dict)
     }
     return all(
-        current_plugins.get(plugin_id) == plugin
+        _baseline_plugin_compatible(
+            plugin,
+            current_plugins.get(plugin_id),
+        )
         for plugin_id, plugin in baseline_plugins.items()
     )
+
+
+def _baseline_plugin_compatible(
+    expected: dict[str, Any],
+    current: object,
+) -> bool:
+    if not isinstance(current, dict):
+        return False
+    expected_without_version = {
+        key: value
+        for key, value in expected.items()
+        if key != "version"
+    }
+    current_without_version = {
+        key: value
+        for key, value in current.items()
+        if key != "version"
+    }
+    return expected_without_version == current_without_version
 
 
 def _find_plugin(

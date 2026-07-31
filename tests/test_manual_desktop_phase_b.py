@@ -1562,6 +1562,53 @@ class ManualDesktopPhaseBTest(unittest.TestCase):
             )
         )
 
+    def test_phase_b_delta_allows_unrelated_version_only_drift(self) -> None:
+        before = self._shared_state()
+        baseline = {
+            "pluginId": "documents@openai-primary-runtime",
+            "name": "documents",
+            "marketplaceName": "openai-primary-runtime",
+            "version": "26.727.11326",
+            "enabled": True,
+        }
+        before["plugins"] = [baseline]
+        before["installed_plugin_ids"] = [baseline["pluginId"]]
+        current = self._shared_state()
+        current["plugins"] = [
+            {
+                **baseline,
+                "version": "26.730.11710",
+            },
+            {
+                "pluginId": PLUGIN_ID,
+                "name": "tooluseproxy",
+                "enabled": False,
+            },
+        ]
+        current["installed_plugin_ids"] = [
+            baseline["pluginId"],
+            PLUGIN_ID,
+        ]
+        current["marketplace_names"] = [MARKETPLACE_NAME]
+
+        self.assertTrue(
+            _phase_b_delta_matches(
+                before,
+                current,
+                plugin_expected=True,
+                marketplace_expected=True,
+            )
+        )
+        current["plugins"][0]["enabled"] = False
+        self.assertFalse(
+            _phase_b_delta_matches(
+                before,
+                current,
+                plugin_expected=True,
+                marketplace_expected=True,
+            )
+        )
+
     def test_prepare_stops_before_mutation_when_shared_state_changed(
         self,
     ) -> None:
