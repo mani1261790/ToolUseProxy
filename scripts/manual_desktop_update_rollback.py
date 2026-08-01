@@ -462,6 +462,7 @@ def checkpoint_old_installed(root_argument: Path) -> dict[str, Any]:
         installed_plugin_root=installed_root,
         expected_tree_sha256=old.effective_tree_sha256,
         require_trusted=True,
+        expected_plugin_id=PLUGIN_ID,
     )
     hook_items = hooks["hooks"]
     state = apply_transition(
@@ -551,10 +552,14 @@ def checkpoint_old_probe(root_argument: Path) -> dict[str, Any]:
             kind="session",
             value=str(session_id),
         ),
-        expected_tool_hash=_probe_id_hash(
-            str(nonce),
-            kind="tool",
-            value=str(true_call_id),
+        expected_tool_hash=(
+            _probe_id_hash(
+                str(nonce),
+                kind="tool",
+                value=str(true_call_id),
+            )
+            if session.get("tool_id_linkable", True)
+            else None
         ),
     )
     if (
@@ -875,6 +880,7 @@ def checkpoint_new_installed(root_argument: Path) -> dict[str, Any]:
         installed_plugin_root=installed_root,
         expected_tree_sha256=new.effective_tree_sha256,
         require_trusted=True,
+        expected_plugin_id=PLUGIN_ID,
     )
     hook_items = hooks["hooks"]
     state = apply_transition(
@@ -964,10 +970,14 @@ def checkpoint_new_probe(root_argument: Path) -> dict[str, Any]:
             kind="session",
             value=str(session_id),
         ),
-        expected_tool_hash=_probe_id_hash(
-            str(nonce),
-            kind="tool",
-            value=str(true_call_id),
+        expected_tool_hash=(
+            _probe_id_hash(
+                str(nonce),
+                kind="tool",
+                value=str(true_call_id),
+            )
+            if session.get("tool_id_linkable", True)
+            else None
         ),
     )
     if (
@@ -1335,6 +1345,7 @@ def checkpoint_old_reinstalled_for_rollback(
         installed_plugin_root=installed_root,
         expected_tree_sha256=old.effective_tree_sha256,
         require_trusted=True,
+        expected_plugin_id=PLUGIN_ID,
     )
     hook_items = hooks["hooks"]
     state = apply_transition(

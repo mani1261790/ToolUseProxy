@@ -779,10 +779,14 @@ def checkpoint_hook_probe(root_argument: Path) -> dict[str, Any]:
             kind="session",
             value=session_id,
         ),
-        expected_tool_hash=_probe_id_hash(
-            probe_nonce,
-            kind="tool",
-            value=true_call_id,
+        expected_tool_hash=(
+            _probe_id_hash(
+                probe_nonce,
+                kind="tool",
+                value=true_call_id,
+            )
+            if session.get("tool_id_linkable", True)
+            else None
         ),
     )
     if counts.get("pre-tool-use", 0) != 1:
@@ -2343,6 +2347,7 @@ def _desktop_plugin_hooks(
     installed_plugin_root: Path,
     expected_tree_sha256: str,
     require_trusted: bool,
+    expected_plugin_id: str = PLUGIN_ID,
 ) -> dict[str, Any]:
     response = _desktop_app_server_request(
         codex_home,
@@ -2375,7 +2380,10 @@ def _desktop_plugin_hooks(
     selected = [
         hook
         for hook in raw_hooks
-        if isinstance(hook, dict) and hook.get("pluginId") == PLUGIN_ID
+        if (
+            isinstance(hook, dict)
+            and hook.get("pluginId") == expected_plugin_id
+        )
     ]
     if (
         len(selected) != 3
@@ -3804,6 +3812,7 @@ def _parse_probe_session(
     workspace_seen = False
     session_id: str | None = None
     calls: dict[str, tuple[str, str | None]] = {}
+    unlinked_tool_ids: set[str] = set()
     outputs: set[str] = set()
     unexpected_response_item_count = 0
     assistant_raw_value_absent = True
@@ -3850,6 +3859,25 @@ def _parse_probe_session(
                         calls[call_id] = (tool_name, command)
                     else:
                         unexpected_response_item_count += 1
+                elif payload_type == "custom_tool_call":
+                    call_id = payload.get("call_id")
+                    tool_name = payload.get("name")
+                    arguments = _parse_exec_custom_tool_input(
+                        payload.get("input")
+                    )
+                    if (
+                        isinstance(call_id, str)
+                        and call_id not in calls
+                        and tool_name == "exec"
+                        and arguments is not None
+                    ):
+                        calls[call_id] = (
+                            "exec_command",
+                            _normalize_command(arguments.get("cmd")),
+                        )
+                        unlinked_tool_ids.add(call_id)
+                    else:
+                        unexpected_response_item_count += 1
                 elif payload_type == "function_call_output":
                     call_id = payload.get("call_id")
                     output = payload.get("output")
@@ -3860,6 +3888,16 @@ def _parse_probe_session(
                         )
                         if isinstance(call_id, str):
                             outputs.add(call_id)
+                elif payload_type == "custom_tool_call_output":
+                    call_id = payload.get("call_id")
+                    output = payload.get("output")
+                    output_raw_value_absent = (
+                        output_raw_value_absent
+                        and SYNTHETIC_CANARY
+                        not in json.dumps(output, ensure_ascii=False)
+                    )
+                    if isinstance(call_id, str):
+                        outputs.add(call_id)
                 elif (
                     payload_type == "message"
                     and payload.get("role") == "assistant"
@@ -3892,6 +3930,10 @@ def _parse_probe_session(
         "session_id": session_id,
         "true_call_id": true_call_id,
         "true_call_count": len(true_ids),
+        "tool_id_linkable": (
+            true_call_id is not None
+            and true_call_id not in unlinked_tool_ids
+        ),
         "unexpected_tool_call_count": (
             len(calls) - len(true_ids) + unexpected_response_item_count
         ),
@@ -3899,6 +3941,26 @@ def _parse_probe_session(
         "assistant_raw_value_absent": assistant_raw_value_absent,
         "output_raw_value_absent": output_raw_value_absent,
     }
+
+
+def _parse_exec_custom_tool_input(value: object) -> dict[str, Any] | None:
+    if not isinstance(value, str) or len(value) > 16_384:
+        return None
+    match = re.fullmatch(
+        r"\s*const\s+r\s*=\s*await\s+tools\.exec_command\((\{.*\})\);"
+        r"\s*text\(r\.output\);\s*",
+        value,
+        flags=re.DOTALL,
+    )
+    if match is None:
+        return None
+    try:
+        arguments = json.loads(match.group(1))
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(arguments, dict):
+        return None
+    return arguments
 
 
 def _probe_id_hash(
@@ -3924,7 +3986,7 @@ def _read_probe_event_counts(
     path: Path,
     *,
     expected_session_hash: str,
-    expected_tool_hash: str,
+    expected_tool_hash: str | None,
 ) -> dict[str, int]:
     if (
         not path.is_file()
@@ -3955,19 +4017,36 @@ def _read_probe_event_counts(
         records.append((parts[0], parts[1], parts[2]))
     if (
         re.fullmatch(r"[0-9a-f]{64}", expected_session_hash) is None
-        or re.fullmatch(r"[0-9a-f]{64}", expected_tool_hash) is None
+        or (
+            expected_tool_hash is not None
+            and re.fullmatch(r"[0-9a-f]{64}", expected_tool_hash) is None
+        )
         or not records
         or len(records) > 32
         or any(
             phase not in allowed
             or session_hash != expected_session_hash
             or (
-                tool_hash != expected_tool_hash
+                (
+                    re.fullmatch(r"[0-9a-f]{64}", tool_hash) is None
+                    or (
+                        expected_tool_hash is not None
+                        and tool_hash != expected_tool_hash
+                    )
+                )
                 if phase != "stop"
                 else tool_hash != "-"
             )
             for phase, session_hash, tool_hash in records
         )
+        or len(
+            {
+                tool_hash
+                for phase, _, tool_hash in records
+                if phase != "stop"
+            }
+        )
+        != 1
     ):
         raise DesktopPhaseBFailure(
             "checkpoint_hook_probe",

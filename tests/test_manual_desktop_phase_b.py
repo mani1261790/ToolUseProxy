@@ -184,6 +184,44 @@ class ManualDesktopPhaseBTest(unittest.TestCase):
                 )
             )
 
+    def test_hooks_list_can_target_a_distinct_plugin_id(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory).resolve()
+            codex_home = root / "codex-home"
+            workspace = root / "workspace"
+            installed_root = root / "marketplace" / "tooluseproxy"
+            hook_root = codex_home / "plugins" / "cache" / "update"
+            workspace.mkdir()
+            installed_root.mkdir(parents=True)
+            (hook_root / "hooks").mkdir(parents=True)
+            (hook_root / "hooks" / "hooks.json").write_text(
+                "{}\n",
+                encoding="utf-8",
+            )
+            expected_plugin_id = "tooluseproxy@desktop-update"
+            response = self._hooks_list_response(
+                workspace=workspace,
+                hook_root=hook_root,
+            )
+            for hook in response["data"][0]["hooks"]:
+                hook["pluginId"] = expected_plugin_id
+
+            with patch(
+                "scripts.manual_desktop_phase_b."
+                "_desktop_app_server_request",
+                return_value=response,
+            ):
+                inventory = _desktop_plugin_hooks(
+                    codex_home,
+                    workspace=workspace,
+                    installed_plugin_root=installed_root,
+                    expected_tree_sha256=_tree_sha256(hook_root),
+                    require_trusted=True,
+                    expected_plugin_id=expected_plugin_id,
+                )
+
+            self.assertEqual(3, len(inventory["hooks"]))
+
     def test_hooks_list_allows_generated_python_cache(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory).resolve()
@@ -565,6 +603,63 @@ class ManualDesktopPhaseBTest(unittest.TestCase):
                 text=True,
             )
             self.assertTrue((plugin_root / "delegated-marker").is_file())
+
+    def test_probe_event_counts_accepts_one_unlinked_internal_tool_hash(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory).resolve()
+            marker = root / PROBE_MARKER_FILENAME
+            session_hash = "a" * 64
+            internal_tool_hash = "b" * 64
+            marker.write_text(
+                (
+                    f"pre-tool-use\t{session_hash}\t{internal_tool_hash}\n"
+                    f"post-tool-use\t{session_hash}\t{internal_tool_hash}\n"
+                    f"stop\t{session_hash}\t-\n"
+                ),
+                encoding="utf-8",
+            )
+            marker.chmod(0o600)
+
+            counts = _read_probe_event_counts(
+                marker,
+                expected_session_hash=session_hash,
+                expected_tool_hash=None,
+            )
+
+            self.assertEqual(1, counts["pre-tool-use"])
+            self.assertEqual(1, counts["post-tool-use"])
+            self.assertEqual(1, counts["stop"])
+
+    def test_probe_event_counts_rejects_disagreeing_internal_tool_hashes(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory).resolve()
+            marker = root / PROBE_MARKER_FILENAME
+            session_hash = "a" * 64
+            marker.write_text(
+                (
+                    f"pre-tool-use\t{session_hash}\t{'b' * 64}\n"
+                    f"post-tool-use\t{session_hash}\t{'c' * 64}\n"
+                    f"stop\t{session_hash}\t-\n"
+                ),
+                encoding="utf-8",
+            )
+            marker.chmod(0o600)
+
+            with self.assertRaises(DesktopPhaseBFailure) as raised:
+                _read_probe_event_counts(
+                    marker,
+                    expected_session_hash=session_hash,
+                    expected_tool_hash=None,
+                )
+
+            self.assertEqual(
+                "probe_marker_content_invalid",
+                raised.exception.code,
+            )
 
     def test_probe_plugin_data_rejects_phase_path_disagreement(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -1400,6 +1495,7 @@ class ManualDesktopPhaseBTest(unittest.TestCase):
                     "session_id": "probe-session",
                     "true_call_id": "probe",
                     "true_call_count": 1,
+                    "tool_id_linkable": True,
                     "unexpected_tool_call_count": 0,
                     "true_output_seen": True,
                     "assistant_raw_value_absent": True,
@@ -1407,6 +1503,99 @@ class ManualDesktopPhaseBTest(unittest.TestCase):
                 },
                 parsed,
             )
+
+    def test_probe_session_accepts_unified_exec_transcript_for_true(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory).resolve()
+            workspace = root / "workspace"
+            workspace.mkdir()
+            session = root / "session.jsonl"
+            tool_input = (
+                "const r = await tools.exec_command("
+                + json.dumps(
+                    {
+                        "cmd": "true",
+                        "workdir": str(workspace),
+                        "yield_time_ms": 10000,
+                    }
+                )
+                + "); text(r.output);"
+            )
+            records = [
+                {
+                    "type": "session_meta",
+                    "payload": {
+                        "id": "probe-session",
+                        "cwd": str(workspace),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "custom_tool_call",
+                        "name": "exec",
+                        "call_id": "probe",
+                        "input": tool_input,
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "custom_tool_call_output",
+                        "call_id": "probe",
+                        "output": [{"type": "text", "text": ""}],
+                    },
+                },
+            ]
+            session.write_text(
+                "".join(json.dumps(record) + "\n" for record in records),
+                encoding="utf-8",
+            )
+
+            parsed = _parse_probe_session(session, workspace=workspace)
+
+            self.assertEqual(1, parsed["true_call_count"])
+            self.assertEqual(0, parsed["unexpected_tool_call_count"])
+            self.assertTrue(parsed["true_output_seen"])
+            self.assertFalse(parsed["tool_id_linkable"])
+
+    def test_probe_session_rejects_unbounded_custom_exec_input(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory).resolve()
+            workspace = root / "workspace"
+            workspace.mkdir()
+            session = root / "session.jsonl"
+            records = [
+                {
+                    "type": "session_meta",
+                    "payload": {
+                        "id": "probe-session",
+                        "cwd": str(workspace),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "custom_tool_call",
+                        "name": "exec",
+                        "call_id": "probe",
+                        "input": (
+                            'const r = await tools.exec_command({"cmd":"true"}); '
+                            'await tools.exec_command({"cmd":"false"}); '
+                            "text(r.output);"
+                        ),
+                    },
+                },
+            ]
+            session.write_text(
+                "".join(json.dumps(record) + "\n" for record in records),
+                encoding="utf-8",
+            )
+
+            parsed = _parse_probe_session(session, workspace=workspace)
+
+            self.assertEqual(0, parsed["true_call_count"])
+            self.assertEqual(1, parsed["unexpected_tool_call_count"])
 
     def test_probe_session_ignores_oversized_unrelated_session(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
