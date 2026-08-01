@@ -599,14 +599,7 @@ def checkpoint_old_probe(root_argument: Path) -> dict[str, Any]:
         f'sh "{installed_root / "hooks" / "run_cli.sh"}" init --codex '
         f'--workspace "{workspace}" --data-dir "{plugin_data}" --json'
     )
-    prompt = (
-        "ToolUseProxy旧版のbaselineを作ります。\n\n"
-        "次の初期化コマンドを1回実行してください。外部通信はありません。"
-        "変更されるのは検証専用のPlugin dataとworkspace登録だけです。\n\n"
-        f"{init_command}\n\n"
-        "成功したら、別のtool callとしてshellのtrueを1回だけ実行してください。"
-        "ほかのtool、Web、MCP、file編集は使わないでください。\n"
-    )
+    prompt = _old_baseline_prompt(init_command)
     _write_private(prompt_file, prompt.encode())
     task_url = "codex://new?" + urllib.parse.urlencode(
         {"path": str(workspace), "prompt": prompt.rstrip()}
@@ -624,6 +617,28 @@ def checkpoint_old_probe(root_argument: Path) -> dict[str, Any]:
             "prompt_file": str(prompt_file),
         },
     }
+
+
+def _old_baseline_prompt(init_command: str) -> str:
+    return (
+        "ToolUseProxy旧版のbaselineを作ります。\n\n"
+        "次の初期化コマンドは通常のsandboxで先に試さないでください。"
+        "この1コマンドだけ、sandbox外での実行許可を求めて1回実行して"
+        "ください。外部通信はありません。変更されるのは検証専用のPlugin "
+        "dataとworkspace登録だけです。\n\n"
+        "承認画面の説明はMarkdownを使わず、次の5項目を改行して日本語で"
+        "表示してください。\n"
+        "操作: ToolUseProxy旧版の検証用DBとworkspace登録を初期化します。\n"
+        "目的: update前のbaselineを作るためです。\n"
+        "変更: 指定Plugin dataとworkspace登録だけです。\n"
+        "通信: ありません。\n"
+        "拒否条件: 表示コマンドが次の完全なコマンドと違えば拒否します。\n\n"
+        f"{init_command}\n\n"
+        "sandbox外での1コマンド限定許可を要求できない場合、通常権限では"
+        "実行せず停止してください。\n\n"
+        "成功したら、別のtool callとしてshellのtrueを1回だけ実行してください。"
+        "ほかのtool、Web、MCP、file編集は使わないでください。\n"
+    )
 
 
 def checkpoint_baseline(root_argument: Path) -> dict[str, Any]:

@@ -12,6 +12,7 @@ from scripts.manual_desktop_update_rollback import (
     DesktopUpdateRollbackFailure,
     _extract_tar_safely,
     _inventory_delta_matches,
+    _old_baseline_prompt,
     _remove_managed_path,
     _validate_uninstall_plan,
     inspect_marketplace_artifact,
@@ -19,6 +20,21 @@ from scripts.manual_desktop_update_rollback import (
 
 
 class ManualDesktopUpdateRollbackTest(unittest.TestCase):
+    def test_old_baseline_prompt_requires_scoped_escalation(self) -> None:
+        command = 'sh "/plugin/hooks/run_cli.sh" init --data-dir "/data"'
+
+        prompt = _old_baseline_prompt(command)
+
+        self.assertIn("通常のsandboxで先に試さない", prompt)
+        self.assertIn("この1コマンドだけ、sandbox外での実行許可", prompt)
+        self.assertIn("操作:", prompt)
+        self.assertIn("目的:", prompt)
+        self.assertIn("変更:", prompt)
+        self.assertIn("通信:", prompt)
+        self.assertIn("拒否条件:", prompt)
+        self.assertIn(command, prompt)
+        self.assertIn("trueを1回だけ", prompt)
+
     def test_inspect_marketplace_binds_all_artifact_identities(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory).resolve()
