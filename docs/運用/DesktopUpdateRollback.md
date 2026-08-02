@@ -81,7 +81,7 @@ Desktop dispatchを値なしmarkerで確認するためにlauncherへ計測処�
 3. `old_plugin_installed`
 4. `old_hooks_trusted`
 5. `baseline_initialized`: schema v1 DB、synthetic event、workspace状態を固定
-6. `old_removed_for_update`: 旧code登録だけを削除し、data保持を確認
+6. `old_removed_for_update`: 旧code登録だけを削除し、schema・baseline event件数・workspace登録でdata保持を確認する。Plugin有効中の正常なevent追記があるため、削除前後のDB全体hash一致は要求しない。削除後のhashをPlugin不在期間の静止基準として保存する
 7. `new_marketplace_added`
 8. `new_plugin_installed`
 9. `new_hooks_trusted`

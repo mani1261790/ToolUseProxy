@@ -723,14 +723,33 @@ def checkpoint_old_removed_for_update(root_argument: Path) -> dict[str, Any]:
         plugin_expected=False,
         marketplace_root=Path(old.plugin_root).parent,
     ):
-        raise DesktopUpdateRollbackFailure(
-            "checkpoint_old_removed",
-            "shared_state_delta_unexpected",
+        rebased_before = _rebaseline_desktop_version_only(
+            state["before"],
+            current,
+            plugin_expected=False,
+            marketplace_root=Path(old.plugin_root).parent,
         )
+        if rebased_before is None:
+            raise DesktopUpdateRollbackFailure(
+                "checkpoint_old_removed",
+                "shared_state_delta_unexpected",
+            )
+        state["host_version_rebaseline"] = {
+            "reason": "desktop_app_updated_between_checkpoints",
+            "previous_desktop_version": state["before"].get(
+                "desktop_version"
+            ),
+            "current_desktop_version": current.get("desktop_version"),
+            "codex_cli_unchanged": True,
+            "desktop_codex_unchanged": True,
+        }
+        state["before"] = rebased_before
     database = Path(str(state["current_data"])) / "events.db"
-    data_hash_unchanged = (
-        database.is_file()
-        and _sha256(database) == state.get("baseline_database_sha256")
+    database_schema = _database_schema(database)
+    baseline_event_preserved, workspace_registered = _database_baseline_checks(
+        database,
+        workspace=Path(str(state["workspace"])).resolve(),
+        minimum_event_count=int(state["baseline_event_count"]),
     )
     state = apply_transition(
         state,
@@ -738,9 +757,12 @@ def checkpoint_old_removed_for_update(root_argument: Path) -> dict[str, Any]:
         evidence={
             "plugin_present": False,
             "managed_data_present": database.is_file(),
-            "managed_data_hash_unchanged": data_hash_unchanged,
+            "database_schema": database_schema,
+            "baseline_event_count_preserved": baseline_event_preserved,
+            "workspace_registered": workspace_registered,
         },
     )
+    state["removed_database_sha256"] = _sha256(database)
     write_state(root / STATE_FILENAME, state)
     return {
         "schema_version": REPORT_SCHEMA_VERSION,
@@ -748,7 +770,12 @@ def checkpoint_old_removed_for_update(root_argument: Path) -> dict[str, Any]:
         "case_id": CASE_ID,
         "plugin_code_removed": True,
         "managed_data_present": True,
-        "managed_data_hash_unchanged": True,
+        "database_schema": database_schema,
+        "baseline_event_count_preserved": True,
+        "workspace_registered": True,
+        "desktop_version_rebaselined": (
+            "host_version_rebaseline" in state
+        ),
         "next": (
             "Run prepare-new. It will replace only the validation marketplace; "
             "it will not delete or migrate managed data."
@@ -2430,6 +2457,38 @@ def _inventory_delta_matches(
     ):
         return False
     return _baseline_plugins_compatible(before, current)
+
+
+def _rebaseline_desktop_version_only(
+    before: Any,
+    current: dict[str, Any],
+    *,
+    plugin_expected: bool,
+    marketplace_root: Path,
+) -> dict[str, Any] | None:
+    if not isinstance(before, dict):
+        return None
+    previous = before.get("desktop_version")
+    current_version = current.get("desktop_version")
+    if (
+        not isinstance(previous, str)
+        or not isinstance(current_version, str)
+        or previous == current_version
+        or before.get("codex_cli_version") != current.get("codex_cli_version")
+        or before.get("desktop_codex_version")
+        != current.get("desktop_codex_version")
+    ):
+        return None
+    rebased = json.loads(json.dumps(before))
+    rebased["desktop_version"] = current_version
+    if not _inventory_delta_matches(
+        rebased,
+        current,
+        plugin_expected=plugin_expected,
+        marketplace_root=marketplace_root,
+    ):
+        return None
+    return rebased
 
 
 def _inventory_restored_without_config_hash(

@@ -17,6 +17,7 @@ from scripts.manual_desktop_update_rollback import (
     _extract_tar_safely,
     _inventory_delta_matches,
     _old_baseline_prompt,
+    _rebaseline_desktop_version_only,
     _remove_managed_path,
     _validate_uninstall_plan,
     inspect_marketplace_artifact,
@@ -24,6 +25,52 @@ from scripts.manual_desktop_update_rollback import (
 
 
 class ManualDesktopUpdateRollbackTest(unittest.TestCase):
+    def test_desktop_version_rebaseline_allows_only_app_version_drift(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            marketplace = Path(temporary_directory).resolve()
+            before = {
+                "codex_cli_version": "codex 1",
+                "desktop_version": "desktop-old",
+                "desktop_codex_version": "desktop-codex 1",
+                "installed_plugin_ids": [],
+                "marketplace_names": [MARKETPLACE_NAME],
+                "marketplaces": [
+                    {"name": MARKETPLACE_NAME, "root": str(marketplace)}
+                ],
+                "plugins": [],
+            }
+            current = {
+                **before,
+                "desktop_version": "desktop-new",
+            }
+
+            rebased = _rebaseline_desktop_version_only(
+                before,
+                current,
+                plugin_expected=False,
+                marketplace_root=marketplace,
+            )
+
+            self.assertIsNotNone(rebased)
+            assert rebased is not None
+            self.assertEqual("desktop-new", rebased["desktop_version"])
+            self.assertEqual("desktop-old", before["desktop_version"])
+
+            incompatible = {
+                **current,
+                "desktop_codex_version": "desktop-codex 2",
+            }
+            self.assertIsNone(
+                _rebaseline_desktop_version_only(
+                    before,
+                    incompatible,
+                    plugin_expected=False,
+                    marketplace_root=marketplace,
+                )
+            )
+
     def test_checkpoint_baseline_cli_dispatches_to_function(self) -> None:
         root = Path("/tmp/desktop-update-baseline")
         payload = {"schema_version": 1, "status": "baseline_initialized"}

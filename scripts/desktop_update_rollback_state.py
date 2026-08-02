@@ -371,10 +371,13 @@ def _validate_stage_evidence(
             Path(str(state["current_data"])),
             target_stage,
         )
-    elif target_stage in {
-        "old_removed_for_update",
-        "new_removed_for_rollback",
-    }:
+    elif target_stage == "old_removed_for_update":
+        _require(evidence, "plugin_present", False, target_stage)
+        _require(evidence, "managed_data_present", True, target_stage)
+        _require(evidence, "database_schema", 1, target_stage)
+        _require(evidence, "baseline_event_count_preserved", True, target_stage)
+        _require(evidence, "workspace_registered", True, target_stage)
+    elif target_stage == "new_removed_for_rollback":
         _require(evidence, "plugin_present", False, target_stage)
         _require(evidence, "managed_data_present", True, target_stage)
         _require(evidence, "managed_data_hash_unchanged", True, target_stage)
