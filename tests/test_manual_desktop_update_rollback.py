@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import json
+import sys
 import tarfile
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
+
+import scripts.manual_desktop_update_rollback as update_rollback
 
 from scripts.manual_desktop_update_rollback import (
     MARKETPLACE_NAME,
@@ -20,6 +24,34 @@ from scripts.manual_desktop_update_rollback import (
 
 
 class ManualDesktopUpdateRollbackTest(unittest.TestCase):
+    def test_checkpoint_baseline_cli_dispatches_to_function(self) -> None:
+        root = Path("/tmp/desktop-update-baseline")
+        payload = {"schema_version": 1, "status": "baseline_initialized"}
+
+        with (
+            patch.object(
+                sys,
+                "argv",
+                [
+                    "manual_desktop_update_rollback.py",
+                    "checkpoint-baseline",
+                    "--root",
+                    str(root),
+                ],
+            ),
+            patch.object(
+                update_rollback,
+                "checkpoint_baseline",
+                return_value=payload,
+            ) as checkpoint,
+            patch("builtins.print") as output,
+        ):
+            result = update_rollback.main()
+
+        self.assertEqual(0, result)
+        checkpoint.assert_called_once_with(root)
+        output.assert_called_once_with(json.dumps(payload, sort_keys=True))
+
     def test_old_baseline_prompt_requires_scoped_escalation(self) -> None:
         command = 'sh "/plugin/hooks/run_cli.sh" init --data-dir "/data"'
 

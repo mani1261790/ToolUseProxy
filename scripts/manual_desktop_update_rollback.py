@@ -115,8 +115,14 @@ def main() -> int:
     checkpoint_old.add_argument("--root", type=Path, required=True)
     checkpoint_probe = subparsers.add_parser("checkpoint-old-probe")
     checkpoint_probe.add_argument("--root", type=Path, required=True)
-    checkpoint_baseline = subparsers.add_parser("checkpoint-baseline")
-    checkpoint_baseline.add_argument("--root", type=Path, required=True)
+    checkpoint_baseline_parser = subparsers.add_parser(
+        "checkpoint-baseline"
+    )
+    checkpoint_baseline_parser.add_argument(
+        "--root",
+        type=Path,
+        required=True,
+    )
     checkpoint_old_removed = subparsers.add_parser("checkpoint-old-removed")
     checkpoint_old_removed.add_argument("--root", type=Path, required=True)
     prepare_new = subparsers.add_parser("prepare-new")
