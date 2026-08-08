@@ -87,13 +87,24 @@ from hook_monitor.runtime.source_config import (
     protected_source_selector_payload,
     resolve_protected_source_path,
 )
+from hook_monitor.runtime.settings import (
+    RUNTIME_SETTINGS_SCHEMA_VERSION,
+    RuntimeSettingChange,
+    RuntimeSettingsError,
+    WorkspaceRuntimeSettings,
+    empty_workspace_runtime_settings,
+    make_workspace_runtime_settings,
+    parse_runtime_settings_json,
+    runtime_settings_json,
+    validate_runtime_setting_key,
+)
 
 if TYPE_CHECKING:
     from hook_monitor.policy.redaction_preview import RedactionPreviewPlan
 
 
 DEFAULT_DB_PATH = Path(".tooluseproxy/events.db")
-CURRENT_SCHEMA_VERSION = 5
+CURRENT_SCHEMA_VERSION = 6
 RUNTIME_REQUIRED_TABLES = frozenset(
     {
         "analysis_cursors",
@@ -130,6 +141,8 @@ RUNTIME_REQUIRED_TABLES = frozenset(
         "tool_operation_outcomes",
         "tool_operations",
         "workspace_analysis_state",
+        "workspace_runtime_setting_changes",
+        "workspace_runtime_settings",
         "workspaces",
     }
 )
@@ -235,6 +248,28 @@ RUNTIME_REQUIRED_COLUMNS = {
             "recorded_at",
         }
     ),
+    "workspace_runtime_settings": frozenset(
+        {
+            "workspace_id",
+            "settings_schema_version",
+            "settings_revision",
+            "settings_json",
+            "updated_at",
+        }
+    ),
+    "workspace_runtime_setting_changes": frozenset(
+        {
+            "change_id",
+            "workspace_id",
+            "action",
+            "setting_key",
+            "previous_value",
+            "new_value",
+            "previous_revision",
+            "new_revision",
+            "recorded_at",
+        }
+    ),
 }
 LEGACY_DERIVED_WORKSPACE_ID = "legacy_unscoped"
 WORKSPACE_ANALYSIS_INPUT_REVISION_VERSION = "workspace-analysis-input-v2"
@@ -333,6 +368,11 @@ RUNTIME_REQUIRED_INDEXES = {
         False,
         ("candidate_id", "recorded_at", "review_id"),
     ),
+    "idx_workspace_runtime_setting_changes": (
+        "workspace_runtime_setting_changes",
+        False,
+        ("workspace_id", "recorded_at", "change_id"),
+    ),
 }
 RUNTIME_REQUIRED_TRIGGERS = {
     "protected_source_candidate_reviews_no_update": (
@@ -341,6 +381,14 @@ RUNTIME_REQUIRED_TRIGGERS = {
     ),
     "protected_source_candidate_reviews_no_delete": (
         "protected_source_candidate_reviews",
+        "BEFORE DELETE",
+    ),
+    "workspace_runtime_setting_changes_no_update": (
+        "workspace_runtime_setting_changes",
+        "BEFORE UPDATE",
+    ),
+    "workspace_runtime_setting_changes_no_delete": (
+        "workspace_runtime_setting_changes",
         "BEFORE DELETE",
     ),
 }
@@ -545,6 +593,86 @@ class EventStore:
                     first_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     last_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 )
+                """
+            )
+            conn.execute(
+                f"""
+                CREATE TABLE IF NOT EXISTS workspace_runtime_settings (
+                    workspace_id TEXT PRIMARY KEY,
+                    settings_schema_version INTEGER NOT NULL CHECK (
+                        settings_schema_version = {RUNTIME_SETTINGS_SCHEMA_VERSION}
+                    ),
+                    settings_revision TEXT NOT NULL CHECK (
+                        length(settings_revision) = 64
+                        AND settings_revision NOT GLOB '*[^0-9a-f]*'
+                    ),
+                    settings_json TEXT NOT NULL CHECK (
+                        length(CAST(settings_json AS BLOB)) <= 4096
+                    ),
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (workspace_id) REFERENCES workspaces (workspace_id)
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS workspace_runtime_setting_changes (
+                    change_id TEXT PRIMARY KEY CHECK (
+                        length(change_id) = 32
+                        AND change_id NOT GLOB '*[^0-9a-f]*'
+                    ),
+                    workspace_id TEXT NOT NULL,
+                    action TEXT NOT NULL CHECK (action IN ('set', 'unset')),
+                    setting_key TEXT NOT NULL CHECK (
+                        length(CAST(setting_key AS BLOB)) BETWEEN 1 AND 64
+                    ),
+                    previous_value INTEGER CHECK (
+                        previous_value IS NULL OR previous_value IN (0, 1)
+                    ),
+                    new_value INTEGER CHECK (
+                        new_value IS NULL OR new_value IN (0, 1)
+                    ),
+                    previous_revision TEXT NOT NULL CHECK (
+                        length(previous_revision) = 64
+                        AND previous_revision NOT GLOB '*[^0-9a-f]*'
+                    ),
+                    new_revision TEXT NOT NULL CHECK (
+                        length(new_revision) = 64
+                        AND new_revision NOT GLOB '*[^0-9a-f]*'
+                    ),
+                    recorded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (workspace_id) REFERENCES workspaces (workspace_id)
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_workspace_runtime_setting_changes
+                ON workspace_runtime_setting_changes (
+                    workspace_id,
+                    recorded_at,
+                    change_id
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TRIGGER IF NOT EXISTS
+                    workspace_runtime_setting_changes_no_update
+                BEFORE UPDATE ON workspace_runtime_setting_changes
+                BEGIN
+                    SELECT RAISE(ABORT, 'workspace runtime setting audit is immutable');
+                END
+                """
+            )
+            conn.execute(
+                """
+                CREATE TRIGGER IF NOT EXISTS
+                    workspace_runtime_setting_changes_no_delete
+                BEFORE DELETE ON workspace_runtime_setting_changes
+                BEGIN
+                    SELECT RAISE(ABORT, 'workspace runtime setting audit is immutable');
+                END
                 """
             )
             conn.execute(
@@ -9205,6 +9333,319 @@ class EventStore:
             conn.execute("BEGIN IMMEDIATE")
             self._upsert_workspace(conn, workspace)
 
+    def apply_workspace_runtime_settings_profile(
+        self,
+        workspace: WorkspaceContext,
+        *,
+        settings: dict[str, bool],
+        expected_revision: str,
+    ) -> tuple[WorkspaceRuntimeSettings, tuple[RuntimeSettingChange, ...]]:
+        """Register a workspace and apply one fixed settings profile atomically."""
+        if (
+            not workspace.ready
+            or workspace.workspace_id is None
+            or workspace.canonical_root is None
+        ):
+            raise RuntimeSettingsError(
+                "workspace_unavailable",
+                "workspace is not usable for runtime settings",
+            )
+        if not re.fullmatch(r"[0-9a-f]{64}", expected_revision):
+            raise RuntimeSettingsError(
+                "settings_revision_invalid",
+                "expected runtime settings revision is invalid",
+            )
+        target = make_workspace_runtime_settings(
+            workspace.workspace_id,
+            settings,
+        )
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            self._upsert_workspace(conn, workspace)
+            current = _load_workspace_runtime_settings(
+                conn,
+                workspace.workspace_id,
+            )
+            if current.revision == target.revision:
+                return current, ()
+            if current.revision != expected_revision:
+                raise RuntimeSettingsError(
+                    "settings_revision_stale",
+                    "runtime settings changed; verify the current revision",
+                )
+
+            conn.execute(
+                """
+                INSERT INTO workspace_runtime_settings (
+                    workspace_id,
+                    settings_schema_version,
+                    settings_revision,
+                    settings_json,
+                    updated_at
+                ) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(workspace_id) DO UPDATE SET
+                    settings_schema_version = excluded.settings_schema_version,
+                    settings_revision = excluded.settings_revision,
+                    settings_json = excluded.settings_json,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE workspace_runtime_settings.settings_revision = ?
+                """,
+                (
+                    workspace.workspace_id,
+                    target.schema_version,
+                    target.revision,
+                    runtime_settings_json(target.settings),
+                    current.revision,
+                ),
+            )
+            changes: list[RuntimeSettingChange] = []
+            for setting_key in sorted(target.settings):
+                previous_value = current.settings.get(setting_key)
+                new_value = target.settings[setting_key]
+                if previous_value is new_value:
+                    continue
+                change_id = uuid.uuid4().hex
+                conn.execute(
+                    """
+                    INSERT INTO workspace_runtime_setting_changes (
+                        change_id,
+                        workspace_id,
+                        action,
+                        setting_key,
+                        previous_value,
+                        new_value,
+                        previous_revision,
+                        new_revision
+                    ) VALUES (?, ?, 'set', ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        change_id,
+                        workspace.workspace_id,
+                        setting_key,
+                        (
+                            None
+                            if previous_value is None
+                            else int(previous_value)
+                        ),
+                        int(new_value),
+                        current.revision,
+                        target.revision,
+                    ),
+                )
+                row = conn.execute(
+                    """
+                    SELECT recorded_at
+                    FROM workspace_runtime_setting_changes
+                    WHERE change_id = ?
+                    """,
+                    (change_id,),
+                ).fetchone()
+                assert row is not None
+                changes.append(
+                    RuntimeSettingChange(
+                        change_id=change_id,
+                        workspace_id=workspace.workspace_id,
+                        action="set",
+                        setting_key=setting_key,
+                        previous_value=previous_value,
+                        new_value=new_value,
+                        previous_revision=current.revision,
+                        new_revision=target.revision,
+                        recorded_at=str(row[0]),
+                    )
+                )
+            return target, tuple(changes)
+
+    def get_workspace_runtime_settings(
+        self,
+        workspace_id: str,
+        *,
+        busy_timeout_ms: int | None = None,
+    ) -> WorkspaceRuntimeSettings:
+        if not isinstance(workspace_id, str) or not workspace_id:
+            raise RuntimeSettingsError(
+                "workspace_id_invalid",
+                "workspace runtime settings require a workspace identity",
+            )
+        if busy_timeout_ms is None:
+            with self._connect() as conn:
+                return _load_workspace_runtime_settings(conn, workspace_id)
+        if type(busy_timeout_ms) is not int or not 0 <= busy_timeout_ms <= 1000:
+            raise ValueError("runtime settings busy timeout is invalid")
+        uri = f"{self.db_path.resolve().as_uri()}?mode=ro"
+        timeout_seconds = busy_timeout_ms / 1000
+        with sqlite3.connect(uri, uri=True, timeout=timeout_seconds) as conn:
+            conn.execute(f"PRAGMA busy_timeout = {busy_timeout_ms}")
+            return _load_workspace_runtime_settings(conn, workspace_id)
+
+    def update_workspace_runtime_setting(
+        self,
+        workspace_id: str,
+        *,
+        setting_key: str,
+        value: bool | None,
+        expected_revision: str,
+    ) -> tuple[WorkspaceRuntimeSettings, RuntimeSettingChange | None]:
+        validate_runtime_setting_key(setting_key)
+        if value is not None and type(value) is not bool:
+            raise RuntimeSettingsError(
+                "setting_value_invalid",
+                f"runtime setting {setting_key} must be on or off",
+            )
+        if not re.fullmatch(r"[0-9a-f]{64}", expected_revision):
+            raise RuntimeSettingsError(
+                "settings_revision_invalid",
+                "expected runtime settings revision is invalid",
+            )
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            registered = conn.execute(
+                "SELECT 1 FROM workspaces WHERE workspace_id = ?",
+                (workspace_id,),
+            ).fetchone()
+            if registered is None:
+                raise RuntimeSettingsError(
+                    "workspace_not_registered",
+                    "workspace is not registered; run tooluseproxy init first",
+                )
+            current = _load_workspace_runtime_settings(conn, workspace_id)
+            if current.revision != expected_revision:
+                raise RuntimeSettingsError(
+                    "settings_revision_stale",
+                    "runtime settings changed; run config show again",
+                )
+            previous_value = current.settings.get(setting_key)
+            updated = dict(current.settings)
+            if value is None:
+                updated.pop(setting_key, None)
+                action = "unset"
+            else:
+                updated[setting_key] = value
+                action = "set"
+            result = make_workspace_runtime_settings(workspace_id, updated)
+            if result.revision == current.revision:
+                return current, None
+
+            conn.execute(
+                """
+                INSERT INTO workspace_runtime_settings (
+                    workspace_id,
+                    settings_schema_version,
+                    settings_revision,
+                    settings_json,
+                    updated_at
+                ) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(workspace_id) DO UPDATE SET
+                    settings_schema_version = excluded.settings_schema_version,
+                    settings_revision = excluded.settings_revision,
+                    settings_json = excluded.settings_json,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE workspace_runtime_settings.settings_revision = ?
+                """,
+                (
+                    workspace_id,
+                    result.schema_version,
+                    result.revision,
+                    runtime_settings_json(result.settings),
+                    current.revision,
+                ),
+            )
+            change_id = uuid.uuid4().hex
+            conn.execute(
+                """
+                INSERT INTO workspace_runtime_setting_changes (
+                    change_id,
+                    workspace_id,
+                    action,
+                    setting_key,
+                    previous_value,
+                    new_value,
+                    previous_revision,
+                    new_revision
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    change_id,
+                    workspace_id,
+                    action,
+                    setting_key,
+                    (
+                        None
+                        if previous_value is None
+                        else int(previous_value)
+                    ),
+                    None if value is None else int(value),
+                    current.revision,
+                    result.revision,
+                ),
+            )
+            row = conn.execute(
+                """
+                SELECT recorded_at
+                FROM workspace_runtime_setting_changes
+                WHERE change_id = ?
+                """,
+                (change_id,),
+            ).fetchone()
+            assert row is not None
+            change = RuntimeSettingChange(
+                change_id=change_id,
+                workspace_id=workspace_id,
+                action=action,
+                setting_key=setting_key,
+                previous_value=previous_value,
+                new_value=value,
+                previous_revision=current.revision,
+                new_revision=result.revision,
+                recorded_at=str(row[0]),
+            )
+            return result, change
+
+    def list_workspace_runtime_setting_changes(
+        self,
+        workspace_id: str,
+        *,
+        limit: int = 20,
+    ) -> tuple[RuntimeSettingChange, ...]:
+        if type(limit) is not int or not 1 <= limit <= 100:
+            raise ValueError("runtime setting history limit must be between 1 and 100")
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT
+                    change_id,
+                    workspace_id,
+                    action,
+                    setting_key,
+                    previous_value,
+                    new_value,
+                    previous_revision,
+                    new_revision,
+                    recorded_at
+                FROM workspace_runtime_setting_changes
+                WHERE workspace_id = ?
+                ORDER BY recorded_at DESC, change_id DESC
+                LIMIT ?
+                """,
+                (workspace_id, limit),
+            ).fetchall()
+        return tuple(
+            RuntimeSettingChange(
+                change_id=str(row[0]),
+                workspace_id=str(row[1]),
+                action=str(row[2]),
+                setting_key=str(row[3]),
+                previous_value=(
+                    None if row[4] is None else bool(row[4])
+                ),
+                new_value=None if row[5] is None else bool(row[5]),
+                previous_revision=str(row[6]),
+                new_revision=str(row[7]),
+                recorded_at=str(row[8]),
+            )
+            for row in rows
+        )
+
     def list_workspaces(self) -> list[WorkspaceContext]:
         with self._connect() as conn:
             rows = conn.execute(
@@ -11957,6 +12398,38 @@ def _model_derived_workspace_id(workspace_id: str) -> str | None:
     if workspace_id == LEGACY_DERIVED_WORKSPACE_ID:
         return None
     return workspace_id
+
+
+def _load_workspace_runtime_settings(
+    conn: sqlite3.Connection,
+    workspace_id: str,
+) -> WorkspaceRuntimeSettings:
+    row = conn.execute(
+        """
+        SELECT
+            settings_schema_version,
+            settings_revision,
+            settings_json
+        FROM workspace_runtime_settings
+        WHERE workspace_id = ?
+        """,
+        (workspace_id,),
+    ).fetchone()
+    if row is None:
+        return empty_workspace_runtime_settings(workspace_id)
+    if row[0] != RUNTIME_SETTINGS_SCHEMA_VERSION:
+        raise RuntimeSettingsError(
+            "settings_schema_unsupported",
+            "stored runtime settings use an unsupported schema",
+        )
+    settings = parse_runtime_settings_json(str(row[2]))
+    result = make_workspace_runtime_settings(workspace_id, settings)
+    if result.revision != row[1]:
+        raise RuntimeSettingsError(
+            "settings_revision_mismatch",
+            "stored runtime settings revision does not match its payload",
+        )
+    return result
 
 
 def _workspace_context_from_registry_row(row: tuple) -> WorkspaceContext:

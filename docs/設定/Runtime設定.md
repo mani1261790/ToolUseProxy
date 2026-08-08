@@ -1,0 +1,64 @@
+# Workspace runtime設定
+
+ToolUseProxyの実行時policyは、workspaceごとに`PLUGIN_DATA/events.db`へ保存できます。Desktopや別taskでも同じworkspace登録と`PLUGIN_DATA`を使えば設定が引き継がれ、Plugin codeをremove / reinstallしてもmanaged dataを明示削除しない限り残ります。
+
+## 設定できる項目
+
+| key | 役割 | 既定値 |
+| --- | --- | --- |
+| `pre-tool-policy` | Bashの外部sinkをPreToolUseで評価する | off |
+| `file-payload-shadow` | file-backed payloadのexact比較をobserve-onlyで記録する | off |
+| `file-payload-exact-enforcement` | 確定したexact / substring一致を実行前blockへ昇格する | off |
+
+`file-payload-shadow`と`file-payload-exact-enforcement`をonにする前に、`pre-tool-policy`をonにする必要があります。依存項目がonの間は`pre-tool-policy`をoffまたはunsetにできません。
+
+## 確認と変更
+
+最初に現在のrevisionを取得します。
+
+```bash
+sh "<PLUGIN_ROOT>/hooks/run_cli.sh" config show \
+  --workspace "$PWD" \
+  --data-dir "<PLUGIN_DATA>" \
+  --json
+```
+
+変更には直前に確認した`settings_revision`が必要です。これは別taskや別processの更新を誤って上書きしないためのcompare-and-setです。
+
+```bash
+sh "<PLUGIN_ROOT>/hooks/run_cli.sh" config set pre-tool-policy on \
+  --expected-revision "<SETTINGS_REVISION>" \
+  --workspace "$PWD" \
+  --data-dir "<PLUGIN_DATA>" \
+  --json
+```
+
+一つ変更するたびに新しいrevisionが返るため、次の変更にはその新しい値を使います。workspace設定を削除して既定値へ戻す場合は`unset`を使います。
+
+```bash
+sh "<PLUGIN_ROOT>/hooks/run_cli.sh" config unset pre-tool-policy \
+  --expected-revision "<SETTINGS_REVISION>" \
+  --workspace "$PWD" \
+  --data-dir "<PLUGIN_DATA>" \
+  --json
+```
+
+値を含まない変更履歴は次で確認できます。
+
+```bash
+sh "<PLUGIN_ROOT>/hooks/run_cli.sh" config history \
+  --workspace "$PWD" \
+  --data-dir "<PLUGIN_DATA>" \
+  --limit 20 \
+  --json
+```
+
+`doctor`と`status`にもcurrent / effective value、適用元、診断codeが表示されます。
+
+## 優先順位と安全境界
+
+有効値の優先順位は`有効な環境変数 > workspace設定 > offの既定値`です。既存の環境変数との互換性は維持しますが、不正な環境変数値はworkspace設定へ黙ってfallbackせず、その項目をoffにして`environment_value_invalid`を診断します。
+
+Hookは設定を短いread-only transactionで読みます。Hook内ではschema migration、設定変更、workspace scan、network accessを行いません。DB lock、schema不一致、設定破損では永続設定をfail-openで使わず、明示された有効な環境変数と安全な既定値だけへ戻ります。migrationが必要な場合はHook外で`init --codex`を実行します。
+
+設定storeへsecret本文や任意文字列は保存しません。保存対象は固定keyのboolean、revision、workspace ID、値を含まない変更監査だけです。

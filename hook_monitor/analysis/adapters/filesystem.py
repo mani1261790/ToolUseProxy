@@ -19,6 +19,7 @@ from hook_monitor.runtime.models import (
     ResourceVersion,
     ToolOperation,
 )
+from hook_monitor.runtime.tool_compat import SHELL_OPERATION_TOOL_NAMES
 from hook_monitor.runtime.operations import (
     apply_patch_operation_kind,
     bash_segment_fragment_ids,
@@ -62,14 +63,7 @@ class FilesystemAdapter:
         "filesystem_write_text_file",
     }
     _APPLY_PATCH_NAME = "apply_patch"
-    _BASH_NAMES = {
-        "bash",
-        "shell",
-        "exec",
-        "command",
-        "terminal",
-        "run_command",
-    }
+    _BASH_NAMES = SHELL_OPERATION_TOOL_NAMES
 
     def analyze(
         self,

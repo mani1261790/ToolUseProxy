@@ -64,6 +64,8 @@ class RuntimeAnalysisResult:
     analysis_run: AnalysisRun
     assignments: tuple[LineageAssignment, ...]
     sinks: tuple[SinkCandidate, ...]
+    source_chunks: tuple[SourceChunk, ...]
+    source_digest: str
     mode: str
 
 
@@ -252,6 +254,8 @@ def _rebuild_session(
         ),
         assignments=tuple(assignments),
         sinks=adapter_result.sinks,
+        source_chunks=tuple(chunks),
+        source_digest=source_digest,
         mode="session-full",
     )
 
@@ -476,6 +480,8 @@ def _update_session_delta(
                 workspace_id=workspace_id,
             )
         ),
+        source_chunks=tuple(chunks),
+        source_digest=source_digest,
         mode="session-incremental",
     )
 

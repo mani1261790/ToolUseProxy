@@ -260,6 +260,55 @@ def rehearse_lifecycle(
         )
         if status.get("status") != "active":
             raise LifecycleFailure("upgrade_status", "upgraded_runtime_inactive")
+        runtime_settings = _run_plugin_json(
+            current_cli,
+            [
+                "config",
+                "show",
+                "--workspace",
+                str(workspace),
+                "--data-dir",
+                str(current_data),
+                "--json",
+            ],
+            cwd=workspace,
+            env=current_environment,
+            stage="runtime_settings_show",
+            captured_outputs=captured_outputs,
+        )
+        settings_revision = _runtime_settings_revision(
+            runtime_settings,
+            "runtime_settings_show",
+        )
+        for setting_key in (
+            "pre-tool-policy",
+            "file-payload-shadow",
+            "file-payload-exact-enforcement",
+        ):
+            runtime_settings = _run_plugin_json(
+                current_cli,
+                [
+                    "config",
+                    "set",
+                    setting_key,
+                    "on",
+                    "--expected-revision",
+                    settings_revision,
+                    "--workspace",
+                    str(workspace),
+                    "--data-dir",
+                    str(current_data),
+                    "--json",
+                ],
+                cwd=workspace,
+                env=current_environment,
+                stage=f"runtime_settings_set_{setting_key}",
+                captured_outputs=captured_outputs,
+            )
+            settings_revision = _runtime_settings_revision(
+                runtime_settings,
+                f"runtime_settings_set_{setting_key}",
+            )
         _run_hook(
             current_hook,
             _pre_tool_payload(workspace, "current-event"),
@@ -275,6 +324,41 @@ def rehearse_lifecycle(
         installer.disable()
         if current_root.exists() or not database.is_file():
             raise LifecycleFailure(stage, "current_disable_contract_invalid")
+        installer.remove_marketplace()
+
+        stage = "current_reinstall"
+        reinstalled_root = installer.install(
+            current_marketplace,
+            expected_version=current_version,
+        )
+        reinstalled_environment = _plugin_environment(
+            reinstalled_root,
+            current_data,
+            codex_home,
+        )
+        reinstalled_settings = _run_plugin_json(
+            reinstalled_root / "hooks" / "run_cli.sh",
+            [
+                "config",
+                "show",
+                "--workspace",
+                str(workspace),
+                "--data-dir",
+                str(current_data),
+                "--json",
+            ],
+            cwd=workspace,
+            env=reinstalled_environment,
+            stage=stage,
+            captured_outputs=captured_outputs,
+        )
+        if (
+            _runtime_settings_revision(reinstalled_settings, stage)
+            != settings_revision
+            or not _all_runtime_settings_enabled(reinstalled_settings)
+        ):
+            raise LifecycleFailure(stage, "runtime_settings_not_preserved")
+        installer.disable()
         installer.remove_marketplace()
 
         stage = "rollback_install"
@@ -425,6 +509,7 @@ def rehearse_lifecycle(
                 "upgrade_backup_created": True,
                 "upgrade_data_preserved": True,
                 "upgraded_runtime_active": True,
+                "runtime_settings_preserved_after_reinstall": True,
                 "newer_schema_rollback_rejected": True,
                 "rollback_backup_imported": True,
                 "rollback_baseline_data_preserved": True,
@@ -435,6 +520,33 @@ def rehearse_lifecycle(
             },
             "metrics": {"external_side_effect_count": 0},
         }
+
+
+def _runtime_settings_revision(
+    payload: dict[str, Any],
+    stage: str,
+) -> str:
+    revision = payload.get("settings_revision")
+    if (
+        not isinstance(revision, str)
+        or len(revision) != 64
+        or any(character not in "0123456789abcdef" for character in revision)
+    ):
+        raise LifecycleFailure(stage, "runtime_settings_revision_invalid")
+    return revision
+
+
+def _all_runtime_settings_enabled(payload: dict[str, Any]) -> bool:
+    settings = payload.get("settings")
+    if not isinstance(settings, list) or len(settings) != 3:
+        return False
+    return all(
+        isinstance(setting, dict)
+        and setting.get("configured_value") is True
+        and setting.get("effective_value") is True
+        and setting.get("source") == "workspace"
+        for setting in settings
+    )
 
 
 class _Installer:
@@ -613,6 +725,12 @@ def _plugin_environment(
         "TOOLUSEPROXY_PYTHON": sys.executable,
     }
     environment.pop("PYTHONPATH", None)
+    for key in (
+        "TOOLUSEPROXY_PRE_TOOL_POLICY",
+        "TOOLUSEPROXY_PRE_TOOL_FILE_PAYLOAD_SHADOW",
+        "TOOLUSEPROXY_PRE_TOOL_FILE_PAYLOAD_EXACT_ENFORCEMENT",
+    ):
+        environment.pop(key, None)
     return environment
 
 

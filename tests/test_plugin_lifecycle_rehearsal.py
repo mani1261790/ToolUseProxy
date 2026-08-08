@@ -61,7 +61,7 @@ class PluginLifecycleRehearsalTest(unittest.TestCase):
         self.assertEqual("passed", payload["status"])
         self.assertEqual(mode, payload["installation_mode"])
         self.assertEqual("0.1.0-alpha.1", payload["baseline"]["plugin_version"])
-        self.assertEqual("0.1.0-alpha.3", payload["candidate"]["plugin_version"])
+        self.assertEqual("0.1.0-alpha.4", payload["candidate"]["plugin_version"])
         self.assertTrue(
             all(
                 value

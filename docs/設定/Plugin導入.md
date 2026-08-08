@@ -5,7 +5,7 @@ ToolUseProxyのCodex Pluginは、repository全体ではなく、生成時にallo
 ## 現在のsupport範囲
 
 - Python 3.11 / 3.12。3.13以降は現在未対応
-- macOS: local package、relocated Plugin bundle、Codex CLIのisolated local marketplace install、alpha.1→alpha.3 upgrade / safe rollbackを検証。Python 3.12 package smokeはCIで継続確認
+- macOS: local package、relocated Plugin bundle、Codex CLIのisolated local marketplace install、alpha.1→alpha.4 upgrade / safe rollbackを検証。Python 3.12 package smokeはCIで継続確認
 - Linux: Ubuntu CIでPython 3.11 / 3.12のfull suite、package、relocated Plugin bundle、wheelのcheckout外実行を検証。Codex CLI marketplace installの実環境E2Eは未検証
 - Windows: `py -3.11`を使うlauncherを同梱するexperimental範囲。実機検証は未完了で、protected-source登録workflow全体は現在未対応
 - Hook内network access、remote embedding、telemetry: なし
@@ -25,20 +25,54 @@ alphaのthreat modelは、Pluginやcoding agentの無承認manifest変更、stal
 
 ## 現在versionと更新
 
-現在versionは`0.1.0-alpha.3`です。類似度profile v2とruntime graph v19を導入しています。既存sessionを次に解析する際は古いcandidate indexを使い続けず、そのsessionのgraphとindexを一度全再構築します。
+現在versionは`0.1.0-alpha.4`です。類似度profile v2とruntime graph v19を導入しています。既存sessionを次に解析する際は古いcandidate indexを使い続けず、そのsessionのgraphとindexを一度全再構築します。
 
-SQLite schemaはv4のままなので、alpha.3への更新だけを理由にDB migrationや`init`を再実行する必要はありません。将来SQLite schema更新を伴うreleaseで`doctor` / `status`がupgrade必要と報告した場合だけ、Hook外で明示的な`init --codex`を実行します。更新後は新しいHook definitionをreview・trustして新しいtaskを開始し、`doctor` / `status`を実行してください。
+Codex CLIはPluginごとの自動更新commandではなく、登録済みGit marketplaceを明示的に更新する`codex plugin marketplace upgrade`を提供します。moving refを登録している場合、更新されたmarketplace snapshotからinstall済みPluginも置き換わります。ToolUseProxyは次の2方式を分けます。
+
+| 方式 | `--ref` | 用途 | 更新 |
+| --- | --- | --- | --- |
+| public alpha更新チャンネル | `public-alpha` | 通常のdogfood / pilot | `marketplace upgrade`で明示更新 |
+| immutable version固定 | `v0.1.0-alpha.4` | 再現実験、監査、rollback | tagは動かないため自動的に別versionへ進まない |
+
+`public-alpha`はreview済み・CI green・公開済みのalpha release commitだけへfast-forwardする保護branchです。開発途中の`main`を実行元にはしません。更新は自動ではなく、ユーザーがcommandを実行した時だけ行われます。
+
+Codex Desktopも同じmarketplaceからPluginをinstallし、複数workspaceで利用できます。Plugin codeのinstallはCodex環境単位ですが、初期化、protected source、runtime設定、監査dataはworkspace単位です。新しいworkspaceを使うたびに、そのworkspaceでbundled setup skillを実行し、保護対象を個別にreviewします。2026-08-09のmacOS実機runでは、3 Hookのreview / trust、PreToolUse / PostToolUse / Stop、public allow、file-backed protected payloadの実行前block、data migration、backup rollback、Disableなしの直接Removeを確認しました。fresh setup profile runは承認2回、public side effect 1、protected side effect 0、exact block 1、raw exposure 0で`passed`です。Desktop task履歴のshell名`exec_command`とHook APIのcanonical名`Bash`は別namespaceであり、画面表示だけでなくHook trust、定義hash、値なしmarker、Hook DB、task記録を証拠にします。hosted Web SearchはPreToolUse / PostToolUse Hookの対象外です。
+
+SQLite schemaはalpha.3とalpha.4でv6のままなので、alpha.3からalpha.4への更新だけを理由にDB migrationを実行する必要はありません。古いschemaから更新した場合、またはbundled setup skillがsetup必要と判定した場合だけ、Hook外で明示的なatomic setup profileを適用します。更新後は変更されたHook definitionをreview・trustして新しいtaskを開始し、bundled skillのread-only verificationを実行してください。
 
 ## install
 
-公開alphaは、可変なremote `main`ではなく、immutableなrelease tagを指定してinstallします。
+通常のpublic alpha利用では、保護された更新チャンネルを指定します。
 
 ```bash
-codex plugin marketplace add mani1261790/ToolUseProxy --ref v0.1.0-alpha.3
+codex plugin marketplace add mani1261790/ToolUseProxy --ref public-alpha
 codex plugin add tooluseproxy@tooluseproxy
 ```
 
-install後はCodexが表示するPlugin source、version、3つのHook definitionを確認してtrustします。ToolUseProxyはこのreviewを迂回しません。release artifact、checksum、SBOM、release notesは[`v0.1.0-alpha.3`](https://github.com/mani1261790/ToolUseProxy/releases/tag/v0.1.0-alpha.3)で確認できます。
+versionを固定する場合は最初のcommandを次に置き換えます。
+
+```bash
+codex plugin marketplace add mani1261790/ToolUseProxy --ref v0.1.0-alpha.4
+```
+
+install後はCodexが表示するPlugin source、version、3つのHook definitionを確認してtrustします。ToolUseProxyはこのreviewを迂回しません。以前trustしたHookでも、matcher、command、sourceなどの定義が変わると`modified`になり、再reviewが必要です。release artifact、checksum、SBOM、release notesは[`v0.1.0-alpha.4`](https://github.com/mani1261790/ToolUseProxy/releases/tag/v0.1.0-alpha.4)で確認できます。
+
+### CLIで更新する
+
+`public-alpha`を登録した環境では、新release公開後に次を実行します。
+
+```bash
+codex plugin marketplace upgrade tooluseproxy
+codex plugin list --json
+```
+
+更新後は表示されたversionを確認し、変更されたHook definitionをreview・trustして、新しいCodex taskを開始します。続いて対象workspaceで`doctor`と`status`を実行してください。schema migrationが必要と報告された場合だけ、Hook外で`init --codex`を実行し、作成されたmigration backupを保持します。`PLUGIN_DATA`はmarketplace cacheと分離されるため、Plugin codeの置換では削除されません。
+
+固定tagを登録している場合、`marketplace upgrade`は同じtagを再取得するだけで別versionへ進みません。将来の別tagへ移るには、Pluginとmarketplaceをremoveし、新しいtagを指定してmarketplaceとPluginを追加します。この操作でも`PLUGIN_DATA`は保持されます。managed dataを削除する`uninstall apply`は更新には使いません。
+
+### rollback
+
+codeだけを以前のversionへ戻す場合は、Pluginとmarketplaceをremoveし、戻したいimmutable tagを指定して再追加します。新しいschemaを古いruntimeで無理に開かないでください。旧runtimeが現在DBをinactiveと判定する場合は、upgrade前に`init --codex`が作成したSQLite backupを別の`PLUGIN_DATA`へ復元します。現在DBは上書きせず保持します。検証済みの手順は[Pluginライフサイクル](../運用/Pluginライフサイクル.md)にあります。
 
 checkoutから開発版を試す場合だけ、repository rootをlocal marketplaceとして追加します。
 
@@ -78,11 +112,11 @@ codex plugin add tooluseproxy@tooluseproxy
 
 builderはruntime fileを明示的に選び、`.git`、`.github`、tests、内部設計docs、scripts、cache、virtual environment、local DB、legacy Hook entrypointをZIPへ含めません。展開したmarketplace rootにはREADME、support、privacy / security契約、Apache-2.0 LICENSEを含め、install済みPluginにもLICENSEを残します。公開済みZIPを利用する場合はReleaseのSHA256SUMSと照合してください。
 
-installまたはHook定義の更新後は、Codexが示すHook definitionを確認してtrustします。ToolUseProxyはこのreviewを迂回しません。新しいPlugin componentとskillを確実に読み込むため、trust後は新しいtaskを開始します。
+installまたはHook定義の更新後は、Codexが示すHook definitionを確認してtrustします。ToolUseProxyはこのreviewを迂回しません。PreToolUse / PostToolUse / Stopがすべて`trusted`であり、`modified` / `untrusted`が残っていないことを確認してください。新しいPlugin componentとskillを確実に読み込むため、trust後は新しいtaskを開始します。
 
 ## 初期化
 
-Plugin Hookは未初期化DBを検出してもschema migrationやworkspace変更を行わず、fail-openで終了します。その際、`PLUGIN_ROOT`と`PLUGIN_DATA`から作った初期化commandをstderrへ表示します。対象workspaceのrootへ移動し、表示されたcommandを実行してください。形式は次の通りです。
+Plugin Hookは未初期化DBを検出してもschema migrationやworkspace変更を行わず、fail-openで終了します。その際、`PLUGIN_ROOT`と`PLUGIN_DATA`から作った初期化commandを、Codex Hook契約に沿うphase別JSONとしてstdoutへ返します。PreToolUse / PostToolUseでは`additionalContext`、Stopではadvisoryな`systemMessage`を使い、denyや入力書き換えは行いません。Python不足、runtime起動失敗、内部policy評価失敗も同じJSON契約で通知し、例外本文やHook inputは診断へ含めません。以前のstderrだけに出す形式はDesktopで表示されないため廃止しました。ただし、案内の表示自体をdispatch証拠にはせず、Desktopでは[Desktop Phase B](../運用/DesktopPhaseB.md)のtrusted probeが記録したdata pathだけを使います。cacheやprocess環境から`PLUGIN_DATA`を推測しません。案内に含まれるcommandの形式は次の通りです。
 
 ```bash
 sh "<PLUGIN_ROOT>/hooks/run_cli.sh" init --codex --data-dir "<PLUGIN_DATA>"
@@ -90,11 +124,25 @@ sh "<PLUGIN_ROOT>/hooks/run_cli.sh" init --codex --data-dir "<PLUGIN_DATA>"
 
 このcommandは次を行います。
 
-- `PLUGIN_DATA/events.db`を候補の承認予約と監査tableを含むschema v4へ初期化または明示的にmigrationする
+- `PLUGIN_DATA/events.db`を候補、監査、workspace runtime設定を含むschema v6へ初期化または明示的にmigrationする
 - 古いschemaをmigrationする前にSQLite backupを作る
 - canonical workspace rootをDBへ登録する
 - `protected_sources.json`がない場合だけ、schema v2の空manifestをatomicに作る
 - 既存の有効なmanifestは変更しない
+
+`PLUGIN_DATA`は通常workspace外にあります。Codexが
+`workspace-write`で動いている場合、coding agentはこのcommandを通常権限で先に
+試してはいけません。対象commandだけに対するsandbox外実行の承認を要求し、
+`exec_command`に`require_escalated`相当の機構があるsurfaceではそれを使います。
+Full Accessは必須条件ではありません。1コマンド単位の昇格手段がないsurfaceでは
+実行前に停止し、利用者が確認済みcommandを自分で実行するか、必要なlocal pathを
+許可するmodeを明示的に選びます。`Operation not permitted`の後に別pathや広い
+commandへ自動的に変えて再試行しません。
+
+なお、agentが`require_escalated`相当を付けたことと、hostが個別承認UIを表示した
+ことは同じではありません。Codex DesktopがUIを表示せず実行する場合もあるため、
+検証時はsessionのtool argumentsと、人が実際に見た画面を別々に記録します。
+承認UIが出なかった場合は「理解した」と推測せず、`not shown`として扱います。
 
 続けて、同じworkspaceとdata directoryを指定して診断します。
 
@@ -119,6 +167,8 @@ sh "<PLUGIN_ROOT>/hooks/run_cli.sh" status \
 - runtime redact / `updatedInput`: 無効
 
 protected sourceは初期化時やHook実行中には自動登録しません。初期化が作るのは空のmanifestだけです。
+
+PreToolUseとfile-backed payload policyは、環境変数だけでなくworkspace単位の永続設定でも明示opt-inできます。現在値、変更方法、優先順位、revision競合の扱いは[Workspace runtime設定](Runtime設定.md)を参照してください。
 
 ### legacy manifestの明示migration
 
@@ -249,14 +299,16 @@ sh "<PLUGIN_ROOT>/hooks/run_cli.sh" uninstall apply \
 
 削除対象はSQLite database / sidecar、migration backup、manifest backupだけです。管理外fileは残し、plan後に内容が変わった場合はstale tokenを拒否します。workspace manifestやprotected source本体、symlink先、package codeは削除しません。secure eraseやfilesystem snapshotの削除は保証しません。
 
-alpha.1からalpha.3へのupgrade / safe rollback手順と検証結果は[Pluginライフサイクル](../運用/Pluginライフサイクル.md)を参照してください。将来versionとcross-platformでの反復は引き続きpublic alphaの検証課題です。
+alpha.1からalpha.4へのupgrade / safe rollback手順と検証結果は[Pluginライフサイクル](../運用/Pluginライフサイクル.md)を参照してください。将来versionとcross-platformでの反復は引き続きpublic alphaの検証課題です。
 
 pre-release候補で実際のHook trust、agent説明、実tool invocationを検証するときは、通常workspaceや実secretを使わず、[Pluginドッグフードのmanual Phase B](../運用/Pluginドッグフード.md#manual-phase-b)を実行します。prepare出力はlocal pathを含むため公開せず、raw値とpathを除外したverify結果だけをrelease evidenceとして扱います。
 
 ## trustとfailure時の挙動
 
 - 未trustのPlugin HookはCodex側でskipされます
-- Python 3.11が見つからない場合、launcherは理由をstderrへ出してfail-openします
+- 一度trustした定義でも、matcherやcommandなどが変わると`modified`になり、再reviewするまでskipされます
+- Desktopでは正常終了したHookのstderrが画面へ表示されないため、Pluginの非active診断はphase別JSON stdoutを使います。表示の有無だけでは発火を判定しません
+- Python 3.11 / 3.12が見つからない場合も、launcherは同じ非blocking JSONで理由を返してfail-openします
 - DBがない、古い、新しすぎる、不完全な場合、runtime HookはDBを変更せずfail-openします
 - SQLite migrationは`init`だけ、protected source manifestのv1→v2 migrationは明示承認後の`protect migrate apply`だけが行い、通常のPlugin HookはDDL、backfill、manifest migrationを実行しません
 - 壊れたmanifestや未登録workspaceは`doctor/status`でactive扱いにしません

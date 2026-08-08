@@ -20,14 +20,18 @@ plain language:
 Explain that command Hooks run outside the Codex sandbox with the user's local
 permissions. ToolUseProxy's Hook implementation writes to its local data
 directory and does not make network requests, but the user must still verify
-the source is `Plugin - tooluseproxy@tooluseproxy`, exactly three ToolUseProxy
-Hooks are present, and every ToolUseProxy command points inside the expected
-installed Plugin root. In an isolated manual Phase B harness, those three must
-be the only pending Hooks. Outside that harness, if unrelated Hooks are also
-pending, do not use `Trust all`; review the three ToolUseProxy entries
-individually. Explain that trust applies to the exact definitions currently
-shown and changed definitions require review again. If any ToolUseProxy source,
-count, or path differs, tell the user not to trust and stop setup.
+the Plugin source, exactly three ToolUseProxy Hooks, and every ToolUseProxy
+command path. For a normal installation, the expected source is
+`Plugin - tooluseproxy@tooluseproxy`. If a manual Phase B context declares
+`expected_plugin_id`, use `Plugin - <expected_plugin_id>` instead; never replace
+that context-specific ID with the normal installation ID. Every command must
+point inside the expected installed Plugin root. In an isolated manual Phase B
+harness, those three must be the only pending Hooks. Outside that harness, if
+unrelated Hooks are also pending, do not use `Trust all`; review the three
+ToolUseProxy entries individually. Explain that trust applies to the exact
+definitions currently shown and changed definitions require review again. If
+any ToolUseProxy source, count, or path differs, tell the user not to trust and
+stop setup.
 
 Before requesting permission to run any `run_cli.sh` or `run_cli.cmd` command,
 explain the operation in plain language. The explanation must let a person
@@ -38,27 +42,32 @@ summary from the exact command arguments that will be submitted.
 
 Assume the Codex approval surface renders plain text, exposes Markdown syntax
 literally, and may collapse every newline. Therefore the summary must be one
-short physical paragraph. Never use Markdown headings, emphasis, bullets,
-tables, code spans, or fenced blocks in it. In particular, do not emit `#`,
-`*`, backticks, or a leading `-`.
+short physical paragraph of at most 160 Unicode characters. Never use Markdown
+headings, emphasis, bullets, tables, code spans, or fenced blocks in it. In
+particular, do not emit `#`, `*`, backticks, or a leading `-`.
 
-Use these full-width plain-text delimiters in this exact order:
+Use these plain-text delimiters in this exact order:
 
-`実行確認｜【操作】...｜【目的】...｜【影響】...｜【通信】...｜【取消】...｜【判断】...`
+`実行確認｜すること：...｜変わるもの：...｜外部通信：...｜許可判断：...`
 
-Keep the whole summary concise enough to scan after line wrapping. Describe:
+Keep `すること` and `変わるもの` in ordinary language. Use `なし` for no
+state change or no network. In `許可判断`, name the one operation that is safe
+to approve and the extra or different operation that requires rejection.
 
-- `操作`: exact subcommand, count, and target workspace in ordinary language
-- `目的`: what the operation accomplishes
-- `影響`: local data it reads and state it may write, or `変更なし`
-- `通信`: `なし` unless the operation truly requires it
-- `取消`: how to reverse or review the change
-- `判断`: first state the checked approval condition, then the concrete
-  mismatch or extra operation that requires rejection
+Do not list absolute paths in the summary. Name the workspace briefly and say
+that the submitted arguments were checked against the approved context file.
+The raw command remains available separately for technical review.
 
-Do not list every absolute path in the summary. Name the workspace briefly and
-say that the submitted arguments were checked against the approved context
-file. The raw command remains available separately for technical review.
+Pass exactly the same short paragraph as the tool call's approval
+`justification`; do not put a second, longer explanation in the approval UI.
+For common operations, follow these models and adapt only the workspace name or
+whether state changes:
+
+- fixed setup profile apply: `実行確認｜すること：workspace外のPlugin dataへ初期化と保護3設定を一括適用｜変わるもの：検証用DBと登録情報｜外部通信：なし｜許可判断：初期設定1回だけなら許可。ほかの操作があれば拒否。`
+- fixed setup profile verify: `実行確認｜すること：workspace外のPlugin dataを読み取り一括確認｜変わるもの：なし｜外部通信：なし｜許可判断：確認1回だけなら許可。変更操作があれば拒否。`
+- init: `実行確認｜すること：この検証用workspaceをToolUseProxyへ登録｜変わるもの：検証用DBと登録情報｜外部通信：なし｜許可判断：初期設定1回だけなら許可。ほかの操作があれば拒否。`
+- doctor/status/config show: `実行確認｜すること：この検証用workspaceの状態確認｜変わるもの：なし｜外部通信：なし｜許可判断：確認1回だけなら許可。変更操作があれば拒否。`
+- config set: `実行確認｜すること：保護設定を1項目変更｜変わるもの：この検証用workspaceの設定｜外部通信：なし｜許可判断：表示した1項目の変更だけなら許可。ほかの変更があれば拒否。`
 
 Do not use implementation terms such as revision, manifest hash, Hook data
 directory, or opaque token as the primary permission explanation. Those terms
@@ -66,7 +75,7 @@ may follow as technical detail. If a command combines multiple read-only
 checks after one local initialization, say so explicitly.
 
 Never use memory-dependent references such as `説明済み`, `上記の操作`, or
-`先ほどの説明` in the permission summary. The `【判断】` segment must stand
+`先ほどの説明` in the permission summary. The `許可判断` segment must stand
 on its own. Before submitting the tool call, verify that the long `sh ...`
 display uses the expected installed Plugin launcher, exact subcommand,
 workspace, and data directory, and contains no unmentioned command. State that
@@ -74,14 +83,35 @@ verification in the summary. Tell the user to reject if the command differs from
 the named operation or scope. The user must not need to understand the long
 shell command to decide.
 
+If a `run_cli.sh` or `run_cli.cmd` command must read or write `PLUGIN_DATA`
+outside the current sandbox's writable roots, do not first try the command with
+ordinary sandbox permissions. Request the host's explicit, one-command
+out-of-sandbox approval for that exact command. On an `exec_command` interface
+that exposes `sandbox_permissions`, set it to `require_escalated` and provide a
+short plain-language justification consistent with the permission summary.
+Do not treat Full Access as a prerequisite and do not use it merely to avoid a
+per-command decision. If the current surface offers no per-command escalation,
+stop before execution and explain that the user must either run the exact
+reviewed command themselves or deliberately choose a surface/mode that grants
+the required local path. Never retry an `Operation not permitted` result with a
+broader command or different path.
+
+If the command tool reports that the process is still running and returns a
+continuation or cell ID, use only the host-provided wait/resume operation with
+that exact ID until the original command completes. Waiting is not a second CLI
+command and must not trigger a new approval. Do not rerun the CLI command, and
+do not report missing initial output as a command failure.
+
 1. Confirm that the current directory is the intended workspace root.
 2. Confirm that the ToolUseProxy Plugin Hook definition has been reviewed and trusted in Codex. Do not bypass Hook trust.
 3. If the workspace belongs to a manual Phase B harness and the prompt names a
    mode `0600` `phase-b-context.json`, read that exact file first. Use only its
-   `workspace`, `plugin_root`, `plugin_data`, and `test_sink` paths. Do not use
-   `ps`, inspect parent-process environments, or broadly search outside the
-   workspace to rediscover those paths. If the context conflicts with the
-   current workspace or a Hook diagnostic, stop and explain the mismatch.
+   `workspace`, `plugin_root`, `plugin_data`, and `test_sink` as filesystem
+   paths. Use `expected_plugin_id`, `expected_plugin_version`, `setup_skill`,
+   and `surface` only as identity and workflow metadata. Do not use `ps`,
+   inspect parent-process environments, or broadly search outside the workspace
+   to rediscover those paths. If the context conflicts with the current
+   workspace or a Hook diagnostic, stop and explain the mismatch.
    Otherwise, resolve the absolute Plugin root from this skill's location; it
    is two directories above `skills/tooluseproxy-setup`. On macOS/Linux, run
    every command through `sh "<PLUGIN_ROOT>/hooks/run_cli.sh"`. The general
@@ -90,6 +120,33 @@ shell command to decide.
    If the context declares `surface: codex_cli_tui`, report the result only for
    the Codex CLI TUI. Do not infer Codex Desktop/GUI support from that run.
 4. Initialize the same writable directory used by the Hook:
+
+   If an approved manual workflow supplies an exact `file-payload-exact`
+   setup-profile command and expected revision, use that one command instead
+   of separate `init` and three `config set` commands. The profile is fixed to
+   `pre-tool-policy`, `file-payload-shadow`, and
+   `file-payload-exact-enforcement` all enabled; it accepts no arbitrary
+   settings object. Do not substitute another profile or revision.
+
+   ```text
+   sh "<PLUGIN_ROOT>/hooks/run_cli.sh" setup apply file-payload-exact --codex --expected-revision <expected-revision> --workspace <workspace-root> --data-dir <PLUGIN_DATA> --json
+   ```
+
+   Follow it with the exact read-only combined verification when the workflow
+   supplies it. This replaces separate `doctor`, `status`, and `config show`
+   calls for that workflow:
+
+   ```text
+   sh "<PLUGIN_ROOT>/hooks/run_cli.sh" setup verify file-payload-exact --workspace <workspace-root> --data-dir <PLUGIN_DATA> --json
+   ```
+
+   Stop before any send test unless the setup application and combined
+   verification both succeed. The approval is required because these commands
+   access Plugin data outside the task workspace, not because they use the
+   network. Request each as a one-command approval and never request a reusable
+   permission prefix.
+
+   Otherwise, use the existing individual initialization flow:
 
    ```text
    sh "<PLUGIN_ROOT>/hooks/run_cli.sh" init --codex --workspace <workspace-root> --data-dir <PLUGIN_DATA>
