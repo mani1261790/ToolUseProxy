@@ -562,6 +562,7 @@ def _run_setup_apply(args: argparse.Namespace) -> int:
         PathConfigurationError,
         SchemaCompatibilityError,
         SourceConfigError,
+        ValueError,
         sqlite3.Error,
     ):
         _render_setup_error(
@@ -724,6 +725,8 @@ def _run_setup_verify(args: argparse.Namespace) -> int:
         PathConfigurationError,
         RuntimeSettingsError,
         SchemaCompatibilityError,
+        SourceConfigError,
+        ValueError,
         sqlite3.Error,
     ):
         _render_setup_error(

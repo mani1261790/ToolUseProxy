@@ -225,6 +225,41 @@ text(JSON.stringify(r));
             self.assertIn("外部通信：なし", prompt)
             self.assertIn("個別のinit、doctor、status、config show、config setは実行しない", prompt)
 
+    def test_desktop_prompt_defers_setup_commands_until_data_is_known(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory).resolve()
+            workspace = root / "workspace"
+            plugin_root = root / "plugin"
+            marketplace = root / "marketplace"
+            workspace.mkdir()
+            plugin_root.mkdir()
+            marketplace.mkdir()
+            _write_desktop_guidance(
+                root,
+                {
+                    "workspace": str(workspace),
+                    "hook_plugin_root": str(plugin_root),
+                    "marketplace": str(marketplace),
+                    "installed_plugin_root": str(plugin_root),
+                    "plugin_data": None,
+                    "fake_sink": str(root / "bin" / "curl"),
+                    "plugin_version": "0.1.0-alpha.3.desktop-phase-b.test",
+                },
+            )
+
+            prompt = (root / "desktop-phase-b-prompt.txt").read_text(
+                encoding="utf-8"
+            )
+
+            self.assertIn(
+                "実行するexact commandはcheckpoint-hook-probe後に確定します",
+                prompt,
+            )
+            self.assertNotIn("setup apply: None", prompt)
+            self.assertNotIn("setup verify: None", prompt)
+
     def test_hooks_list_requires_exact_trusted_phase_b_hooks(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory).resolve()

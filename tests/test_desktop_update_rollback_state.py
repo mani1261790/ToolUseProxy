@@ -280,6 +280,60 @@ class DesktopUpdateRollbackStateTest(unittest.TestCase):
                     evidence={},
                 )
 
+    def test_restore_plan_requires_migration_backup(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory).resolve()
+            state = self._advance_to_old_reinstalled(self._state(root), root)
+            state = apply_transition(
+                state,
+                target_stage="rollback_incompatible_confirmed",
+                evidence={
+                    "status": "inactive",
+                    "database_schema": 6,
+                    "database_hash_unchanged": True,
+                    "event_count_unchanged": True,
+                },
+            )
+
+            with self.assertRaisesRegex(
+                DesktopUpdateStateError,
+                "migration_backup_missing",
+            ):
+                apply_transition(
+                    state,
+                    target_stage="rollback_restore_planned",
+                    evidence={
+                        "source_backup": str(root / "missing.bak"),
+                        "current_data_path": str(root / "current-data"),
+                        "rollback_data_path": str(root / "rollback-data"),
+                    },
+                )
+
+    def test_state_io_rejects_symlink_path_components(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory).resolve()
+            real = root / "real"
+            real.mkdir()
+            linked = root / "linked"
+            linked.symlink_to(real, target_is_directory=True)
+            state_path = linked / "nested" / "state.json"
+
+            with self.assertRaisesRegex(
+                DesktopUpdateStateError,
+                "symlink_refused",
+            ):
+                write_state(state_path, self._state(root))
+
+            real_state = real / "state.json"
+            write_state(real_state, self._state(root))
+            linked_state = root / "state-link.json"
+            linked_state.symlink_to(real_state)
+            with self.assertRaisesRegex(
+                DesktopUpdateStateError,
+                "state_unavailable",
+            ):
+                read_state(linked_state)
+
     def test_old_runtime_must_not_mutate_new_database(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory).resolve()
