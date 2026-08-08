@@ -26,6 +26,34 @@ from scripts.manual_desktop_update_rollback import (
 
 
 class ManualDesktopUpdateRollbackTest(unittest.TestCase):
+    def test_checkpoint_new_probe_cli_dispatches_to_function(self) -> None:
+        root = Path("/tmp/desktop-update-new-probe")
+        payload = {"schema_version": 1, "status": "new_hook_probe_passed"}
+
+        with (
+            patch.object(
+                sys,
+                "argv",
+                [
+                    "manual_desktop_update_rollback.py",
+                    "checkpoint-new-probe",
+                    "--root",
+                    str(root),
+                ],
+            ),
+            patch.object(
+                update_rollback,
+                "checkpoint_new_probe",
+                return_value=payload,
+            ) as checkpoint,
+            patch("builtins.print") as output,
+        ):
+            result = update_rollback.main()
+
+        self.assertEqual(0, result)
+        checkpoint.assert_called_once_with(root)
+        output.assert_called_once_with(json.dumps(payload, sort_keys=True))
+
     def test_desktop_host_rebaseline_allows_app_bundle_drift_only(
         self,
     ) -> None:
