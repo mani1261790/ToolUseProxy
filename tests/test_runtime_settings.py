@@ -7,6 +7,7 @@ import json
 from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
+from unittest.mock import patch
 
 from hook_monitor.runtime.settings import (
     FILE_PAYLOAD_EXACT_ENFORCEMENT_KEY,
@@ -535,6 +536,57 @@ class RuntimeSettingsCliTest(unittest.TestCase):
         self.assertEqual(before_settings, after_settings)
         self.assertEqual(before_history, after_history)
         self.assertEqual(before_manifest, manifest.read_bytes())
+
+    def test_setup_profile_errors_remain_structured_json(self) -> None:
+        fresh_workspace = self.root / "error-workspace"
+        fresh_data = self.root / "error-data"
+        fresh_workspace.mkdir()
+        initial_revision = empty_workspace_runtime_settings(
+            "revision-is-settings-only"
+        ).revision
+        with patch(
+            "tooluseproxy.cli._create_empty_manifest",
+            side_effect=ValueError("invalid manifest"),
+        ):
+            apply_code, apply_payload, _ = self._run(
+                [
+                    "setup",
+                    "apply",
+                    SETUP_PROFILE_FILE_PAYLOAD_EXACT,
+                    "--codex",
+                    "--expected-revision",
+                    initial_revision,
+                    "--workspace",
+                    str(fresh_workspace),
+                    "--data-dir",
+                    str(fresh_data),
+                    "--json",
+                ]
+            )
+        self.assertEqual(1, apply_code)
+        self.assertEqual("setup_unavailable", apply_payload["error"]["code"])
+
+        with patch(
+            "tooluseproxy.cli._resolve_cli_workspace",
+            side_effect=ValueError("invalid workspace"),
+        ):
+            verify_code, verify_payload, _ = self._run(
+                [
+                    "setup",
+                    "verify",
+                    SETUP_PROFILE_FILE_PAYLOAD_EXACT,
+                    "--workspace",
+                    str(fresh_workspace),
+                    "--data-dir",
+                    str(fresh_data),
+                    "--json",
+                ]
+            )
+        self.assertEqual(1, verify_code)
+        self.assertEqual(
+            "verification_unavailable",
+            verify_payload["error"]["code"],
+        )
 
 
 if __name__ == "__main__":

@@ -3714,6 +3714,15 @@ def _write_desktop_guidance(
                 "--json",
             ]
         )
+    if setup_apply_command is None or setup_verify_command is None:
+        setup_command_sentence = (
+            "実行するexact commandはcheckpoint-hook-probe後に確定します。"
+        )
+    else:
+        setup_command_sentence = (
+            "実行するexact commandはsetup apply: "
+            f"{setup_apply_command}｜setup verify: {setup_verify_command}。"
+        )
     prompt = (
         "ToolUseProxy Desktop Phase Bを行います。"
         f"最初に{root / CONTEXT_FILENAME}を読み、そこに記載されたsetup_skillを"
@@ -3736,8 +3745,8 @@ def _write_desktop_guidance(
         "操作があれば拒否。」を使ってください。setup verifyでは「実行確認｜"
         "すること：workspace外のPlugin dataを読み取り一括確認｜変わるもの：なし"
         "｜外部通信：なし｜許可判断：確認1回だけなら許可。変更操作があれば"
-        "拒否。」を使ってください。実行するexact commandはsetup apply: "
-        f"{setup_apply_command}｜setup verify: {setup_verify_command}。verification"
+        "拒否。」を使ってください。"
+        f"{setup_command_sentence}verification"
         "がpassedになった後、payload fileを読まず、次の二つだけを順に"
         f"実行してください。public call: {public_command}｜protected call: "
         f"{protected_command}。system curl、変数、stdin、command substitution、"

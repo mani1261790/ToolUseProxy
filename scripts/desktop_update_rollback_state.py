@@ -236,10 +236,11 @@ def write_state(path: Path, state: Mapping[str, Any]) -> None:
         separators=(",", ":"),
     )
     _reject_sensitive_evidence(rendered)
-    path = path.expanduser().resolve()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if path.parent.is_symlink() or path.is_symlink():
+    requested = path.expanduser()
+    if _path_or_ancestor_is_symlink(requested):
         raise DesktopUpdateStateError("state_write", "symlink_refused")
+    path = requested.resolve()
+    path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.{secrets.token_hex(8)}.tmp")
     try:
         descriptor = os.open(
@@ -265,14 +266,28 @@ def write_state(path: Path, state: Mapping[str, Any]) -> None:
 
 
 def read_state(path: Path) -> dict[str, Any]:
-    path = path.expanduser().resolve()
-    if not path.is_file() or path.is_symlink():
+    requested = path.expanduser()
+    if _path_or_ancestor_is_symlink(requested):
+        raise DesktopUpdateStateError("state_read", "state_unavailable")
+    path = requested.resolve()
+    if not path.is_file():
         raise DesktopUpdateStateError("state_read", "state_unavailable")
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as error:
         raise DesktopUpdateStateError("state_read", "state_invalid") from error
     return _validated_state(payload)
+
+
+def _path_or_ancestor_is_symlink(path: Path) -> bool:
+    current = path.absolute()
+    while True:
+        if current.is_symlink():
+            return True
+        parent = current.parent
+        if parent == current:
+            return False
+        current = parent
 
 
 def make_cleanup_token(state: Mapping[str, Any]) -> tuple[str, dict[str, Any]]:
@@ -400,10 +415,16 @@ def _validate_stage_evidence(
         _require(evidence, "database_hash_unchanged", True, target_stage)
         _require(evidence, "event_count_unchanged", True, target_stage)
     elif target_stage == "rollback_restore_planned":
+        migration_backup = state.get("migration_backup")
+        if not isinstance(migration_backup, str) or not migration_backup:
+            raise DesktopUpdateStateError(
+                target_stage,
+                "migration_backup_missing",
+            )
         _require_path(
             evidence,
             "source_backup",
-            Path(str(state["migration_backup"])),
+            Path(migration_backup),
             target_stage,
         )
         _require_path(
