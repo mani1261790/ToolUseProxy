@@ -8,7 +8,7 @@ Codexのtool useをローカルで観測し、外部sinkへ送られるpayload�
 
 - [研究紹介スライド（初めて知る方向け）](https://mani1261790.github.io/ToolUseProxy/slides/tooluseproxy-research.html)
 - [Codex Pluginとして試す](docs/設定/Plugin導入.md)
-- [5分quickstart / Five-minute quickstart](QUICKSTART.md)
+- [5分クイックスタート](QUICKSTART.md)
 - 30秒synthetic demo: `python3.11 scripts/demo_plugin.py`
 - [English introduction](README.en.md)
 - [対応環境と既知の制限](SUPPORT.md)
@@ -53,9 +53,11 @@ ToolUseProxyはLLM内部の状態や因果的な情報流を直接観測する�
 
 設計全体は[アーキテクチャ概要](docs/設計/アーキテクチャ.md)、詳細な完了範囲と残作業は[実装タスク計画](docs/運用/実装タスク.md)を参照してください。
 
-## Pluginをインストールする
+## 5分クイックスタート
 
-Python 3.11または3.12とCodex CLIを用意します。通常は、公開alphaだけをfast-forwardで配信する`public-alpha`更新チャンネルを追加してください。可変な開発branchの`main`を実行元にはしません。OS・機能別の境界は[サポート範囲](SUPPORT.md)を確認してください。
+Python 3.11または3.12と、Plugin対応のCodex CLIまたはCodex Desktopを用意します。通常は、検証済みの公開alphaだけを配信する`public-alpha`を使います。開発中の`main`はインストール元にしません。
+
+### 1. Pluginを1回インストールする
 
 ```bash
 codex plugin marketplace add mani1261790/ToolUseProxy --ref public-alpha
@@ -64,7 +66,27 @@ codex plugin add tooluseproxy@tooluseproxy
 
 MarketplaceとPluginのinstallはCodex環境に対して1回です。特定project専用のinstallではなく、同じPluginを複数projectで利用できます。初期化、protected source登録、runtime設定、監査dataはworkspaceごとに分離されるため、新しいprojectではbundled setup skillを実行して、そのworkspaceだけを初期設定します。
 
-更新は自動ではありません。新しいpublic alphaが出た後、次を明示的に実行します。
+### 2. 3つのHookを確認する
+
+Codexに表示されるsourceが`Plugin - tooluseproxy@tooluseproxy`で、`PreToolUse`、`PostToolUse`、`Stop`の3件だけであることを確認してTrustします。commandがインストール済みPlugin内の`hooks/run_hook.sh`を指していない場合や、無関係なHookも表示されている場合は`Trust all`を使わないでください。
+
+### 3. 利用するprojectを初期設定する
+
+対象projectをCodexで開き、新しいtaskで次のように依頼します。
+
+> ToolUseProxy setup skillを使って、このworkspaceを初期設定し、doctorとstatusで確認してください。protected valueは表示せず、失敗した場合はそこで停止してください。
+
+`doctor: ok`と`status: active`を確認したら利用開始できます。Pluginは再インストールせず、別projectでも同じ手順でworkspaceだけを初期設定します。
+
+### 4. protected sourceを1件ずつ確認する
+
+> protected source候補を1件だけscanし、値を表示せずに説明してください。approve、reject、ignoreの判断を待ってください。
+
+候補は自動登録されません。内容と変更点を理解したうえで1件ずつ明示承認します。PreToolUse blockも既定では無効です。
+
+### 5. 更新する
+
+更新は自動ではありません。新しいpublic alphaが出た後、更新する場合だけ次を明示的に実行します。
 
 ```bash
 codex plugin marketplace upgrade tooluseproxy
@@ -73,15 +95,9 @@ codex plugin list --json
 
 特定versionを固定したい場合は、`public-alpha`の代わりにimmutable tag `v0.1.0-alpha.4`を指定します。固定tagは`marketplace upgrade`を実行しても別versionへ移動しません。
 
-installまたは更新後は、Codexが表示するHook definitionを確認してtrustし、新しいtaskを開始します。Pluginが示す`PLUGIN_ROOT` / `PLUGIN_DATA`を使って、対象workspaceで初期化と診断を行います。
+更新後は変更された3つのHookをもう一度確認し、新しいCodex taskでsetup skillによるverificationを実行します。
 
-```bash
-sh "<PLUGIN_ROOT>/hooks/run_cli.sh" init --codex --data-dir "<PLUGIN_DATA>"
-sh "<PLUGIN_ROOT>/hooks/run_cli.sh" doctor --workspace "$PWD" --data-dir "<PLUGIN_DATA>"
-sh "<PLUGIN_ROOT>/hooks/run_cli.sh" status --workspace "$PWD" --data-dir "<PLUGIN_DATA>"
-```
-
-Hook trustで確認する内容、更新チャンネルと固定tagの違い、protected sourceの候補発見・承認、rollback、削除時のdata保持を含む完全な手順は[Plugin導入](docs/設定/Plugin導入.md)にあります。Codex Desktopはlocal Pluginを利用できるsurfaceで、[Desktop専用Phase B harness](docs/運用/DesktopPhaseB.md)まで実装済みです。定義hashを固定した3 Hookのtrust、値を含まないmarkerによるPre / Post / Stop各1回の実配送、public allow、protected payloadの実行前blockを確認しました。2026-08-09には異version migration、backup rollback、DisableなしのRemoveも完走しました。承認文の理解は短文化後のrunで確認済みです。[#63](https://github.com/mani1261790/ToolUseProxy/issues/63)では、workspace外のPlugin dataを操作する理由を明記し、固定profile適用とread-only verificationの通常2承認へ集約しました。fresh runは承認2回、public 1、protected 0、exact block 1、raw exposure 0で正式な`passed`です。Codex CLIのMarketplace更新と保護動作も実機検証済みです。
+Hook trust、実projectでの安全な試し方、更新、削除は[5分クイックスタート](QUICKSTART.md)、保護設定、rollback、data保持を含む完全な説明は[Plugin導入](docs/設定/Plugin導入.md)にあります。Codex Desktopはlocal Pluginを利用できるsurfaceで、[Desktop専用Phase B harness](docs/運用/DesktopPhaseB.md)まで実装済みです。定義hashを固定した3 Hookのtrust、値を含まないmarkerによるPre / Post / Stop各1回の実配送、public allow、protected payloadの実行前blockを確認しました。2026-08-09には異version migration、backup rollback、DisableなしのRemoveも完走しました。承認文の理解は短文化後のrunで確認済みです。[#63](https://github.com/mani1261790/ToolUseProxy/issues/63)では、workspace外のPlugin dataを操作する理由を明記し、固定profile適用とread-only verificationの通常2承認へ集約しました。fresh runは承認2回、public 1、protected 0、exact block 1、raw exposure 0で正式な`passed`です。Codex CLIのMarketplace更新と保護動作も実機検証済みです。
 
 ## 安全側の既定値
 
