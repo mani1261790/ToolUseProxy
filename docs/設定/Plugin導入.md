@@ -5,7 +5,7 @@ ToolUseProxyのCodex Pluginは、repository全体ではなく、生成時にallo
 ## 現在のsupport範囲
 
 - Python 3.11 / 3.12。3.13以降は現在未対応
-- macOS: local package、relocated Plugin bundle、Codex CLIのisolated local marketplace install、alpha.1→alpha.3 upgrade / safe rollbackを検証。Python 3.12 package smokeはCIで継続確認
+- macOS: local package、relocated Plugin bundle、Codex CLIのisolated local marketplace install、alpha.1→alpha.4 upgrade / safe rollbackを検証。Python 3.12 package smokeはCIで継続確認
 - Linux: Ubuntu CIでPython 3.11 / 3.12のfull suite、package、relocated Plugin bundle、wheelのcheckout外実行を検証。Codex CLI marketplace installの実環境E2Eは未検証
 - Windows: `py -3.11`を使うlauncherを同梱するexperimental範囲。実機検証は未完了で、protected-source登録workflow全体は現在未対応
 - Hook内network access、remote embedding、telemetry: なし
@@ -25,20 +25,20 @@ alphaのthreat modelは、Pluginやcoding agentの無承認manifest変更、stal
 
 ## 現在versionと更新
 
-現在versionは`0.1.0-alpha.3`です。類似度profile v2とruntime graph v19を導入しています。既存sessionを次に解析する際は古いcandidate indexを使い続けず、そのsessionのgraphとindexを一度全再構築します。
+現在versionは`0.1.0-alpha.4`です。類似度profile v2とruntime graph v19を導入しています。既存sessionを次に解析する際は古いcandidate indexを使い続けず、そのsessionのgraphとindexを一度全再構築します。
 
 Codex CLIはPluginごとの自動更新commandではなく、登録済みGit marketplaceを明示的に更新する`codex plugin marketplace upgrade`を提供します。moving refを登録している場合、更新されたmarketplace snapshotからinstall済みPluginも置き換わります。ToolUseProxyは次の2方式を分けます。
 
 | 方式 | `--ref` | 用途 | 更新 |
 | --- | --- | --- | --- |
 | public alpha更新チャンネル | `public-alpha` | 通常のdogfood / pilot | `marketplace upgrade`で明示更新 |
-| immutable version固定 | `v0.1.0-alpha.3` | 再現実験、監査、rollback | tagは動かないため自動的に別versionへ進まない |
+| immutable version固定 | `v0.1.0-alpha.4` | 再現実験、監査、rollback | tagは動かないため自動的に別versionへ進まない |
 
 `public-alpha`はreview済み・CI green・公開済みのalpha release commitだけへfast-forwardする保護branchです。開発途中の`main`を実行元にはしません。更新は自動ではなく、ユーザーがcommandを実行した時だけ行われます。
 
-Codex Desktopはrepositoryの`.agents/plugins/marketplace.json`を使うlocal Plugin workflowの対象です。ただし、「DesktopがPluginをinstallできること」と「ToolUseProxyの3 Hook、PreToolUse block、更新後のdata保持がCLIと同じ条件で動くこと」は別の主張です。2026-07-30の実機runでは、定義変更後のPreToolUse / PostToolUseが`trustStatus: modified`のままで、実行可能な`trusted`状態ではありませんでした。Desktop task履歴のshell名`exec_command`もHook matcher名ではなく、Hook APIのcanonical名は`Bash`です。さらに正常終了したHookのstderrはDesktop画面へ表示されないため、案内が見えないことだけでは発火を判断できません。最新定義3件の再trustとmarker / Hook DBによる再検証が終わるまで、実機保証する保護動作とinstall / update手順はCodex CLIに限定します。hosted Web SearchもPreToolUse / PostToolUse Hookの対象外です。
+Codex Desktopも同じmarketplaceからPluginをinstallし、複数workspaceで利用できます。Plugin codeのinstallはCodex環境単位ですが、初期化、protected source、runtime設定、監査dataはworkspace単位です。新しいworkspaceを使うたびに、そのworkspaceでbundled setup skillを実行し、保護対象を個別にreviewします。2026-08-09のmacOS実機runでは、3 Hookのreview / trust、PreToolUse / PostToolUse / Stop、public allow、file-backed protected payloadの実行前block、data migration、backup rollback、Disableなしの直接Removeを確認しました。fresh setup profile runは承認2回、public side effect 1、protected side effect 0、exact block 1、raw exposure 0で`passed`です。Desktop task履歴のshell名`exec_command`とHook APIのcanonical名`Bash`は別namespaceであり、画面表示だけでなくHook trust、定義hash、値なしmarker、Hook DB、task記録を証拠にします。hosted Web SearchはPreToolUse / PostToolUse Hookの対象外です。
 
-SQLite schemaはv4のままなので、alpha.3への更新だけを理由にDB migrationや`init`を再実行する必要はありません。将来SQLite schema更新を伴うreleaseで`doctor` / `status`がupgrade必要と報告した場合だけ、Hook外で明示的な`init --codex`を実行します。更新後は新しいHook definitionをreview・trustして新しいtaskを開始し、`doctor` / `status`を実行してください。
+SQLite schemaはalpha.3とalpha.4でv6のままなので、alpha.3からalpha.4への更新だけを理由にDB migrationを実行する必要はありません。古いschemaから更新した場合、またはbundled setup skillがsetup必要と判定した場合だけ、Hook外で明示的なatomic setup profileを適用します。更新後は変更されたHook definitionをreview・trustして新しいtaskを開始し、bundled skillのread-only verificationを実行してください。
 
 ## install
 
@@ -52,10 +52,10 @@ codex plugin add tooluseproxy@tooluseproxy
 versionを固定する場合は最初のcommandを次に置き換えます。
 
 ```bash
-codex plugin marketplace add mani1261790/ToolUseProxy --ref v0.1.0-alpha.3
+codex plugin marketplace add mani1261790/ToolUseProxy --ref v0.1.0-alpha.4
 ```
 
-install後はCodexが表示するPlugin source、version、3つのHook definitionを確認してtrustします。ToolUseProxyはこのreviewを迂回しません。以前trustしたHookでも、matcher、command、sourceなどの定義が変わると`modified`になり、再reviewが必要です。release artifact、checksum、SBOM、release notesは[`v0.1.0-alpha.3`](https://github.com/mani1261790/ToolUseProxy/releases/tag/v0.1.0-alpha.3)で確認できます。
+install後はCodexが表示するPlugin source、version、3つのHook definitionを確認してtrustします。ToolUseProxyはこのreviewを迂回しません。以前trustしたHookでも、matcher、command、sourceなどの定義が変わると`modified`になり、再reviewが必要です。release artifact、checksum、SBOM、release notesは[`v0.1.0-alpha.4`](https://github.com/mani1261790/ToolUseProxy/releases/tag/v0.1.0-alpha.4)で確認できます。
 
 ### CLIで更新する
 
@@ -299,7 +299,7 @@ sh "<PLUGIN_ROOT>/hooks/run_cli.sh" uninstall apply \
 
 削除対象はSQLite database / sidecar、migration backup、manifest backupだけです。管理外fileは残し、plan後に内容が変わった場合はstale tokenを拒否します。workspace manifestやprotected source本体、symlink先、package codeは削除しません。secure eraseやfilesystem snapshotの削除は保証しません。
 
-alpha.1からalpha.3へのupgrade / safe rollback手順と検証結果は[Pluginライフサイクル](../運用/Pluginライフサイクル.md)を参照してください。将来versionとcross-platformでの反復は引き続きpublic alphaの検証課題です。
+alpha.1からalpha.4へのupgrade / safe rollback手順と検証結果は[Pluginライフサイクル](../運用/Pluginライフサイクル.md)を参照してください。将来versionとcross-platformでの反復は引き続きpublic alphaの検証課題です。
 
 pre-release候補で実際のHook trust、agent説明、実tool invocationを検証するときは、通常workspaceや実secretを使わず、[Pluginドッグフードのmanual Phase B](../運用/Pluginドッグフード.md#manual-phase-b)を実行します。prepare出力はlocal pathを含むため公開せず、raw値とpathを除外したverify結果だけをrelease evidenceとして扱います。
 

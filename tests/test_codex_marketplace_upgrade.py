@@ -16,8 +16,8 @@ from typing import Any
 REPO_ROOT = Path(__file__).resolve().parents[1]
 BASELINE_COMMIT = "22974427ab62e55a00d21af164d8fc837cb5e8b7"
 BASELINE_PLUGIN_VERSION = "0.1.0-alpha.1"
-CURRENT_PLUGIN_VERSION = "0.1.0-alpha.3"
-CURRENT_PYTHON_VERSION = "0.1.0a3"
+CURRENT_PLUGIN_VERSION = "0.1.0-alpha.4"
+CURRENT_PYTHON_VERSION = "0.1.0a4"
 UPDATE_REF = "public-alpha-test"
 
 

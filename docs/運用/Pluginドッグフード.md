@@ -2,6 +2,58 @@
 
 公開Plugin marketplace artifactから、public alphaのlifecycleをsynthetic dataだけで反復する手順です。CodexのHook trustはユーザーがdefinitionをreviewして行うmanual gateであり、このrunnerは承認を自動化・迂回しません。
 
+## 実projectでのself-dogfood
+
+自分の別projectで試す場合も、最初から日常利用へ全面適用しません。公開済みartifactの利用と、まだreleaseへ昇格していない最新mainの評価を区別します。
+
+| 目的 | install元 | 境界 |
+| --- | --- | --- |
+| 公開済みalphaを再現する | `public-alpha`またはimmutable tag | 公開済みreleaseだけ。release後にmainへ入った変更は含まない |
+| 次release候補を自分で先行評価する | cleanなlocal checkoutまたはそこからbuildしたPlugin bundle | development build。version表示だけで公開artifactと同一視しない |
+
+開始前に次を確認します。
+
+1. 対象projectのbackupまたはcleanなGit状態を確認する
+2. 顧客data、production credential、signing keyを含まない低risk workspaceを最初に選ぶ
+3. `codex plugin list --json`と`codex plugin marketplace list --json`で既存installを確認する
+4. ToolUseProxy Pluginが複数有効なら停止し、どの一つを使うか決める
+5. 既存Plugin dataは削除せず保持する。削除は別の`uninstall plan`と明示承認に分ける
+6. install元のcommit、Plugin version、Codex version、OS、対象workspaceの識別名だけをlocal記録へ残す
+
+公開版を使うcommandは[Five-minute quickstart](../../QUICKSTART.md)を正本にします。最新mainを先行評価するときは、remote `main`を直接trustせず、まずcheckoutを`origin/main`の確認済みcommitへ固定してcleanであることを確認し、そのlocal absolute pathをmarketplaceとして登録します。
+
+```bash
+codex plugin marketplace add /absolute/path/to/ToolUseProxy
+codex plugin add tooluseproxy@tooluseproxy
+```
+
+同名marketplaceがすでにある場合に上書きや混在を推測実行しません。既存installのremove、marketplace remove、新しいinstallをそれぞれ確認し、Plugin codeのremoveとmanaged dataの削除を分離します。install後はPreToolUse / PostToolUse / Stopの定義をreviewし、3件とも意図したsourceとhashである場合だけtrustして、新しいtaskを開始します。
+
+最初のtaskではbundled setup skillだけを使います。最新buildでは、workspace外のPlugin dataへ初期化と3保護設定を一つのatomic profileとして適用し、その後に一つのread-only verificationを行います。承認理由は「外部通信」ではなく「workspace外のPlugin data操作」であり、通常の承認UIは2回程度です。広い再利用可能permission prefixは許可しません。
+
+日常作業へ進む前に、低riskなsynthetic dataで次を順番に確認します。
+
+- setup applyとread-only verificationが成功する
+- harmlessなpublic operationが1回実行される
+- synthetic protected valueを含む対応済みfile-backed operationが実行前にblockされる
+- protected side effectが0である
+- assistant出力へprotected valueが現れない
+- 通常作業で予期しないblockがない
+
+次のいずれかがあれば、そのprojectでの利用を停止します。
+
+- setup / verification / doctor / statusの失敗
+- Hookが`modified`、`untrusted`、想定外sourceになる
+- ToolUseProxy Pluginの二重稼働
+- public operationのfalse block
+- protected operationのside effect発生
+- raw protected valueの画面、report、Issueへの露出
+- 未知schema、DB error、設定revision不一致
+
+停止時は失敗した操作を繰り返さず、Pluginをdisableまたはremoveします。Plugin codeをremoveしてもlocal dataは保持されます。managed dataを削除する場合だけ、後からvalue-freeな`uninstall plan`を確認し、exact confirmationを別途承認します。
+
+結果は`.github/ISSUE_TEMPLATE/dogfood-report.md`の項目で記録します。公開Issueへ貼れるのはversion、OS、判定、件数、value-freeなfailure code、分かりやすさの評価だけです。project名、absolute path、source値、raw Hook payload、`events.db`、task transcript、tokenは貼りません。security-sensitiveな結果は公開Issueではなく[SECURITY.md](../../SECURITY.md)の非公開窓口を使います。
+
 ## 自動Phase A
 
 Codex CLIを使うisolated lifecycleを実行します。
@@ -44,7 +96,7 @@ python3.11 scripts/dogfood_plugin.py --installation-mode extracted
 | surface | Plugin利用の公式案内 | ToolUseProxy Phase B |
 | --- | --- | --- |
 | Codex CLI TUI | あり | 機能動作を確認済み。説明UXは再検証待ち |
-| Codex Desktop / GUI | あり | Hook review・command承認・blockを未検証 |
+| Codex Desktop / GUI | あり | macOS実機でHook review、承認2回のatomic setup / read-only verify、public allow、protected block、raw exposure 0を確認済み |
 
 ```bash
 python3.11 scripts/manual_plugin_phase_b.py prepare \
@@ -172,7 +224,7 @@ python3.11 scripts/manual_sink_payload_shadow.py desktop-preflight
 
 2026-07-27時点のlocal環境では、isolated `CODEX_HOME`とopt-in環境変数の両方がDesktop Hookへ届くことを証明できるlauncherが見つからないため、`unsupported: isolated_desktop_hook_environment_unavailable`です。これは「DesktopでPluginを使えない」という意味ではなく、「CLI用の隔離harnessをそのままDesktopへ流用できない」という意味です。
 
-workspace単位のruntime設定とTUI harnessへの接続は実装済みです。Desktop専用Phase B harnessも実装し、同じ永続設定を使って標準のDesktop Plugin installを検証できる段階です。専用synthetic workspaceでPlugin source / version、3 Hookのreview、doctor / status、public allow、protected exact block、marker / DB / session照合、disable / remove / 同一版reinstallを確認します。共有環境を使うため、変更前のPlugin一覧と設定を記録し、検証後に元へ戻すplanを先に提示します。人がDesktopで完走したaggregate reportはまだなく、実行手順と合格条件は[Codex Desktop Phase B](DesktopPhaseB.md)を正本にします。
+workspace単位のruntime設定とTUI harnessへの接続に加え、Desktop専用Phase B harnessも実装済みです。macOS Desktop実機でPlugin source / version、3 Hookのreview、doctor / status、public allow、protected exact block、marker / DB / session照合、disable / remove / 同一版reinstall、異versionmigration、backup rollback、Disableなしの直接Removeを確認しました。2026-08-09のfresh setup profile runは承認2回、public 1、protected 0、exact block 1、raw exposure 0で正式な`passed`です。実行手順、aggregate evidence、共有環境の復元条件は[Codex Desktop Phase B](DesktopPhaseB.md)を正本にします。
 
 verify結果を保存した後は、prepare出力の`logout_command`でisolated `CODEX_HOME`からlogoutします。失敗調査中はrootを保持できますが、調査完了後は認証cacheとraw local sessionを含むため、必要なaggregate evidenceを残してrootを明示的に削除します。削除はverifierが自動で行いません。
 
