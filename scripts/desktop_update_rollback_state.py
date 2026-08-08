@@ -380,7 +380,7 @@ def _validate_stage_evidence(
     elif target_stage == "new_removed_for_rollback":
         _require(evidence, "plugin_present", False, target_stage)
         _require(evidence, "managed_data_present", True, target_stage)
-        _require(evidence, "managed_data_hash_unchanged", True, target_stage)
+        _require(evidence, "managed_data_preserved", True, target_stage)
     elif target_stage == "new_plugin_installed":
         _validate_plugin_evidence(evidence, new, trusted_required=True)
     elif target_stage == "updated":

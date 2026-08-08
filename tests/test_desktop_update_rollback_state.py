@@ -168,7 +168,7 @@ class DesktopUpdateRollbackStateTest(unittest.TestCase):
                 evidence={
                     "plugin_present": False,
                     "managed_data_present": True,
-                    "managed_data_hash_unchanged": True,
+                    "managed_data_preserved": True,
                 },
             )
             state = apply_transition(
@@ -407,7 +407,7 @@ class DesktopUpdateRollbackStateTest(unittest.TestCase):
                 {
                     "plugin_present": False,
                     "managed_data_present": True,
-                    "managed_data_hash_unchanged": True,
+                    "managed_data_preserved": True,
                 },
             ),
             (

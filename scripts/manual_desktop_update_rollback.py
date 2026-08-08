@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import hashlib
 import json
 import os
 import re
@@ -1226,7 +1227,12 @@ def checkpoint_updated_runtime(root_argument: Path) -> dict[str, Any]:
     )
     state["migration_backup"] = str(backups[0])
     state["updated_database_sha256"] = _sha256(database)
-    state["updated_event_count"] = _database_event_count(database)
+    updated_event_count = _database_event_count(database)
+    state["updated_event_count"] = updated_event_count
+    state["updated_event_prefix_sha256"] = _database_event_prefix_sha256(
+        database,
+        updated_event_count,
+    )
     state["update_session_summary"] = {
         "unexpected_tool_call_count": session["unexpected_tool_call_count"],
         "public_call_count": len(session["public_call_ids"]),
@@ -1288,9 +1294,38 @@ def checkpoint_new_removed_for_rollback(
             "shared_state_delta_unexpected",
         )
     database = Path(str(state["current_data"])) / "events.db"
-    unchanged = (
+    hash_unchanged = (
         database.is_file()
         and _sha256(database) == state.get("updated_database_sha256")
+    )
+    event_count = _database_event_count(database)
+    expected_event_count = int(state["updated_event_count"])
+    baseline_event_present, workspace_registered = _database_baseline_checks(
+        database,
+        workspace=Path(str(state["workspace"])),
+        minimum_event_count=expected_event_count,
+    )
+    backups = _migration_backup_files(Path(str(state["current_data"])))
+    migration_backup_schema = (
+        _database_schema(backups[0])
+        if len(backups) == 1
+        else None
+    )
+    expected_prefix = state.get("updated_event_prefix_sha256")
+    prefix_preserved = (
+        _database_event_prefix_sha256(database, expected_event_count)
+        == expected_prefix
+        if isinstance(expected_prefix, str)
+        else None
+    )
+    managed_data_preserved = bool(
+        database.is_file()
+        and _database_schema(database) == 6
+        and event_count >= expected_event_count
+        and baseline_event_present
+        and workspace_registered
+        and migration_backup_schema == 1
+        and prefix_preserved is not False
     )
     state = apply_transition(
         state,
@@ -1298,16 +1333,29 @@ def checkpoint_new_removed_for_rollback(
         evidence={
             "plugin_present": False,
             "managed_data_present": database.is_file(),
-            "managed_data_hash_unchanged": unchanged,
+            "managed_data_preserved": managed_data_preserved,
         },
     )
+    state["new_removed_data_evidence"] = {
+        "database_schema": 6,
+        "event_count_before_remove": expected_event_count,
+        "event_count_after_remove": event_count,
+        "event_prefix_preserved": prefix_preserved,
+        "database_hash_unchanged": hash_unchanged,
+        "workspace_registered": workspace_registered,
+        "migration_backup_schema": migration_backup_schema,
+    }
     write_state(root / STATE_FILENAME, state)
     return {
         "schema_version": REPORT_SCHEMA_VERSION,
         "status": "new_removed_for_rollback",
         "case_id": CASE_ID,
         "managed_data_present": True,
-        "managed_data_hash_unchanged": True,
+        "managed_data_preserved": True,
+        "database_hash_unchanged": hash_unchanged,
+        "event_count_before_remove": expected_event_count,
+        "event_count_after_remove": event_count,
+        "event_prefix_preserved": prefix_preserved,
         "next": "Run prepare-old-rollback to replace only the marketplace code.",
     }
 
@@ -2340,6 +2388,48 @@ def _database_event_count(database: Path) -> int:
             "database_event_count_missing",
         )
     return int(row[0])
+
+
+def _database_event_prefix_sha256(database: Path, event_count: int) -> str:
+    if event_count < 0:
+        raise DesktopUpdateRollbackFailure(
+            "database",
+            "database_event_prefix_invalid",
+        )
+    digest = hashlib.sha256()
+    try:
+        uri = f"{database.resolve(strict=True).as_uri()}?mode=ro"
+        with sqlite3.connect(uri, uri=True) as connection:
+            rows = connection.execute(
+                """
+                SELECT *
+                FROM events
+                ORDER BY sequence_no IS NULL, sequence_no, event_id
+                LIMIT ?
+                """,
+                (event_count,),
+            ).fetchall()
+    except (OSError, sqlite3.Error) as error:
+        raise DesktopUpdateRollbackFailure(
+            "database",
+            "database_event_prefix_unavailable",
+        ) from error
+    if len(rows) != event_count:
+        raise DesktopUpdateRollbackFailure(
+            "database",
+            "database_event_prefix_incomplete",
+        )
+    for row in rows:
+        digest.update(
+            json.dumps(
+                list(row),
+                ensure_ascii=False,
+                separators=(",", ":"),
+                default=str,
+            ).encode("utf-8")
+        )
+        digest.update(b"\n")
+    return digest.hexdigest()
 
 
 def _database_baseline_checks(

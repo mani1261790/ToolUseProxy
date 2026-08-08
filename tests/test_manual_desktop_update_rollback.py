@@ -15,6 +15,7 @@ from scripts.manual_desktop_update_rollback import (
     PLUGIN_ID,
     DesktopUpdateRollbackFailure,
     _extract_tar_safely,
+    _database_event_prefix_sha256,
     _inventory_delta_matches,
     _migration_backup_files,
     _old_baseline_prompt,
@@ -28,6 +29,42 @@ from scripts.manual_desktop_update_rollback import (
 
 
 class ManualDesktopUpdateRollbackTest(unittest.TestCase):
+    def test_event_prefix_digest_is_stable_across_append_only_events(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            database = Path(temporary_directory) / "events.db"
+            with update_rollback.sqlite3.connect(database) as connection:
+                connection.execute(
+                    "CREATE TABLE events ("
+                    "event_id TEXT, sequence_no INTEGER, payload_json TEXT)"
+                )
+                connection.executemany(
+                    "INSERT INTO events VALUES (?, ?, ?)",
+                    [("one", 1, "{}"), ("two", 2, "{}")],
+                )
+            before = _database_event_prefix_sha256(database, 2)
+
+            with update_rollback.sqlite3.connect(database) as connection:
+                connection.execute(
+                    "INSERT INTO events VALUES (?, ?, ?)",
+                    ("three", 3, "{}"),
+                )
+
+            self.assertEqual(
+                before,
+                _database_event_prefix_sha256(database, 2),
+            )
+            with update_rollback.sqlite3.connect(database) as connection:
+                connection.execute(
+                    "UPDATE events SET payload_json = ? WHERE event_id = ?",
+                    ('{"changed":true}', "one"),
+                )
+            self.assertNotEqual(
+                before,
+                _database_event_prefix_sha256(database, 2),
+            )
+
     def test_update_prompt_uses_short_approval_and_wait_contract(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory).resolve()
