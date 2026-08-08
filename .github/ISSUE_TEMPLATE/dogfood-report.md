@@ -13,10 +13,10 @@ assignees: ""
 ## 環境
 
 - OSとversion:
+- surface: `codex_cli_tui` / Codex Desktop/GUI
 - Codex DesktopまたはCLIのversion:
 - ToolUseProxy Plugin version:
 - install元: `public-alpha` / immutable tag / local candidate
-- install元commit（local candidateの場合）:
 - 新規install / update / reinstall:
 
 ## Setup
@@ -50,7 +50,7 @@ assignees: ""
 
 ## Failureまたは停止
 
-- status: passed / needs-followup / stopped
+- status: passed / needs_followup / stopped
 - value-freeなfailure code:
 - 失敗後に同じ操作を再試行した: yes / no
 - Plugin codeをdisable / removeした: yes / no

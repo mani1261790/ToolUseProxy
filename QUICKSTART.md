@@ -20,6 +20,8 @@ The preview builds a clean Plugin artifact and runs a synthetic Phase A lifecycl
 
 ```bash
 python3.11 scripts/demo_plugin.py
+# Or, when Python 3.12 is the supported interpreter available on the host:
+python3.12 scripts/demo_plugin.py
 ```
 
 It does not replace manual Hook trust or actual-tool Phase B testing.
