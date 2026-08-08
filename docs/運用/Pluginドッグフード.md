@@ -61,7 +61,7 @@ prepareは同じrootへmode `0600`の`phase-b-prompt.txt`、`phase-b-guide.md`�
 
 1. guideでPreToolUse / PostToolUse / Stopの役割、sandbox外実行、local data、networkなし、想定source / 件数 / command rootを理解する
 2. Codexが表示する3件のHook definitionをreviewし、guideと一致する場合だけtrustする
-3. 長いPlugin commandの承認ごとに、Markdownや改行に依存しない1段落の説明が表示され、`【操作】` `【目的】` `【影響】` `【通信】` `【取消】` `【判断】` の全角ラベルで区切られている
+3. 長いPlugin commandの承認ごとに、160文字以内の同じplain textが事前説明と承認理由の両方へ表示され、`すること：` `変わるもの：` `外部通信：` `許可判断：` で区切られている。absolute pathやMarkdownは承認理由へ含めない
 4. synthetic workspaceで`init`、`doctor`、`status`を実行する
 5. `protect scan`候補について、exact JSONより先に「守るファイル」「守る範囲」「止める場面」「承認すると変わるもの」「承認しない場合」の説明を読む
 6. その説明を理解した場合だけexact proposalを明示approveする

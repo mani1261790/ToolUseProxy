@@ -20,6 +20,9 @@ from hook_monitor.runtime.source_config import (
     SourceConfigError,
 )
 from hook_monitor.runtime.settings import (
+    FILE_PAYLOAD_EXACT_ENFORCEMENT_KEY,
+    FILE_PAYLOAD_SHADOW_KEY,
+    PRE_TOOL_POLICY_KEY,
     RUNTIME_SETTING_KEYS,
     EffectiveRuntimeSettings,
     RuntimeSettingsError,
@@ -76,6 +79,13 @@ from tooluseproxy.uninstall import (
 MANIFEST_FILENAME = "protected_sources.json"
 PROTECT_OUTPUT_SCHEMA_VERSION = 1
 CONFIG_OUTPUT_SCHEMA_VERSION = 1
+SETUP_OUTPUT_SCHEMA_VERSION = 1
+SETUP_PROFILE_FILE_PAYLOAD_EXACT = "file-payload-exact"
+SETUP_PROFILE_SETTINGS = {
+    PRE_TOOL_POLICY_KEY: True,
+    FILE_PAYLOAD_SHADOW_KEY: True,
+    FILE_PAYLOAD_EXACT_ENFORCEMENT_KEY: True,
+}
 
 
 class _ProtectCliError(ValueError):
@@ -116,6 +126,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _run_doctor(args)
         if args.command == "status":
             return _run_status(args)
+        if args.command == "setup":
+            return _run_setup(args)
         if args.command == "config":
             return _run_config(args)
         if args.command == "protect":
@@ -175,6 +187,40 @@ def _build_parser() -> argparse.ArgumentParser:
     status.add_argument("--workspace", type=Path, default=Path.cwd())
     status.add_argument("--json", action="store_true", help="Print machine-readable output.")
     _add_runtime_path_arguments(status)
+
+    setup = subparsers.add_parser(
+        "setup",
+        help="Apply or verify one fixed workspace protection profile.",
+    )
+    setup_subparsers = setup.add_subparsers(
+        dest="setup_command",
+        required=True,
+    )
+    setup_apply = setup_subparsers.add_parser(
+        "apply",
+        help="Initialize and atomically apply a fixed protection profile.",
+    )
+    setup_apply.add_argument(
+        "profile",
+        choices=(SETUP_PROFILE_FILE_PAYLOAD_EXACT,),
+    )
+    setup_apply.add_argument("--codex", action="store_true")
+    setup_apply.add_argument("--expected-revision", required=True)
+    setup_apply.add_argument("--workspace", type=Path, default=Path.cwd())
+    setup_apply.add_argument("--json", action="store_true")
+    _add_runtime_path_arguments(setup_apply)
+
+    setup_verify = setup_subparsers.add_parser(
+        "verify",
+        help="Read-only verification of setup, status, and effective settings.",
+    )
+    setup_verify.add_argument(
+        "profile",
+        choices=(SETUP_PROFILE_FILE_PAYLOAD_EXACT,),
+    )
+    setup_verify.add_argument("--workspace", type=Path, default=Path.cwd())
+    setup_verify.add_argument("--json", action="store_true")
+    _add_runtime_path_arguments(setup_verify)
 
     config = subparsers.add_parser(
         "config",
@@ -431,6 +477,281 @@ def _run_init(args: argparse.Namespace) -> int:
     }
     _render(payload, as_json=args.json)
     return 0
+
+
+def _run_setup(args: argparse.Namespace) -> int:
+    if args.setup_command == "apply":
+        return _run_setup_apply(args)
+    if args.setup_command == "verify":
+        return _run_setup_verify(args)
+    raise ValueError(f"unsupported setup command: {args.setup_command}")
+
+
+def _run_setup_apply(args: argparse.Namespace) -> int:
+    try:
+        paths = resolve_runtime_paths(db_path=args.db, data_dir=args.data_dir)
+        if args.codex and paths.source == "platform_default":
+            raise RuntimeSettingsError(
+                "plugin_data_unknown",
+                "Codex Plugin data directory must be passed explicitly",
+            )
+        plugin_data = os.environ.get("PLUGIN_DATA")
+        if args.codex and plugin_data:
+            plugin_paths = resolve_runtime_paths(data_dir=plugin_data)
+            if paths.db_path != plugin_paths.db_path:
+                raise RuntimeSettingsError(
+                    "plugin_data_mismatch",
+                    "--data-dir does not match the Codex Plugin data directory",
+                )
+
+        prepare_data_directory(paths)
+        ensure_data_directory_marker(paths.data_dir)
+        secure_database_permissions(paths.db_path)
+        backup_path = _backup_database_before_upgrade(paths.db_path)
+        if not paths.db_path.exists():
+            _create_secure_empty_file(paths.db_path)
+        store = EventStore(paths.db_path)
+        store.initialize()
+        secure_database_permissions(paths.db_path)
+
+        workspace = resolve_workspace(
+            str(args.workspace),
+            str(args.workspace),
+            discovered_by="setup_profile",
+        )
+        if not workspace.ready or workspace.canonical_root is None:
+            raise RuntimeSettingsError(
+                "workspace_unavailable",
+                f"workspace is not usable: {workspace.status}",
+            )
+        manifest_path = Path(workspace.canonical_root) / MANIFEST_FILENAME
+        manifest_created = _create_empty_manifest(manifest_path)
+        settings, changes = store.apply_workspace_runtime_settings_profile(
+            workspace,
+            settings=SETUP_PROFILE_SETTINGS,
+            expected_revision=args.expected_revision,
+        )
+        effective = resolve_effective_runtime_settings(settings, os.environ)
+        payload = {
+            "schema_version": SETUP_OUTPUT_SCHEMA_VERSION,
+            "status": "applied" if changes else "already_applied",
+            "profile": args.profile,
+            "version": __version__,
+            "codex": bool(args.codex),
+            "path_source": paths.source,
+            "data_dir": str(paths.data_dir),
+            "db_path": str(paths.db_path),
+            "workspace_id": workspace.workspace_id,
+            "workspace_root": workspace.canonical_root,
+            "manifest_path": str(manifest_path),
+            "manifest_created": manifest_created,
+            "migration_backup": (
+                None if backup_path is None else str(backup_path)
+            ),
+            "settings_revision": settings.revision,
+            "changed_keys": [change.setting_key for change in changes],
+            "settings": [
+                asdict(effective.settings[key]) for key in RUNTIME_SETTING_KEYS
+            ],
+        }
+    except RuntimeSettingsError as exc:
+        _render_setup_error(exc.code, str(exc), as_json=args.json)
+        return 1
+    except (
+        OSError,
+        PathConfigurationError,
+        SchemaCompatibilityError,
+        SourceConfigError,
+        sqlite3.Error,
+    ):
+        _render_setup_error(
+            "setup_unavailable",
+            "the fixed setup profile could not be applied",
+            as_json=args.json,
+        )
+        return 1
+    _render(payload, as_json=args.json)
+    return 0
+
+
+def _run_setup_verify(args: argparse.Namespace) -> int:
+    try:
+        paths = resolve_runtime_paths(db_path=args.db, data_dir=args.data_dir)
+        workspace, workspace_path = _resolve_cli_workspace(args.workspace)
+        summary = _read_database_summary(paths.db_path)
+        permissions_ok, permissions_detail = (
+            _inspect_data_directory_permissions(paths.data_dir)
+        )
+        registration_ok, registration_detail = (
+            _inspect_workspace_registration(paths.db_path, workspace)
+        )
+        protected_sources = _inspect_manifest(
+            workspace_path / MANIFEST_FILENAME
+        )
+        settings_payload: dict[str, object] = {
+            "ok": False,
+            "detail": "workspace runtime settings are unavailable",
+            "settings": [],
+        }
+        profile_configured = False
+        profile_effective = False
+        if (
+            workspace.ready
+            and workspace.workspace_id is not None
+            and paths.db_path.is_file()
+        ):
+            settings = EventStore(
+                paths.db_path
+            ).get_workspace_runtime_settings(
+                workspace.workspace_id,
+                busy_timeout_ms=1000,
+            )
+            effective = resolve_effective_runtime_settings(
+                settings,
+                os.environ,
+            )
+            profile_configured = settings.settings == SETUP_PROFILE_SETTINGS
+            profile_effective = all(
+                effective.settings[key].effective_value
+                for key in RUNTIME_SETTING_KEYS
+            )
+            invalid_environment = sorted(
+                key
+                for key in RUNTIME_SETTING_KEYS
+                if effective.settings[key].source == "invalid_environment"
+            )
+            settings_payload = {
+                "ok": not invalid_environment,
+                "detail": (
+                    "workspace runtime settings valid"
+                    if not invalid_environment
+                    else "invalid environment overrides: "
+                    + ", ".join(invalid_environment)
+                ),
+                "settings_schema_version": settings.schema_version,
+                "settings_revision": settings.revision,
+                "settings": [
+                    asdict(effective.settings[key])
+                    for key in RUNTIME_SETTING_KEYS
+                ],
+            }
+
+        checks = [
+            _check("workspace", workspace.ready, str(workspace_path)),
+            _check(
+                "data_directory",
+                paths.data_dir.is_dir(),
+                str(paths.data_dir),
+            ),
+            _check(
+                "data_directory_permissions",
+                permissions_ok,
+                permissions_detail,
+            ),
+            _check("database", bool(summary["ok"]), str(summary["detail"])),
+            _check(
+                "workspace_registration",
+                registration_ok,
+                registration_detail,
+            ),
+            _check(
+                "protected_sources",
+                bool(protected_sources["runtime_readable"]),
+                str(protected_sources["detail"]),
+            ),
+            _check(
+                "runtime_settings",
+                bool(settings_payload["ok"]),
+                str(settings_payload["detail"]),
+            ),
+            _check(
+                "profile_configured",
+                profile_configured,
+                args.profile,
+            ),
+            _check(
+                "profile_effective",
+                profile_effective,
+                args.profile,
+            ),
+        ]
+        plugin_root = os.environ.get("PLUGIN_ROOT")
+        plugin_data = os.environ.get("PLUGIN_DATA")
+        if plugin_root is not None or plugin_data is not None:
+            plugin_root_path = (
+                None if not plugin_root else _absolute_path(plugin_root)
+            )
+            plugin_data_path = (
+                None if not plugin_data else _absolute_path(plugin_data)
+            )
+            plugin_ok = bool(
+                plugin_root_path
+                and plugin_data_path
+                and (
+                    plugin_root_path / ".codex-plugin" / "plugin.json"
+                ).is_file()
+                and (plugin_root_path / "hooks" / "hooks.json").is_file()
+                and plugin_data_path == paths.data_dir
+            )
+            checks.append(
+                _check(
+                    "plugin_environment",
+                    plugin_ok,
+                    "Plugin root and data directory identity",
+                )
+            )
+        ok = all(bool(item["ok"]) for item in checks)
+        payload = {
+            "schema_version": SETUP_OUTPUT_SCHEMA_VERSION,
+            "status": "passed" if ok else "needs_attention",
+            "profile": args.profile,
+            "version": __version__,
+            "path_source": paths.source,
+            "db_path": str(paths.db_path),
+            "workspace_id": workspace.workspace_id,
+            "workspace_root": str(workspace_path),
+            "checks": checks,
+            "database": summary,
+            "workspace_registration": {
+                "ok": registration_ok,
+                "detail": registration_detail,
+            },
+            "protected_sources": protected_sources,
+            "runtime_settings": settings_payload,
+        }
+    except (
+        OSError,
+        PathConfigurationError,
+        RuntimeSettingsError,
+        SchemaCompatibilityError,
+        sqlite3.Error,
+    ):
+        _render_setup_error(
+            "verification_unavailable",
+            "the read-only setup verification could not be completed",
+            as_json=args.json,
+        )
+        return 1
+    _render(payload, as_json=args.json)
+    return 0 if ok else 1
+
+
+def _render_setup_error(code: str, message: str, *, as_json: bool) -> None:
+    if as_json:
+        print(
+            json.dumps(
+                {
+                    "schema_version": SETUP_OUTPUT_SCHEMA_VERSION,
+                    "status": "error",
+                    "error": {"code": code, "message": message},
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
+            file=sys.stderr,
+        )
+        return
+    print(f"tooluseproxy: {code}: {message}", file=sys.stderr)
 
 
 def _run_doctor(args: argparse.Namespace) -> int:

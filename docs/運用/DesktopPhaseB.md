@@ -4,7 +4,7 @@ Issue [#53](https://github.com/mani1261790/ToolUseProxy/issues/53)では、CLI T
 
 ## 現在地
 
-専用harnessは実装済みです。2026-07-28と2026-07-30にCodex Desktop同梱の`codex-cli 0.146.0-alpha.3.1`で人による実機確認を行いました。7月30日の最新runまでの結果は次のとおりです。
+専用harnessは実装済みです。2026-07-28以降、Codex Desktop同梱のCodexで人による実機確認を行いました。2026-08-09までの結果は次のとおりです。
 
 | 段階 | 結果 |
 | --- | --- |
@@ -15,7 +15,9 @@ Issue [#53](https://github.com/mani1261790/ToolUseProxy/issues/53)では、CLI T
 | Hook matcherに渡るcanonical tool名 | `Bash` |
 | 最新定義のtrusted Hook probe | PreToolUse / PostToolUse / Stop各1回、余分なtool call 0件で成功 |
 | `workspace-write`でのPlugin data操作 | 10コマンドすべてに1回限定の`require_escalated`と日本語の理由を付けて発行 |
-| 個別commandの承認UI | 表示されず、ユーザー入力なしで進行。理由はsession記録だけでは断定しない |
+| 個別commandの承認UI | 表示を確認。短いplain textで内容は理解できたが、初期設定で約10回の承認が必要 |
+| 保存済み2026-08-09 run | 最新exit-code wrapperを厳密に解析し、public 1 / protected 0 / exact block 1 / raw exposure 0で正式な`passed` |
+| 2-command setup | fresh Desktopで承認UI 2回を確認。説明はある程度理解可能。public 1 / protected 0 / exact block 1 / raw exposure 0で正式な`passed` |
 | public / protected call | publicは実行、protectedはPreToolUseが実行前block |
 | disable / remove / 同一版reinstall | 管理DBとruntime設定を保持したまま完走 |
 | final cleanup | Plugin、Marketplace、管理データ、synthetic workspaceを削除。他のPlugin / Marketplace一覧は開始時と一致 |
@@ -29,7 +31,11 @@ Desktopのtask履歴で使われる`exec_command`は、Hook matcherのtool名で
 
 以前のrunは、`workspace-write`のDesktop taskからworkspace外の`PLUGIN_DATA`へ通常権限で`init`し、OS拒否で停止しました。setup skillとPhase B promptを直した最新runでは、Plugin dataを実際に触る10コマンドすべてが`require_escalated`、空でない日本語の理由、再利用可能な`prefix_rule`なしで発行され、初期化からprotected blockまで完走しました。
 
-ただし、これは「各コマンドに一時的な権限昇格要求が付いた」という機械確認です。今回のDesktopでは個別承認UI自体が表示されず、ユーザーは入力していません。Desktopが自動的に許可した理由はsession記録だけでは断定できません。harnessは今後、承認UIが見えた場合の`yes` / `no`に加えて`not-shown`を記録し、`ux_status: not_observed`として機能合格と分離します。
+ただし、承認の理由は外部通信ではありません。Desktop taskのworkspace外にある`PLUGIN_DATA`をCLIが読み書きするため、各commandに一時的な権限昇格が必要になります。2026-08-09のfresh runでは、短いplain textの説明、継続中commandのwait、public allow、protected blockまで機能上は完走しました。Hook review、command説明、block説明はいずれも理解できたという評価でしたが、初期設定で約10回の承認が必要な点は製品UXとして残っています。
+
+承認理由は160文字以内のplain textとし、区切りは`すること：`、`変わるもの：`、`外部通信：`、`許可判断：`の4つだけにします。absolute path、Markdown、過去の説明への参照を含めません。同じ文を承認直前とtool callのjustificationへ渡します。command toolがcell IDを返した場合は、CLIを再実行せず、そのIDによるwaitだけで元commandの完了まで待ちます。
+
+Issue [#63](https://github.com/mani1261790/ToolUseProxy/issues/63)では、`init`と3つの明示設定を固定`file-payload-exact` profileの一括適用へ、`doctor` / `status` / `config show`を一つのread-only verificationへまとめました。3設定は一つのSQLite transactionと一つのrevisionで更新し、stale revisionでは変更せず停止します。新しいharnessはprofile apply 1回、verification 1回、再利用可能permission 0件を必須にします。Desktop session parserは、setupとsendではexactな`text(JSON.stringify(r));`だけを受理し、`text(r.output);`は単独probeとcontext・setup skillの固定読み取りだけに限定します。任意statement、追加command、同じoutput-only wrapperによるsetupやsendは拒否します。2026-08-09のfresh runは全checks trueで正式な`passed`です。
 
 Plugin自体も、未初期化・Python不足・runtime起動失敗・内部policy評価失敗などの非active診断をstderrではなくCodexが解釈できるphase別JSON stdoutで返すように改修しました。例外本文とHook inputは診断へ含めません。これは利用者へ次の操作を伝えるための改善です。一方、dispatchの合否は引き続きmarkerで判定し、診断が画面に見えたかどうかとは分離します。
 
@@ -44,13 +50,17 @@ Plugin自体も、未初期化・Python不足・runtime起動失敗・内部poli
 - Desktopのtool useにToolUseProxy Hookが発火する: trusted probeで確認済み
 - workspace外のPlugin dataへ通常権限で初期化できる: できない。1コマンド単位の権限昇格が必要
 - Desktopでprotected payloadを実行前blockできる: 確認済み
-- 個別commandの承認UIを人が理解できる: 今回はUIが表示されず未観測
+- 個別commandの承認UIが表示される: 確認済み
+- 個別commandの承認文を人が理解できる: 短文化後のrunで確認済み
+- 初期設定の承認回数が実用的である: fresh runで2回を確認。説明は「ある程度わかりやすかった」と評価
 
-Desktop / GUI上で今回のfile-backed exact-only保護が動くことは確認できました。機能とlifecycleは完走しましたが、個別command承認UIは表示されなかったため、承認UXを含むDesktop Phase B全体の合格とは扱いません。
+Desktop / GUI上で今回のfile-backed exact-only保護が動くことは確認でき、機能とlifecycleは完走しました。保存済みrunと2-command setupのfresh runは、Desktop task記録、Hook DB、markerの相互照合まで正式な`passed`として記録済みです。fresh runのcommand承認は2回で、再利用可能permissionは0件でした。
 
 2026-07-31にdisable、remove、同一版reinstall、final remove、cleanupを完走しました。Plugin登録、検証用Marketplace、約111MBの管理データ、synthetic workspaceは削除され、無関係なPlugin / MarketplaceのIDと設定は保持されています。一方、Codexは削除済みworkspaceのproject設定と、削除済みPluginのHook trust履歴を`config.toml`へ残しました。開始時のconfig本文を保存していないため自動編集はせず、`restored_with_inactive_config_residue`としてaggregate reportへ明記しています。該当Pluginが存在しないため、この履歴だけでHookが実行されることはありません。
 
 同一版reinstallは「Plugin codeを削除しても`PLUGIN_DATA`の設定と監査DBが残り、再install時に再利用されること」を確認します。本物のupdateは異なる二つのimmutable versionが必要です。同じZIPを入れ直した結果をupdate成功とは数えません。
+
+異versionのupdate、schema migration、安全なrollback、DisableなしのRemoveはIssue [#62](https://github.com/mani1261790/ToolUseProxy/issues/62)で扱います。専用harnessと自動testは実装済みで、次はDesktop実機runです。実装境界、人が行う操作、安全停止条件は[Codex Desktop update / rollback 検証計画](DesktopUpdateRollback.md)を正本にします。
 
 ## 安全境界
 
