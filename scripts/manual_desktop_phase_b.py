@@ -3948,19 +3948,53 @@ def _parse_exec_custom_tool_input(value: object) -> dict[str, Any] | None:
         return None
     match = re.fullmatch(
         r"\s*const\s+r\s*=\s*await\s+tools\.exec_command\((\{.*\})\);"
-        r"\s*text\(r\.output\);\s*",
+        r"\s*(?:text\(r\.output\)|"
+        r"text\(JSON\.stringify\(\{exit_code:r\.exit_code,\s*"
+        r"output:r\.output\}\)\));\s*",
         value,
         flags=re.DOTALL,
     )
     if match is None:
         return None
-    try:
-        arguments = json.loads(match.group(1))
-    except json.JSONDecodeError:
-        return None
+    arguments = _parse_exec_arguments_object(match.group(1))
     if not isinstance(arguments, dict):
         return None
     return arguments
+
+
+def _parse_exec_arguments_object(value: str) -> dict[str, Any] | None:
+    def unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, item in pairs:
+            if key in result:
+                raise ValueError("duplicate key")
+            result[key] = item
+        return result
+
+    candidates = [value]
+    if re.fullmatch(
+        r"\{\s*(?:[A-Za-z_][A-Za-z0-9_]*\s*:.*\s*)+\}",
+        value,
+        flags=re.DOTALL,
+    ):
+        candidates.append(
+            re.sub(
+                r"(?m)^(\s*)([A-Za-z_][A-Za-z0-9_]*)(\s*):",
+                r'\1"\2"\3:',
+                value,
+            )
+        )
+    for candidate in candidates:
+        try:
+            parsed = json.loads(
+                candidate,
+                object_pairs_hook=unique_object,
+            )
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    return None
 
 
 def _probe_id_hash(
@@ -4247,15 +4281,26 @@ def _parse_session(
                 if record.get("type") != "response_item":
                     continue
                 payload_type = payload.get("type")
-                if payload_type == "function_call":
+                if payload_type in {"function_call", "custom_tool_call"}:
                     call_id = payload.get("call_id")
                     tool_name = payload.get("name")
-                    arguments = payload.get("arguments")
-                    serialized_arguments = (
-                        arguments
-                        if isinstance(arguments, str)
-                        else json.dumps(arguments, ensure_ascii=False)
-                    )
+                    if payload_type == "custom_tool_call":
+                        raw_input = payload.get("input")
+                        arguments = _parse_exec_custom_tool_input(raw_input)
+                        if tool_name == "exec" and arguments is not None:
+                            tool_name = "exec_command"
+                        serialized_arguments = (
+                            raw_input
+                            if isinstance(raw_input, str)
+                            else json.dumps(raw_input, ensure_ascii=False)
+                        )
+                    else:
+                        arguments = payload.get("arguments")
+                        serialized_arguments = (
+                            arguments
+                            if isinstance(arguments, str)
+                            else json.dumps(arguments, ensure_ascii=False)
+                        )
                     input_raw_value_absent = (
                         input_raw_value_absent
                         and SYNTHETIC_CANARY not in serialized_arguments
@@ -4274,11 +4319,12 @@ def _parse_session(
                             arguments.get("command"),
                         )
                         normalized = _normalize_command(command)
+                        canonical = _canonical_shell_command(normalized)
                         if (
                             tool_name == "exec_command"
-                            and normalized is not None
+                            and canonical is not None
                             and _phase_b_command_allowed(
-                                normalized,
+                                canonical,
                                 workspace=workspace,
                                 fake_sink=fake_sink,
                                 context_path=context_path,
@@ -4287,9 +4333,9 @@ def _parse_session(
                                 plugin_data=plugin_data,
                             )
                         ):
-                            commands[call_id] = normalized
+                            commands[call_id] = canonical
                             if _phase_b_cli_accesses_plugin_data(
-                                normalized,
+                                canonical,
                                 plugin_root=plugin_root,
                                 plugin_data=plugin_data,
                             ):
@@ -4323,20 +4369,34 @@ def _parse_session(
                             setup_skill=setup_skill,
                         ):
                             commands[call_id] = f"read:{tool_name}"
+                        elif _phase_b_wait_call_allowed(tool_name, arguments):
+                            commands[call_id] = "wait"
                         else:
                             unexpected_tool_call_count += 1
                     else:
                         unexpected_tool_call_count += 1
-                elif payload_type == "function_call_output":
+                elif payload_type in {
+                    "function_call_output",
+                    "custom_tool_call_output",
+                }:
                     call_id = payload.get("call_id")
                     output = payload.get("output")
-                    if isinstance(output, str):
-                        output_raw_value_absent = (
-                            output_raw_value_absent
-                            and SYNTHETIC_CANARY not in output
-                        )
-                        if isinstance(call_id, str):
-                            outputs[call_id] = output
+                    serialized_output = (
+                        output
+                        if isinstance(output, str)
+                        else json.dumps(output, ensure_ascii=False)
+                    )
+                    output_raw_value_absent = (
+                        output_raw_value_absent
+                        and SYNTHETIC_CANARY not in serialized_output
+                    )
+                    if (
+                        isinstance(call_id, str)
+                        and call_id in seen_call_ids
+                    ):
+                        outputs[call_id] = serialized_output
+                    else:
+                        unexpected_tool_call_count += 1
                 elif (
                     payload_type == "message"
                     and payload.get("role") == "assistant"
@@ -4645,6 +4705,26 @@ def _phase_b_read_call_allowed(
     return Path(candidate).expanduser().resolve() in allowed
 
 
+def _phase_b_wait_call_allowed(
+    tool_name: str,
+    arguments: dict[str, Any],
+) -> bool:
+    if tool_name != "wait" or set(arguments) != {
+        "cell_id",
+        "max_tokens",
+        "yield_time_ms",
+    }:
+        return False
+    return (
+        isinstance(arguments.get("cell_id"), str)
+        and bool(arguments["cell_id"])
+        and isinstance(arguments.get("max_tokens"), int)
+        and 0 < arguments["max_tokens"] <= 100_000
+        and isinstance(arguments.get("yield_time_ms"), int)
+        and 0 < arguments["yield_time_ms"] <= 120_000
+    )
+
+
 def _normalize_command(command: object) -> str | None:
     if isinstance(command, str):
         return command.strip()
@@ -4657,6 +4737,18 @@ def _normalize_command(command: object) -> str | None:
             return values[2].strip()
         return shlex.join(values)
     return None
+
+
+def _canonical_shell_command(command: str | None) -> str | None:
+    if command is None:
+        return None
+    try:
+        words = shlex.split(command)
+    except ValueError:
+        return None
+    if not words:
+        return None
+    return shlex.join(words)
 
 
 def _plugin_data_from_session(
@@ -4714,21 +4806,34 @@ def _read_hook_evidence(
     *,
     public_tool_use_ids: set[str],
     protected_tool_use_ids: set[str],
+    public_commands: set[str] | None = None,
+    protected_commands: set[str] | None = None,
+    minimum_sequence_no: int | None = None,
 ) -> dict[str, Any]:
-    if len(public_tool_use_ids) != 1 or len(protected_tool_use_ids) != 1:
-        return {
-            "public_pre_count": 0,
-            "public_post_count": 0,
-            "protected_pre_count": 0,
-            "protected_post_count": 0,
-            "exact_block_count": 0,
-            "shadow_observation_count": 0,
-            "shadow_table_raw_value_absent": True,
-        }
-    public_id = next(iter(public_tool_use_ids))
-    protected_id = next(iter(protected_tool_use_ids))
     try:
         with sqlite3.connect(f"{database.resolve().as_uri()}?mode=ro", uri=True) as conn:
+            if minimum_sequence_no is not None:
+                resolved_public = _hook_tool_use_ids_for_commands(
+                    conn,
+                    commands=public_commands or set(),
+                    minimum_sequence_no=minimum_sequence_no,
+                )
+                resolved_protected = _hook_tool_use_ids_for_commands(
+                    conn,
+                    commands=protected_commands or set(),
+                    minimum_sequence_no=minimum_sequence_no,
+                )
+                if resolved_public:
+                    public_tool_use_ids = resolved_public
+                if resolved_protected:
+                    protected_tool_use_ids = resolved_protected
+            if (
+                len(public_tool_use_ids) != 1
+                or len(protected_tool_use_ids) != 1
+            ):
+                return _empty_hook_evidence()
+            public_id = next(iter(public_tool_use_ids))
+            protected_id = next(iter(protected_tool_use_ids))
             event_counts = {
                 (str(row[0]), str(row[1])): int(row[2])
                 for row in conn.execute(
@@ -4801,6 +4906,57 @@ def _read_hook_evidence(
             SYNTHETIC_CANARY not in shadow_text
         ),
     }
+
+
+def _empty_hook_evidence() -> dict[str, Any]:
+    return {
+        "public_pre_count": 0,
+        "public_post_count": 0,
+        "protected_pre_count": 0,
+        "protected_post_count": 0,
+        "exact_block_count": 0,
+        "shadow_observation_count": 0,
+        "shadow_table_raw_value_absent": True,
+    }
+
+
+def _hook_tool_use_ids_for_commands(
+    connection: sqlite3.Connection,
+    *,
+    commands: set[str],
+    minimum_sequence_no: int,
+) -> set[str]:
+    canonical_commands = {
+        canonical
+        for command in commands
+        if (canonical := _canonical_shell_command(command)) is not None
+    }
+    if not canonical_commands:
+        return set()
+    matches: set[str] = set()
+    rows = connection.execute(
+        """
+        SELECT tool_use_id, payload_json
+        FROM events
+        WHERE phase = 'pre_tool_use'
+          AND sequence_no > ?
+          AND tool_use_id IS NOT NULL
+        """,
+        (minimum_sequence_no,),
+    )
+    for tool_use_id, payload_json in rows:
+        try:
+            payload = json.loads(str(payload_json))
+        except json.JSONDecodeError:
+            continue
+        tool_input = payload.get("tool_input")
+        if not isinstance(tool_input, dict):
+            continue
+        command = tool_input.get("command", tool_input.get("cmd"))
+        canonical = _canonical_shell_command(_normalize_command(command))
+        if canonical in canonical_commands:
+            matches.add(str(tool_use_id))
+    return matches
 
 
 def _read_runtime_settings(

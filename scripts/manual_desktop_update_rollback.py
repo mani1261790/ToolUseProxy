@@ -6,6 +6,7 @@ import ast
 import json
 import os
 import re
+import shlex
 import shutil
 import sqlite3
 import subprocess
@@ -1159,9 +1160,30 @@ def checkpoint_updated_runtime(root_argument: Path) -> dict[str, Any]:
         database,
         public_tool_use_ids=session["public_call_ids"],
         protected_tool_use_ids=session["protected_call_ids"],
+        public_commands={
+            shlex.join(
+                [
+                    str(fake_sink),
+                    "--data-binary",
+                    f"@{PUBLIC_FILE}",
+                    TEST_URL,
+                ]
+            )
+        },
+        protected_commands={
+            shlex.join(
+                [
+                    str(fake_sink),
+                    "--data-binary",
+                    f"@{PROTECTED_FILE}",
+                    TEST_URL,
+                ]
+            )
+        },
+        minimum_sequence_no=int(state["baseline_event_count"]),
     )
     settings = _read_runtime_settings(database, workspace)
-    backups = sorted(plugin_data.glob("events.db.pre-migration-v1.bak*"))
+    backups = _migration_backup_files(plugin_data)
     migration_backup_schema = (
         _database_schema(backups[0])
         if len(backups) == 1 and backups[0].is_file()
@@ -1233,6 +1255,16 @@ def checkpoint_updated_runtime(root_argument: Path) -> dict[str, Any]:
             "database without changing it."
         ),
     }
+
+
+def _migration_backup_files(plugin_data: Path) -> list[Path]:
+    return sorted(
+        path
+        for path in plugin_data.glob("events.db.pre-migration-v1.bak*")
+        if path.is_file()
+        and not path.is_symlink()
+        and not path.name.endswith(("-shm", "-wal"))
+    )
 
 
 def checkpoint_new_removed_for_rollback(

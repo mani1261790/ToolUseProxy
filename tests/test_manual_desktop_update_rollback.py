@@ -16,6 +16,7 @@ from scripts.manual_desktop_update_rollback import (
     DesktopUpdateRollbackFailure,
     _extract_tar_safely,
     _inventory_delta_matches,
+    _migration_backup_files,
     _old_baseline_prompt,
     _rebaseline_desktop_host_bundle,
     _rebaseline_desktop_version_only,
@@ -26,6 +27,16 @@ from scripts.manual_desktop_update_rollback import (
 
 
 class ManualDesktopUpdateRollbackTest(unittest.TestCase):
+    def test_migration_backup_files_excludes_sqlite_sidecars(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            plugin_data = Path(temporary_directory)
+            backup = plugin_data / "events.db.pre-migration-v1.bak"
+            backup.write_bytes(b"database")
+            (plugin_data / f"{backup.name}-shm").write_bytes(b"shm")
+            (plugin_data / f"{backup.name}-wal").write_bytes(b"wal")
+
+            self.assertEqual([backup], _migration_backup_files(plugin_data))
+
     def test_checkpoint_new_probe_cli_dispatches_to_function(self) -> None:
         root = Path("/tmp/desktop-update-new-probe")
         payload = {"schema_version": 1, "status": "new_hook_probe_passed"}
