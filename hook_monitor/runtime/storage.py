@@ -9333,6 +9333,129 @@ class EventStore:
             conn.execute("BEGIN IMMEDIATE")
             self._upsert_workspace(conn, workspace)
 
+    def apply_workspace_runtime_settings_profile(
+        self,
+        workspace: WorkspaceContext,
+        *,
+        settings: dict[str, bool],
+        expected_revision: str,
+    ) -> tuple[WorkspaceRuntimeSettings, tuple[RuntimeSettingChange, ...]]:
+        """Register a workspace and apply one fixed settings profile atomically."""
+        if (
+            not workspace.ready
+            or workspace.workspace_id is None
+            or workspace.canonical_root is None
+        ):
+            raise RuntimeSettingsError(
+                "workspace_unavailable",
+                "workspace is not usable for runtime settings",
+            )
+        if not re.fullmatch(r"[0-9a-f]{64}", expected_revision):
+            raise RuntimeSettingsError(
+                "settings_revision_invalid",
+                "expected runtime settings revision is invalid",
+            )
+        target = make_workspace_runtime_settings(
+            workspace.workspace_id,
+            settings,
+        )
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            self._upsert_workspace(conn, workspace)
+            current = _load_workspace_runtime_settings(
+                conn,
+                workspace.workspace_id,
+            )
+            if current.revision == target.revision:
+                return current, ()
+            if current.revision != expected_revision:
+                raise RuntimeSettingsError(
+                    "settings_revision_stale",
+                    "runtime settings changed; verify the current revision",
+                )
+
+            conn.execute(
+                """
+                INSERT INTO workspace_runtime_settings (
+                    workspace_id,
+                    settings_schema_version,
+                    settings_revision,
+                    settings_json,
+                    updated_at
+                ) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(workspace_id) DO UPDATE SET
+                    settings_schema_version = excluded.settings_schema_version,
+                    settings_revision = excluded.settings_revision,
+                    settings_json = excluded.settings_json,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE workspace_runtime_settings.settings_revision = ?
+                """,
+                (
+                    workspace.workspace_id,
+                    target.schema_version,
+                    target.revision,
+                    runtime_settings_json(target.settings),
+                    current.revision,
+                ),
+            )
+            changes: list[RuntimeSettingChange] = []
+            for setting_key in sorted(target.settings):
+                previous_value = current.settings.get(setting_key)
+                new_value = target.settings[setting_key]
+                if previous_value is new_value:
+                    continue
+                change_id = uuid.uuid4().hex
+                conn.execute(
+                    """
+                    INSERT INTO workspace_runtime_setting_changes (
+                        change_id,
+                        workspace_id,
+                        action,
+                        setting_key,
+                        previous_value,
+                        new_value,
+                        previous_revision,
+                        new_revision
+                    ) VALUES (?, ?, 'set', ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        change_id,
+                        workspace.workspace_id,
+                        setting_key,
+                        (
+                            None
+                            if previous_value is None
+                            else int(previous_value)
+                        ),
+                        int(new_value),
+                        current.revision,
+                        target.revision,
+                    ),
+                )
+                row = conn.execute(
+                    """
+                    SELECT recorded_at
+                    FROM workspace_runtime_setting_changes
+                    WHERE change_id = ?
+                    """,
+                    (change_id,),
+                ).fetchone()
+                assert row is not None
+                changes.append(
+                    RuntimeSettingChange(
+                        change_id=change_id,
+                        workspace_id=workspace.workspace_id,
+                        action="set",
+                        setting_key=setting_key,
+                        previous_value=previous_value,
+                        new_value=new_value,
+                        previous_revision=current.revision,
+                        new_revision=target.revision,
+                        recorded_at=str(row[0]),
+                    )
+                )
+            return target, tuple(changes)
+
     def get_workspace_runtime_settings(
         self,
         workspace_id: str,

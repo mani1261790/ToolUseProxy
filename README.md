@@ -4,7 +4,7 @@ Codexのtool useをローカルで観測し、外部sinkへ送られるpayload�
 
 本プロジェクトは、[SecHack365](https://sechack365.nict.go.jp/)での研究・開発成果物です。
 
-> 現在は`0.1.0-alpha.3` public alphaです。中核機能、再現可能な配布物、Apache-2.0の配布契約、CLI TUIでのfile-backed exact-only enforcement検証は整いましたが、完全なDLPではありません。Codex DesktopではPluginの検索・install、Hook review、trusted Pre / Post / Stop probe、public allow、file-backed protected payloadの実行前blockまで実機確認しました。`workspace-write` taskではworkspace外のPlugin dataを触る各コマンドが一時的な権限昇格として発行されます。2026-08-09の手動承認runではUIが2回表示されましたが、説明は読みにくく、doctorの完了結果を取得できず安全停止したため、承認UXと継続中commandの扱いを改善中です。adapter外のnetwork egress、hosted Web Search、Linux実Codex task、Windows実機も引き続き検証中です。
+> 現在は`0.1.0-alpha.3` public alphaです。中核機能、再現可能な配布物、Apache-2.0の配布契約、CLI TUIでのfile-backed exact-only enforcement検証は整いましたが、完全なDLPではありません。Codex DesktopではPluginの検索・install、Hook review、trusted Pre / Post / Stop probe、public allow、file-backed protected payloadの実行前blockに加え、alpha.1からalpha.3へのdata migration、backup rollback、DisableなしのRemoveまで実機確認しました。保存済み2026-08-09 runと、初期化・3保護設定・状態確認を2 commandへ集約したfresh runは、どちらも正式な`passed`です。fresh runの承認UIは2回でした。adapter外のnetwork egress、hosted Web Search、Linux実Codex task、Windows実機も引き続き検証中です。
 
 - [研究紹介スライド（初めて知る方向け）](https://mani1261790.github.io/ToolUseProxy/slides/tooluseproxy-research.html)
 - [Codex Pluginとして試す](docs/設定/Plugin導入.md)
@@ -48,7 +48,7 @@ ToolUseProxyはLLM内部の状態や因果的な情報流を直接観測する�
 | Plugin化 | alpha.3 | installable package、relocatable Plugin、`PLUGIN_ROOT` / `PLUGIN_DATA`、初期化・診断・traceを実装 |
 | runtime設定 | 実装済み | workspace単位のboolean設定、環境変数override、revision付き更新、値なし監査、Plugin再導入後の保持 |
 | protected source登録 | 明示承認型を実装済み | `scan` / `suggest` → exact proposal → `approve` / `reject` / `ignore`。無承認登録はしない |
-| Public alpha | `0.1.0-alpha.3` | Apache-2.0、checksum / SBOM、archive内部、CI Action、hash-locked build、Git履歴監査、upgrade / rollback、自動dogfoodを完了。CLI TUIのfile-backed shadow / exact-only Phase Bは合格。Desktopもinstall、trust、実Hook probe、public allow、protected block、disable / remove / 同一版reinstall / cleanupまで機能確認済み。個別承認UIは表示を確認したが、説明の可読性と継続中commandの完了取得は再検証が必要。Codexが保持する非アクティブなproject / Hook trust履歴は残存。cross-platform実機、少人数pilotも継続課題 |
+| Public alpha | `0.1.0-alpha.3` | Apache-2.0、checksum / SBOM、archive内部、CI Action、hash-locked build、Git履歴監査、upgrade / rollback、自動dogfoodを完了。CLI TUIのfile-backed shadow / exact-only Phase Bは合格。Desktopもinstall、trust、実Hook probe、public allow、protected block、同一版reinstall、異version migration、backup rollback、DisableなしのRemove、cleanupまで機能確認済み。保存runと2-command setupのfresh runはいずれも正式な`passed`。fresh setupの承認は2回。Codexが保持する非アクティブなproject / Hook trust履歴は残存。cross-platform実機、少人数pilotも継続課題 |
 | 外部sink coverage | adapter allowlist | 既知のBash / MCP / Search等を分類。任意programの実network接続を網羅せず、hosted Web SearchはPreToolUse / PostToolUse Hookの観測対象外。実接続との偽陰性率は未測定 |
 
 設計全体は[アーキテクチャ概要](docs/設計/アーキテクチャ.md)、詳細な完了範囲と残作業は[実装タスク計画](docs/運用/実装タスク.md)を参照してください。
@@ -79,7 +79,7 @@ sh "<PLUGIN_ROOT>/hooks/run_cli.sh" doctor --workspace "$PWD" --data-dir "<PLUGI
 sh "<PLUGIN_ROOT>/hooks/run_cli.sh" status --workspace "$PWD" --data-dir "<PLUGIN_DATA>"
 ```
 
-Hook trustで確認する内容、更新チャンネルと固定tagの違い、protected sourceの候補発見・承認、rollback、削除時のdata保持を含む完全な手順は[Plugin導入](docs/設定/Plugin導入.md)にあります。Codex Desktopはlocal Pluginを利用できるsurfaceで、[Desktop専用Phase B harness](docs/運用/DesktopPhaseB.md)まで実装済みです。2026-07-30のrunでは、定義hashを固定した3 Hookのtrust、値を含まないmarkerによるPre / Post / Stop各1回の実配送、public allow、protected payloadの実行前blockを確認しました。2026-08-09の手動承認runでは個別承認UIが2回表示されましたが、説明の可読性が不十分で、doctorの完了結果を取得できず安全停止しました。「昇格要求」「人が理解できる承認文」「command完了の取得」は別々に評価します。Codex CLIのMarketplace更新と保護動作は実機検証済みです。
+Hook trustで確認する内容、更新チャンネルと固定tagの違い、protected sourceの候補発見・承認、rollback、削除時のdata保持を含む完全な手順は[Plugin導入](docs/設定/Plugin導入.md)にあります。Codex Desktopはlocal Pluginを利用できるsurfaceで、[Desktop専用Phase B harness](docs/運用/DesktopPhaseB.md)まで実装済みです。定義hashを固定した3 Hookのtrust、値を含まないmarkerによるPre / Post / Stop各1回の実配送、public allow、protected payloadの実行前blockを確認しました。2026-08-09には異version migration、backup rollback、DisableなしのRemoveも完走しました。承認文の理解は短文化後のrunで確認済みです。[#63](https://github.com/mani1261790/ToolUseProxy/issues/63)では、workspace外のPlugin dataを操作する理由を明記し、固定profile適用とread-only verificationの通常2承認へ集約しました。fresh runは承認2回、public 1、protected 0、exact block 1、raw exposure 0で正式な`passed`です。Codex CLIのMarketplace更新と保護動作も実機検証済みです。
 
 ## 安全側の既定値
 
@@ -110,7 +110,7 @@ Sink-first比較評価では、direct lexical、resolved lexical、任意のloca
 
 優先順位の正本は[実装タスク計画](docs/運用/実装タスク.md)とGitHub Issues / Projectです。
 
-1. [#53](https://github.com/mani1261790/ToolUseProxy/issues/53): Codex Desktopで最新Hook定義を再trustし、UI表示に依存しないHook probeからpublic allow / protected block、update / removeまで完走する
+1. [#63](https://github.com/mani1261790/ToolUseProxy/issues/63): 最新Desktop task記録を検証器で安全に読み、初期設定の約10回の承認を通常2回程度へまとめる
 2. [#54](https://github.com/mani1261790/ToolUseProxy/issues/54): adapter分類と実network egressをobserve-onlyで突き合わせ、外部sink判定の偽陰性を測る
 3. [#55](https://github.com/mani1261790/ToolUseProxy/issues/55): Auditログを人間がlabelし、active learning・クラスタリング・rule miningで未知patternの調査を効率化する
 4. [#38](https://github.com/mani1261790/ToolUseProxy/issues/38)でGit pushのoutgoing objectとbranch / worktree / 複数人開発を評価する

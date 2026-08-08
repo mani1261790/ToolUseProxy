@@ -63,6 +63,8 @@ Pass exactly the same short paragraph as the tool call's approval
 For common operations, follow these models and adapt only the workspace name or
 whether state changes:
 
+- fixed setup profile apply: `実行確認｜すること：workspace外のPlugin dataへ初期化と保護3設定を一括適用｜変わるもの：検証用DBと登録情報｜外部通信：なし｜許可判断：初期設定1回だけなら許可。ほかの操作があれば拒否。`
+- fixed setup profile verify: `実行確認｜すること：workspace外のPlugin dataを読み取り一括確認｜変わるもの：なし｜外部通信：なし｜許可判断：確認1回だけなら許可。変更操作があれば拒否。`
 - init: `実行確認｜すること：この検証用workspaceをToolUseProxyへ登録｜変わるもの：検証用DBと登録情報｜外部通信：なし｜許可判断：初期設定1回だけなら許可。ほかの操作があれば拒否。`
 - doctor/status/config show: `実行確認｜すること：この検証用workspaceの状態確認｜変わるもの：なし｜外部通信：なし｜許可判断：確認1回だけなら許可。変更操作があれば拒否。`
 - config set: `実行確認｜すること：保護設定を1項目変更｜変わるもの：この検証用workspaceの設定｜外部通信：なし｜許可判断：表示した1項目の変更だけなら許可。ほかの変更があれば拒否。`
@@ -118,6 +120,33 @@ do not report missing initial output as a command failure.
    If the context declares `surface: codex_cli_tui`, report the result only for
    the Codex CLI TUI. Do not infer Codex Desktop/GUI support from that run.
 4. Initialize the same writable directory used by the Hook:
+
+   If an approved manual workflow supplies an exact `file-payload-exact`
+   setup-profile command and expected revision, use that one command instead
+   of separate `init` and three `config set` commands. The profile is fixed to
+   `pre-tool-policy`, `file-payload-shadow`, and
+   `file-payload-exact-enforcement` all enabled; it accepts no arbitrary
+   settings object. Do not substitute another profile or revision.
+
+   ```text
+   sh "<PLUGIN_ROOT>/hooks/run_cli.sh" setup apply file-payload-exact --codex --expected-revision <expected-revision> --workspace <workspace-root> --data-dir <PLUGIN_DATA> --json
+   ```
+
+   Follow it with the exact read-only combined verification when the workflow
+   supplies it. This replaces separate `doctor`, `status`, and `config show`
+   calls for that workflow:
+
+   ```text
+   sh "<PLUGIN_ROOT>/hooks/run_cli.sh" setup verify file-payload-exact --workspace <workspace-root> --data-dir <PLUGIN_DATA> --json
+   ```
+
+   Stop before any send test unless the setup application and combined
+   verification both succeed. The approval is required because these commands
+   access Plugin data outside the task workspace, not because they use the
+   network. Request each as a one-command approval and never request a reusable
+   permission prefix.
+
+   Otherwise, use the existing individual initialization flow:
 
    ```text
    sh "<PLUGIN_ROOT>/hooks/run_cli.sh" init --codex --workspace <workspace-root> --data-dir <PLUGIN_DATA>

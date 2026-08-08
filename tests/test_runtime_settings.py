@@ -20,7 +20,10 @@ from hook_monitor.runtime.settings import (
 )
 from hook_monitor.runtime.storage import CURRENT_SCHEMA_VERSION, EventStore
 from hook_monitor.runtime.workspace import resolve_workspace
-from tooluseproxy.cli import main as tooluseproxy_main
+from tooluseproxy.cli import (
+    SETUP_PROFILE_FILE_PAYLOAD_EXACT,
+    main as tooluseproxy_main,
+)
 
 
 class RuntimeSettingsDomainTest(unittest.TestCase):
@@ -230,6 +233,73 @@ class RuntimeSettingsStorageTest(unittest.TestCase):
                     "DELETE FROM workspace_runtime_setting_changes"
                 )
 
+    def test_fixed_profile_is_atomic_revisioned_and_idempotent(self) -> None:
+        workspace_id = self.workspace_a.workspace_id
+        assert workspace_id is not None
+        initial = self.store.get_workspace_runtime_settings(workspace_id)
+        expected = {
+            PRE_TOOL_POLICY_KEY: True,
+            FILE_PAYLOAD_SHADOW_KEY: True,
+            FILE_PAYLOAD_EXACT_ENFORCEMENT_KEY: True,
+        }
+
+        applied, changes = (
+            self.store.apply_workspace_runtime_settings_profile(
+                self.workspace_a,
+                settings=expected,
+                expected_revision=initial.revision,
+            )
+        )
+
+        self.assertEqual(expected, applied.settings)
+        self.assertEqual(3, len(changes))
+        self.assertEqual(
+            {initial.revision},
+            {change.previous_revision for change in changes},
+        )
+        self.assertEqual(
+            {applied.revision},
+            {change.new_revision for change in changes},
+        )
+        retried, retry_changes = (
+            self.store.apply_workspace_runtime_settings_profile(
+                self.workspace_a,
+                settings=expected,
+                expected_revision=initial.revision,
+            )
+        )
+        self.assertEqual(applied, retried)
+        self.assertEqual((), retry_changes)
+
+    def test_fixed_profile_rejects_stale_non_target_revision(self) -> None:
+        workspace_id = self.workspace_a.workspace_id
+        assert workspace_id is not None
+        initial = self.store.get_workspace_runtime_settings(workspace_id)
+        partial, _ = self.store.update_workspace_runtime_setting(
+            workspace_id,
+            setting_key=PRE_TOOL_POLICY_KEY,
+            value=True,
+            expected_revision=initial.revision,
+        )
+
+        with self.assertRaisesRegex(
+            RuntimeSettingsError,
+            "verify the current revision",
+        ):
+            self.store.apply_workspace_runtime_settings_profile(
+                self.workspace_a,
+                settings={
+                    PRE_TOOL_POLICY_KEY: True,
+                    FILE_PAYLOAD_SHADOW_KEY: True,
+                    FILE_PAYLOAD_EXACT_ENFORCEMENT_KEY: True,
+                },
+                expected_revision=initial.revision,
+            )
+        self.assertEqual(
+            partial,
+            self.store.get_workspace_runtime_settings(workspace_id),
+        )
+
     def test_unregistered_workspace_cannot_be_changed(self) -> None:
         initial = empty_workspace_runtime_settings("not-registered")
         with self.assertRaisesRegex(RuntimeSettingsError, "not registered"):
@@ -385,6 +455,86 @@ class RuntimeSettingsCliTest(unittest.TestCase):
         )
         self.assertEqual(1, exit_code)
         self.assertEqual("setting_key_unknown", unknown["error"]["code"])
+
+    def test_setup_profile_apply_and_read_only_verify(self) -> None:
+        fresh_workspace = self.root / "setup-workspace"
+        fresh_data = self.root / "setup-data"
+        fresh_workspace.mkdir()
+        initial_revision = empty_workspace_runtime_settings(
+            "revision-is-settings-only"
+        ).revision
+        setup_arguments = [
+            "setup",
+            "apply",
+            SETUP_PROFILE_FILE_PAYLOAD_EXACT,
+            "--codex",
+            "--expected-revision",
+            initial_revision,
+            "--workspace",
+            str(fresh_workspace),
+            "--data-dir",
+            str(fresh_data),
+            "--json",
+        ]
+
+        exit_code, applied, _ = self._run(setup_arguments)
+
+        self.assertEqual(0, exit_code)
+        self.assertEqual("applied", applied["status"])
+        self.assertEqual(3, len(applied["changed_keys"]))
+        retry_code, retried, _ = self._run(setup_arguments)
+        self.assertEqual(0, retry_code)
+        self.assertEqual("already_applied", retried["status"])
+
+        manifest = fresh_workspace / "protected_sources.json"
+        database = fresh_data / "events.db"
+        with sqlite3.connect(database) as conn:
+            before_settings = conn.execute(
+                """
+                SELECT settings_revision, settings_json
+                FROM workspace_runtime_settings
+                """
+            ).fetchall()
+            before_history = conn.execute(
+                """
+                SELECT change_id, previous_revision, new_revision
+                FROM workspace_runtime_setting_changes
+                ORDER BY change_id
+                """
+            ).fetchall()
+        before_manifest = manifest.read_bytes()
+        verify_code, verified, _ = self._run(
+            [
+                "setup",
+                "verify",
+                SETUP_PROFILE_FILE_PAYLOAD_EXACT,
+                "--workspace",
+                str(fresh_workspace),
+                "--data-dir",
+                str(fresh_data),
+                "--json",
+            ]
+        )
+        with sqlite3.connect(database) as conn:
+            after_settings = conn.execute(
+                """
+                SELECT settings_revision, settings_json
+                FROM workspace_runtime_settings
+                """
+            ).fetchall()
+            after_history = conn.execute(
+                """
+                SELECT change_id, previous_revision, new_revision
+                FROM workspace_runtime_setting_changes
+                ORDER BY change_id
+                """
+            ).fetchall()
+
+        self.assertEqual(0, verify_code)
+        self.assertEqual("passed", verified["status"])
+        self.assertEqual(before_settings, after_settings)
+        self.assertEqual(before_history, after_history)
+        self.assertEqual(before_manifest, manifest.read_bytes())
 
 
 if __name__ == "__main__":

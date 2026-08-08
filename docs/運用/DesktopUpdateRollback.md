@@ -22,9 +22,13 @@ Issue [#62](https://github.com/mani1261790/ToolUseProxy/issues/62)では、Codex
 
 実装入口は`scripts/manual_desktop_update_rollback.py`、状態機械は`scripts/desktop_update_rollback_state.py`です。既存Desktop Phase BとPlugin lifecycleを含む全test suiteはgreenです。
 
-2026-08-09時点で、異version updateは実機チェックポイントまで通過しました。旧DB schema 1のprivate backupを保持し、新版schema 6へ移行し、public side effect 1件、protected side effect 0件、PreToolUse block 1件、protected値露出0を確認しています。ただしrun途中でDesktop本体も更新されたため、これは`combined_desktop_and_plugin_update`の証拠であり、Plugin単独updateの証拠ではありません。rollbackと直接Removeは引き続き未完了です。
+2026-08-09に異version update、data保持、新版の保護動作、新schemaに対する旧runtimeの安全拒否、backup rollback、Disableなしの直接Remove、cleanupを実機で完走しました。最終reportは`code_update_verified`、`data_reuse_verified`、`new_runtime_protection_verified`、`newer_schema_refusal_verified`、`backup_rollback_verified`、`direct_remove_new_task_verified`、`shared_inventory_restored`がすべて`true`、`raw_protected_value_exposure`が`0`です。
 
-同日の手動承認再確認では`init`と`doctor`の承認UIが2回表示されましたが、説明は読みにくい評価で、`doctor`の完了結果を取得できず安全停止しました。承認理由を160文字以内の4区切りplain textへ短縮し、継続中commandはcell IDで完了まで待つように修正した後、別のfresh runで承認UXを再確認します。
+旧DB schema 1のprivate backupを保持して新版schema 6へ移行し、public side effect 1件、protected side effect 0件、PreToolUse block 1件を確認しました。旧runtimeはcurrent schema 6 DBを変更せずinactiveとして停止し、schema 1 backupを別data directoryへ復元するとactiveになりました。直接Remove後の新しいDesktop taskでは対象Hookが動きませんでした。
+
+cleanup後は共有inventoryを復元しましたが、Codexの`config.toml`に削除済みPlugin / workspaceの非アクティブな履歴が残ったため、最終状態は`restored_with_inactive_config_residue`です。この履歴だけではHookは実行されません。開始時のconfig本文を保存していなかったため、推測編集はしていません。
+
+run途中でDesktop本体も更新されたため、update証拠は`combined_desktop_and_plugin_update`として扱います。Plugin単独updateだけを分離した証拠ではありません。Issue [#62](https://github.com/mani1261790/ToolUseProxy/issues/62)は完了しました。[#63](https://github.com/mani1261790/ToolUseProxy/issues/63)では保存task記録の再検証を正式な`passed`まで完了し、初期設定を固定profile applyとread-only verificationの2 commandへ集約しました。fresh Desktopも承認2回、public 1、protected 0、exact block 1、raw exposure 0で正式な`passed`です。
 
 ## 今回証明すること
 
