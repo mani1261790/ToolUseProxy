@@ -94,6 +94,10 @@ Desktop dispatchを値なしmarkerで確認するためにlauncherへ計測処�
 16. `cleanup_planned`
 17. `restored`
 
+Desktop本体またはbundled Codexが途中で更新された場合、CLI・Plugin inventory・Marketplace rootが一致することを再確認し、host境界の変更をstateへ監査記録する。そのrunは純粋なPlugin単独更新ではなく、`combined_desktop_and_plugin_update`として扱う。Plugin単独更新の証拠が必要なら、同一Desktop build内で別runを実施する。
+
+インストール後のPlugin identityはartifact treeと比較するが、DesktopやPythonが後から作る`.DS_Store`、`__pycache__`、`.pyc`、`.pyo`だけは生成metadataとして除外する。その他の追加・変更は拒否する。
+
 各checkpointは、直前までのstate、共有inventory、artifact identityを再確認してから進みます。失敗時は現在stageと値を含まないerror codeを保存し、同じ確認を際限なく再実行しません。
 
 ### 3. updateを検証する

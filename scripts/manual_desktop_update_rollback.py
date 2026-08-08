@@ -456,7 +456,8 @@ def checkpoint_old_installed(root_argument: Path) -> dict[str, Any]:
     installed_root = Path(installed_path).expanduser().resolve()
     if (
         installed.get("version") != old.declared_version
-        or _tree_sha256(installed_root) != old.effective_tree_sha256
+        or _tree_sha256_ignoring_generated_metadata(installed_root)
+        != old.effective_tree_sha256
     ):
         raise DesktopUpdateRollbackFailure(
             "checkpoint_old_installed",
@@ -899,10 +900,33 @@ def checkpoint_new_installed(root_argument: Path) -> dict[str, Any]:
         plugin_expected=True,
         marketplace_root=Path(new.plugin_root).parent,
     ):
-        raise DesktopUpdateRollbackFailure(
-            "checkpoint_new_installed",
-            "shared_state_delta_unexpected",
+        rebased_before = _rebaseline_desktop_host_bundle(
+            state["before"],
+            current,
+            plugin_expected=True,
+            marketplace_root=Path(new.plugin_root).parent,
         )
+        if rebased_before is None:
+            raise DesktopUpdateRollbackFailure(
+                "checkpoint_new_installed",
+                "shared_state_delta_unexpected",
+            )
+        state["host_environment_rebaseline"] = {
+            "reason": "desktop_host_updated_before_new_plugin_checkpoint",
+            "previous_desktop_version": state["before"].get(
+                "desktop_version"
+            ),
+            "current_desktop_version": current.get("desktop_version"),
+            "previous_desktop_codex_version": state["before"].get(
+                "desktop_codex_version"
+            ),
+            "current_desktop_codex_version": current.get(
+                "desktop_codex_version"
+            ),
+            "codex_cli_unchanged": True,
+        }
+        state["validation_scope"] = "combined_desktop_and_plugin_update"
+        state["before"] = rebased_before
     installed = _find_plugin(current, PLUGIN_ID)
     source = installed.get("source") if isinstance(installed, dict) else None
     installed_path = source.get("path") if isinstance(source, dict) else None
@@ -917,7 +941,10 @@ def checkpoint_new_installed(root_argument: Path) -> dict[str, Any]:
             "new_plugin_identity_mismatch",
         )
     installed_root = Path(installed_path).expanduser().resolve()
-    if _tree_sha256(installed_root) != new.effective_tree_sha256:
+    if (
+        _tree_sha256_ignoring_generated_metadata(installed_root)
+        != new.effective_tree_sha256
+    ):
         raise DesktopUpdateRollbackFailure(
             "checkpoint_new_installed",
             "new_plugin_tree_mismatch",
@@ -1382,7 +1409,10 @@ def checkpoint_old_reinstalled_for_rollback(
             "old_plugin_identity_mismatch",
         )
     installed_root = Path(installed_path).expanduser().resolve()
-    if _tree_sha256(installed_root) != old.effective_tree_sha256:
+    if (
+        _tree_sha256_ignoring_generated_metadata(installed_root)
+        != old.effective_tree_sha256
+    ):
         raise DesktopUpdateRollbackFailure(
             "checkpoint_old_reinstalled",
             "old_plugin_tree_mismatch",
@@ -2481,6 +2511,39 @@ def _rebaseline_desktop_version_only(
         return None
     rebased = json.loads(json.dumps(before))
     rebased["desktop_version"] = current_version
+    if not _inventory_delta_matches(
+        rebased,
+        current,
+        plugin_expected=plugin_expected,
+        marketplace_root=marketplace_root,
+    ):
+        return None
+    return rebased
+
+
+def _rebaseline_desktop_host_bundle(
+    before: Any,
+    current: dict[str, Any],
+    *,
+    plugin_expected: bool,
+    marketplace_root: Path,
+) -> dict[str, Any] | None:
+    if not isinstance(before, dict):
+        return None
+    version_keys = ("desktop_version", "desktop_codex_version")
+    if (
+        before.get("codex_cli_version") != current.get("codex_cli_version")
+        or not any(before.get(key) != current.get(key) for key in version_keys)
+        or any(
+            not isinstance(current.get(key), str)
+            or not current.get(key)
+            for key in version_keys
+        )
+    ):
+        return None
+    rebased = json.loads(json.dumps(before))
+    for key in version_keys:
+        rebased[key] = current[key]
     if not _inventory_delta_matches(
         rebased,
         current,

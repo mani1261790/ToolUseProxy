@@ -17,6 +17,7 @@ from scripts.manual_desktop_update_rollback import (
     _extract_tar_safely,
     _inventory_delta_matches,
     _old_baseline_prompt,
+    _rebaseline_desktop_host_bundle,
     _rebaseline_desktop_version_only,
     _remove_managed_path,
     _validate_uninstall_plan,
@@ -25,6 +26,60 @@ from scripts.manual_desktop_update_rollback import (
 
 
 class ManualDesktopUpdateRollbackTest(unittest.TestCase):
+    def test_desktop_host_rebaseline_allows_app_bundle_drift_only(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            marketplace = Path(temporary_directory).resolve()
+            plugin = {
+                "pluginId": PLUGIN_ID,
+                "name": "tooluseproxy",
+            }
+            before = {
+                "codex_cli_version": "codex 1",
+                "desktop_version": "desktop-old",
+                "desktop_codex_version": "desktop-codex-old",
+                "installed_plugin_ids": [],
+                "marketplace_names": [MARKETPLACE_NAME],
+                "marketplaces": [
+                    {"name": MARKETPLACE_NAME, "root": str(marketplace)}
+                ],
+                "plugins": [],
+            }
+            current = {
+                **before,
+                "desktop_version": "desktop-new",
+                "desktop_codex_version": "desktop-codex-new",
+                "installed_plugin_ids": [PLUGIN_ID],
+                "plugins": [plugin],
+            }
+
+            rebased = _rebaseline_desktop_host_bundle(
+                before,
+                current,
+                plugin_expected=True,
+                marketplace_root=marketplace,
+            )
+
+            self.assertIsNotNone(rebased)
+            assert rebased is not None
+            self.assertEqual("desktop-new", rebased["desktop_version"])
+            self.assertEqual(
+                "desktop-codex-new",
+                rebased["desktop_codex_version"],
+            )
+            self.assertEqual("desktop-old", before["desktop_version"])
+
+            incompatible = {**current, "codex_cli_version": "codex 2"}
+            self.assertIsNone(
+                _rebaseline_desktop_host_bundle(
+                    before,
+                    incompatible,
+                    plugin_expected=True,
+                    marketplace_root=marketplace,
+                )
+            )
+
     def test_desktop_version_rebaseline_allows_only_app_version_drift(
         self,
     ) -> None:
