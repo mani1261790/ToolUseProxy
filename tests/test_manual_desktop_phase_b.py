@@ -740,6 +740,37 @@ text(r.output);
                 raised.exception.code,
             )
 
+    def test_probe_plugin_data_accepts_fresh_uninitialized_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory).resolve()
+            codex_home = root / "codex-home"
+            data_root = codex_home / "plugins" / "data"
+            data_root.mkdir(parents=True)
+            plugin_data = data_root / "tooluseproxy-fresh"
+            evidence = root / PROBE_DATA_PATH_FILENAME
+            evidence.write_text(
+                (
+                    f"pre-tool-use\t{plugin_data}\n"
+                    f"post-tool-use\t{plugin_data}\n"
+                    f"stop\t{plugin_data}\n"
+                ),
+                encoding="utf-8",
+            )
+            evidence.chmod(0o600)
+
+            selected = _read_probe_plugin_data(
+                evidence,
+                codex_home=codex_home,
+                expected_counts={
+                    "pre-tool-use": 1,
+                    "post-tool-use": 1,
+                    "stop": 1,
+                },
+            )
+
+            self.assertEqual(plugin_data, selected)
+            self.assertFalse(plugin_data.exists())
+
     def test_checkpoint_hook_probe_removes_probe_gate(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory).resolve()

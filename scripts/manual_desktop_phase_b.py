@@ -4161,11 +4161,11 @@ def _read_probe_plugin_data(
         )
     selected = Path(next(iter(data_paths))).expanduser().resolve()
     codex_home = codex_home.resolve()
+    data_root = (codex_home / "plugins" / "data").resolve()
     if (
-        selected == codex_home
-        or not selected.is_relative_to(codex_home)
-        or not selected.is_dir()
+        selected.parent != data_root
         or selected.is_symlink()
+        or (selected.exists() and not selected.is_dir())
     ):
         raise DesktopPhaseBFailure(
             "checkpoint_hook_probe",
