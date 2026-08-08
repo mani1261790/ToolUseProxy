@@ -84,6 +84,10 @@ text(r.output);
 
         self.assertEqual("true", parsed["cmd"])
         self.assertEqual("/tmp/workspace", parsed["workdir"])
+        direct_result = _parse_exec_custom_tool_input(
+            'const r = await tools.exec_command({"cmd":"true"}); text(r);'
+        )
+        self.assertEqual({"cmd": "true"}, direct_result)
         escalated = _parse_exec_custom_tool_input(
             """const r = await tools.exec_command({
   cmd: "true",

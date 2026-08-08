@@ -3948,7 +3948,7 @@ def _parse_exec_custom_tool_input(value: object) -> dict[str, Any] | None:
         return None
     match = re.fullmatch(
         r"\s*const\s+r\s*=\s*await\s+tools\.exec_command\((\{.*\})\);"
-        r"\s*(?:text\(r\.output\)|"
+        r"\s*(?:text\(r\)|text\(r\.output\)|"
         r"text\(JSON\.stringify\(\{exit_code:r\.exit_code,\s*"
         r"output:r\.output\}\)\));\s*",
         value,
