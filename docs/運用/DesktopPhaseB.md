@@ -15,7 +15,7 @@ Issue [#53](https://github.com/mani1261790/ToolUseProxy/issues/53)では、CLI T
 | Hook matcherに渡るcanonical tool名 | `Bash` |
 | 最新定義のtrusted Hook probe | PreToolUse / PostToolUse / Stop各1回、余分なtool call 0件で成功 |
 | `workspace-write`でのPlugin data操作 | 10コマンドすべてに1回限定の`require_escalated`と日本語の理由を付けて発行 |
-| 個別commandの承認UI | 表示されず、ユーザー入力なしで進行。理由はsession記録だけでは断定しない |
+| 個別commandの承認UI | 2026-07-30 runでは未表示。2026-08-09の手動承認runでは2回表示されたが、説明は読みにくい評価 |
 | public / protected call | publicは実行、protectedはPreToolUseが実行前block |
 | disable / remove / 同一版reinstall | 管理DBとruntime設定を保持したまま完走 |
 | final cleanup | Plugin、Marketplace、管理データ、synthetic workspaceを削除。他のPlugin / Marketplace一覧は開始時と一致 |
@@ -29,7 +29,9 @@ Desktopのtask履歴で使われる`exec_command`は、Hook matcherのtool名で
 
 以前のrunは、`workspace-write`のDesktop taskからworkspace外の`PLUGIN_DATA`へ通常権限で`init`し、OS拒否で停止しました。setup skillとPhase B promptを直した最新runでは、Plugin dataを実際に触る10コマンドすべてが`require_escalated`、空でない日本語の理由、再利用可能な`prefix_rule`なしで発行され、初期化からprotected blockまで完走しました。
 
-ただし、これは「各コマンドに一時的な権限昇格要求が付いた」という機械確認です。今回のDesktopでは個別承認UI自体が表示されず、ユーザーは入力していません。Desktopが自動的に許可した理由はsession記録だけでは断定できません。harnessは今後、承認UIが見えた場合の`yes` / `no`に加えて`not-shown`を記録し、`ux_status: not_observed`として機能合格と分離します。
+ただし、これは「各コマンドに一時的な権限昇格要求が付いた」という機械確認です。2026-07-30 runでは個別承認UIが表示されず、ユーザーは入力していませんでした。2026-08-09の手動承認runでは`init`と`doctor`の2回で承認UIが表示されましたが、長いcommandと説明が同時に並び、読みにくい評価でした。また`doctor`の完了結果を取得できず安全停止しました。機能結果、承認UIの表示、説明の理解、継続中commandの完了取得を別々に記録します。
+
+この結果を受け、承認理由は160文字以内のplain textへ短縮します。区切りは`すること：`、`変わるもの：`、`外部通信：`、`許可判断：`の4つだけとし、absolute path、Markdown、過去の説明への参照を含めません。同じ文を承認直前とtool callのjustificationへ渡します。command toolがcell IDを返した場合は、CLIを再実行せず、そのIDによるwaitだけで元commandの完了まで待ちます。
 
 Plugin自体も、未初期化・Python不足・runtime起動失敗・内部policy評価失敗などの非active診断をstderrではなくCodexが解釈できるphase別JSON stdoutで返すように改修しました。例外本文とHook inputは診断へ含めません。これは利用者へ次の操作を伝えるための改善です。一方、dispatchの合否は引き続きmarkerで判定し、診断が画面に見えたかどうかとは分離します。
 
@@ -44,9 +46,10 @@ Plugin自体も、未初期化・Python不足・runtime起動失敗・内部poli
 - Desktopのtool useにToolUseProxy Hookが発火する: trusted probeで確認済み
 - workspace外のPlugin dataへ通常権限で初期化できる: できない。1コマンド単位の権限昇格が必要
 - Desktopでprotected payloadを実行前blockできる: 確認済み
-- 個別commandの承認UIを人が理解できる: 今回はUIが表示されず未観測
+- 個別commandの承認UIが表示される: 確認済み
+- 個別commandの承認文を人が理解できる: 読みにくい評価のため改善後の再検証が必要
 
-Desktop / GUI上で今回のfile-backed exact-only保護が動くことは確認できました。機能とlifecycleは完走しましたが、個別command承認UIは表示されなかったため、承認UXを含むDesktop Phase B全体の合格とは扱いません。
+Desktop / GUI上で今回のfile-backed exact-only保護が動くことは確認できました。機能とlifecycleは完走しました。個別command承認UIの表示も後続runで確認しましたが、説明の可読性と継続中commandの完了取得が未合格のため、承認UXを含むDesktop Phase B全体の合格とは扱いません。
 
 2026-07-31にdisable、remove、同一版reinstall、final remove、cleanupを完走しました。Plugin登録、検証用Marketplace、約111MBの管理データ、synthetic workspaceは削除され、無関係なPlugin / MarketplaceのIDと設定は保持されています。一方、Codexは削除済みworkspaceのproject設定と、削除済みPluginのHook trust履歴を`config.toml`へ残しました。開始時のconfig本文を保存していないため自動編集はせず、`restored_with_inactive_config_residue`としてaggregate reportへ明記しています。該当Pluginが存在しないため、この履歴だけでHookが実行されることはありません。
 

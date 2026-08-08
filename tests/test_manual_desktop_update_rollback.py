@@ -22,11 +22,36 @@ from scripts.manual_desktop_update_rollback import (
     _rebaseline_desktop_version_only,
     _remove_managed_path,
     _validate_uninstall_plan,
+    _write_update_context_and_prompt,
     inspect_marketplace_artifact,
 )
 
 
 class ManualDesktopUpdateRollbackTest(unittest.TestCase):
+    def test_update_prompt_uses_short_approval_and_wait_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory).resolve()
+            state = {
+                "workspace": str(root / "workspace"),
+                "new_installed_plugin_root": str(root / "plugin"),
+                "current_data": str(root / "data"),
+                "fake_sink": str(root / "bin" / "curl"),
+                "new": {"declared_version": "0.1.0-alpha.3"},
+            }
+
+            _write_update_context_and_prompt(root, state)
+
+            prompt = (root / "desktop-update-rollback-prompt.txt").read_text()
+            self.assertIn(
+                "実行確認｜すること：...｜変わるもの：...｜外部通信：",
+                prompt,
+            )
+            self.assertIn("同じ160文字以内のplain text", prompt)
+            self.assertIn("tool callのjustification", prompt)
+            self.assertIn("cell ID", prompt)
+            self.assertIn("元commandの完了まで待って", prompt)
+            self.assertIn("CLI commandを再実行せず", prompt)
+
     def test_migration_backup_files_excludes_sqlite_sidecars(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             plugin_data = Path(temporary_directory)

@@ -22,7 +22,9 @@ Issue [#62](https://github.com/mani1261790/ToolUseProxy/issues/62)では、Codex
 
 実装入口は`scripts/manual_desktop_update_rollback.py`、状態機械は`scripts/desktop_update_rollback_state.py`です。既存Desktop Phase BとPlugin lifecycleを含む全test suiteはgreenです。
 
-まだ実機runは行っていません。したがって、以下は「harnessで検証条件を固定した」状態であり、Desktopでupdate / rollback / 直接Removeが実証済みという意味ではありません。次のgateは、clean commitからplanを作り、人が5〜7回のDesktop操作を行うことです。
+2026-08-09時点で、異version updateは実機チェックポイントまで通過しました。旧DB schema 1のprivate backupを保持し、新版schema 6へ移行し、public side effect 1件、protected side effect 0件、PreToolUse block 1件、protected値露出0を確認しています。ただしrun途中でDesktop本体も更新されたため、これは`combined_desktop_and_plugin_update`の証拠であり、Plugin単独updateの証拠ではありません。rollbackと直接Removeは引き続き未完了です。
+
+同日の手動承認再確認では`init`と`doctor`の承認UIが2回表示されましたが、説明は読みにくい評価で、`doctor`の完了結果を取得できず安全停止しました。承認理由を160文字以内の4区切りplain textへ短縮し、継続中commandはcell IDで完了まで待つように修正した後、別のfresh runで承認UXを再確認します。
 
 ## 今回証明すること
 

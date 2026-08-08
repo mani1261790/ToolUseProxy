@@ -42,27 +42,30 @@ summary from the exact command arguments that will be submitted.
 
 Assume the Codex approval surface renders plain text, exposes Markdown syntax
 literally, and may collapse every newline. Therefore the summary must be one
-short physical paragraph. Never use Markdown headings, emphasis, bullets,
-tables, code spans, or fenced blocks in it. In particular, do not emit `#`,
-`*`, backticks, or a leading `-`.
+short physical paragraph of at most 160 Unicode characters. Never use Markdown
+headings, emphasis, bullets, tables, code spans, or fenced blocks in it. In
+particular, do not emit `#`, `*`, backticks, or a leading `-`.
 
-Use these full-width plain-text delimiters in this exact order:
+Use these plain-text delimiters in this exact order:
 
-`実行確認｜【操作】...｜【目的】...｜【影響】...｜【通信】...｜【取消】...｜【判断】...`
+`実行確認｜すること：...｜変わるもの：...｜外部通信：...｜許可判断：...`
 
-Keep the whole summary concise enough to scan after line wrapping. Describe:
+Keep `すること` and `変わるもの` in ordinary language. Use `なし` for no
+state change or no network. In `許可判断`, name the one operation that is safe
+to approve and the extra or different operation that requires rejection.
 
-- `操作`: exact subcommand, count, and target workspace in ordinary language
-- `目的`: what the operation accomplishes
-- `影響`: local data it reads and state it may write, or `変更なし`
-- `通信`: `なし` unless the operation truly requires it
-- `取消`: how to reverse or review the change
-- `判断`: first state the checked approval condition, then the concrete
-  mismatch or extra operation that requires rejection
+Do not list absolute paths in the summary. Name the workspace briefly and say
+that the submitted arguments were checked against the approved context file.
+The raw command remains available separately for technical review.
 
-Do not list every absolute path in the summary. Name the workspace briefly and
-say that the submitted arguments were checked against the approved context
-file. The raw command remains available separately for technical review.
+Pass exactly the same short paragraph as the tool call's approval
+`justification`; do not put a second, longer explanation in the approval UI.
+For common operations, follow these models and adapt only the workspace name or
+whether state changes:
+
+- init: `実行確認｜すること：この検証用workspaceをToolUseProxyへ登録｜変わるもの：検証用DBと登録情報｜外部通信：なし｜許可判断：初期設定1回だけなら許可。ほかの操作があれば拒否。`
+- doctor/status/config show: `実行確認｜すること：この検証用workspaceの状態確認｜変わるもの：なし｜外部通信：なし｜許可判断：確認1回だけなら許可。変更操作があれば拒否。`
+- config set: `実行確認｜すること：保護設定を1項目変更｜変わるもの：この検証用workspaceの設定｜外部通信：なし｜許可判断：表示した1項目の変更だけなら許可。ほかの変更があれば拒否。`
 
 Do not use implementation terms such as revision, manifest hash, Hook data
 directory, or opaque token as the primary permission explanation. Those terms
@@ -70,7 +73,7 @@ may follow as technical detail. If a command combines multiple read-only
 checks after one local initialization, say so explicitly.
 
 Never use memory-dependent references such as `説明済み`, `上記の操作`, or
-`先ほどの説明` in the permission summary. The `【判断】` segment must stand
+`先ほどの説明` in the permission summary. The `許可判断` segment must stand
 on its own. Before submitting the tool call, verify that the long `sh ...`
 display uses the expected installed Plugin launcher, exact subcommand,
 workspace, and data directory, and contains no unmentioned command. State that
@@ -90,6 +93,12 @@ stop before execution and explain that the user must either run the exact
 reviewed command themselves or deliberately choose a surface/mode that grants
 the required local path. Never retry an `Operation not permitted` result with a
 broader command or different path.
+
+If the command tool reports that the process is still running and returns a
+continuation or cell ID, use only the host-provided wait/resume operation with
+that exact ID until the original command completes. Waiting is not a second CLI
+command and must not trigger a new approval. Do not rerun the CLI command, and
+do not report missing initial output as a command failure.
 
 1. Confirm that the current directory is the intended workspace root.
 2. Confirm that the ToolUseProxy Plugin Hook definition has been reviewed and trusted in Codex. Do not bypass Hook trust.

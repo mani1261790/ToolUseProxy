@@ -93,21 +93,19 @@ class ManualPluginPhaseBTest(unittest.TestCase):
             self.assertIn("Desktop/GUI", guide)
             self.assertIn("別の検証", guide)
             for approval_label in (
-                "【操作】",
-                "【目的】",
-                "【影響】",
-                "【通信】",
-                "【取消】",
-                "【判断】",
+                "すること：",
+                "変わるもの：",
+                "外部通信：",
+                "許可判断：",
             ):
                 self.assertIn(approval_label, guide)
                 self.assertIn(approval_label, prompt)
             self.assertIn(
-                "実行確認｜【操作】短い説明｜【目的】短い説明｜【影響】短い説明",
+                "実行確認｜すること：短い説明｜変わるもの：短い説明",
                 guide,
             )
             self.assertIn(
-                "実行確認｜【操作】短い説明｜【目的】短い説明｜【影響】短い説明",
+                "実行確認｜すること：短い説明｜変わるもの：短い説明",
                 prompt,
             )
             self.assertIn("Markdownを描画せず、改行を潰す", guide)
@@ -233,20 +231,19 @@ class ManualPluginPhaseBTest(unittest.TestCase):
         ):
             self.assertIn(proposal_label, skill)
         for approval_label in (
-            "【操作】",
-            "【目的】",
-            "【影響】",
-            "【通信】",
-            "【取消】",
-            "【判断】",
+            "すること：",
+            "変わるもの：",
+            "外部通信：",
+            "許可判断：",
         ):
             self.assertIn(approval_label, skill)
         self.assertIn(
-            "実行確認｜【操作】...｜【目的】...｜【影響】...",
+            "実行確認｜すること：...｜変わるもの：...",
             skill,
         )
         self.assertIn("may collapse every newline", skill)
-        self.assertIn("Never use Markdown headings", skill)
+        self.assertIn("Never use Markdown", skill)
+        self.assertIn("headings, emphasis, bullets", skill)
         self.assertNotIn("### 実行前の確認", skill)
         self.assertNotIn("**実行する操作**", skill)
         self.assertIn("continue to any send test", skill)
