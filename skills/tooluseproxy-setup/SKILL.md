@@ -7,6 +7,39 @@ description: Set up, diagnose, inspect, or explicitly uninstall the ToolUseProxy
 
 Use this workflow only when the user asks to set up, diagnose, or uninstall ToolUseProxy. Never add a protected source or delete local data without showing the exact value-free plan and receiving explicit user approval.
 
+## User-facing language contract
+
+Infer the user's intent from natural language. Never require or compare against
+an exact phrase. The user must not need to know the skill name, CLI subcommands,
+storage layout, or English decision words. The following are copyable examples,
+not trigger strings:
+
+- `ToolUseProxyをこのプロジェクトで使えるようにして`
+- `守った方がよいファイルを探して`
+- `ToolUseProxyが動いているか確認して`
+- `ToolUseProxyをこのプロジェクトから外して`
+
+Do not ask the user to restate a request using `setup skill`, `init`, `doctor`,
+`status`, `scan`, `selector`, `approve`, `reject`, or `ignore`. Those are
+implementation details for the agent. Accept clear paraphrases, different levels
+of detail and politeness, and short follow-up requests whose intent is clear from
+the conversation. Never ask the user to repeat one of the examples verbatim.
+
+When setup starts, lead with:
+
+`このプロジェクトでToolUseProxyを使えるようにします。初期設定と安全確認のため、通常は確認画面が2回出ます。どちらも外部通信は行いません。`
+
+When setup succeeds, lead with:
+
+`準備できました。このプロジェクトではToolUseProxyが動作しています。保護するファイルはまだ自動登録されていません。続けて、守るファイルを探すよう自然な言葉で依頼できます（例：「守った方がよいファイルを探して」）。`
+
+When setup or verification fails, lead with:
+
+`準備できませんでした。ToolUseProxyの保護機能はこのプロジェクトでは有効になっていません。ここで停止し、原因と安全なやり直し方を説明します。`
+
+Technical status codes and raw JSON may follow under `技術情報`, but never use
+them as the primary explanation and never require the user to interpret them.
+
 Before asking the user to trust ToolUseProxy Hooks, explain all three roles in
 plain language:
 
@@ -48,10 +81,10 @@ particular, do not emit `#`, `*`, backticks, or a leading `-`.
 
 Use these plain-text delimiters in this exact order:
 
-`実行確認｜すること：...｜変わるもの：...｜外部通信：...｜許可判断：...`
+`ToolUseProxyの確認｜内容：...｜変更：...｜通信：...｜理由：...｜許可：...`
 
-Keep `すること` and `変わるもの` in ordinary language. Use `なし` for no
-state change or no network. In `許可判断`, name the one operation that is safe
+Keep `内容` and `変更` in ordinary language. Use `なし` for no
+state change or no network. In `許可`, name the one operation that is safe
 to approve and the extra or different operation that requires rejection.
 
 Do not list absolute paths in the summary. Name the workspace briefly and say
@@ -60,14 +93,19 @@ The raw command remains available separately for technical review.
 
 Pass exactly the same short paragraph as the tool call's approval
 `justification`; do not put a second, longer explanation in the approval UI.
-For common operations, follow these models and adapt only the workspace name or
+For common operations, follow these models and adapt only the project name or
 whether state changes:
 
-- fixed setup profile apply: `実行確認｜すること：workspace外のPlugin dataへ初期化と保護3設定を一括適用｜変わるもの：検証用DBと登録情報｜外部通信：なし｜許可判断：初期設定1回だけなら許可。ほかの操作があれば拒否。`
-- fixed setup profile verify: `実行確認｜すること：workspace外のPlugin dataを読み取り一括確認｜変わるもの：なし｜外部通信：なし｜許可判断：確認1回だけなら許可。変更操作があれば拒否。`
-- init: `実行確認｜すること：この検証用workspaceをToolUseProxyへ登録｜変わるもの：検証用DBと登録情報｜外部通信：なし｜許可判断：初期設定1回だけなら許可。ほかの操作があれば拒否。`
-- doctor/status/config show: `実行確認｜すること：この検証用workspaceの状態確認｜変わるもの：なし｜外部通信：なし｜許可判断：確認1回だけなら許可。変更操作があれば拒否。`
-- config set: `実行確認｜すること：保護設定を1項目変更｜変わるもの：この検証用workspaceの設定｜外部通信：なし｜許可判断：表示した1項目の変更だけなら許可。ほかの変更があれば拒否。`
+- fixed setup profile apply: `ToolUseProxyの確認｜内容：このプロジェクトの保護を有効にする｜変更：初期設定と3つの保護設定｜通信：なし｜理由：プロジェクト外の専用保存領域を使うため｜許可：この初期設定だけなら許可`
+- fixed setup profile verify: `ToolUseProxyの確認｜内容：設定が正しく有効か確認する｜変更：なし｜通信：なし｜理由：プロジェクト外の専用保存領域を読むため｜許可：確認だけなら許可`
+- init: `ToolUseProxyの確認｜内容：このプロジェクトで利用を開始する｜変更：初期設定と記録用DB｜通信：なし｜理由：プロジェクト外の専用保存領域を使うため｜許可：この初期設定だけなら許可`
+- doctor/status/config show: `ToolUseProxyの確認｜内容：このプロジェクトで正しく動くか確認する｜変更：なし｜通信：なし｜理由：専用保存領域の状態を読むため｜許可：確認だけなら許可`
+- config set: `ToolUseProxyの確認｜内容：表示した保護設定を変更する｜変更：このプロジェクトの設定1件｜通信：なし｜理由：専用保存領域へ設定を保存するため｜許可：表示した1件だけなら許可`
+- protected-source scan: `ToolUseProxyの確認｜内容：守った方がよいファイルを探す｜変更：候補の確認記録だけ｜通信：なし｜理由：このプロジェクト内を安全な範囲で読むため｜許可：候補探しだけなら許可`
+- protected-source approval: `ToolUseProxyの確認｜内容：表示したファイルを保護対象にする｜変更：保護対象リストに1件追加｜通信：なし｜理由：専用保存領域へ承認を記録するため｜許可：表示した1件だけなら許可`
+- protected-source reject or ignore: `ToolUseProxyの確認｜内容：表示した候補を見送る｜変更：見送りの記録だけ｜通信：なし｜理由：同じ候補の扱いを専用保存領域へ記録するため｜許可：表示した1件だけなら許可`
+- removal without data deletion: `ToolUseProxyの確認｜内容：このプロジェクトでの利用を止める｜変更：Pluginの有効状態だけ｜通信：なし｜理由：新しい記録を止めるため｜許可：データを残した停止だけなら許可`
+- managed-data deletion: `ToolUseProxyの確認｜内容：表示したToolUseProxyデータを削除する｜変更：表示した管理対象データ｜通信：なし｜理由：削除は元に戻せないため｜許可：表示した範囲だけなら許可`
 
 Do not use implementation terms such as revision, manifest hash, Hook data
 directory, or opaque token as the primary permission explanation. Those terms
@@ -75,7 +113,7 @@ may follow as technical detail. If a command combines multiple read-only
 checks after one local initialization, say so explicitly.
 
 Never use memory-dependent references such as `説明済み`, `上記の操作`, or
-`先ほどの説明` in the permission summary. The `許可判断` segment must stand
+`先ほどの説明` in the permission summary. The `許可` segment must stand
 on its own. Before submitting the tool call, verify that the long `sh ...`
 display uses the expected installed Plugin launcher, exact subcommand,
 workspace, and data directory, and contains no unmentioned command. State that
@@ -182,36 +220,39 @@ do not report missing initial output as a command failure.
 
    The scanner is read-only for source files and the manifest, performs no network access, and uses fixed limits for traversal depth, entries, supported files, total bytes, and candidates. It excludes VCS, dependencies, virtual environments, build/cache directories, symlinks, and ToolUseProxy runtime data. It writes only a value-free candidate/review audit plus internal source hash/stat to the local runtime database and returns at most one review candidate in stable relative-path order. Show the relative path, reason codes, confidence, proposed source entry, and scan completeness. Never show or repeat source values, source hashes, absolute paths, or file previews. If `scan_complete` is false, explain the reached limit reasons and that unscanned scope remains; never report that no protected source exists.
 
-   Before showing the exact JSON proposal, translate it into this five-line
+   Before showing the exact JSON proposal, translate it into this user-facing
    review card:
 
-   - `守るファイル`: show only the workspace-relative path.
-   - `守る範囲`: explain selectors as scope, not syntax. For `dotenv_keys`,
+   - Start with `このファイルをToolUseProxyで守りますか？`
+   - `ファイル`: show only the workspace-relative path.
+   - `守る内容`: explain selectors as scope, not syntax. For `dotenv_keys`,
      say that only the values of the named settings are selected, not every
      value in the file. For `json_pointers`, identify the selected JSON fields
      without showing their values. If there is no selector, say that the file
      content is selected.
-   - `止める場面`: explain in ordinary language that attempts to include the
-     selected content in external sending or search can be stopped before the
-     tool runs.
-   - `承認すると変わるもの`: explain that one entry is added to
-     `protected_sources.json`; the source file itself is not changed.
-   - `承認しない場合`: explain that nothing is registered or changed. Briefly
-     offer reject for a reviewed non-secret and ignore when the user does not
-     want the same content proposed again by the current detector.
+   - `できること`: say that ToolUseProxy can stop an attempt to send the
+     selected content outside before the tool runs.
+   - `「守る」を選ぶと`: say that one item is added to ToolUseProxy's protected
+     list and the source file itself is not changed. Do not name the manifest.
+   - `選んでください`: offer exactly these ordinary-language choices:
+     `守る` / `今回は見送る` / `今後は候補に出さない`.
 
-   After the card, copy the CLI result's proposed source object verbatim as the
-   exact value-free JSON proposal. Do not reconstruct it from memory, rename
+   Map `守る` to approve, `今回は見送る` to reject, and
+   `今後は候補に出さない` to ignore internally. Never require the user to
+   reply with the English command words.
+
+   After the card, place `技術情報（判断には読まなくてもかまいません）` and
+   copy the CLI result's proposed source object verbatim as the exact value-free
+   JSON proposal. Do not reconstruct it from memory, rename
    keys, change singular/plural forms, change arrays or objects, add or remove
    fields, or normalize its contents. In particular, preserve `selector`
    exactly; never rewrite it as `selectors`. If the exact object is no longer
    available, stop and rerun the same bounded discovery command instead of
    presenting a reconstructed proposal. Follow the JSON with reason codes,
-   confidence, and scan completeness as technical detail. First ask whether
-   the user understands what content is selected and what approval changes.
-   If the answer is no or uncertain, explain again and do not request approval.
-   Ask for explicit approve, reject, or ignore only after the explanation is
-   understood.
+   confidence, and scan completeness as technical detail. Ask only the
+   ordinary-language choice after the card. If the user says the explanation
+   is unclear, explain `守る内容` and what changes again before accepting a
+   choice.
 8. If the user or agent already knows one `.env`, `.env.*`, or JSON path, or needs to propose a file outside the bounded scanner's policy, use the explicit-path fallback:
 
    ```text

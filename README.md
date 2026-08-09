@@ -4,11 +4,11 @@ Codexのtool useをローカルで観測し、外部sinkへ送られるpayload�
 
 本プロジェクトは、[SecHack365](https://sechack365.nict.go.jp/)での研究・開発成果物です。
 
-> 現在は`0.1.0-alpha.4` public alphaです。中核機能、再現可能な配布物、Apache-2.0の配布契約、CLI TUIでのfile-backed exact-only enforcement検証は整いましたが、完全なDLPではありません。Codex DesktopではPluginの検索・install、Hook review、trusted Pre / Post / Stop probe、public allow、file-backed protected payloadの実行前blockに加え、alpha.1からalpha.3へのdata migration、backup rollback、DisableなしのRemoveまで実機確認しました。保存済み2026-08-09 runと、初期化・3保護設定・状態確認を2 commandへ集約したfresh runは、どちらも正式な`passed`です。fresh runの承認UIは2回でした。adapter外のnetwork egress、hosted Web Search、Linux実Codex task、Windows実機も引き続き検証中です。
+> 現在は`0.1.0-alpha.5` public alphaです。中核機能、再現可能な配布物、Apache-2.0の配布契約、CLI TUIでのfile-backed exact-only enforcement検証は整いましたが、完全なDLPではありません。Codex DesktopではPluginの検索・install、Hook review、trusted Pre / Post / Stop probe、public allow、file-backed protected payloadの実行前blockに加え、alpha.1からalpha.3へのdata migration、backup rollback、DisableなしのRemoveまで実機確認しました。保存済み2026-08-09 runと、初期化・3保護設定・状態確認を2 commandへ集約したfresh runは、どちらも正式な`passed`です。fresh runの承認UIは2回でした。alpha.5では自然言語による導入、保護候補の分かりやすい確認、短い日本語の承認・診断案内を追加しました。adapter外のnetwork egress、hosted Web Search、Linux実Codex task、Windows実機も引き続き検証中です。
 
 - [研究紹介スライド（初めて知る方向け）](https://mani1261790.github.io/ToolUseProxy/slides/tooluseproxy-research.html)
 - [Codex Pluginとして試す](docs/設定/Plugin導入.md)
-- [5分quickstart / Five-minute quickstart](QUICKSTART.md)
+- [5分クイックスタート](QUICKSTART.md)
 - 30秒synthetic demo: `python3.11 scripts/demo_plugin.py`
 - [English introduction](README.en.md)
 - [対応環境と既知の制限](SUPPORT.md)
@@ -45,17 +45,19 @@ ToolUseProxyはLLM内部の状態や因果的な情報流を直接観測する�
 | 1. Trace | 中核完了 | event / artifact / resource / sinkをworkspace・session単位で追跡し、再現可能な解析runを保存 |
 | 2. Detect | 中核完了 | protected source binding、lineage、finding、policy、類似度profile v2.1を実装 |
 | 3. Stop | alpha実装済み | Stopの`continue_review`と、opt-inのBash / MCP PreToolUse denyを提供。runtime redactは無効 |
-| Plugin化 | alpha.4 | installable package、relocatable Plugin、`PLUGIN_ROOT` / `PLUGIN_DATA`、初期化・診断・traceを実装 |
+| Plugin化 | alpha.5 | installable package、relocatable Plugin、`PLUGIN_ROOT` / `PLUGIN_DATA`、初期化・診断・traceを実装 |
 | runtime設定 | 実装済み | workspace単位のboolean設定、環境変数override、revision付き更新、値なし監査、Plugin再導入後の保持 |
 | protected source登録 | 明示承認型を実装済み | `scan` / `suggest` → exact proposal → `approve` / `reject` / `ignore`。無承認登録はしない |
-| Public alpha | `0.1.0-alpha.4` | Apache-2.0、checksum / SBOM、archive内部、CI Action、hash-locked build、Git履歴監査、upgrade / rollback、自動dogfoodを完了。CLI TUIのfile-backed shadow / exact-only Phase Bは合格。Desktopもinstall、trust、実Hook probe、public allow、protected block、同一版reinstall、異version migration、backup rollback、DisableなしのRemove、cleanupまで機能確認済み。保存runと2-command setupのfresh runはいずれも正式な`passed`。fresh setupの承認は2回。Codexが保持する非アクティブなproject / Hook trust履歴は残存。cross-platform実機、少人数pilotも継続課題 |
+| Public alpha | `0.1.0-alpha.5` | alpha.4の検証済み保護機能とrelease契約を維持し、自然言語の導入、保護候補の日本語3択、短い承認・診断案内を追加。checksum / SBOM、archive内部、CI Action、hash-locked build、Git履歴監査、upgrade / rollback、自動dogfoodを継続。CLI TUIとDesktopのpublic allow、protected block、raw exposure 0を確認済み。cross-platform実機、少人数pilotも継続課題 |
 | 外部sink coverage | adapter allowlist | 既知のBash / MCP / Search等を分類。任意programの実network接続を網羅せず、hosted Web SearchはPreToolUse / PostToolUse Hookの観測対象外。実接続との偽陰性率は未測定 |
 
 設計全体は[アーキテクチャ概要](docs/設計/アーキテクチャ.md)、詳細な完了範囲と残作業は[実装タスク計画](docs/運用/実装タスク.md)を参照してください。
 
-## Pluginをインストールする
+## 5分クイックスタート
 
-Python 3.11または3.12とCodex CLIを用意します。通常は、公開alphaだけをfast-forwardで配信する`public-alpha`更新チャンネルを追加してください。可変な開発branchの`main`を実行元にはしません。OS・機能別の境界は[サポート範囲](SUPPORT.md)を確認してください。
+Python 3.11または3.12と、Plugin対応のCodex CLIまたはCodex Desktopを用意します。通常は、検証済みの公開alphaだけを配信する`public-alpha`を使います。開発中の`main`はインストール元にしません。
+
+### 1. Pluginを1回インストールする
 
 ```bash
 codex plugin marketplace add mani1261790/ToolUseProxy --ref public-alpha
@@ -64,24 +66,40 @@ codex plugin add tooluseproxy@tooluseproxy
 
 MarketplaceとPluginのinstallはCodex環境に対して1回です。特定project専用のinstallではなく、同じPluginを複数projectで利用できます。初期化、protected source登録、runtime設定、監査dataはworkspaceごとに分離されるため、新しいprojectではbundled setup skillを実行して、そのworkspaceだけを初期設定します。
 
-更新は自動ではありません。新しいpublic alphaが出た後、次を明示的に実行します。
+### 2. 3つのHookを確認する
+
+Codexに表示されるsourceが`Plugin - tooluseproxy@tooluseproxy`で、`PreToolUse`、`PostToolUse`、`Stop`の3件だけであることを確認してTrustします。commandがインストール済みPlugin内の`hooks/run_hook.sh`を指していない場合や、無関係なHookも表示されている場合は`Trust all`を使わないでください。
+
+### 3. 利用するprojectを初期設定する
+
+対象projectをCodexで開き、新しいtaskで自然な言葉で依頼します。例えば次のように短く頼めますが、この通りの言い方でなくても構いません。
+
+> ToolUseProxyをこのプロジェクトで使えるようにして
+
+あとはToolUseProxyが、何をするか、何が変わるか、外部通信があるかを日本語で説明します。準備が完了すると「このプロジェクトではToolUseProxyが動作しています」と案内されます。Pluginは再インストールせず、別projectでも「ToolUseProxyの準備をして」など、目的が伝わる短い依頼だけで使い始められます。
+
+### 4. protected sourceを1件ずつ確認する
+
+例えば、続けて次のように依頼できます。これも固定フレーズではありません。
+
+> 守った方がよいファイルを探して
+
+候補が見つかると、「どのファイルの何を守るか」「何を止められるか」「元ファイルが変更されないこと」が表示されます。選択肢は「守る」「今回は見送る」「今後は候補に出さない」の3つです。候補は自動登録されません。PreToolUse blockも既定では無効です。
+
+### 5. 更新する
+
+更新は自動ではありません。新しいpublic alphaが出た後、更新する場合だけ次を明示的に実行します。
 
 ```bash
 codex plugin marketplace upgrade tooluseproxy
 codex plugin list --json
 ```
 
-特定versionを固定したい場合は、`public-alpha`の代わりにimmutable tag `v0.1.0-alpha.4`を指定します。固定tagは`marketplace upgrade`を実行しても別versionへ移動しません。
+特定versionを固定したい場合は、`public-alpha`の代わりにimmutable tag `v0.1.0-alpha.5`を指定します。固定tagは`marketplace upgrade`を実行しても別versionへ移動しません。
 
-installまたは更新後は、Codexが表示するHook definitionを確認してtrustし、新しいtaskを開始します。Pluginが示す`PLUGIN_ROOT` / `PLUGIN_DATA`を使って、対象workspaceで初期化と診断を行います。
+更新後は変更された3つのHookをもう一度確認し、新しいCodex taskでsetup skillによるverificationを実行します。
 
-```bash
-sh "<PLUGIN_ROOT>/hooks/run_cli.sh" init --codex --data-dir "<PLUGIN_DATA>"
-sh "<PLUGIN_ROOT>/hooks/run_cli.sh" doctor --workspace "$PWD" --data-dir "<PLUGIN_DATA>"
-sh "<PLUGIN_ROOT>/hooks/run_cli.sh" status --workspace "$PWD" --data-dir "<PLUGIN_DATA>"
-```
-
-Hook trustで確認する内容、更新チャンネルと固定tagの違い、protected sourceの候補発見・承認、rollback、削除時のdata保持を含む完全な手順は[Plugin導入](docs/設定/Plugin導入.md)にあります。Codex Desktopはlocal Pluginを利用できるsurfaceで、[Desktop専用Phase B harness](docs/運用/DesktopPhaseB.md)まで実装済みです。定義hashを固定した3 Hookのtrust、値を含まないmarkerによるPre / Post / Stop各1回の実配送、public allow、protected payloadの実行前blockを確認しました。2026-08-09には異version migration、backup rollback、DisableなしのRemoveも完走しました。承認文の理解は短文化後のrunで確認済みです。[#63](https://github.com/mani1261790/ToolUseProxy/issues/63)では、workspace外のPlugin dataを操作する理由を明記し、固定profile適用とread-only verificationの通常2承認へ集約しました。fresh runは承認2回、public 1、protected 0、exact block 1、raw exposure 0で正式な`passed`です。Codex CLIのMarketplace更新と保護動作も実機検証済みです。
+Hook trust、実projectでの安全な試し方、更新、削除は[5分クイックスタート](QUICKSTART.md)、保護設定、rollback、data保持を含む完全な説明は[Plugin導入](docs/設定/Plugin導入.md)にあります。Codex Desktopはlocal Pluginを利用できるsurfaceで、[Desktop専用Phase B harness](docs/運用/DesktopPhaseB.md)まで実装済みです。定義hashを固定した3 Hookのtrust、値を含まないmarkerによるPre / Post / Stop各1回の実配送、public allow、protected payloadの実行前blockを確認しました。2026-08-09には異version migration、backup rollback、DisableなしのRemoveも完走しました。承認文の理解は短文化後のrunで確認済みです。[#63](https://github.com/mani1261790/ToolUseProxy/issues/63)では、workspace外のPlugin dataを操作する理由を明記し、固定profile適用とread-only verificationの通常2承認へ集約しました。fresh runは承認2回、public 1、protected 0、exact block 1、raw exposure 0で正式な`passed`です。Codex CLIのMarketplace更新と保護動作も実機検証済みです。
 
 ## 安全側の既定値
 

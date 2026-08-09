@@ -1,150 +1,129 @@
-# ToolUseProxy five-minute quickstart
+# ToolUseProxy 5分クイックスタート
 
-This quickstart installs the published public alpha from the protected
-`public-alpha` release channel. Do not substitute the mutable development
-branch `main`. Changes merged after the latest release are not available from
-`public-alpha` until a new verified release is promoted.
+この手順では、検証済みの公開alphaを保護branch `public-alpha`からインストールします。開発中の変更を含む`main`は、通常利用のインストール元にしないでください。
 
-## 1. Prerequisites
+## 1. 必要なもの
 
-- macOS or Linux
-- Python 3.11 or 3.12
-- Codex CLI or Codex Desktop with Plugin support
+- macOSまたはLinux
+- Python 3.11または3.12
+- Plugin対応のCodex CLIまたはCodex Desktop
 
-Review [support and known limitations](SUPPORT.md) and [privacy and retention](PRIVACY.md). ToolUseProxy stores local audit data that may contain plaintext code, commands, responses, and protected-source chunks.
-The source and distribution artifacts are licensed under the [Apache License 2.0](LICENSE).
+利用前に[対応環境と既知の制限](SUPPORT.md)と[プライバシーとデータ保持](PRIVACY.md)を確認してください。ToolUseProxyのlocal監査DBには、コード、command、response、protected sourceの断片が平文で保存される場合があります。
 
-## 2. Optional 30-second preview
+## 2. Pluginをインストールする
 
-The preview builds a clean Plugin artifact and runs a synthetic Phase A lifecycle without real network calls:
-
-```bash
-python3.11 scripts/demo_plugin.py
-# Or, when Python 3.12 is the supported interpreter available on the host:
-python3.12 scripts/demo_plugin.py
-```
-
-It does not replace manual Hook trust or actual-tool Phase B testing.
-
-## 3. Install the public Plugin
-
-Add the public-alpha release channel and install ToolUseProxy:
+次の2コマンドを実行します。
 
 ```bash
 codex plugin marketplace add mani1261790/ToolUseProxy --ref public-alpha
 codex plugin add tooluseproxy@tooluseproxy
 ```
 
-The marketplace and Plugin are installed once for the Codex environment, not
-once per project. You can then use the same Plugin in multiple projects. Each
-workspace keeps separate initialization, protected-source registration,
-runtime settings, and audit data, so run the bundled setup skill when you first
-use a new workspace.
+MarketplaceとPluginのインストールは、Codex環境ごとに1回だけです。projectごとに再インストールする必要はなく、同じPluginを複数projectで利用できます。
 
-Start a new Codex task in the workspace you want to monitor. Review the exact Hook definition shown by Codex and trust it only if the Plugin source and version are the ones you intended to install. ToolUseProxy does not bypass this review.
-
-For a reproducible version pin, use `--ref v0.1.0-alpha.4` instead. A pinned
-tag does not advance to a future version.
-
-For development from a checkout, replace the first command with
-`codex plugin marketplace add "$PWD"`. Do not use a mutable remote branch as a
-trusted distribution source.
-
-Before using a checkout build in a real project, confirm that no other
-ToolUseProxy Plugin is enabled. Two ToolUseProxy installations can register the
-same Hooks and make both behavior and audit evidence ambiguous. Keep existing
-Plugin data unless you separately review and approve an `uninstall plan`.
-
-## 4. Initialize and diagnose
-
-Ask the coding agent:
-
-> Use the ToolUseProxy setup skill. Initialize ToolUseProxy for this workspace, run doctor and status, and explain any failure without showing protected values.
-
-Follow the setup skill bundled with the installed Plugin. A newer build may
-group initialization and the three protected runtime settings into one atomic
-profile application, followed by one read-only verification. Approval is still
-limited to those exact commands; it is not a reusable permission prefix.
-
-The Plugin provides the exact `PLUGIN_ROOT` and `PLUGIN_DATA` paths at runtime. The equivalent commands are:
+特定versionへ固定する場合は、1つ目のコマンドで`public-alpha`の代わりにimmutable tagを指定します。
 
 ```bash
-sh "<PLUGIN_ROOT>/hooks/run_cli.sh" init --codex --data-dir "<PLUGIN_DATA>"
-sh "<PLUGIN_ROOT>/hooks/run_cli.sh" doctor --workspace "$PWD" --data-dir "<PLUGIN_DATA>"
-sh "<PLUGIN_ROOT>/hooks/run_cli.sh" status --workspace "$PWD" --data-dir "<PLUGIN_DATA>"
+codex plugin marketplace add mani1261790/ToolUseProxy --ref v0.1.0-alpha.5
 ```
 
-`status: active` confirms runtime initialization. It does not mean every sensitive file has been discovered or registered.
+## 3. 3つのHookを確認してTrustする
 
-## 5. Review one protected-source proposal
+Codexが表示するHookを、次の条件と照合してください。
 
-Ask the agent:
+- sourceが`Plugin - tooluseproxy@tooluseproxy`
+- `PreToolUse`、`PostToolUse`、`Stop`の3件
+- commandがインストール済みToolUseProxy Plugin内の`hooks/run_hook.sh`を指す
 
-> Scan for one protected-source candidate. Show only the relative path, reason codes, confidence, and proposed selector. Wait for my explicit approve, reject, or ignore decision.
+役割は次のとおりです。
 
-The agent runs bounded offline `protect scan`. It must not display source values, source hashes, file previews, or absolute paths. Approval is one candidate at a time. After an approval changes the manifest hash, the agent must scan again before presenting another proposal.
+- `PreToolUse`: tool実行前にpayloadを確認し、protected contentの外部送信を止める
+- `PostToolUse`: tool実行後に入力と結果をlocal DBへ記録する
+- `Stop`: 最終回答にprotected contentが残っていないか確認する
 
-Do not approve a proposal you do not understand. `init`, setup permission, or permission to edit another file does not approve a protected source.
+HookはCodex sandbox外でユーザー権限により実行されます。ToolUseProxyのHook自身はlocal dataへ書き込み、network通信は行いません。source、件数、command pathが異なる場合はTrustしないでください。無関係なHookも表示されている場合は`Trust all`を使わず、ToolUseProxyの3件を個別に確認します。
 
-## 6. Confirm status, updates, and retention
+## 4. 利用するprojectを初期設定する
 
-After an explicit approval, ask the agent to run `status` again. The approved source becomes active for the next analysis run in that workspace.
+ToolUseProxyを使いたいprojectをCodexで開き、新しいtaskで自然な言葉で依頼します。例えば次のように短く頼めますが、この通りの言い方でなくても構いません。
 
-PreToolUse blocking remains off by default; the quickstart does not silently enable enforcement. Use the full [Plugin onboarding guide](https://github.com/mani1261790/ToolUseProxy/blob/main/docs/%E8%A8%AD%E5%AE%9A/Plugin%E5%B0%8E%E5%85%A5.md) before enabling it.
+> ToolUseProxyをこのプロジェクトで使えるようにして
 
-Runtime policy settings can be stored per workspace in `PLUGIN_DATA` with
-revision-checked `config show`, `config set`, and `config unset` commands.
-Environment variables remain compatible overrides. See the
-[workspace runtime settings guide](docs/%E8%A8%AD%E5%AE%9A/Runtime%E8%A8%AD%E5%AE%9A.md)
-for the exact keys, dependencies, and audit behavior.
+Pluginのインストールは1回ですが、次の情報はworkspaceごとに分離されます。
 
-Updates from `public-alpha` are explicit:
+- workspaceの初期化
+- protected sourceの登録
+- runtime保護設定
+- local監査data
+
+ToolUseProxyが必要な初期設定と安全確認を案内します。通常は確認画面が2回出ます。どちらも外部通信は行わず、このprojectの外にあるToolUseProxy専用保存領域を設定・確認するためのものです。
+
+完了時に「このプロジェクトではToolUseProxyが動作しています」と表示されれば準備完了です。すべての機密ファイルが自動登録されるわけではありません。
+
+## 5. protected sourceを1件確認する
+
+続けて、自然な言葉で保護候補を探すよう依頼します。次は入力例であり、固定フレーズではありません。
+
+> 守った方がよいファイルを探して
+
+候補が見つかると、次の内容が日本語で表示されます。
+
+- ファイル：project内の相対pathだけ
+- 守る内容：値を表示せず、どの設定項目を守るか
+- できること：選んだ内容の外部送信を実行前に止められること
+- 「守る」を選ぶと：保護対象リストに1件追加され、元ファイルは変わらないこと
+- 選択肢：「守る」「今回は見送る」「今後は候補に出さない」
+
+候補の値、file preview、source hash、ユーザーのabsolute pathは表示しません。初期設定や候補探しだけでは保護対象に登録されません。
+
+PreToolUse blockは既定で無効です。このクイックスタートだけで強制blockを自動的に有効化することはありません。保護設定を有効にする場合は、[Plugin導入ガイド](docs/設定/Plugin導入.md)の説明と承認境界を確認してください。
+
+## 6. 実projectで安全に試す
+
+最初は、production credential、顧客data、署名鍵を含まない低riskなprojectを選びます。次の順で確認してください。
+
+1. 有効なToolUseProxy Pluginが1つだけである
+2. 3つのHookを確認してTrustした
+3. 「このプロジェクトではToolUseProxyが動作しています」と表示された
+4. harmlessなpublic操作が通常どおり完了した
+5. syntheticなprotected valueが外部操作の実行前にblockされた
+6. 通常作業で予期しないblockが発生しない
+7. PluginをRemoveしても、別途data削除を承認しない限りlocal dataが保持される
+
+setup失敗、Hookの`modified`または`untrusted`、2つ目のToolUseProxy Plugin、public操作の誤block、protected valueの外部副作用が発生した場合は検証を停止してください。広い再利用可能permissionで回避しないでください。
+
+詳細な記録項目は[実projectでのドッグフード手順](docs/運用/Pluginドッグフード.md#実projectでのself-dogfood)と[dogfood report template](.github/ISSUE_TEMPLATE/dogfood-report.md)を利用できます。reportへsource値、raw Hook payload、SQLite DB、access token、ユーザーのabsolute pathを含めないでください。
+
+## 7. 更新する
+
+更新は自動ではありません。新しい公開alphaへ進む場合だけ、明示的に実行します。
 
 ```bash
 codex plugin marketplace upgrade tooluseproxy
 codex plugin list --json
 ```
 
-After an update, review changed Hook definitions, start a new Codex task, and
-run the verification requested by the installed setup skill. Run initialization
-only if the installed skill reports that setup or schema migration is required.
-The CLI update path and the Codex Desktop install, update, backup rollback,
-direct Remove, Hook trust, public allow, and protected pre-execution block have
-been verified on macOS. This does not establish Linux or Windows Desktop
-support.
+更新後は変更されたHook定義を再確認し、新しいCodex taskを開始して、bundled setup skillが求めるverificationを実行します。
 
-## 7. Use it in a real project carefully
+## 8. Pluginを外す
 
-Start with one low-risk project and one intentionally selected protected source.
-Do not begin with production credentials, customer data, signing keys, or a
-workspace where a fail-open event would be costly. Confirm these checkpoints in
-order:
-
-1. only one ToolUseProxy Plugin is enabled;
-2. all three Hook definitions are reviewed and trusted;
-3. setup and read-only verification succeed;
-4. one harmless public operation completes normally;
-5. one synthetic protected value is blocked before the external operation;
-6. normal project work continues without unexpected blocks;
-7. Plugin removal retains data unless a separate uninstall is approved.
-
-Stop the trial if setup or verification fails, a Hook becomes `modified` or
-`untrusted`, an unexpected second ToolUseProxy Plugin is active, a public
-operation is blocked, or a protected value reaches an external side effect.
-Do not work around a failure by granting a broad reusable permission.
-
-Use the [real-project dogfood checklist](docs/%E9%81%8B%E7%94%A8/Plugin%E3%83%89%E3%83%83%E3%82%B0%E3%83%95%E3%83%BC%E3%83%89.md#%E5%AE%9Fproject%E3%81%A7%E3%81%AEself-dogfood) and the
-[GitHub dogfood report template](.github/ISSUE_TEMPLATE/dogfood-report.md).
-Reports must not include source values, raw Hook payloads, SQLite databases,
-access tokens, or absolute user paths.
-
-## 8. Remove the Plugin
-
-To remove Plugin code:
+PluginコードとMarketplace登録を外す場合は次を実行します。
 
 ```bash
 codex plugin remove tooluseproxy@tooluseproxy
 codex plugin marketplace remove tooluseproxy
 ```
 
-Removal retains local SQLite data. Deleting managed data is a separate `uninstall plan` and exact-confirmation operation described in the [Plugin onboarding guide](https://github.com/mani1261790/ToolUseProxy/blob/main/docs/%E8%A8%AD%E5%AE%9A/Plugin%E5%B0%8E%E5%85%A5.md#disable--uninstall).
+この操作ではlocal監査dataを削除しません。data削除は[Plugin導入ガイド](docs/設定/Plugin導入.md#disable--uninstall)に記載した、別の`uninstall plan`と明示承認が必要です。
+
+## 30秒のsynthetic preview
+
+repositoryをcheckoutしている場合は、実network通信を行わない自動previewも実行できます。
+
+```bash
+python3.11 scripts/demo_plugin.py
+# Python 3.12を使う場合
+python3.12 scripts/demo_plugin.py
+```
+
+これはHookの目視確認・Trustや、実際のCodex taskでの検証を置き換えるものではありません。
