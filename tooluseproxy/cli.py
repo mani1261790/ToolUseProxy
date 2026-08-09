@@ -1948,10 +1948,16 @@ def _render_protect_error(code: str, message: str, *, as_json: bool) -> None:
 def _run_trace(arguments: list[str]) -> int:
     from hook_monitor.cli.trace import main as trace_main
 
-    paths = resolve_runtime_paths()
+    explicit_db = any(
+        argument == "--db" or argument.startswith("--db=")
+        for argument in arguments
+    )
+    default_db_path = None
+    if not explicit_db:
+        default_db_path = resolve_runtime_paths().db_path
     return trace_main(
         arguments,
-        default_db_path=paths.db_path,
+        default_db_path=default_db_path,
         allow_schema_migration=False,
     )
 

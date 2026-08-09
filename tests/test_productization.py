@@ -224,6 +224,31 @@ class RuntimePathsTest(unittest.TestCase):
 
 
 class ProductCliTest(unittest.TestCase):
+    def test_explicit_trace_database_ignores_unverified_plugin_root(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            database = root / "events.db"
+            EventStore(database).initialize()
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            with (
+                patch.dict(
+                    os.environ,
+                    {CODEX_PLUGIN_ROOT_ENV: str(root / "not-a-codex-plugin")},
+                    clear=False,
+                ),
+                redirect_stdout(stdout),
+                redirect_stderr(stderr),
+            ):
+                exit_code = cli_main(
+                    ["trace", "--db", str(database), "--no-preview"]
+                )
+
+            self.assertEqual(1, exit_code)
+            self.assertEqual("", stdout.getvalue())
+            self.assertIn("Choose --analysis-run", stderr.getvalue())
+            self.assertNotIn("Plugin root", stderr.getvalue())
+
     def test_codex_init_rejects_an_unknown_plugin_data_directory(self) -> None:
         stderr = io.StringIO()
         with patch.dict(os.environ, {}, clear=True), redirect_stderr(stderr):
