@@ -72,17 +72,19 @@ Codexに表示されるsourceが`Plugin - tooluseproxy@tooluseproxy`で、`PreTo
 
 ### 3. 利用するprojectを初期設定する
 
-対象projectをCodexで開き、新しいtaskで次のように依頼します。
+対象projectをCodexで開き、新しいtaskで自然な言葉で依頼します。例えば次のように短く頼めますが、この通りの言い方でなくても構いません。
 
-> ToolUseProxy setup skillを使って、このworkspaceを初期設定し、doctorとstatusで確認してください。protected valueは表示せず、失敗した場合はそこで停止してください。
+> ToolUseProxyをこのプロジェクトで使えるようにして
 
-`doctor: ok`と`status: active`を確認したら利用開始できます。Pluginは再インストールせず、別projectでも同じ手順でworkspaceだけを初期設定します。
+あとはToolUseProxyが、何をするか、何が変わるか、外部通信があるかを日本語で説明します。準備が完了すると「このプロジェクトではToolUseProxyが動作しています」と案内されます。Pluginは再インストールせず、別projectでも「ToolUseProxyの準備をして」など、目的が伝わる短い依頼だけで使い始められます。
 
 ### 4. protected sourceを1件ずつ確認する
 
-> protected source候補を1件だけscanし、値を表示せずに説明してください。approve、reject、ignoreの判断を待ってください。
+例えば、続けて次のように依頼できます。これも固定フレーズではありません。
 
-候補は自動登録されません。内容と変更点を理解したうえで1件ずつ明示承認します。PreToolUse blockも既定では無効です。
+> 守った方がよいファイルを探して
+
+候補が見つかると、「どのファイルの何を守るか」「何を止められるか」「元ファイルが変更されないこと」が表示されます。選択肢は「守る」「今回は見送る」「今後は候補に出さない」の3つです。候補は自動登録されません。PreToolUse blockも既定では無効です。
 
 ### 5. 更新する
 

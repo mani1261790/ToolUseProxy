@@ -423,8 +423,46 @@ def _enabled_pre_tool_adapters(
     return frozenset(adapters)
 
 
+def _inactive_message(code: str) -> str:
+    messages = {
+        "database_missing": (
+            "ToolUseProxyはこのプロジェクトではまだ準備されていません。"
+        ),
+        "schema_upgrade_required": (
+            "ToolUseProxyの保存データを更新する必要があります。"
+        ),
+        "database_unreadable": (
+            "ToolUseProxyの保存データを読み取れないため、保護機能は動作していません。"
+        ),
+        "schema_too_new": (
+            "保存データがこのToolUseProxyより新しいため、保護機能は動作していません。"
+        ),
+        "schema_incomplete": (
+            "ToolUseProxyの保存データが不完全なため、保護機能は動作していません。"
+        ),
+        "plugin_environment": (
+            "ToolUseProxy Pluginの設定を読み込めないため、保護機能は動作していません。"
+        ),
+        "python_missing": (
+            "Python 3.11または3.12が見つからないため、ToolUseProxyの保護機能は動作していません。"
+        ),
+        "runtime_start_failed": (
+            "ToolUseProxyを開始できなかったため、保護機能は動作していません。"
+        ),
+    }
+    message = messages.get(
+        code,
+        "ToolUseProxyを安全に開始できないため、保護機能は動作していません。",
+    )
+    return f"{message}（技術情報: {code}）"
+
+
 def _schema_inactive_message(exc: SchemaCompatibilityError) -> str:
-    message = f"ToolUseProxy inactive ({exc.code}): {exc}"
+    message = (
+        f"{_inactive_message(exc.code)}\n"
+        "Codexに「ToolUseProxyをこのプロジェクトで使えるようにして」"
+        "と依頼してください。"
+    )
     if exc.code not in {"database_missing", "schema_upgrade_required"}:
         return message
     plugin_root = os.environ.get("PLUGIN_ROOT")
@@ -448,7 +486,10 @@ def _schema_inactive_message(exc: SchemaCompatibilityError) -> str:
                 shlex.quote(plugin_data),
             )
         )
-    return f"{message}\nRun from the workspace root: {command}"
+    return (
+        f"{message}\n"
+        f"手動で準備する場合のコマンド: {command}"
+    )
 
 
 def inactive_hook_output(
@@ -479,7 +520,8 @@ def _emit_inactive_hook_output(
     code: str,
     detail: str,
 ) -> None:
-    message = f"ToolUseProxy inactive ({code}): {detail}"
+    del detail
+    message = _inactive_message(code)
     print(
         json.dumps(
             inactive_hook_output(phase, message),
@@ -542,7 +584,7 @@ def _capture_post_tool_evidence(
     )
     if diagnostic is not None:
         print(
-            f"ToolUseProxy inactive ({diagnostic[0]}): {diagnostic[1]}",
+            _inactive_message(diagnostic[0]),
             file=sys.stderr,
         )
 

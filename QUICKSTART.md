@@ -45,9 +45,9 @@ HookはCodex sandbox外でユーザー権限により実行されます。ToolUs
 
 ## 4. 利用するprojectを初期設定する
 
-ToolUseProxyを使いたいprojectをCodexで開き、新しいtaskで次のように依頼します。
+ToolUseProxyを使いたいprojectをCodexで開き、新しいtaskで自然な言葉で依頼します。例えば次のように短く頼めますが、この通りの言い方でなくても構いません。
 
-> ToolUseProxy setup skillを使って、このworkspaceを初期設定し、doctorとstatusで確認してください。protected valueは表示せず、失敗した場合はそこで停止して理由を説明してください。
+> ToolUseProxyをこのプロジェクトで使えるようにして
 
 Pluginのインストールは1回ですが、次の情報はworkspaceごとに分離されます。
 
@@ -56,15 +56,25 @@ Pluginのインストールは1回ですが、次の情報はworkspaceごとに�
 - runtime保護設定
 - local監査data
 
-`doctor: ok`と`status: active`を確認します。これはruntimeが利用可能という意味であり、すべての機密ファイルが自動的に保護されたという意味ではありません。
+ToolUseProxyが必要な初期設定と安全確認を案内します。通常は確認画面が2回出ます。どちらも外部通信は行わず、このprojectの外にあるToolUseProxy専用保存領域を設定・確認するためのものです。
+
+完了時に「このプロジェクトではToolUseProxyが動作しています」と表示されれば準備完了です。すべての機密ファイルが自動登録されるわけではありません。
 
 ## 5. protected sourceを1件確認する
 
-続けて、次のように依頼します。
+続けて、自然な言葉で保護候補を探すよう依頼します。次は入力例であり、固定フレーズではありません。
 
-> protected source候補を1件だけscanしてください。相対path、理由、confidence、値を含まないselectorだけを説明し、approve、reject、ignoreの判断を待ってください。
+> 守った方がよいファイルを探して
 
-ToolUseProxyは候補の値、file preview、source hash、absolute pathを表示しません。protected sourceは、内容と変更点を理解したうえで1件ずつ明示承認します。初期設定やscanの実行だけでは登録されません。
+候補が見つかると、次の内容が日本語で表示されます。
+
+- ファイル：project内の相対pathだけ
+- 守る内容：値を表示せず、どの設定項目を守るか
+- できること：選んだ内容の外部送信を実行前に止められること
+- 「守る」を選ぶと：保護対象リストに1件追加され、元ファイルは変わらないこと
+- 選択肢：「守る」「今回は見送る」「今後は候補に出さない」
+
+候補の値、file preview、source hash、ユーザーのabsolute pathは表示しません。初期設定や候補探しだけでは保護対象に登録されません。
 
 PreToolUse blockは既定で無効です。このクイックスタートだけで強制blockを自動的に有効化することはありません。保護設定を有効にする場合は、[Plugin導入ガイド](docs/設定/Plugin導入.md)の説明と承認境界を確認してください。
 
@@ -74,7 +84,7 @@ PreToolUse blockは既定で無効です。このクイックスタートだけ�
 
 1. 有効なToolUseProxy Pluginが1つだけである
 2. 3つのHookを確認してTrustした
-3. setup、doctor、statusが成功した
+3. 「このプロジェクトではToolUseProxyが動作しています」と表示された
 4. harmlessなpublic操作が通常どおり完了した
 5. syntheticなprotected valueが外部操作の実行前にblockされた
 6. 通常作業で予期しないblockが発生しない

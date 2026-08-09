@@ -113,9 +113,9 @@ prepareは同じrootへmode `0600`の`phase-b-prompt.txt`、`phase-b-guide.md`�
 
 1. guideでPreToolUse / PostToolUse / Stopの役割、sandbox外実行、local data、networkなし、想定source / 件数 / command rootを理解する
 2. Codexが表示する3件のHook definitionをreviewし、guideと一致する場合だけtrustする
-3. 長いPlugin commandの承認ごとに、160文字以内の同じplain textが事前説明と承認理由の両方へ表示され、`すること：` `変わるもの：` `外部通信：` `許可判断：` で区切られている。absolute pathやMarkdownは承認理由へ含めない
+3. 長いPlugin commandの承認ごとに、160文字以内の同じplain textが事前説明と承認理由の両方へ表示され、`内容：` `変更：` `通信：` `理由：` `許可：` で区切られている。absolute pathやMarkdownは承認理由へ含めない
 4. synthetic workspaceで`init`、`doctor`、`status`を実行する
-5. `protect scan`候補について、exact JSONより先に「守るファイル」「守る範囲」「止める場面」「承認すると変わるもの」「承認しない場合」の説明を読む
+5. 候補について、exact JSONより先に「このファイルをToolUseProxyで守りますか？」と表示され、「ファイル」「守る内容」「できること」「守るを選ぶと」の説明と「守る」「今回は見送る」「今後は候補に出さない」の選択肢を読む
 6. その説明を理解した場合だけexact proposalを明示approveする
 7. public fixtureを絶対pathのfake sinkへ送り、false blockがなくmarkerが作られることを確認する
 8. synthetic protected fixtureを静的なliteralとして同じfake sinkへ送るtool callを依頼し、deny時のmarkerが0であることを確認する

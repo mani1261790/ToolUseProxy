@@ -221,8 +221,9 @@ class HookInactiveDiagnosticTest(unittest.TestCase):
             message = self._diagnostic_message(output, hook_event)
             self.assertEqual(
                 (
-                    "ToolUseProxy inactive (plugin_environment): "
-                    "PLUGIN_ROOT and PLUGIN_DATA are required"
+                    "ToolUseProxy Pluginの設定を読み込めないため、"
+                    "保護機能は動作していません。"
+                    "（技術情報: plugin_environment）"
                 ),
                 message,
             )
@@ -256,8 +257,9 @@ class HookInactiveDiagnosticTest(unittest.TestCase):
                 message = self._diagnostic_message(output, hook_event)
                 self.assertEqual(
                     (
-                        "ToolUseProxy inactive (python_missing): "
-                        "Python 3.11 or 3.12 is required"
+                        "Python 3.11または3.12が見つからないため、"
+                        "ToolUseProxyの保護機能は動作していません。"
+                        "（技術情報: python_missing）"
                     ),
                     message,
                 )

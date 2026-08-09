@@ -221,8 +221,8 @@ text(JSON.stringify(r));
             self.assertIn("権限昇格手段がない場合は実行せず停止", prompt)
             self.assertIn("setup apply file-payload-exact", prompt)
             self.assertIn("setup verify file-payload-exact", prompt)
-            self.assertIn("workspace外のPlugin data", prompt)
-            self.assertIn("外部通信：なし", prompt)
+            self.assertIn("プロジェクト外の専用保存領域", prompt)
+            self.assertIn("通信：なし", prompt)
             self.assertIn("個別のinit、doctor、status、config show、config setは実行しない", prompt)
 
     def test_desktop_prompt_defers_setup_commands_until_data_is_known(

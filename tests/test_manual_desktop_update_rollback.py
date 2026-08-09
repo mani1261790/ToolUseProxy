@@ -80,7 +80,7 @@ class ManualDesktopUpdateRollbackTest(unittest.TestCase):
 
             prompt = (root / "desktop-update-rollback-prompt.txt").read_text()
             self.assertIn(
-                "実行確認｜すること：...｜変わるもの：...｜外部通信：",
+                "ToolUseProxyの確認｜内容：...｜変更：...｜通信：",
                 prompt,
             )
             self.assertIn("同じ160文字以内のplain text", prompt)

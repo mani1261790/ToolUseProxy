@@ -81,11 +81,14 @@ class PosixLauncherPythonContractTest(unittest.TestCase):
             )
 
             self.assertEqual(1, cli.returncode)
-            self.assertIn("Python 3.11 or 3.12 is required", cli.stderr)
+            self.assertIn(
+                "ToolUseProxyの実行にはPython 3.11または3.12が必要です。",
+                cli.stderr,
+            )
             self.assertEqual(0, hook.returncode)
             hook_output = json.loads(hook.stdout)
             self.assertIn(
-                "Python 3.11 or 3.12 is required",
+                "Python 3.11または3.12が見つからないため、",
                 hook_output["hookSpecificOutput"]["additionalContext"],
             )
             self.assertEqual(

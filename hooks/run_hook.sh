@@ -4,19 +4,29 @@ phase=${1:-}
 
 emit_inactive() {
     code=$1
-    detail=$2
-    case "$phase" in
-        pre-tool-use)
-            printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":"ToolUseProxy inactive (%s): %s"}}\n' "$code" "$detail"
+    case "$code" in
+        plugin_environment)
+            message="ToolUseProxy Pluginの設定を読み込めないため、保護機能は動作していません。"
             ;;
-        post-tool-use)
-            printf '{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"ToolUseProxy inactive (%s): %s"}}\n' "$code" "$detail"
-            ;;
-        stop)
-            printf '{"systemMessage":"ToolUseProxy inactive (%s): %s"}\n' "$code" "$detail"
+        python_missing)
+            message="Python 3.11または3.12が見つからないため、ToolUseProxyの保護機能は動作していません。"
             ;;
         *)
-            printf 'ToolUseProxy inactive (%s): %s\n' "$code" "$detail" >&2
+            message="ToolUseProxyを開始できなかったため、保護機能は動作していません。"
+            ;;
+    esac
+    case "$phase" in
+        pre-tool-use)
+            printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":"%s（技術情報: %s）"}}\n' "$message" "$code"
+            ;;
+        post-tool-use)
+            printf '{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"%s（技術情報: %s）"}}\n' "$message" "$code"
+            ;;
+        stop)
+            printf '{"systemMessage":"%s（技術情報: %s）"}\n' "$message" "$code"
+            ;;
+        *)
+            printf '%s（技術情報: %s）\n' "$message" "$code" >&2
             ;;
     esac
 }
