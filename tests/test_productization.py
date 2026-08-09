@@ -1519,8 +1519,9 @@ class PluginBundleTest(unittest.TestCase):
             self.assertEqual(
                 {
                     "systemMessage": (
-                        "ToolUseProxy inactive (python_missing): "
-                        "Python 3.11 or 3.12 is required"
+                        "Python 3.11または3.12が見つからないため、"
+                        "ToolUseProxyの保護機能は動作していません。"
+                        "（技術情報: python_missing）"
                     )
                 },
                 output,

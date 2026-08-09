@@ -1,7 +1,7 @@
 #!/bin/sh
 
 if [ "$#" -eq 0 ]; then
-    echo "usage: run_cli.sh <tooluseproxy arguments>" >&2
+    echo "使い方: run_cli.sh <ToolUseProxyの引数>" >&2
     exit 2
 fi
 
@@ -20,5 +20,5 @@ for python in "${TOOLUSEPROXY_PYTHON:-}" python3.12 python3.11 python3; do
     exec "$python" "$plugin_root/tooluseproxy_plugin.py" "$@"
 done
 
-echo "tooluseproxy: Python 3.11 or 3.12 is required" >&2
+echo "ToolUseProxyの実行にはPython 3.11または3.12が必要です。" >&2
 exit 1

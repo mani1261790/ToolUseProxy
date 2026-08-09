@@ -1,4 +1,5 @@
 @echo off
+chcp 65001 >nul
 set "phase=%~1"
 if "%phase%"=="" exit /b 0
 if "%PLUGIN_ROOT%"=="" (
@@ -44,21 +45,23 @@ exit /b 0
 
 :emit_inactive
 set "inactive_code=%~1"
-set "inactive_detail=%~2"
+set "inactive_message=ToolUseProxyを開始できなかったため、保護機能は動作していません。"
+if /i "%inactive_code%"=="plugin_environment" set "inactive_message=ToolUseProxy Pluginの設定を読み込めないため、保護機能は動作していません。"
+if /i "%inactive_code%"=="python_missing" set "inactive_message=Python 3.11または3.12が見つからないため、ToolUseProxyの保護機能は動作していません。"
 if /i "%phase%"=="pre-tool-use" goto emit_pre
 if /i "%phase%"=="post-tool-use" goto emit_post
 if /i "%phase%"=="stop" goto emit_stop
-echo ToolUseProxy inactive (%inactive_code%): %inactive_detail% 1>&2
+echo %inactive_message%（技術情報: %inactive_code%） 1>&2
 exit /b 0
 
 :emit_pre
-echo {"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":"ToolUseProxy inactive (%inactive_code%): %inactive_detail%"}}
+echo {"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":"%inactive_message%（技術情報: %inactive_code%）"}}
 exit /b 0
 
 :emit_post
-echo {"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"ToolUseProxy inactive (%inactive_code%): %inactive_detail%"}}
+echo {"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"%inactive_message%（技術情報: %inactive_code%）"}}
 exit /b 0
 
 :emit_stop
-echo {"systemMessage":"ToolUseProxy inactive (%inactive_code%): %inactive_detail%"}
+echo {"systemMessage":"%inactive_message%（技術情報: %inactive_code%）"}
 exit /b 0
