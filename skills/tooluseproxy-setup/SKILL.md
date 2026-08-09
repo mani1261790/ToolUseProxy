@@ -40,6 +40,19 @@ When setup or verification fails, lead with:
 Technical status codes and raw JSON may follow under `技術情報`, but never use
 them as the primary explanation and never require the user to interpret them.
 
+Never describe an installed/enabled Plugin or trusted Hooks as active
+protection. Protection is active for the current workspace only after the
+fixed setup application and read-only verification both pass. If the database
+is missing, say plainly that the Plugin is installed but this workspace is not
+protected yet. Do not present protected-source registration plans before that
+gate passes.
+
+If the request contains a version-specific skill link for an older Plugin
+cache entry, do not treat the removed cache directory as a product failure and
+do not search for replacement cache paths. Use this skill only when it is the
+current active skill supplied by Codex, explain that a Plugin update requires a
+new task, and never ask the user to copy an absolute skill path.
+
 Before asking the user to trust ToolUseProxy Hooks, explain all three roles in
 plain language:
 
@@ -96,14 +109,16 @@ Pass exactly the same short paragraph as the tool call's approval
 For common operations, follow these models and adapt only the project name or
 whether state changes:
 
-- fixed setup profile apply: `ToolUseProxyの確認｜内容：このプロジェクトの保護を有効にする｜変更：初期設定と3つの保護設定｜通信：なし｜理由：プロジェクト外の専用保存領域を使うため｜許可：この初期設定だけなら許可`
+- fixed setup profile apply: `ToolUseProxyの確認｜内容：このプロジェクトの保護を有効にする｜変更：初期設定と、保護ファイルの外部送信を実行前に止める設定｜通信：なし｜理由：プロジェクト外の専用保存領域へ設定を保存するため｜許可：この初期設定だけなら許可`
 - fixed setup profile verify: `ToolUseProxyの確認｜内容：設定が正しく有効か確認する｜変更：なし｜通信：なし｜理由：プロジェクト外の専用保存領域を読むため｜許可：確認だけなら許可`
 - init: `ToolUseProxyの確認｜内容：このプロジェクトで利用を開始する｜変更：初期設定と記録用DB｜通信：なし｜理由：プロジェクト外の専用保存領域を使うため｜許可：この初期設定だけなら許可`
 - doctor/status/config show: `ToolUseProxyの確認｜内容：このプロジェクトで正しく動くか確認する｜変更：なし｜通信：なし｜理由：専用保存領域の状態を読むため｜許可：確認だけなら許可`
 - config set: `ToolUseProxyの確認｜内容：表示した保護設定を変更する｜変更：このプロジェクトの設定1件｜通信：なし｜理由：専用保存領域へ設定を保存するため｜許可：表示した1件だけなら許可`
-- protected-source scan: `ToolUseProxyの確認｜内容：守った方がよいファイルを探す｜変更：候補の確認記録だけ｜通信：なし｜理由：このプロジェクト内を安全な範囲で読むため｜許可：候補探しだけなら許可`
+- protected-source scan: `ToolUseProxyの確認｜内容：守った方がよいファイルを探す｜変更：候補の確認記録だけ｜通信：なし｜理由：プロジェクト外の専用保存領域へ確認結果を記録するため｜許可：候補探しだけなら許可`
 - protected-source approval: `ToolUseProxyの確認｜内容：表示したファイルを保護対象にする｜変更：保護対象リストに1件追加｜通信：なし｜理由：専用保存領域へ承認を記録するため｜許可：表示した1件だけなら許可`
 - protected-source reject or ignore: `ToolUseProxyの確認｜内容：表示した候補を見送る｜変更：見送りの記録だけ｜通信：なし｜理由：同じ候補の扱いを専用保存領域へ記録するため｜許可：表示した1件だけなら許可`
+- protected-source migration plan: `ToolUseProxyの確認｜内容：保護対象リストを安全に更新できるか確認する｜変更：なし｜通信：なし｜理由：プロジェクト外の専用保存領域の状態を読むため｜許可：更新前の確認だけなら許可`
+- protected-source migration apply: `ToolUseProxyの確認｜内容：保護対象リストを新しい形式へ更新する｜変更：リストの形式と専用保存領域のバックアップ｜通信：なし｜理由：ToolUseProxy専用保存領域へバックアップを保存するため｜許可：表示した更新だけなら許可`
 - removal without data deletion: `ToolUseProxyの確認｜内容：このプロジェクトでの利用を止める｜変更：Pluginの有効状態だけ｜通信：なし｜理由：新しい記録を止めるため｜許可：データを残した停止だけなら許可`
 - managed-data deletion: `ToolUseProxyの確認｜内容：表示したToolUseProxyデータを削除する｜変更：表示した管理対象データ｜通信：なし｜理由：削除は元に戻せないため｜許可：表示した範囲だけなら許可`
 
@@ -184,23 +199,54 @@ do not report missing initial output as a command failure.
    network. Request each as a one-command approval and never request a reusable
    permission prefix.
 
-   Otherwise, use the existing individual initialization flow:
+   For a normal marketplace installation, do not depend on a Hook diagnostic
+   and do not ask the user to paste `database_missing`, an absolute data path,
+   or an initialization command. The installed launcher validates that its
+   Plugin root is exactly inside the current Codex Plugin store, checks that the
+   manifest name matches the installed Plugin identity, and then resolves the
+   corresponding Codex Plugin data directory using Codex's Plugin-store
+   contract. It fails closed if any identity or layout check differs.
+
+   Apply the fixed profile with the explicit empty-settings precondition. This
+   is safe for a new workspace, idempotent when the same profile is already
+   applied, and refuses to overwrite a partial or different existing setup:
 
    ```text
-   sh "<PLUGIN_ROOT>/hooks/run_cli.sh" init --codex --workspace <workspace-root> --data-dir <PLUGIN_DATA>
+   sh "<PLUGIN_ROOT>/hooks/run_cli.sh" setup apply file-payload-exact --codex --expect-empty-settings --workspace <workspace-root> --json
    ```
 
-   If `PLUGIN_DATA` is not available in the current shell, use the exact data directory printed by the Plugin Hook's `database_missing` diagnostic. Do not guess a cache path.
-5. Run `doctor` and `status` with the same `--workspace` and `--data-dir` values. Stop and explain every failing check before enabling stronger policy gates. A legacy manifest may remain runtime-readable and active while reporting `registration_writable: false` and `migration_required: true`.
+   Then run the one read-only verification command:
+
+   ```text
+   sh "<PLUGIN_ROOT>/hooks/run_cli.sh" setup verify file-payload-exact --workspace <workspace-root> --json
+   ```
+
+   These are the normal two approval screens. Never add `--data-dir` derived
+   from a guessed path. If either command reports that the installed Plugin
+   identity or data directory cannot be verified, lead with the setup-failure
+   wording and stop. Do not fall back to asking the user for internal
+   diagnostics.
+
+5. For a manual context-bound Phase B workflow, run `doctor` and `status` with
+   the exact context-supplied `--workspace` and `--data-dir` values when that
+   workflow requires the individual commands. For a normal marketplace setup,
+   the combined `setup verify` above is the health gate. Stop and explain every
+   failing check before protected-source review or stronger policy tests. A
+   legacy manifest may remain runtime-readable and active while reporting
+   `registration_writable: false` and `migration_required: true`.
    In a manual Phase B run, if `init`, `doctor`, `status`, or `protect scan`
    returns an error or non-healthy status, stop that run immediately. Do not
    continue to any send test, do not attempt the protected call, and do not
    treat a later recovery as evidence for the failed run. Diagnose or prepare
    a fresh run separately.
+   For steps 6 through 11 in a normal marketplace installation, continue to
+   use the installed launcher without `--data-dir`; the same verified resolver
+   selects the Plugin data directory. A manual context-bound workflow instead
+   keeps using only its exact supplied `--data-dir` commands.
 6. Treat the generated `protected_sources.json` as a user-owned manifest. Never edit it directly on the user's behalf. If `status` reports that schema is omitted or v1, create a value-free migration plan on POSIX:
 
    ```text
-   sh "<PLUGIN_ROOT>/hooks/run_cli.sh" protect migrate plan --workspace <workspace-root> --data-dir <PLUGIN_DATA> --json
+   sh "<PLUGIN_ROOT>/hooks/run_cli.sh" protect migrate plan --workspace <workspace-root> --json
    ```
 
    Show the user the from/to schema, source count, whether a missing `sources` field will be added, formatting policy, private backup name, and preservation guarantees. Never show the manifest body, unknown-field values, source values, or previews. Explain that migration preserves existing entries, source order, existing key order, unknown fields, selectors, and protection semantics while changing the schema declaration and, only when `sources` is missing, adding the semantically equivalent empty list. It infers no selectors. It stores an exact-byte private backup under the data directory and normalizes the installed manifest to UTF-8, 2-space indentation, LF, and a trailing newline. Strict JSON does not support comments; do not strip comments or accept duplicate keys.
@@ -208,14 +254,14 @@ do not report missing initial output as a command failure.
    Wait for explicit user approval of that exact migration plan. Setup approval, permission to edit another file, or a request to register a source does not approve migration. After approval, pass the unchanged revision and input manifest hash returned by the plan:
 
    ```text
-   sh "<PLUGIN_ROOT>/hooks/run_cli.sh" protect migrate apply --migration-revision <migration-revision> --expected-manifest-sha256 <manifest-sha256> --workspace <workspace-root> --data-dir <PLUGIN_DATA> --json
+   sh "<PLUGIN_ROOT>/hooks/run_cli.sh" protect migrate apply --migration-revision <migration-revision> --expected-manifest-sha256 <manifest-sha256> --workspace <workspace-root> --json
    ```
 
    The apply command accepts no replacement JSON. If the manifest changed, run `protect migrate plan` again, present the new plan, and obtain new approval. For an interruption or durability-unknown result, retry the exact same apply command. The workspace lock serializes cooperating ToolUseProxy writers, but not a same-UID non-cooperating editor; filesystem updates are not guaranteed to be serialized across the final validation-to-replace or durability-revalidation-to-completion windows. Run migration only on POSIX (macOS/Linux); it is unsupported on Windows. Migration approval never approves a later protected-source proposal.
 7. After schema v2 and `registration_writable: true` are confirmed, explicitly run the bounded offline scanner:
 
    ```text
-   sh "<PLUGIN_ROOT>/hooks/run_cli.sh" protect scan --workspace <workspace-root> --data-dir <PLUGIN_DATA> --json
+   sh "<PLUGIN_ROOT>/hooks/run_cli.sh" protect scan --workspace <workspace-root> --json
    ```
 
    The scanner is read-only for source files and the manifest, performs no network access, and uses fixed limits for traversal depth, entries, supported files, total bytes, and candidates. It excludes VCS, dependencies, virtual environments, build/cache directories, symlinks, and ToolUseProxy runtime data. It writes only a value-free candidate/review audit plus internal source hash/stat to the local runtime database and returns at most one review candidate in stable relative-path order. Show the relative path, reason codes, confidence, proposed source entry, and scan completeness. Never show or repeat source values, source hashes, absolute paths, or file previews. If `scan_complete` is false, explain the reached limit reasons and that unscanned scope remains; never report that no protected source exists.
@@ -253,17 +299,34 @@ do not report missing initial output as a command failure.
    ordinary-language choice after the card. If the user says the explanation
    is unclear, explain `守る内容` and what changes again before accepting a
    choice.
-8. If the user or agent already knows one `.env`, `.env.*`, or JSON path, or needs to propose a file outside the bounded scanner's policy, use the explicit-path fallback:
+8. If the user or agent already knows one `.env`, `.env.*`, or JSON path, use
+   the selector-aware explicit-path fallback:
 
    ```text
-   sh "<PLUGIN_ROOT>/hooks/run_cli.sh" protect suggest --path <workspace-relative-path> --workspace <workspace-root> --data-dir <PLUGIN_DATA> --json
+   sh "<PLUGIN_ROOT>/hooks/run_cli.sh" protect suggest --path <workspace-relative-path> --workspace <workspace-root> --json
    ```
 
    `suggest` has the same source/manifest read-only and value-free output/storage boundary as `scan`, but it evaluates only the requested path.
+
+   If the user explicitly asks to protect a complete UTF-8 text file such as a
+   Markdown research plan, use the whole-file form instead. It remains bounded
+   to one workspace-relative, non-symlink regular file of at most 1 MiB and
+   does not add that format to automatic scanning:
+
+   ```text
+   sh "<PLUGIN_ROOT>/hooks/run_cli.sh" protect suggest --path <workspace-relative-path> --whole-file --workspace <workspace-root> --json
+   ```
+
+   In the review card, say plainly that the entire file content is selected.
+   Never preview or quote it. A directory-level request may be translated into
+   a value-free list of relative file paths, but it is only a scope plan: it is
+   not approval. Suggest, show, and obtain a decision for exactly one file at a
+   time. After one approval changes the manifest, create a fresh proposal for
+   the next file.
 9. Wait for explicit user approval of that exact source proposal. Approval is not implied by setup, diagnosis, manifest migration, running a scan, a prior request to inspect the file, or permission to edit other project files. After approval, pass the unchanged opaque revision and manifest hash returned by `scan` or `suggest`:
 
    ```text
-   sh "<PLUGIN_ROOT>/hooks/run_cli.sh" protect approve <candidate-id> --candidate-revision <opaque-revision> --expected-manifest-sha256 <manifest-sha256> --workspace <workspace-root> --data-dir <PLUGIN_DATA> --json
+   sh "<PLUGIN_ROOT>/hooks/run_cli.sh" protect approve <candidate-id> --candidate-revision <opaque-revision> --expected-manifest-sha256 <manifest-sha256> --workspace <workspace-root> --json
    ```
 
    Approval holds the workspace lock from the candidate reservation through manifest I/O and DB finalize/release. The expected manifest hash is an optimistic precondition; the lock serializes cooperating ToolUseProxy writers but does not exclude a same-UID non-cooperating editor. Filesystem/DB serialization is therefore not guaranteed across either the final validation-to-replace window or the durability-revalidation-to-DB-finalize window. For an interruption or transient state failure, retry the exact same approve command and unchanged candidate ID, opaque revision, and manifest hash. Exact-entry recovery re-fsyncs the workspace directory and revalidates the source and manifest before finalizing. One approval changes the manifest hash, so never use another candidate's old scan revision/hash afterward. Run `protect scan` again, show the refreshed next proposal, and obtain a separate explicit approval. If an explicit-path approval reports that the source or manifest changed, run `suggest` again and present the new proposal. Do not weaken the comparison or retry with an edited proposal. Use `protect reject` or `protect ignore` to persist a user's negative decision.
@@ -277,15 +340,19 @@ do not report missing initial output as a command failure.
 11. If the user asks to uninstall, remove or disable the Plugin first so new Hook writes stop. Data retention is the default; Plugin or package removal never approves data deletion. If the user also asks to delete local data, run a non-mutating plan from an installed package or the exact release artifact being removed:
 
    ```text
-   sh "<PLUGIN_ROOT>/hooks/run_cli.sh" uninstall plan --data-dir <PLUGIN_DATA> --json
+   sh "<PLUGIN_ROOT>/hooks/run_cli.sh" uninstall plan --json
    ```
 
    Show the selected data directory, managed file count, managed byte count, unmanaged top-level entry count, and that all workspaces sharing the database will be affected. Never inspect or reveal stored payloads. Wait for explicit approval of that exact deletion plan. Then pass the unchanged opaque confirmation token:
 
    ```text
-   sh "<PLUGIN_ROOT>/hooks/run_cli.sh" uninstall apply --data-dir <PLUGIN_DATA> --confirmation-token <confirmation-token> --json
+   sh "<PLUGIN_ROOT>/hooks/run_cli.sh" uninstall apply --confirmation-token <confirmation-token> --json
    ```
 
    Do not infer approval from a request to remove Plugin code, uninstall a Python package, clear a different cache, or approve a protected source. If managed data changes after review, `apply` rejects the stale token; create and present a new plan. The command deletes only the ToolUseProxy database / SQLite sidecars, migration backups, and manifest backups. It retains unknown entries, workspace manifests, protected source files, symlink targets, filesystem snapshots, and external backups. It does not provide secure erase.
 
-The default onboarding boundary records tool activity and reviews final responses. PreToolUse blocking and MCP blocking remain explicit opt-ins; do not silently enable them.
+The core defaults record tool activity and review final responses; PreToolUse
+and MCP blocking are disabled until explicitly configured. The normal fixed
+setup profile described above explicitly enables PreToolUse file-payload
+blocking after the user approves the setup. MCP blocking remains a separate
+explicit opt-in and must never be enabled silently.

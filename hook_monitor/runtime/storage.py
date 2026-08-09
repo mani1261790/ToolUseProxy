@@ -11,7 +11,7 @@ import uuid
 from contextlib import nullcontext
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
 
 from hook_monitor.analysis.adapters.mcp_profiles import (
     DEFAULT_MCP_INPUT_LIMITS,
@@ -9339,6 +9339,8 @@ class EventStore:
         *,
         settings: dict[str, bool],
         expected_revision: str,
+        prepare_workspace: Callable[[], None] | None = None,
+        rollback_workspace: Callable[[], None] | None = None,
     ) -> tuple[WorkspaceRuntimeSettings, tuple[RuntimeSettingChange, ...]]:
         """Register a workspace and apply one fixed settings profile atomically."""
         if (
@@ -9359,102 +9361,114 @@ class EventStore:
             workspace.workspace_id,
             settings,
         )
-        with self._connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            self._upsert_workspace(conn, workspace)
-            current = _load_workspace_runtime_settings(
-                conn,
-                workspace.workspace_id,
-            )
-            if current.revision == target.revision:
-                return current, ()
-            if current.revision != expected_revision:
-                raise RuntimeSettingsError(
-                    "settings_revision_stale",
-                    "runtime settings changed; verify the current revision",
-                )
-
-            conn.execute(
-                """
-                INSERT INTO workspace_runtime_settings (
-                    workspace_id,
-                    settings_schema_version,
-                    settings_revision,
-                    settings_json,
-                    updated_at
-                ) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-                ON CONFLICT(workspace_id) DO UPDATE SET
-                    settings_schema_version = excluded.settings_schema_version,
-                    settings_revision = excluded.settings_revision,
-                    settings_json = excluded.settings_json,
-                    updated_at = CURRENT_TIMESTAMP
-                WHERE workspace_runtime_settings.settings_revision = ?
-                """,
-                (
+        workspace_prepared = False
+        try:
+            with self._connect() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                current = _load_workspace_runtime_settings(
+                    conn,
                     workspace.workspace_id,
-                    target.schema_version,
-                    target.revision,
-                    runtime_settings_json(target.settings),
-                    current.revision,
-                ),
-            )
-            changes: list[RuntimeSettingChange] = []
-            for setting_key in sorted(target.settings):
-                previous_value = current.settings.get(setting_key)
-                new_value = target.settings[setting_key]
-                if previous_value is new_value:
-                    continue
-                change_id = uuid.uuid4().hex
+                )
+                if (
+                    current.revision != target.revision
+                    and current.revision != expected_revision
+                ):
+                    raise RuntimeSettingsError(
+                        "settings_revision_stale",
+                        "runtime settings changed; verify the current revision",
+                    )
+                if prepare_workspace is not None:
+                    workspace_prepared = True
+                    prepare_workspace()
+                self._upsert_workspace(conn, workspace)
+                if current.revision == target.revision:
+                    return current, ()
+
                 conn.execute(
                     """
-                    INSERT INTO workspace_runtime_setting_changes (
-                        change_id,
+                    INSERT INTO workspace_runtime_settings (
                         workspace_id,
-                        action,
-                        setting_key,
-                        previous_value,
-                        new_value,
-                        previous_revision,
-                        new_revision
-                    ) VALUES (?, ?, 'set', ?, ?, ?, ?, ?)
+                        settings_schema_version,
+                        settings_revision,
+                        settings_json,
+                        updated_at
+                    ) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    ON CONFLICT(workspace_id) DO UPDATE SET
+                        settings_schema_version = excluded.settings_schema_version,
+                        settings_revision = excluded.settings_revision,
+                        settings_json = excluded.settings_json,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE workspace_runtime_settings.settings_revision = ?
                     """,
                     (
-                        change_id,
                         workspace.workspace_id,
-                        setting_key,
-                        (
-                            None
-                            if previous_value is None
-                            else int(previous_value)
-                        ),
-                        int(new_value),
-                        current.revision,
+                        target.schema_version,
                         target.revision,
+                        runtime_settings_json(target.settings),
+                        current.revision,
                     ),
                 )
-                row = conn.execute(
-                    """
-                    SELECT recorded_at
-                    FROM workspace_runtime_setting_changes
-                    WHERE change_id = ?
-                    """,
-                    (change_id,),
-                ).fetchone()
-                assert row is not None
-                changes.append(
-                    RuntimeSettingChange(
-                        change_id=change_id,
-                        workspace_id=workspace.workspace_id,
-                        action="set",
-                        setting_key=setting_key,
-                        previous_value=previous_value,
-                        new_value=new_value,
-                        previous_revision=current.revision,
-                        new_revision=target.revision,
-                        recorded_at=str(row[0]),
+                changes: list[RuntimeSettingChange] = []
+                for setting_key in sorted(target.settings):
+                    previous_value = current.settings.get(setting_key)
+                    new_value = target.settings[setting_key]
+                    if previous_value is new_value:
+                        continue
+                    change_id = uuid.uuid4().hex
+                    conn.execute(
+                        """
+                        INSERT INTO workspace_runtime_setting_changes (
+                            change_id,
+                            workspace_id,
+                            action,
+                            setting_key,
+                            previous_value,
+                            new_value,
+                            previous_revision,
+                            new_revision
+                        ) VALUES (?, ?, 'set', ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            change_id,
+                            workspace.workspace_id,
+                            setting_key,
+                            (
+                                None
+                                if previous_value is None
+                                else int(previous_value)
+                            ),
+                            int(new_value),
+                            current.revision,
+                            target.revision,
+                        ),
                     )
-                )
-            return target, tuple(changes)
+                    row = conn.execute(
+                        """
+                        SELECT recorded_at
+                        FROM workspace_runtime_setting_changes
+                        WHERE change_id = ?
+                        """,
+                        (change_id,),
+                    ).fetchone()
+                    assert row is not None
+                    changes.append(
+                        RuntimeSettingChange(
+                            change_id=change_id,
+                            workspace_id=workspace.workspace_id,
+                            action="set",
+                            setting_key=setting_key,
+                            previous_value=previous_value,
+                            new_value=new_value,
+                            previous_revision=current.revision,
+                            new_revision=target.revision,
+                            recorded_at=str(row[0]),
+                        )
+                    )
+                return target, tuple(changes)
+        except Exception:
+            if workspace_prepared and rollback_workspace is not None:
+                rollback_workspace()
+            raise
 
     def get_workspace_runtime_settings(
         self,
@@ -12720,16 +12734,17 @@ def _canonical_proposed_source_json(
         source_path=relative_path,
         source_type=payload["type"],
     )
-    if selector is None:
-        raise ValueError("candidate proposed source requires a selector")
     canonical_payload = {
         "id": payload["id"],
         "path": relative_path,
         "type": payload["type"],
         "sensitivity": payload["sensitivity"],
         "policy_tags": policy_tags,
-        "selector": protected_source_selector_payload(selector),
     }
+    if selector is not None:
+        canonical_payload["selector"] = protected_source_selector_payload(
+            selector
+        )
     return json.dumps(
         canonical_payload,
         ensure_ascii=False,

@@ -39,13 +39,13 @@ def render_hook_message(explanation: PolicyExplanation) -> str:
     return "\n".join(
         (
             explanation.user_message,
+            _result_message(explanation),
             (
-                f"Source: {explanation.source_label}; "
-                f"Sink: {explanation.sink_type}; "
-                f"Score: {explanation.path_score:.2f}; "
-                f"Severity: {explanation.severity}"
+                "技術情報（通常は読む必要なし）｜"
+                f"送信先：{explanation.sink_type}｜"
+                f"判定：{explanation.action}｜"
+                f"調査用：{explanation.trace_command}"
             ),
-            f"Trace: {explanation.trace_command}",
         )
     )
 
@@ -53,24 +53,40 @@ def render_hook_message(explanation: PolicyExplanation) -> str:
 def _user_message(decision: PolicyDecision) -> str:
     if decision.evidence_kind == "resolved_file_exact":
         return (
-            "Protected source content was found in a file-backed external "
-            "payload. Remove protected content from the referenced file or "
-            "choose a public payload before retrying."
+            "ToolUseProxyが外部送信を実行前に止めました。参照ファイルに"
+            "保護対象の内容が含まれています。保護対象を除くか、公開用の"
+            "ファイルを選んでからやり直してください。"
         )
     if decision.sink_type == "final_answer":
         return (
-            "Protected source content appears in the final answer. "
-            "Revise the final answer to remove protected details, then continue."
+            "最終回答に保護対象の内容が含まれています。ToolUseProxyが回答を"
+            "止めたため、保護対象を除いてから回答を作り直してください。"
         )
     if decision.sink_type.startswith("external_"):
         return (
-            "Protected source content would be sent to an external sink. "
-            "Remove protected details from the tool input before retrying."
+            "外部へ送る内容に保護対象が含まれています。送信内容から"
+            "保護対象を除いてからやり直してください。"
         )
     return (
-        "Protected source content reached a policy-controlled sink. "
-        "Review and remove protected details before continuing."
+        "保護対象の内容が制限対象の操作に含まれています。操作内容から"
+        "保護対象を除いてからやり直してください。"
     )
+
+
+def _result_message(explanation: PolicyExplanation) -> str:
+    if (
+        explanation.sink_type == "final_answer"
+        and explanation.action == "continue_review"
+    ):
+        return "結果：この回答はまだ利用者へ返していません。保護対象の内容も表示していません。"
+    if (
+        explanation.action == "block"
+        and explanation.hook_event in {"PreToolUse", "PermissionRequest"}
+    ):
+        return "結果：外部操作は実行されていません。保護対象の内容も表示していません。"
+    if explanation.hook_event == "PostToolUse":
+        return "結果：この確認は操作後です。実行済みの操作は取り消せません。保護対象の内容は表示していません。"
+    return "結果：保護対象の内容は表示していません。操作を続ける前に送信内容を確認してください。"
 
 
 def _trace_command(

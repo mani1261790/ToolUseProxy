@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import json
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -10,6 +11,8 @@ from typing import Mapping
 DB_PATH_ENV = "TOOLUSEPROXY_DB_PATH"
 DATA_DIR_ENV = "TOOLUSEPROXY_DATA_DIR"
 PLUGIN_DATA_ENV = "PLUGIN_DATA"
+CODEX_HOME_ENV = "CODEX_HOME"
+CODEX_PLUGIN_ROOT_ENV = "TOOLUSEPROXY_CODEX_PLUGIN_ROOT"
 DEFAULT_DB_FILENAME = "events.db"
 
 
@@ -48,6 +51,14 @@ def resolve_runtime_paths(
             "explicit_data_dir",
         )
 
+    codex_plugin_root = _nonempty(env.get(CODEX_PLUGIN_ROOT_ENV))
+    if codex_plugin_root is not None:
+        return resolve_codex_plugin_runtime_paths(
+            plugin_root=codex_plugin_root,
+            environ=env,
+            home=home,
+        )
+
     configured_db = _nonempty(env.get(DB_PATH_ENV))
     if configured_db is not None:
         resolved_db = _absolute_path(configured_db)
@@ -80,6 +91,66 @@ def resolve_runtime_paths(
         resolved_dir,
         resolved_dir / DEFAULT_DB_FILENAME,
         "platform_default",
+    )
+
+
+def resolve_codex_plugin_runtime_paths(
+    *,
+    plugin_root: str | Path,
+    environ: Mapping[str, str] | None = None,
+    home: Path | None = None,
+) -> RuntimePaths:
+    """Resolve Codex's legacy Plugin data root from a verified install root."""
+    env = os.environ if environ is None else environ
+    user_home = Path.home() if home is None else home
+    configured_home = _nonempty(env.get(CODEX_HOME_ENV))
+    codex_home = _absolute_path(
+        configured_home if configured_home is not None else user_home / ".codex"
+    )
+    try:
+        canonical_home = codex_home.resolve(strict=True)
+        canonical_root = _absolute_path(plugin_root).resolve(strict=True)
+        cache_root = (canonical_home / "plugins" / "cache").resolve(strict=True)
+        relative = canonical_root.relative_to(cache_root)
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise PathConfigurationError(
+            "installed Codex Plugin root could not be verified"
+        ) from exc
+
+    if len(relative.parts) != 3:
+        raise PathConfigurationError(
+            "installed Codex Plugin root has an unsupported layout"
+        )
+    marketplace_name, plugin_name, plugin_version = relative.parts
+    if not all(
+        _safe_codex_plugin_segment(value)
+        for value in (marketplace_name, plugin_name, plugin_version)
+    ):
+        raise PathConfigurationError(
+            "installed Codex Plugin identity is invalid"
+        )
+
+    manifest_path = canonical_root / ".codex-plugin" / "plugin.json"
+    try:
+        if manifest_path.stat().st_size > 64 * 1024:
+            raise ValueError
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
+        raise PathConfigurationError(
+            "installed Codex Plugin manifest could not be verified"
+        ) from exc
+    if not isinstance(manifest, dict) or manifest.get("name") != plugin_name:
+        raise PathConfigurationError(
+            "installed Codex Plugin identity does not match its manifest"
+        )
+
+    data_dir = canonical_home / "plugins" / "data" / (
+        f"{plugin_name}-{marketplace_name}"
+    )
+    return RuntimePaths(
+        data_dir=data_dir,
+        db_path=data_dir / DEFAULT_DB_FILENAME,
+        source="codex_plugin_store",
     )
 
 
@@ -124,3 +195,11 @@ def _nonempty(value: str | None) -> str | None:
     if value is None or not value.strip():
         return None
     return value
+
+
+def _safe_codex_plugin_segment(value: str) -> bool:
+    return bool(value) and value not in {".", ".."} and all(
+        character.isascii()
+        and (character.isalnum() or character in {"-", "_", ".", "+"})
+        for character in value
+    )

@@ -35,6 +35,13 @@ class WindowsLauncherPythonContractTest(unittest.TestCase):
         self.assertIn("python_missing", content)
         self.assertIn("runtime_start_failed", content)
 
+    def test_cli_launchers_expose_their_verified_plugin_root(self) -> None:
+        posix = (REPO_ROOT / "hooks" / "run_cli.sh").read_text(encoding="utf-8")
+        windows = (REPO_ROOT / "hooks" / "run_cli.cmd").read_text(encoding="utf-8")
+
+        self.assertIn("TOOLUSEPROXY_CODEX_PLUGIN_ROOT", posix)
+        self.assertIn("TOOLUSEPROXY_CODEX_PLUGIN_ROOT", windows)
+
 
 @unittest.skipIf(os.name == "nt", "POSIX launcher contract")
 class PosixLauncherPythonContractTest(unittest.TestCase):

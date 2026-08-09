@@ -2114,7 +2114,7 @@ text(JSON.stringify(r));
                 ),
                 self._function_output(
                     "protected",
-                    "PreToolUse hook (blocked): Protected source content",
+                    "ToolUseProxyが外部送信を実行前に止めました",
                 ),
             ]
             session = root / "session.jsonl"
@@ -3106,7 +3106,7 @@ text(JSON.stringify(r));
             selected = _plugin_data_from_session(
                 (),
                 (
-                    "Trace: tooluseproxy trace --db "
+                    "技術情報（通常は読む必要なし）｜調査用：tooluseproxy trace --db "
                     f"{plugin_data / 'events.db'} --analysis-run run",
                 ),
                 codex_home=codex_home,

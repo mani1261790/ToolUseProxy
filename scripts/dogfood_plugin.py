@@ -492,6 +492,8 @@ def _run_dogfood(installation_mode: str) -> dict[str, Any]:
                 "trace",
                 "--decision",
                 decision_id,
+                "--db",
+                str(data_dir / "events.db"),
                 "--no-preview",
             ],
             cwd=workspace,

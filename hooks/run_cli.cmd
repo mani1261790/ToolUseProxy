@@ -4,6 +4,7 @@ if "%~1"=="" (
   echo 使い方: run_cli.cmd ^<ToolUseProxyの引数^> 1>&2
   exit /b 2
 )
+set "TOOLUSEPROXY_CODEX_PLUGIN_ROOT=%~dp0.."
 where py >nul 2>nul
 if errorlevel 1 (
   echo ToolUseProxyの実行にはPython 3.11または3.12が必要です。 1>&2

@@ -7422,6 +7422,19 @@ class InformationFlowTest(unittest.TestCase):
             permission_output["hookSpecificOutput"]["decision"]["behavior"],
         )
 
+        post_block = self._policy_decision(
+            action="block",
+            severity="critical",
+            sink_type="external_http_request",
+            path_score=0.95,
+            hook_event="PostToolUse",
+        )
+        post_output = render_codex_hook_output(post_block, "PostToolUse")
+        post_reason = post_output["reason"]
+        self.assertIn("この確認は操作後です", post_reason)
+        self.assertIn("実行済みの操作は取り消せません", post_reason)
+        self.assertNotIn("外部操作は実行されていません", post_reason)
+
         final_answer = self._policy_decision(
             action="continue_review",
             severity="critical",
@@ -7433,12 +7446,14 @@ class InformationFlowTest(unittest.TestCase):
         self.assertEqual("block", stop_output["decision"])
         self.assertIn("reason", stop_output)
         self.assertIn(
-            "Protected source content appears in the final answer",
+            "最終回答に保護対象の内容が含まれています",
             stop_output["reason"],
         )
-        self.assertIn("Trace: tooluseproxy trace", stop_output["reason"])
-        self.assertIn("Source: source_chunk:private-source:0", stop_output["reason"])
-        self.assertIn("Sink: final_answer", stop_output["reason"])
+        self.assertIn("この回答はまだ利用者へ返していません", stop_output["reason"])
+        self.assertIn("調査用：tooluseproxy trace", stop_output["reason"])
+        self.assertIn("送信先：final_answer", stop_output["reason"])
+        self.assertNotIn("Source:", stop_output["reason"])
+        self.assertNotIn("Score:", stop_output["reason"])
 
         final_warning = self._policy_decision(
             action="warn",
@@ -7534,8 +7549,8 @@ class InformationFlowTest(unittest.TestCase):
         payload = json.loads(result.stdout)
         self.assertEqual("block", payload["decision"])
         self.assertIn("reason", payload)
-        self.assertIn("Protected source content appears in the final answer", payload["reason"])
-        self.assertIn(f"Trace: tooluseproxy trace --db {self.db_path}", payload["reason"])
+        self.assertIn("最終回答に保護対象の内容が含まれています", payload["reason"])
+        self.assertIn(f"調査用：tooluseproxy trace --db {self.db_path}", payload["reason"])
         self.assertIn(f"--analysis-run {run_id}", payload["reason"])
         self.assertNotIn(SECRET, payload["reason"])
 
@@ -7581,8 +7596,8 @@ class InformationFlowTest(unittest.TestCase):
         payload = json.loads(result.stdout)
 
         self.assertEqual("block", payload["decision"])
-        self.assertIn("Protected source content appears in the final answer", payload["reason"])
-        self.assertIn(f"Trace: tooluseproxy trace --db {self.db_path}", payload["reason"])
+        self.assertIn("最終回答に保護対象の内容が含まれています", payload["reason"])
+        self.assertIn(f"調査用：tooluseproxy trace --db {self.db_path}", payload["reason"])
         self.assertNotIn(SECRET, payload["reason"])
         with sqlite3.connect(self.db_path) as conn:
             stored_stop = conn.execute(
@@ -7788,7 +7803,7 @@ class InformationFlowTest(unittest.TestCase):
         )
         self.assertNotIn(SECRET, json.dumps(output))
         self.assertIn(
-            "referenced file",
+            "参照ファイル",
             output["hookSpecificOutput"]["permissionDecisionReason"],
         )
         decisions = self.store.list_policy_decisions()

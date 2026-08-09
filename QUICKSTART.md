@@ -24,7 +24,7 @@ MarketplaceとPluginのインストールは、Codex環境ごとに1回だけで
 特定versionへ固定する場合は、1つ目のコマンドで`public-alpha`の代わりにimmutable tagを指定します。
 
 ```bash
-codex plugin marketplace add mani1261790/ToolUseProxy --ref v0.1.0-alpha.5
+codex plugin marketplace add mani1261790/ToolUseProxy --ref v0.1.0-alpha.6
 ```
 
 ## 3. 3つのHookを確認してTrustする
@@ -58,6 +58,8 @@ Pluginのインストールは1回ですが、次の情報はworkspaceごとに�
 
 ToolUseProxyが必要な初期設定と安全確認を案内します。通常は確認画面が2回出ます。どちらも外部通信は行わず、このprojectの外にあるToolUseProxy専用保存領域を設定・確認するためのものです。
 
+通常インストールでは、ToolUseProxy自身が現在のPlugin identityを検証して専用保存領域を特定します。利用者が`database_missing`などの内部診断、absolute path、初期化commandをコピーして貼り直す必要はありません。保存先を安全に確認できない場合は、別pathを推測せず未設定のまま停止します。
+
 完了時に「このプロジェクトではToolUseProxyが動作しています」と表示されれば準備完了です。すべての機密ファイルが自動登録されるわけではありません。
 
 ## 5. protected sourceを1件確認する
@@ -76,7 +78,9 @@ ToolUseProxyが必要な初期設定と安全確認を案内します。通常�
 
 候補の値、file preview、source hash、ユーザーのabsolute pathは表示しません。初期設定や候補探しだけでは保護対象に登録されません。
 
-PreToolUse blockは既定で無効です。このクイックスタートだけで強制blockを自動的に有効化することはありません。保護設定を有効にする場合は、[Plugin導入ガイド](docs/設定/Plugin導入.md)の説明と承認境界を確認してください。
+既にpathが分かっているMarkdownなどの文書は、例えば「研究計画と研究方針のMarkdownを全文守りたい」のように依頼できます。ToolUseProxyは本文を表示せず、対象pathと「全文を守る」ことを1件ずつ示します。directory単位の依頼でも一括登録はせず、各ファイルについて「守る」を選んだ後だけ登録します。
+
+この初期設定では、PreToolUseによる実行前blockとfile-backed payload保護をworkspace単位で有効にします。既存の異なる設定がある場合は上書きせず停止します。
 
 ## 6. 実projectで安全に試す
 
@@ -91,6 +95,8 @@ PreToolUse blockは既定で無効です。このクイックスタートだけ�
 7. PluginをRemoveしても、別途data削除を承認しない限りlocal dataが保持される
 
 setup失敗、Hookの`modified`または`untrusted`、2つ目のToolUseProxy Plugin、public操作の誤block、protected valueの外部副作用が発生した場合は検証を停止してください。広い再利用可能permissionで回避しないでください。
+
+正常にblockした場合は、「ToolUseProxyが外部送信を実行前に止めました」と「結果：外部操作は実行されていません」が先に表示されます。保護対象の本文、source ID、scoreは判断材料として表示しません。調査commandが必要な場合だけ、最後の「技術情報（通常は読む必要なし）」を確認できます。
 
 詳細な記録項目は[実projectでのドッグフード手順](docs/運用/Pluginドッグフード.md#実projectでのself-dogfood)と[dogfood report template](.github/ISSUE_TEMPLATE/dogfood-report.md)を利用できます。reportへsource値、raw Hook payload、SQLite DB、access token、ユーザーのabsolute pathを含めないでください。
 
