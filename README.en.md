@@ -4,7 +4,7 @@ ToolUseProxy is a local-first research implementation for tracing information fl
 
 This project is a research and development outcome of [SecHack365](https://sechack365.nict.go.jp/).
 
-The current version is the `0.1.0-alpha.4` public alpha. It is not a complete DLP system.
+The current version is the `0.1.0-alpha.5` public alpha. It is not a complete DLP system.
 
 ToolUseProxy is licensed under the [Apache License 2.0](LICENSE).
 
@@ -39,7 +39,7 @@ codex plugin marketplace upgrade tooluseproxy
 codex plugin list --json
 ```
 
-Use the immutable `v0.1.0-alpha.4` tag instead of `public-alpha` when reproducible version pinning matters. A pinned tag does not move when the marketplace is upgraded. Review the exact Hook definitions after installation or an update before trusting them. A changed matcher, command, or source invalidates the earlier trust decision; a Hook with `trustStatus: modified` must be reviewed again. Then follow the [Japanese five-minute quickstart](QUICKSTART.md) to initialize ToolUseProxy and review the first protected-source proposal. The CLI update path is tested.
+Use the immutable `v0.1.0-alpha.5` tag instead of `public-alpha` when reproducible version pinning matters. A pinned tag does not move when the marketplace is upgraded. Review the exact Hook definitions after installation or an update before trusting them. A changed matcher, command, or source invalidates the earlier trust decision; a Hook with `trustStatus: modified` must be reviewed again. Then follow the [Japanese five-minute quickstart](QUICKSTART.md) to initialize ToolUseProxy and review the first protected-source proposal. The CLI update path is tested.
 
 On Codex Desktop for macOS, Plugin installation, review and trust of all three Hooks, `PreToolUse` / `PostToolUse` / `Stop` delivery, public allow, and the pre-execution block of a file-backed protected payload have been verified. The August 9 runs also covered alpha.1-to-alpha.3 data migration, backup rollback, direct Remove without Disable, saved-task revalidation, and a fresh atomic setup-profile run. The fresh run passed with two command approvals, one public side effect, zero protected side effects, one exact block, and zero raw protected-value exposures. Desktop task history records local shell calls as `exec_command`, while the canonical Hook matcher name is `Bash`; value-free markers, the Hook database, stable definition hashes, and task records remain the evidence boundary. Linux and Windows Desktop are not established by this result.
 

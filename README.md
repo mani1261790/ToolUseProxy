@@ -4,7 +4,7 @@ Codexのtool useをローカルで観測し、外部sinkへ送られるpayload�
 
 本プロジェクトは、[SecHack365](https://sechack365.nict.go.jp/)での研究・開発成果物です。
 
-> 現在は`0.1.0-alpha.4` public alphaです。中核機能、再現可能な配布物、Apache-2.0の配布契約、CLI TUIでのfile-backed exact-only enforcement検証は整いましたが、完全なDLPではありません。Codex DesktopではPluginの検索・install、Hook review、trusted Pre / Post / Stop probe、public allow、file-backed protected payloadの実行前blockに加え、alpha.1からalpha.3へのdata migration、backup rollback、DisableなしのRemoveまで実機確認しました。保存済み2026-08-09 runと、初期化・3保護設定・状態確認を2 commandへ集約したfresh runは、どちらも正式な`passed`です。fresh runの承認UIは2回でした。adapter外のnetwork egress、hosted Web Search、Linux実Codex task、Windows実機も引き続き検証中です。
+> 現在は`0.1.0-alpha.5` public alphaです。中核機能、再現可能な配布物、Apache-2.0の配布契約、CLI TUIでのfile-backed exact-only enforcement検証は整いましたが、完全なDLPではありません。Codex DesktopではPluginの検索・install、Hook review、trusted Pre / Post / Stop probe、public allow、file-backed protected payloadの実行前blockに加え、alpha.1からalpha.3へのdata migration、backup rollback、DisableなしのRemoveまで実機確認しました。保存済み2026-08-09 runと、初期化・3保護設定・状態確認を2 commandへ集約したfresh runは、どちらも正式な`passed`です。fresh runの承認UIは2回でした。alpha.5では自然言語による導入、保護候補の分かりやすい確認、短い日本語の承認・診断案内を追加しました。adapter外のnetwork egress、hosted Web Search、Linux実Codex task、Windows実機も引き続き検証中です。
 
 - [研究紹介スライド（初めて知る方向け）](https://mani1261790.github.io/ToolUseProxy/slides/tooluseproxy-research.html)
 - [Codex Pluginとして試す](docs/設定/Plugin導入.md)
@@ -45,10 +45,10 @@ ToolUseProxyはLLM内部の状態や因果的な情報流を直接観測する�
 | 1. Trace | 中核完了 | event / artifact / resource / sinkをworkspace・session単位で追跡し、再現可能な解析runを保存 |
 | 2. Detect | 中核完了 | protected source binding、lineage、finding、policy、類似度profile v2.1を実装 |
 | 3. Stop | alpha実装済み | Stopの`continue_review`と、opt-inのBash / MCP PreToolUse denyを提供。runtime redactは無効 |
-| Plugin化 | alpha.4 | installable package、relocatable Plugin、`PLUGIN_ROOT` / `PLUGIN_DATA`、初期化・診断・traceを実装 |
+| Plugin化 | alpha.5 | installable package、relocatable Plugin、`PLUGIN_ROOT` / `PLUGIN_DATA`、初期化・診断・traceを実装 |
 | runtime設定 | 実装済み | workspace単位のboolean設定、環境変数override、revision付き更新、値なし監査、Plugin再導入後の保持 |
 | protected source登録 | 明示承認型を実装済み | `scan` / `suggest` → exact proposal → `approve` / `reject` / `ignore`。無承認登録はしない |
-| Public alpha | `0.1.0-alpha.4` | Apache-2.0、checksum / SBOM、archive内部、CI Action、hash-locked build、Git履歴監査、upgrade / rollback、自動dogfoodを完了。CLI TUIのfile-backed shadow / exact-only Phase Bは合格。Desktopもinstall、trust、実Hook probe、public allow、protected block、同一版reinstall、異version migration、backup rollback、DisableなしのRemove、cleanupまで機能確認済み。保存runと2-command setupのfresh runはいずれも正式な`passed`。fresh setupの承認は2回。Codexが保持する非アクティブなproject / Hook trust履歴は残存。cross-platform実機、少人数pilotも継続課題 |
+| Public alpha | `0.1.0-alpha.5` | alpha.4の検証済み保護機能とrelease契約を維持し、自然言語の導入、保護候補の日本語3択、短い承認・診断案内を追加。checksum / SBOM、archive内部、CI Action、hash-locked build、Git履歴監査、upgrade / rollback、自動dogfoodを継続。CLI TUIとDesktopのpublic allow、protected block、raw exposure 0を確認済み。cross-platform実機、少人数pilotも継続課題 |
 | 外部sink coverage | adapter allowlist | 既知のBash / MCP / Search等を分類。任意programの実network接続を網羅せず、hosted Web SearchはPreToolUse / PostToolUse Hookの観測対象外。実接続との偽陰性率は未測定 |
 
 設計全体は[アーキテクチャ概要](docs/設計/アーキテクチャ.md)、詳細な完了範囲と残作業は[実装タスク計画](docs/運用/実装タスク.md)を参照してください。
@@ -95,7 +95,7 @@ codex plugin marketplace upgrade tooluseproxy
 codex plugin list --json
 ```
 
-特定versionを固定したい場合は、`public-alpha`の代わりにimmutable tag `v0.1.0-alpha.4`を指定します。固定tagは`marketplace upgrade`を実行しても別versionへ移動しません。
+特定versionを固定したい場合は、`public-alpha`の代わりにimmutable tag `v0.1.0-alpha.5`を指定します。固定tagは`marketplace upgrade`を実行しても別versionへ移動しません。
 
 更新後は変更された3つのHookをもう一度確認し、新しいCodex taskでsetup skillによるverificationを実行します。
 
