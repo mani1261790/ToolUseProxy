@@ -513,7 +513,11 @@ def _run_setup_apply(args: argparse.Namespace) -> int:
                 "Codex Plugin data directory must be passed explicitly",
             )
         plugin_data = os.environ.get("PLUGIN_DATA")
-        if args.codex and plugin_data:
+        if (
+            args.codex
+            and plugin_data
+            and paths.source != "codex_plugin_store"
+        ):
             plugin_paths = resolve_runtime_paths(data_dir=plugin_data)
             if paths.db_path != plugin_paths.db_path:
                 raise RuntimeSettingsError(
@@ -542,7 +546,23 @@ def _run_setup_apply(args: argparse.Namespace) -> int:
                 f"workspace is not usable: {workspace.status}",
             )
         manifest_path = Path(workspace.canonical_root) / MANIFEST_FILENAME
-        manifest_created = _create_empty_manifest(manifest_path)
+        manifest_created = False
+        manifest_binding: tuple[int, int] | None = None
+
+        def prepare_manifest() -> None:
+            nonlocal manifest_created, manifest_binding
+            manifest_created = _create_empty_manifest(manifest_path)
+            if manifest_created:
+                metadata = os.lstat(manifest_path)
+                manifest_binding = (metadata.st_dev, metadata.st_ino)
+
+        def rollback_manifest() -> None:
+            if manifest_created and manifest_binding is not None:
+                _remove_created_empty_manifest(
+                    manifest_path,
+                    expected_binding=manifest_binding,
+                )
+
         expected_revision = args.expected_revision
         if args.expect_empty_settings:
             expected_revision = empty_workspace_runtime_settings(
@@ -553,6 +573,8 @@ def _run_setup_apply(args: argparse.Namespace) -> int:
             workspace,
             settings=SETUP_PROFILE_SETTINGS,
             expected_revision=expected_revision,
+            prepare_workspace=prepare_manifest,
+            rollback_workspace=rollback_manifest,
         )
         effective = resolve_effective_runtime_settings(settings, os.environ)
         payload = {
@@ -706,7 +728,15 @@ def _run_setup_verify(args: argparse.Namespace) -> int:
         ]
         plugin_root = os.environ.get("PLUGIN_ROOT")
         plugin_data = os.environ.get("PLUGIN_DATA")
-        if plugin_root is not None or plugin_data is not None:
+        if paths.source == "codex_plugin_store":
+            checks.append(
+                _check(
+                    "plugin_environment",
+                    True,
+                    "installed Plugin store identity verified",
+                )
+            )
+        elif plugin_root is not None or plugin_data is not None:
             plugin_root_path = (
                 None if not plugin_root else _absolute_path(plugin_root)
             )
@@ -1988,6 +2018,36 @@ def _create_empty_manifest(path: Path) -> bool:
     finally:
         temporary_path.unlink(missing_ok=True)
     return True
+
+
+def _remove_created_empty_manifest(
+    path: Path,
+    *,
+    expected_binding: tuple[int, int],
+) -> None:
+    try:
+        metadata = os.lstat(path)
+        expected = (
+            json.dumps(
+                {
+                    "schema_version": CURRENT_MANIFEST_SCHEMA_VERSION,
+                    "sources": [],
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+            + "\n"
+        ).encode("utf-8")
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_nlink != 1
+            or (metadata.st_dev, metadata.st_ino) != expected_binding
+            or path.read_bytes() != expected
+        ):
+            return
+        path.unlink()
+    except OSError:
+        return
 
 
 def _read_database_summary(db_path: Path) -> dict[str, Any]:

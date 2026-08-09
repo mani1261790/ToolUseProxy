@@ -592,9 +592,51 @@ class RuntimeSettingsCliTest(unittest.TestCase):
         )
         self.assertEqual(0, set_code)
 
+        manifest = fresh_workspace / "protected_sources.json"
+        manifest.unlink()
         stale_code, stale, _ = self._run(arguments)
         self.assertEqual(1, stale_code)
         self.assertEqual("settings_revision_stale", stale["error"]["code"])
+        self.assertFalse(manifest.exists())
+
+    def test_setup_profile_rolls_back_manifest_when_database_write_fails(self) -> None:
+        fresh_workspace = self.root / "rollback-workspace"
+        fresh_data = self.root / "rollback-data"
+        fresh_workspace.mkdir()
+        arguments = [
+            "setup",
+            "apply",
+            SETUP_PROFILE_FILE_PAYLOAD_EXACT,
+            "--codex",
+            "--expect-empty-settings",
+            "--workspace",
+            str(fresh_workspace),
+            "--data-dir",
+            str(fresh_data),
+            "--json",
+        ]
+
+        with patch.object(
+            EventStore,
+            "_upsert_workspace",
+            side_effect=sqlite3.OperationalError("synthetic write failure"),
+        ):
+            exit_code, payload, _ = self._run(arguments)
+
+        self.assertEqual(1, exit_code)
+        self.assertEqual("setup_unavailable", payload["error"]["code"])
+        self.assertFalse((fresh_workspace / "protected_sources.json").exists())
+        with sqlite3.connect(fresh_data / "events.db") as conn:
+            self.assertEqual(
+                0,
+                conn.execute("SELECT COUNT(*) FROM workspaces").fetchone()[0],
+            )
+            self.assertEqual(
+                0,
+                conn.execute(
+                    "SELECT COUNT(*) FROM workspace_runtime_settings"
+                ).fetchone()[0],
+            )
 
     def test_setup_profile_errors_remain_structured_json(self) -> None:
         fresh_workspace = self.root / "error-workspace"

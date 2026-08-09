@@ -51,6 +51,14 @@ def resolve_runtime_paths(
             "explicit_data_dir",
         )
 
+    codex_plugin_root = _nonempty(env.get(CODEX_PLUGIN_ROOT_ENV))
+    if codex_plugin_root is not None:
+        return resolve_codex_plugin_runtime_paths(
+            plugin_root=codex_plugin_root,
+            environ=env,
+            home=home,
+        )
+
     configured_db = _nonempty(env.get(DB_PATH_ENV))
     if configured_db is not None:
         resolved_db = _absolute_path(configured_db)
@@ -72,14 +80,6 @@ def resolve_runtime_paths(
             resolved_dir,
             resolved_dir / DEFAULT_DB_FILENAME,
             "plugin_data",
-        )
-
-    codex_plugin_root = _nonempty(env.get(CODEX_PLUGIN_ROOT_ENV))
-    if codex_plugin_root is not None:
-        return resolve_codex_plugin_runtime_paths(
-            plugin_root=codex_plugin_root,
-            environ=env,
-            home=home,
         )
 
     resolved_dir = default_user_data_dir(

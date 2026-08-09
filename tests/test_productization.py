@@ -155,6 +155,9 @@ class RuntimePathsTest(unittest.TestCase):
                 environ={
                     "CODEX_HOME": str(codex_home),
                     CODEX_PLUGIN_ROOT_ENV: str(plugin_root),
+                    "PLUGIN_DATA": str(root / "unverified-plugin-data"),
+                    "TOOLUSEPROXY_DATA_DIR": str(root / "unverified-data-dir"),
+                    "TOOLUSEPROXY_DB_PATH": str(root / "unverified.db"),
                 }
             )
 
@@ -166,6 +169,21 @@ class RuntimePathsTest(unittest.TestCase):
                 / "tooluseproxy-tooluseproxy"
                 / "events.db",
                 paths.db_path,
+            )
+
+            manual_data = root / "manual-phase-b-data"
+            manual_paths = resolve_runtime_paths(
+                data_dir=manual_data,
+                environ={
+                    "CODEX_HOME": str(codex_home),
+                    CODEX_PLUGIN_ROOT_ENV: str(plugin_root),
+                    "PLUGIN_DATA": str(root / "different-plugin-data"),
+                },
+            )
+            self.assertEqual("explicit_data_dir", manual_paths.source)
+            self.assertEqual(
+                manual_data.absolute() / "events.db",
+                manual_paths.db_path,
             )
 
     def test_codex_plugin_resolver_rejects_unverified_or_mismatched_roots(self) -> None:
@@ -952,6 +970,7 @@ class PluginBundleTest(unittest.TestCase):
             environment.update(
                 {
                     "CODEX_HOME": str(codex_home),
+                    "PLUGIN_DATA": str(root / "inherited-wrong-plugin-data"),
                     "TOOLUSEPROXY_PYTHON": sys.executable,
                 }
             )
