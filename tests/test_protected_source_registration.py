@@ -188,6 +188,21 @@ class ProtectedSourceRegistrationCliTest(unittest.TestCase):
         self.assertEqual(0, exit_code, stderr)
         return payload, stderr
 
+    def _suggest_whole_file(
+        self,
+        relative_path: str,
+    ) -> tuple[dict[str, object], str]:
+        exit_code, payload, stderr = self._run_json(
+            *self._protect_arguments(
+                "suggest",
+                "--path",
+                relative_path,
+                "--whole-file",
+            )
+        )
+        self.assertEqual(0, exit_code, stderr)
+        return payload, stderr
+
     def _single_candidate(self, payload: dict[str, object]) -> dict[str, object]:
         self.assertEqual(1, payload["schema_version"])
         self.assertEqual("review_required", payload["status"])
@@ -295,6 +310,96 @@ class ProtectedSourceRegistrationCliTest(unittest.TestCase):
         self.assertNotIn(secret, database_text)
         self.assertNotIn(str(candidate["candidate_revision"]), database_text)
         self.assertNotIn("candidate_revision", column_names)
+
+    def test_explicit_markdown_whole_file_is_value_free_and_approved_once(self) -> None:
+        private_text = "PRIVATE.RESEARCH.PLAN.6c8f"
+        relative_path = "docs/研究計画/研究計画書.md"
+        source = self.workspace / relative_path
+        source.parent.mkdir(parents=True)
+        source.write_text(f"# 研究計画\n\n{private_text}\n", encoding="utf-8")
+        manifest_before = self.manifest_path.read_bytes()
+
+        suggestion, stderr = self._suggest_whole_file(relative_path)
+        candidate = self._single_candidate(suggestion)
+
+        self.assertEqual(manifest_before, self.manifest_path.read_bytes())
+        self.assertEqual(relative_path, candidate["path"])
+        self.assertEqual(["explicit_whole_file"], candidate["reason_codes"])
+        self.assertEqual(1.0, candidate["confidence"])
+        self.assertNotIn("selector", candidate["proposed_source"])
+        rendered = json.dumps(suggestion, ensure_ascii=False)
+        self.assertNotIn(private_text, rendered)
+        self.assertNotIn(hashlib.sha256(source.read_bytes()).hexdigest(), rendered)
+        self.assertNotIn(str(self.workspace.resolve()), rendered)
+        self.assertNotIn(private_text, stderr)
+
+        exit_code, approved, approval_stderr = self._approve(
+            suggestion,
+            candidate,
+        )
+
+        self.assertEqual(0, exit_code, approval_stderr)
+        self.assertEqual("approved", approved["status"])
+        manifest = json.loads(self.manifest_path.read_text(encoding="utf-8"))
+        self.assertEqual(relative_path, manifest["sources"][0]["path"])
+        self.assertNotIn("selector", manifest["sources"][0])
+        loaded_sources, loaded_chunks = load_sources_and_chunks(
+            self.workspace,
+            self.manifest_path,
+        )
+        self.assertEqual(1, len(loaded_sources))
+        self.assertIn(private_text, [chunk.text for chunk in loaded_chunks])
+        database_text, _ = self._database_text()
+        self.assertNotIn(private_text, database_text)
+
+    def test_markdown_requires_explicit_whole_file_scope(self) -> None:
+        relative_path = "docs/private.md"
+        source = self.workspace / relative_path
+        source.parent.mkdir()
+        source.write_text("private", encoding="utf-8")
+
+        exit_code, _, stderr = self._run_json(
+            *self._protect_arguments("suggest", "--path", relative_path)
+        )
+        self.assertEqual(1, exit_code)
+        self.assertEqual(
+            "unsupported_source_format",
+            json.loads(stderr)["error"]["code"],
+        )
+
+        exit_code, _, stderr = self._run_json(
+            *self._protect_arguments(
+                "suggest",
+                "--path",
+                "protected_sources.json",
+                "--whole-file",
+            )
+        )
+        self.assertEqual(1, exit_code)
+        self.assertEqual(
+            "invalid_relative_path",
+            json.loads(stderr)["error"]["code"],
+        )
+
+    def test_markdown_whole_file_change_invalidates_review(self) -> None:
+        relative_path = "docs/private-plan.md"
+        source = self.workspace / relative_path
+        source.parent.mkdir()
+        source.write_text("original private plan", encoding="utf-8")
+        suggestion, _ = self._suggest_whole_file(relative_path)
+        candidate = self._single_candidate(suggestion)
+
+        source.write_text("changed private plan", encoding="utf-8")
+        exit_code, payload, stderr = self._approve(suggestion, candidate)
+
+        self.assertEqual(1, exit_code)
+        self.assertEqual({}, payload)
+        self.assertEqual(
+            "source_changed",
+            json.loads(stderr)["error"]["code"],
+        )
+        manifest = json.loads(self.manifest_path.read_text(encoding="utf-8"))
+        self.assertEqual([], manifest["sources"])
 
     def test_dotenv_approval_registers_only_the_selected_value(self) -> None:
         secret = "DOTENV.APPROVAL.SECRET.40bb"

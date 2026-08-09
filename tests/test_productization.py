@@ -22,6 +22,7 @@ from hook_monitor.runtime.storage import CURRENT_SCHEMA_VERSION, EventStore
 from tooluseproxy import __version__
 from tooluseproxy.cli import main as cli_main
 from tooluseproxy.paths import (
+    CODEX_PLUGIN_ROOT_ENV,
     PathConfigurationError,
     default_user_data_dir,
     resolve_runtime_paths,
@@ -130,6 +131,78 @@ class RuntimePathsTest(unittest.TestCase):
                 home=home,
             ),
         )
+
+    def test_installed_codex_plugin_resolves_official_data_root(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            codex_home = root / "codex-home"
+            plugin_root = (
+                codex_home
+                / "plugins"
+                / "cache"
+                / "tooluseproxy"
+                / "tooluseproxy"
+                / "0.1.0-alpha.6"
+            )
+            manifest_dir = plugin_root / ".codex-plugin"
+            manifest_dir.mkdir(parents=True)
+            (manifest_dir / "plugin.json").write_text(
+                json.dumps({"name": "tooluseproxy", "version": "0.1.0-alpha.6"}),
+                encoding="utf-8",
+            )
+
+            paths = resolve_runtime_paths(
+                environ={
+                    "CODEX_HOME": str(codex_home),
+                    CODEX_PLUGIN_ROOT_ENV: str(plugin_root),
+                }
+            )
+
+            self.assertEqual("codex_plugin_store", paths.source)
+            self.assertEqual(
+                codex_home.resolve()
+                / "plugins"
+                / "data"
+                / "tooluseproxy-tooluseproxy"
+                / "events.db",
+                paths.db_path,
+            )
+
+    def test_codex_plugin_resolver_rejects_unverified_or_mismatched_roots(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            codex_home = root / "codex-home"
+            outside = root / "copied-plugin"
+            manifest_dir = outside / ".codex-plugin"
+            manifest_dir.mkdir(parents=True)
+            (manifest_dir / "plugin.json").write_text(
+                json.dumps({"name": "tooluseproxy"}),
+                encoding="utf-8",
+            )
+            with self.assertRaises(PathConfigurationError):
+                resolve_runtime_paths(
+                    environ={
+                        "CODEX_HOME": str(codex_home),
+                        CODEX_PLUGIN_ROOT_ENV: str(outside),
+                    }
+                )
+
+            installed = (
+                codex_home / "plugins" / "cache" / "market" / "plugin" / "1.0"
+            )
+            installed_manifest = installed / ".codex-plugin"
+            installed_manifest.mkdir(parents=True)
+            (installed_manifest / "plugin.json").write_text(
+                json.dumps({"name": "different"}),
+                encoding="utf-8",
+            )
+            with self.assertRaises(PathConfigurationError):
+                resolve_runtime_paths(
+                    environ={
+                        "CODEX_HOME": str(codex_home),
+                        CODEX_PLUGIN_ROOT_ENV: str(installed),
+                    }
+                )
 
 
 class ProductCliTest(unittest.TestCase):
@@ -834,6 +907,130 @@ class PluginBundleTest(unittest.TestCase):
         rendered_hooks = json.dumps(hooks)
         self.assertIn("PLUGIN_ROOT", rendered_hooks)
         self.assertNotIn(str(REPO_ROOT), rendered_hooks)
+
+    @unittest.skipIf(os.name == "nt", "POSIX launcher test")
+    def test_codex_store_install_supports_normal_setup_without_data_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            codex_home = root / "codex-home"
+            plugin_root = (
+                codex_home
+                / "plugins"
+                / "cache"
+                / "tooluseproxy"
+                / "tooluseproxy"
+                / "0.1.0-alpha.6"
+            )
+            plugin_root.mkdir(parents=True)
+            for directory in (".codex-plugin", "hook_monitor", "hooks", "tooluseproxy"):
+                shutil.copytree(
+                    REPO_ROOT / directory,
+                    plugin_root / directory,
+                    dirs_exist_ok=True,
+                    ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+                )
+            shutil.copy2(
+                REPO_ROOT / "tooluseproxy_plugin.py",
+                plugin_root / "tooluseproxy_plugin.py",
+            )
+            workspace = root / "research-project"
+            workspace.mkdir()
+            source = workspace / "docs" / "private-plan.md"
+            source.parent.mkdir()
+            private_text = "ISOLATED.NORMAL.SETUP.SECRET.81f4"
+            source.write_text(private_text, encoding="utf-8")
+            launcher = plugin_root / "hooks" / "run_cli.sh"
+            environment = dict(os.environ)
+            for name in (
+                "PLUGIN_DATA",
+                "PLUGIN_ROOT",
+                "PYTHONPATH",
+                "TOOLUSEPROXY_DATA_DIR",
+                "TOOLUSEPROXY_DB_PATH",
+            ):
+                environment.pop(name, None)
+            environment.update(
+                {
+                    "CODEX_HOME": str(codex_home),
+                    "TOOLUSEPROXY_PYTHON": sys.executable,
+                }
+            )
+
+            applied = subprocess.run(
+                [
+                    "sh",
+                    str(launcher),
+                    "setup",
+                    "apply",
+                    "file-payload-exact",
+                    "--codex",
+                    "--expect-empty-settings",
+                    "--workspace",
+                    str(workspace),
+                    "--json",
+                ],
+                cwd=workspace,
+                env=environment,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            applied_payload = json.loads(applied.stdout)
+            self.assertEqual("applied", applied_payload["status"])
+            self.assertEqual("codex_plugin_store", applied_payload["path_source"])
+            data_dir = (
+                codex_home
+                / "plugins"
+                / "data"
+                / "tooluseproxy-tooluseproxy"
+            )
+            self.assertEqual(str(data_dir.resolve()), applied_payload["data_dir"])
+
+            verified = subprocess.run(
+                [
+                    "sh",
+                    str(launcher),
+                    "setup",
+                    "verify",
+                    "file-payload-exact",
+                    "--workspace",
+                    str(workspace),
+                    "--json",
+                ],
+                cwd=workspace,
+                env=environment,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            self.assertEqual("passed", json.loads(verified.stdout)["status"])
+
+            suggested = subprocess.run(
+                [
+                    "sh",
+                    str(launcher),
+                    "protect",
+                    "suggest",
+                    "--path",
+                    "docs/private-plan.md",
+                    "--whole-file",
+                    "--workspace",
+                    str(workspace),
+                    "--json",
+                ],
+                cwd=workspace,
+                env=environment,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            suggestion = json.loads(suggested.stdout)
+            self.assertEqual("review_required", suggestion["status"])
+            self.assertNotIn(private_text, suggested.stdout + suggested.stderr)
+            candidate = suggestion["candidates"][0]
+            self.assertEqual("docs/private-plan.md", candidate["path"])
+            self.assertNotIn("selector", candidate["proposed_source"])
+            self.assertTrue((data_dir / "events.db").is_file())
 
     @unittest.skipIf(os.name == "nt", "POSIX launcher test")
     def test_relocated_plugin_uses_plugin_data_without_checkout_imports(self) -> None:

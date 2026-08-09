@@ -9,6 +9,8 @@ plugin_root=${PLUGIN_ROOT:-}
 if [ -z "$plugin_root" ]; then
     plugin_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 fi
+TOOLUSEPROXY_CODEX_PLUGIN_ROOT=$plugin_root
+export TOOLUSEPROXY_CODEX_PLUGIN_ROOT
 
 for python in "${TOOLUSEPROXY_PYTHON:-}" python3.12 python3.11 python3; do
     if [ -z "$python" ] || ! command -v "$python" >/dev/null 2>&1; then

@@ -731,13 +731,20 @@ def suggest_protected_source(
     relative_path: str,
     *,
     workspace_id: str,
+    whole_file: bool = False,
 ) -> ProtectedSourceCandidate:
     """Create one value-free, explicitly reviewable protected-source candidate."""
 
     if not isinstance(workspace_id, str) or not workspace_id.strip():
         _raise("candidate_invalid")
+    if type(whole_file) is not bool:
+        _raise("candidate_invalid")
     normalized_path = _normalize_relative_path(relative_path)
-    _source_kind(normalized_path)
+    if whole_file:
+        if normalized_path == MANIFEST_FILENAME:
+            _raise("invalid_relative_path")
+    else:
+        _source_kind(normalized_path)
     root_fd, root_path, root_stat = _open_workspace(workspace_root)
     try:
         manifest_text, manifest_binding = _read_manifest_text(root_fd, root_stat.st_dev)
@@ -761,6 +768,7 @@ def suggest_protected_source(
             manifest=manifest,
             manifest_binding=manifest_binding,
             root_path=root_path,
+            whole_file=whole_file,
         )
     finally:
         os.close(root_fd)
@@ -863,13 +871,19 @@ def _build_protected_source_candidate(
     manifest: dict[str, object],
     manifest_binding: FileBinding,
     root_path: Path,
+    whole_file: bool = False,
 ) -> ProtectedSourceCandidate:
-    source_kind = _source_kind(normalized_path)
-    selector, reason_codes, confidence = _discover_selector(
-        source_kind,
-        source_text,
-        relative_path=normalized_path,
-    )
+    if whole_file:
+        selector = None
+        reason_codes = ("explicit_whole_file",)
+        confidence = 1.0
+    else:
+        source_kind = _source_kind(normalized_path)
+        selector, reason_codes, confidence = _discover_selector(
+            source_kind,
+            source_text,
+            relative_path=normalized_path,
+        )
     proposed_source = _build_proposed_source(normalized_path, selector)
     already_registered = _validate_new_source_against_manifest(
         manifest,
@@ -1319,13 +1333,18 @@ def _revalidate_source(
     )
     if not _source_binding_matches(binding, candidate.source_binding):
         _raise("source_changed")
-    source_kind = _source_kind(candidate.relative_path)
-    selector, reason_codes, confidence = _discover_selector(
-        source_kind,
-        text,
-        relative_path=candidate.relative_path,
-        detector_version=candidate.detector_version,
-    )
+    if candidate.reason_codes == ("explicit_whole_file",):
+        selector = None
+        reason_codes = candidate.reason_codes
+        confidence = 1.0
+    else:
+        source_kind = _source_kind(candidate.relative_path)
+        selector, reason_codes, confidence = _discover_selector(
+            source_kind,
+            text,
+            relative_path=candidate.relative_path,
+            detector_version=candidate.detector_version,
+        )
     proposed = _build_proposed_source(candidate.relative_path, selector)
     if (
         proposed != candidate.proposed_source
@@ -1793,7 +1812,7 @@ def _escape_json_pointer_segment(value: str) -> str:
 
 def _build_proposed_source(
     relative_path: str,
-    selector: dict[str, list[str]],
+    selector: dict[str, list[str]] | None,
 ) -> dict[str, object]:
     path = PurePath(relative_path)
     slug_source = re.sub(r"[^a-z0-9]+", "_", path.name.casefold()).strip("_")
@@ -1802,14 +1821,16 @@ def _build_proposed_source(
     source_id = f"protected_{slug}_{hashlib.sha256(identity).hexdigest()[:16]}"
     if _SAFE_SOURCE_ID.fullmatch(source_id) is None:
         _raise("candidate_invalid")
-    return {
+    proposed: dict[str, object] = {
         "id": source_id,
         "path": relative_path,
         "type": "secretfile",
         "sensitivity": "high",
         "policy_tags": ["no_external", "no_search"],
-        "selector": selector,
     }
+    if selector is not None:
+        proposed["selector"] = selector
+    return proposed
 
 
 def _validate_proposed_source(
@@ -1817,8 +1838,11 @@ def _validate_proposed_source(
     *,
     expected_path: str,
 ) -> dict[str, object]:
-    expected_keys = {"id", "path", "type", "sensitivity", "policy_tags", "selector"}
-    if set(value) != expected_keys:
+    base_keys = {"id", "path", "type", "sensitivity", "policy_tags"}
+    if set(value) not in {
+        frozenset(base_keys),
+        frozenset(base_keys | {"selector"}),
+    }:
         _raise("candidate_invalid")
     source_id = value.get("id")
     path = value.get("path")
@@ -1833,9 +1857,13 @@ def _validate_proposed_source(
         or source_type != "secretfile"
         or sensitivity != "high"
         or tags != ["no_external", "no_search"]
-        or not isinstance(selector, Mapping)
-        or len(selector) != 1
     ):
+        _raise("candidate_invalid")
+    if "selector" not in value:
+        if expected_path == MANIFEST_FILENAME:
+            _raise("candidate_invalid")
+        return _copy_json_object(value)
+    if not isinstance(selector, Mapping) or len(selector) != 1:
         _raise("candidate_invalid")
     kind = next(iter(selector))
     expected_kind = "dotenv_keys" if _source_kind(expected_path) == "dotenv" else "json_pointers"

@@ -27,6 +27,7 @@ from hook_monitor.runtime.settings import (
     EffectiveRuntimeSettings,
     RuntimeSettingsError,
     WorkspaceRuntimeSettings,
+    empty_workspace_runtime_settings,
     parse_runtime_setting_value,
     resolve_effective_runtime_settings,
 )
@@ -205,7 +206,15 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=(SETUP_PROFILE_FILE_PAYLOAD_EXACT,),
     )
     setup_apply.add_argument("--codex", action="store_true")
-    setup_apply.add_argument("--expected-revision", required=True)
+    setup_precondition = setup_apply.add_mutually_exclusive_group(required=True)
+    setup_precondition.add_argument("--expected-revision")
+    setup_precondition.add_argument(
+        "--expect-empty-settings",
+        action="store_true",
+        help=(
+            "Apply only when this workspace has no configured runtime settings."
+        ),
+    )
     setup_apply.add_argument("--workspace", type=Path, default=Path.cwd())
     setup_apply.add_argument("--json", action="store_true")
     _add_runtime_path_arguments(setup_apply)
@@ -297,7 +306,15 @@ def _build_parser() -> argparse.ArgumentParser:
     suggest.add_argument(
         "--path",
         required=True,
-        help="One workspace-relative .env or JSON path.",
+        help="One workspace-relative path.",
+    )
+    suggest.add_argument(
+        "--whole-file",
+        action="store_true",
+        help=(
+            "Propose the complete UTF-8 file as protected content instead of "
+            "discovering .env or JSON selectors."
+        ),
     )
     suggest.add_argument("--workspace", type=Path, default=Path.cwd())
     suggest.add_argument("--json", action="store_true", help="Print machine-readable output.")
@@ -526,10 +543,16 @@ def _run_setup_apply(args: argparse.Namespace) -> int:
             )
         manifest_path = Path(workspace.canonical_root) / MANIFEST_FILENAME
         manifest_created = _create_empty_manifest(manifest_path)
+        expected_revision = args.expected_revision
+        if args.expect_empty_settings:
+            expected_revision = empty_workspace_runtime_settings(
+                workspace.workspace_id
+            ).revision
+        assert expected_revision is not None
         settings, changes = store.apply_workspace_runtime_settings_profile(
             workspace,
             settings=SETUP_PROFILE_SETTINGS,
-            expected_revision=args.expected_revision,
+            expected_revision=expected_revision,
         )
         effective = resolve_effective_runtime_settings(settings, os.environ)
         payload = {
@@ -538,6 +561,11 @@ def _run_setup_apply(args: argparse.Namespace) -> int:
             "profile": args.profile,
             "version": __version__,
             "codex": bool(args.codex),
+            "precondition": (
+                "empty_settings"
+                if args.expect_empty_settings
+                else "exact_revision"
+            ),
             "path_source": paths.source,
             "data_dir": str(paths.data_dir),
             "db_path": str(paths.db_path),
@@ -1093,6 +1121,7 @@ def _run_protect(args: argparse.Namespace) -> int:
                 workspace,
                 workspace_path,
                 (args.path,),
+                whole_file=args.whole_file,
             )
         elif args.protect_command == "scan":
             payload = _scan_protected_source_candidates(
@@ -1216,6 +1245,8 @@ def _suggest_protected_sources(
     workspace: WorkspaceContext,
     workspace_path: Path,
     relative_paths: tuple[str, ...],
+    *,
+    whole_file: bool = False,
 ) -> dict[str, Any]:
     with lock_protected_source_workspace(workspace_path) as workspace_lock:
         return _suggest_protected_sources_under_lock(
@@ -1223,6 +1254,7 @@ def _suggest_protected_sources(
             workspace,
             workspace_path,
             relative_paths,
+            whole_file=whole_file,
             workspace_lock=workspace_lock,
         )
 
@@ -1474,6 +1506,7 @@ def _suggest_protected_sources_under_lock(
     workspace_path: Path,
     relative_paths: tuple[str, ...],
     *,
+    whole_file: bool = False,
     workspace_lock: ProtectedSourceWorkspaceLock,
 ) -> dict[str, Any]:
     assert workspace.workspace_id is not None
@@ -1488,6 +1521,7 @@ def _suggest_protected_sources_under_lock(
                 workspace_path,
                 relative_path,
                 workspace_id=workspace.workspace_id,
+                whole_file=whole_file,
             )
         except ProtectedSourceRegistrationError as exc:
             if exc.code == "no_secret_selector":

@@ -12720,16 +12720,17 @@ def _canonical_proposed_source_json(
         source_path=relative_path,
         source_type=payload["type"],
     )
-    if selector is None:
-        raise ValueError("candidate proposed source requires a selector")
     canonical_payload = {
         "id": payload["id"],
         "path": relative_path,
         "type": payload["type"],
         "sensitivity": payload["sensitivity"],
         "policy_tags": policy_tags,
-        "selector": protected_source_selector_payload(selector),
     }
+    if selector is not None:
+        canonical_payload["selector"] = protected_source_selector_payload(
+            selector
+        )
     return json.dumps(
         canonical_payload,
         ensure_ascii=False,

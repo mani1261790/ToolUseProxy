@@ -37,6 +37,32 @@ def test_setup_skill_keeps_implementation_words_out_of_user_choices() -> None:
     assert "Never ask the user to repeat one of the examples verbatim" in skill
 
 
+def test_normal_onboarding_does_not_require_internal_path_diagnostics() -> None:
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    quickstart = (REPO_ROOT / "QUICKSTART.md").read_text(encoding="utf-8")
+    plugin_guide = (
+        REPO_ROOT / "docs" / "設定" / "Plugin導入.md"
+    ).read_text(encoding="utf-8")
+    skill = (
+        REPO_ROOT / "skills" / "tooluseproxy-setup" / "SKILL.md"
+    ).read_text(encoding="utf-8")
+
+    assert "--expect-empty-settings" in skill
+    assert "--whole-file" in skill
+    assert "do not ask the user to paste `database_missing`" in skill
+    assert "do not depend on a Hook diagnostic" in skill
+    assert "If `PLUGIN_DATA` is not available" not in skill
+    assert skill.count("--data-dir <PLUGIN_DATA>") == 2
+    assert "Plugin is installed but this workspace is not\nprotected yet" in skill
+    assert "1件ずつ確認" in readme
+    assert "コピーして貼り直す必要はありません" in quickstart
+    assert "ToolUseProxyが外部送信を実行前に止めました" in quickstart
+    assert "結果：外部操作は実行されていません" in quickstart
+    assert "貼り直しを要求しません" in plugin_guide
+    assert "利用者が`doctor`、`status`、`init`、`PLUGIN_DATA`を組み立てる必要はありません" in plugin_guide
+    assert "通常利用者がpathやcommandをコピーするための手順ではありません" in plugin_guide
+
+
 def test_approval_templates_stay_short_and_self_contained() -> None:
     skill = (
         REPO_ROOT / "skills" / "tooluseproxy-setup" / "SKILL.md"
@@ -47,7 +73,7 @@ def test_approval_templates_stay_short_and_self_contained() -> None:
         if line.startswith("- ") and "`ToolUseProxyの確認｜" in line
     ]
 
-    assert len(templates) == 10
+    assert len(templates) == 12
     labels = ("｜内容：", "｜変更：", "｜通信：", "｜理由：", "｜許可：")
     for template in templates:
         assert len(template) <= 160
@@ -55,6 +81,13 @@ def test_approval_templates_stay_short_and_self_contained() -> None:
         assert positions == sorted(positions)
         assert "通信：なし" in template
         assert "`" not in template
+
+    setup = next(value for value in templates if "このプロジェクトの保護を有効" in value)
+    scan = next(value for value in templates if "守った方がよいファイルを探す" in value)
+    assert "外部送信を実行前に止める" in setup
+    assert "専用保存領域へ設定を保存" in setup
+    assert "専用保存領域へ確認結果を記録" in scan
+    assert "このプロジェクト内を安全な範囲で読むため" not in scan
 
 
 def test_hook_status_messages_are_plain_japanese() -> None:

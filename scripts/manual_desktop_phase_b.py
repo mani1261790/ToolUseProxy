@@ -4638,6 +4638,7 @@ def _parse_session(
             "PreToolUse hook (blocked)" in output
             or "permissionDecision" in output
             or "Protected source content" in output
+            or "ToolUseProxyが外部送信を実行前に止めました" in output
             for output in protected_outputs
         ),
         "unexpected_tool_call_count": unexpected_tool_call_count,

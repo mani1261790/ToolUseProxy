@@ -1,6 +1,6 @@
 {
   "name": "tooluseproxy",
-  "version": "0.1.0-alpha.5",
+  "version": "0.1.0-alpha.6",
   "description": "Local information-flow tracing and guardrails for Codex tool use.",
   "author": {
     "name": "ToolUseProxy contributors",

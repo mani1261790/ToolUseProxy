@@ -537,6 +537,65 @@ class RuntimeSettingsCliTest(unittest.TestCase):
         self.assertEqual(before_history, after_history)
         self.assertEqual(before_manifest, manifest.read_bytes())
 
+    def test_setup_profile_accepts_only_empty_settings_precondition(self) -> None:
+        fresh_workspace = self.root / "empty-settings-workspace"
+        fresh_data = self.root / "empty-settings-data"
+        fresh_workspace.mkdir()
+        arguments = [
+            "setup",
+            "apply",
+            SETUP_PROFILE_FILE_PAYLOAD_EXACT,
+            "--codex",
+            "--expect-empty-settings",
+            "--workspace",
+            str(fresh_workspace),
+            "--data-dir",
+            str(fresh_data),
+            "--json",
+        ]
+
+        exit_code, applied, _ = self._run(arguments)
+
+        self.assertEqual(0, exit_code)
+        self.assertEqual("applied", applied["status"])
+        self.assertEqual("empty_settings", applied["precondition"])
+        retry_code, retried, _ = self._run(arguments)
+        self.assertEqual(0, retry_code)
+        self.assertEqual("already_applied", retried["status"])
+
+        _, shown, _ = self._run(
+            [
+                "config",
+                "show",
+                "--workspace",
+                str(fresh_workspace),
+                "--data-dir",
+                str(fresh_data),
+                "--json",
+            ]
+        )
+        revision = str(shown["settings_revision"])
+        set_code, _, _ = self._run(
+            [
+                "config",
+                "set",
+                FILE_PAYLOAD_EXACT_ENFORCEMENT_KEY,
+                "off",
+                "--expected-revision",
+                revision,
+                "--workspace",
+                str(fresh_workspace),
+                "--data-dir",
+                str(fresh_data),
+                "--json",
+            ]
+        )
+        self.assertEqual(0, set_code)
+
+        stale_code, stale, _ = self._run(arguments)
+        self.assertEqual(1, stale_code)
+        self.assertEqual("settings_revision_stale", stale["error"]["code"])
+
     def test_setup_profile_errors_remain_structured_json(self) -> None:
         fresh_workspace = self.root / "error-workspace"
         fresh_data = self.root / "error-data"
