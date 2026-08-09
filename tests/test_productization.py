@@ -640,8 +640,16 @@ class ProductCliTest(unittest.TestCase):
                 text=True,
                 check=True,
             )
-            self.assertEqual("", result.stdout)
-            self.assertIn("database_missing", result.stderr)
+            output = json.loads(result.stdout)
+            self.assertEqual(
+                "PreToolUse",
+                output["hookSpecificOutput"]["hookEventName"],
+            )
+            self.assertIn(
+                "database_missing",
+                output["hookSpecificOutput"]["additionalContext"],
+            )
+            self.assertEqual("", result.stderr)
             self.assertFalse((data_dir / "events.db").exists())
 
     def test_product_hook_fails_open_before_using_an_incomplete_schema(self) -> None:
@@ -683,9 +691,17 @@ class ProductCliTest(unittest.TestCase):
                 check=True,
             )
 
-            self.assertEqual("", result.stdout)
-            self.assertIn("schema_incomplete", result.stderr)
-            self.assertNotIn("Traceback", result.stderr)
+            output = json.loads(result.stdout)
+            self.assertEqual(
+                "PreToolUse",
+                output["hookSpecificOutput"]["hookEventName"],
+            )
+            self.assertIn(
+                "schema_incomplete",
+                output["hookSpecificOutput"]["additionalContext"],
+            )
+            self.assertNotIn("Traceback", result.stdout)
+            self.assertEqual("", result.stderr)
             self.assertEqual(before, db_path.read_bytes())
 
     def test_status_rejects_an_unregistered_workspace(self) -> None:
@@ -899,9 +915,18 @@ class PluginBundleTest(unittest.TestCase):
                 text=True,
                 check=True,
             )
-            self.assertIn("database_missing", inactive.stderr)
-            self.assertIn(str(cli_launcher), inactive.stderr)
-            self.assertIn(str(data_dir), inactive.stderr)
+            inactive_output = json.loads(inactive.stdout)
+            inactive_context = inactive_output["hookSpecificOutput"][
+                "additionalContext"
+            ]
+            self.assertEqual(
+                "PreToolUse",
+                inactive_output["hookSpecificOutput"]["hookEventName"],
+            )
+            self.assertIn("database_missing", inactive_context)
+            self.assertIn(str(cli_launcher), inactive_context)
+            self.assertIn(str(data_dir), inactive_context)
+            self.assertEqual("", inactive.stderr)
             self.assertFalse((data_dir / "events.db").exists())
 
             initialized = subprocess.run(
@@ -1490,8 +1515,18 @@ class PluginBundleTest(unittest.TestCase):
                 text=True,
                 check=True,
             )
-            self.assertEqual("", result.stdout)
-            self.assertIn("python_missing", result.stderr)
+            output = json.loads(result.stdout)
+            self.assertEqual(
+                {
+                    "systemMessage": (
+                        "Python 3.11または3.12が見つからないため、"
+                        "ToolUseProxyの保護機能は動作していません。"
+                        "（技術情報: python_missing）"
+                    )
+                },
+                output,
+            )
+            self.assertEqual("", result.stderr)
             self.assertFalse((data_dir / "events.db").exists())
 
     @unittest.skipIf(os.name == "nt", "POSIX launcher test")

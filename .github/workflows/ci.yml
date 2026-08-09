@@ -17,7 +17,7 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
 
@@ -67,7 +67,7 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -152,6 +152,16 @@ jobs:
           --format text
           --check
 
+      - name: Check sink-first benchmark foundation
+        run: |
+          for dataset in v1 v1_1; do
+            python -m hook_monitor.evaluation.sink_benchmark_cli \
+              --dataset "tests/fixtures/sink_benchmark/${dataset}" \
+              --split all \
+              --format text \
+              --check
+          done
+
       - name: Check protected-source discovery development gate
         run: >-
           python -m hook_monitor.evaluation.protected_source_discovery_cli
@@ -186,7 +196,7 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
 

@@ -4,7 +4,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from hook_monitor.analysis.adapters.common import normalize_tool_name
 from hook_monitor.analysis.adapters.mcp import (
     classify_mcp_sink_type,
     parse_mcp_tool_name,
@@ -14,26 +13,41 @@ from hook_monitor.analysis.adapters.mcp_profiles import (
     inspect_mcp_input,
 )
 from hook_monitor.analysis.leak_detection import LeakFinding, detect_leaks
+from hook_monitor.analysis.sink_payload_evidence import (
+    BashSinkPayloadEvidence,
+    inspect_bash_sink_payload_evidence,
+)
 from hook_monitor.policy.codex_output import (
     render_codex_hook_output,
     select_strongest_decision,
 )
 from hook_monitor.policy.engine import evaluate_policy
+from hook_monitor.policy.sink_payload_exact import (
+    build_exact_file_payload_decisions,
+)
 from hook_monitor.policy.redaction_preview import (
     DEFAULT_REDACTION_PREVIEW_LIMITS,
     plan_mcp_redaction_preview,
 )
 from hook_monitor.runtime.incremental_analysis import (
     RUNTIME_GRAPH_DETECTOR_VERSION,
+    RuntimeAnalysisResult,
     update_runtime_analysis,
 )
 from hook_monitor.runtime.models import AnalysisRun, NormalizedEvent, SinkCandidate
 from hook_monitor.runtime.policy_audit import store_policy_decision
 from hook_monitor.runtime.redaction_audit import store_redaction_preview_plan
+from hook_monitor.runtime.sink_payload_shadow import (
+    build_sink_payload_shadow_observation,
+    store_sink_payload_shadow_observations,
+)
 from hook_monitor.runtime.storage import EventStore
+from hook_monitor.runtime.tool_compat import (
+    is_enforced_shell_tool,
+    shell_command_from_input,
+)
 
 
-ENFORCED_BASH_TOOL_NAMES = {"bash"}
 DEFAULT_PRE_TOOL_ADAPTERS = frozenset({"bash"})
 MCP_INPUT_LIMIT_DENY_REASON = (
     "ToolUseProxy blocked this MCP call because its input exceeds bounded "
@@ -81,7 +95,7 @@ def render_mcp_input_limit_deny(rejection_code: str) -> dict[str, object]:
 
 
 def is_enforced_bash_tool(tool_name: str | None) -> bool:
-    return normalize_tool_name(tool_name) in ENFORCED_BASH_TOOL_NAMES
+    return is_enforced_shell_tool(tool_name)
 
 
 def pre_tool_adapter(tool_name: str | None) -> str | None:
@@ -133,6 +147,8 @@ def evaluate_pre_tool_hook_policy(
     *,
     current_event: NormalizedEvent,
     enabled_adapters: frozenset[str] = DEFAULT_PRE_TOOL_ADAPTERS,
+    sink_payload_shadow_enabled: bool = False,
+    sink_payload_exact_enforcement_enabled: bool = False,
     minimum_path_score: float = 0.15,
     leak_min_score: float = 0.3,
 ) -> dict[str, object]:
@@ -208,6 +224,59 @@ def evaluate_pre_tool_hook_policy(
         except Exception:
             # A preview-only failure must never weaken the already-rendered block.
             pass
+    if current_adapter == "bash" and (
+        sink_payload_shadow_enabled or sink_payload_exact_enforcement_enabled
+    ):
+        try:
+            payload_evidence = _inspect_bash_sink_payload(
+                current_event=current_event,
+                runtime_result=runtime_result,
+                current_sinks=tuple(current_sinks),
+            )
+        except Exception:
+            # Resolution failure must preserve the existing lineage policy.
+            payload_evidence = ()
+        if sink_payload_shadow_enabled:
+            try:
+                _store_bash_sink_payload_shadow(
+                    store,
+                    evidence=payload_evidence,
+                    current_event=current_event,
+                    runtime_result=runtime_result,
+                    baseline_action=(
+                        selected.action if selected is not None else "allow"
+                    ),
+                )
+            except Exception:
+                # Observation must never change the already-rendered policy output.
+                pass
+        if sink_payload_exact_enforcement_enabled and payload_evidence:
+            exact_decisions = build_exact_file_payload_decisions(
+                payload_evidence,
+                sink_candidates=tuple(current_sinks),
+                analysis_run_id=runtime_result.analysis_run.analysis_run_id,
+            )
+            exact_selected = select_strongest_decision(
+                exact_decisions,
+                "PreToolUse",
+            )
+            if exact_selected is not None and exact_selected.action == "block":
+                try:
+                    store_policy_decision(
+                        store,
+                        exact_selected,
+                        runtime_result.analysis_run.analysis_run_id,
+                    )
+                except Exception:
+                    # Exact evidence has already been established; audit failure
+                    # must not allow the external side effect.
+                    pass
+                return render_codex_hook_output(
+                    exact_selected,
+                    "PreToolUse",
+                    db_path=store.db_path,
+                    analysis_run_id=runtime_result.analysis_run.analysis_run_id,
+                )
     return hook_output
 
 
@@ -280,3 +349,74 @@ def _current_external_sinks(
             or sink.tool_use_id == current_event.tool_use_id
         )
     ]
+
+
+def _inspect_bash_sink_payload(
+    *,
+    current_event: NormalizedEvent,
+    runtime_result: RuntimeAnalysisResult,
+    current_sinks: tuple[SinkCandidate, ...],
+) -> tuple[BashSinkPayloadEvidence, ...]:
+    tool_input = current_event.raw_payload.get("tool_input")
+    if not isinstance(tool_input, dict):
+        return ()
+    command = shell_command_from_input(current_event.tool_name, tool_input)
+    if command is None:
+        return ()
+    if (
+        current_event.workspace_root is None
+        or current_event.workspace_execution_cwd is None
+        or current_event.workspace_id is None
+        or current_event.session_id is None
+    ):
+        return ()
+    current_http_sinks = tuple(
+        sink
+        for sink in current_sinks
+        if sink.sink_type == "external_http_request"
+        and sink.metadata.get("matched_program") == "curl"
+    )
+    sink_node_ids_by_segment: dict[int, str] = {}
+    for sink in current_http_sinks:
+        segment_index = sink.metadata.get("segment_index")
+        if type(segment_index) is not int or segment_index < 0:
+            raise ValueError("current curl sink has no segment identity")
+        if segment_index in sink_node_ids_by_segment:
+            raise ValueError("current curl segment has multiple sink identities")
+        sink_node_ids_by_segment[segment_index] = sink.node_id
+    if not sink_node_ids_by_segment:
+        return ()
+    return inspect_bash_sink_payload_evidence(
+        command,
+        workspace_root=Path(current_event.workspace_root),
+        execution_cwd=Path(current_event.workspace_execution_cwd),
+        workspace_id=current_event.workspace_id,
+        sink_node_ids_by_segment=sink_node_ids_by_segment,
+        source_chunks=runtime_result.source_chunks,
+    )
+
+
+def _store_bash_sink_payload_shadow(
+    store: EventStore,
+    *,
+    evidence: tuple[BashSinkPayloadEvidence, ...],
+    current_event: NormalizedEvent,
+    runtime_result: RuntimeAnalysisResult,
+    baseline_action: str,
+) -> None:
+    observations = tuple(
+        observation
+        for item in evidence
+        if (
+            observation := build_sink_payload_shadow_observation(
+                item,
+                pre_event_id=current_event.event_id,
+                analysis_run_id=runtime_result.analysis_run.analysis_run_id,
+                session_id=current_event.session_id,
+                tool_use_id=current_event.tool_use_id,
+                baseline_action=baseline_action,
+            )
+        )
+        is not None
+    )
+    store_sink_payload_shadow_observations(store.db_path, observations)

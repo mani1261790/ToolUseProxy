@@ -17,6 +17,7 @@ from hook_monitor.analysis.bash_file_parser import (
     parse_bash_command_plan,
 )
 from hook_monitor.runtime.models import ArtifactContext, FlowEdge, SinkCandidate
+from hook_monitor.runtime.tool_compat import SHELL_OPERATION_TOOL_NAMES
 from hook_monitor.runtime.operations import bash_segment_fragment_ids
 
 
@@ -25,14 +26,7 @@ class BashAdapter:
 
     name = "bash"
 
-    _BASH_NAMES = {
-        "bash",
-        "shell",
-        "exec",
-        "command",
-        "terminal",
-        "run_command",
-    }
+    _BASH_NAMES = SHELL_OPERATION_TOOL_NAMES
 
     def analyze(
         self,

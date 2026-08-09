@@ -1,0 +1,10 @@
+{
+  "schema_version": 2,
+  "dataset_id": "sink-benchmark-v1-1",
+  "dataset_version": "1.1.0",
+  "description": "Synthetic sink benchmark with balanced file-backed HTTP payload cases.",
+  "ingestion_dataset": "ingestion",
+  "files": {
+    "cases": "cases.jsonl"
+  }
+}

@@ -30,6 +30,14 @@ from hook_monitor.runtime.pre_tool_policy import (
     pre_tool_adapter,
     render_mcp_input_limit_deny,
 )
+from hook_monitor.runtime.settings import (
+    FILE_PAYLOAD_EXACT_ENFORCEMENT_KEY,
+    FILE_PAYLOAD_SHADOW_KEY,
+    PRE_TOOL_POLICY_KEY,
+    EffectiveRuntimeSettings,
+    empty_workspace_runtime_settings,
+    resolve_effective_runtime_settings,
+)
 from hook_monitor.runtime.storage import EventStore, SchemaCompatibilityError
 from hook_monitor.runtime.snapshot_capture import (
     capture_operation_snapshots,
@@ -61,8 +69,13 @@ def run_hook(
             store.require_runtime_schema()
         except SchemaCompatibilityError as exc:
             print(
-                _schema_inactive_message(exc),
-                file=sys.stderr,
+                json.dumps(
+                    inactive_hook_output(
+                        phase,
+                        _schema_inactive_message(exc),
+                    ),
+                    ensure_ascii=False,
+                )
             )
             return 0
     bounded_pre_tool_input = (
@@ -167,9 +180,13 @@ def run_hook(
             exc.rejection_code,
         )
         return 0
-    except HookPayloadError as exc:
-        print(str(exc), file=sys.stderr)
-        return 1
+    except HookPayloadError:
+        _emit_inactive_hook_output(
+            phase,
+            "hook_payload_invalid",
+            "Codex supplied a Hook payload that ToolUseProxy could not parse",
+        )
+        return 0
 
     payload_cwd = payload.get("cwd")
     configured_root = _configured_workspace_root(
@@ -187,10 +204,48 @@ def run_hook(
             else None
         ),
     )
-    enabled_pre_tool_adapters = _enabled_pre_tool_adapters()
+    early_pre_tool_adapters = _enabled_pre_tool_adapters(
+        resolve_effective_runtime_settings(
+            empty_workspace_runtime_settings(
+                event.workspace_id or "unregistered"
+            ),
+            os.environ,
+        )
+    )
+    event_pre_tool_adapter = pre_tool_adapter(event.tool_name)
     if (
         phase == "pre_tool_use"
-        and pre_tool_adapter(event.tool_name) in enabled_pre_tool_adapters
+        and event_pre_tool_adapter == "mcp"
+        and event_pre_tool_adapter in early_pre_tool_adapters
+        and _runtime_policy_workspace_enabled(event)
+    ):
+        bounded_input_guard = evaluate_pre_tool_input_bounds(
+            event,
+            enabled_adapters=early_pre_tool_adapters,
+        )
+        if bounded_input_guard.disposition == "deny":
+            print(json.dumps(bounded_input_guard.hook_output, ensure_ascii=False))
+            return 0
+        if bounded_input_guard.disposition == "bypass":
+            return 0
+    if allow_schema_migration:
+        store.initialize()
+    try:
+        effective_runtime_settings = _effective_runtime_settings(store, event)
+    except Exception:  # pragma: no cover - defensive hook boundary
+        _emit_inactive_hook_output(
+            phase,
+            "runtime_settings_failed",
+            "workspace runtime settings could not be loaded",
+        )
+        return 0
+    enabled_pre_tool_adapters = _enabled_pre_tool_adapters(
+        effective_runtime_settings
+    )
+    if (
+        phase == "pre_tool_use"
+        and event_pre_tool_adapter in enabled_pre_tool_adapters
+        and event_pre_tool_adapter != "mcp"
         and _runtime_policy_workspace_enabled(event)
     ):
         bounded_input_guard = evaluate_pre_tool_input_bounds(
@@ -208,20 +263,25 @@ def run_hook(
     extraction = extract_tool_operations(event, artifacts, fragments)
     fragments.extend(extraction.fragments)
 
-    if allow_schema_migration:
-        store.initialize()
     post_outcome: ToolOutcome | None = None
     post_snapshots: list[ResourceSnapshot] = []
     post_operation_ids: tuple[str, ...] = ()
+    post_diagnostic: tuple[str, str] | None = None
     if phase == "post_tool_use":
         try:
             (
                 post_outcome,
                 post_snapshots,
                 post_operation_ids,
+                post_diagnostic,
             ) = _prepare_post_tool_evidence(store, event)
-        except Exception as exc:  # pragma: no cover - defensive hook boundary
-            _report_policy_failure("post-tool snapshot", exc)
+        except Exception:  # pragma: no cover - defensive hook boundary
+            _emit_inactive_hook_output(
+                phase,
+                "post_tool_snapshot_failed",
+                "post-tool evidence could not be prepared",
+            )
+            return 0
     store.record(
         event,
         artifacts,
@@ -238,8 +298,18 @@ def run_hook(
     if phase == "post_tool_use":
         try:
             store.confirm_redaction_post_input(event)
-        except Exception as exc:  # pragma: no cover - defensive hook boundary
-            _report_policy_failure("post-redaction confirmation", exc)
+        except Exception:  # pragma: no cover - defensive hook boundary
+            post_diagnostic = (
+                "post_redaction_confirmation_failed",
+                "post-tool redaction confirmation could not be recorded",
+            )
+        if post_diagnostic is not None:
+            _emit_inactive_hook_output(
+                phase,
+                post_diagnostic[0],
+                post_diagnostic[1],
+            )
+            return 0
     if phase == "pre_tool_use" and pre_tool_adapter(
         event.tool_name
     ) in enabled_pre_tool_adapters:
@@ -251,9 +321,21 @@ def run_hook(
                 Path(event.workspace_root or ""),
                 current_event=event,
                 enabled_adapters=enabled_pre_tool_adapters,
+                sink_payload_shadow_enabled=effective_runtime_settings.enabled(
+                    FILE_PAYLOAD_SHADOW_KEY
+                ),
+                sink_payload_exact_enforcement_enabled=(
+                    effective_runtime_settings.enabled(
+                        FILE_PAYLOAD_EXACT_ENFORCEMENT_KEY
+                    )
+                ),
             )
-        except Exception as exc:  # pragma: no cover - defensive hook boundary
-            _report_policy_failure("pre-tool", exc)
+        except Exception:  # pragma: no cover - defensive hook boundary
+            _emit_inactive_hook_output(
+                phase,
+                "pre_tool_policy_failed",
+                "pre-tool policy evaluation could not be completed",
+            )
             return 0
         if hook_output:
             print(json.dumps(hook_output, ensure_ascii=False))
@@ -267,8 +349,12 @@ def run_hook(
                 Path(event.workspace_root or ""),
                 current_event_id=event.event_id,
             )
-        except Exception as exc:  # pragma: no cover - defensive hook boundary
-            _report_policy_failure("stop", exc)
+        except Exception:  # pragma: no cover - defensive hook boundary
+            _emit_inactive_hook_output(
+                phase,
+                "stop_policy_failed",
+                "Stop policy evaluation could not be completed",
+            )
             return 0
         if hook_output:
             print(json.dumps(hook_output, ensure_ascii=False))
@@ -309,24 +395,74 @@ def _pre_tool_mcp_policy_enabled() -> bool:
     return configured.lower() in {"1", "true", "yes", "on"}
 
 
-def _enabled_pre_tool_adapters() -> frozenset[str]:
-    if not _pre_tool_policy_enabled():
+def _effective_runtime_settings(
+    store: EventStore,
+    event: NormalizedEvent,
+) -> EffectiveRuntimeSettings:
+    workspace_id = event.workspace_id
+    if workspace_id is None:
+        return resolve_effective_runtime_settings(
+            empty_workspace_runtime_settings("unregistered"),
+            os.environ,
+        )
+    state = store.get_workspace_runtime_settings(
+        workspace_id,
+        busy_timeout_ms=10,
+    )
+    return resolve_effective_runtime_settings(state, os.environ)
+
+
+def _enabled_pre_tool_adapters(
+    settings: EffectiveRuntimeSettings,
+) -> frozenset[str]:
+    if not settings.enabled(PRE_TOOL_POLICY_KEY):
         return frozenset()
     adapters = {"bash"}
-    if _pre_tool_mcp_policy_enabled():
+    if _pre_tool_policy_enabled() and _pre_tool_mcp_policy_enabled():
         adapters.add("mcp")
     return frozenset(adapters)
 
 
-def _report_policy_failure(policy_name: str, exc: Exception) -> None:
-    print(
-        f"{policy_name} policy evaluation failed: {type(exc).__name__}",
-        file=sys.stderr,
+def _inactive_message(code: str) -> str:
+    messages = {
+        "database_missing": (
+            "ToolUseProxyはこのプロジェクトではまだ準備されていません。"
+        ),
+        "schema_upgrade_required": (
+            "ToolUseProxyの保存データを更新する必要があります。"
+        ),
+        "database_unreadable": (
+            "ToolUseProxyの保存データを読み取れないため、保護機能は動作していません。"
+        ),
+        "schema_too_new": (
+            "保存データがこのToolUseProxyより新しいため、保護機能は動作していません。"
+        ),
+        "schema_incomplete": (
+            "ToolUseProxyの保存データが不完全なため、保護機能は動作していません。"
+        ),
+        "plugin_environment": (
+            "ToolUseProxy Pluginの設定を読み込めないため、保護機能は動作していません。"
+        ),
+        "python_missing": (
+            "Python 3.11または3.12が見つからないため、ToolUseProxyの保護機能は動作していません。"
+        ),
+        "runtime_start_failed": (
+            "ToolUseProxyを開始できなかったため、保護機能は動作していません。"
+        ),
+    }
+    message = messages.get(
+        code,
+        "ToolUseProxyを安全に開始できないため、保護機能は動作していません。",
     )
+    return f"{message}（技術情報: {code}）"
 
 
 def _schema_inactive_message(exc: SchemaCompatibilityError) -> str:
-    message = f"ToolUseProxy inactive ({exc.code}): {exc}"
+    message = (
+        f"{_inactive_message(exc.code)}\n"
+        "Codexに「ToolUseProxyをこのプロジェクトで使えるようにして」"
+        "と依頼してください。"
+    )
     if exc.code not in {"database_missing", "schema_upgrade_required"}:
         return message
     plugin_root = os.environ.get("PLUGIN_ROOT")
@@ -350,7 +486,48 @@ def _schema_inactive_message(exc: SchemaCompatibilityError) -> str:
                 shlex.quote(plugin_data),
             )
         )
-    return f"{message}\nRun from the workspace root: {command}"
+    return (
+        f"{message}\n"
+        f"手動で準備する場合のコマンド: {command}"
+    )
+
+
+def inactive_hook_output(
+    phase: str,
+    message: str,
+) -> dict[str, object]:
+    if phase == "pre_tool_use":
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "additionalContext": message,
+            }
+        }
+    if phase == "post_tool_use":
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": "PostToolUse",
+                "additionalContext": message,
+            }
+        }
+    if phase == "stop":
+        return {"systemMessage": message}
+    raise ValueError(f"unsupported Codex hook phase: {phase}")
+
+
+def _emit_inactive_hook_output(
+    phase: str,
+    code: str,
+    detail: str,
+) -> None:
+    del detail
+    message = _inactive_message(code)
+    print(
+        json.dumps(
+            inactive_hook_output(phase, message),
+            ensure_ascii=False,
+        )
+    )
 
 
 def _runtime_policy_workspace_enabled(event: NormalizedEvent) -> bool:
@@ -392,7 +569,10 @@ def _capture_post_tool_evidence(
     store: EventStore,
     event: NormalizedEvent,
 ) -> None:
-    outcome, snapshots, operation_ids = _prepare_post_tool_evidence(store, event)
+    outcome, snapshots, operation_ids, diagnostic = _prepare_post_tool_evidence(
+        store,
+        event,
+    )
     if outcome is None or not operation_ids:
         return
     store.update_tool_operation_outcome(
@@ -402,17 +582,27 @@ def _capture_post_tool_evidence(
         evidence=outcome.evidence,
         resource_snapshots=snapshots,
     )
+    if diagnostic is not None:
+        print(
+            _inactive_message(diagnostic[0]),
+            file=sys.stderr,
+        )
 
 
 def _prepare_post_tool_evidence(
     store: EventStore,
     event: NormalizedEvent,
-) -> tuple[ToolOutcome | None, list[ResourceSnapshot], tuple[str, ...]]:
+) -> tuple[
+    ToolOutcome | None,
+    list[ResourceSnapshot],
+    tuple[str, ...],
+    tuple[str, str] | None,
+]:
     if event.workspace_status != "ready":
-        return None, [], ()
+        return None, [], (), None
     operations = store.list_tool_operations_for_post_event(event)
     if not operations:
-        return None, [], ()
+        return None, [], (), None
     outcome = classify_post_tool_outcome(event)
     owner_matches = _validated_operation_owner(
         store,
@@ -420,10 +610,15 @@ def _prepare_post_tool_evidence(
         operations,
     )
     if not owner_matches:
-        return ToolOutcome("unknown", "post_operation_owner_mismatch"), [], ()
+        return (
+            ToolOutcome("unknown", "post_operation_owner_mismatch"),
+            [],
+            (),
+            None,
+        )
     operation_ids = tuple(sorted(operation.operation_id for operation in operations))
     if outcome.status != "succeeded":
-        return outcome, [], operation_ids
+        return outcome, [], operation_ids, None
     try:
         snapshots = capture_operation_snapshots(
             event,
@@ -432,13 +627,22 @@ def _prepare_post_tool_evidence(
             store_plaintext=plaintext_snapshots_enabled(),
         )
     except Exception as exc:  # pragma: no cover - defensive capture boundary
-        _report_policy_failure("post-tool snapshot", exc)
-        outcome = ToolOutcome(
-            outcome.status,
-            f"{outcome.evidence};snapshot_capture_error:{type(exc).__name__}",
+        return (
+            ToolOutcome(
+                outcome.status,
+                (
+                    f"{outcome.evidence};"
+                    f"snapshot_capture_error:{type(exc).__name__}"
+                ),
+            ),
+            [],
+            operation_ids,
+            (
+                "post_tool_snapshot_failed",
+                "post-tool evidence could not be prepared",
+            ),
         )
-        snapshots = []
-    return outcome, snapshots, operation_ids
+    return outcome, snapshots, operation_ids, None
 
 
 def _validated_operation_owner(

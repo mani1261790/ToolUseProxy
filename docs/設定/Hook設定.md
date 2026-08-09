@@ -96,7 +96,11 @@ project単位では、trustedなrepositoryの`.codex/hooks.json`へ次のよう�
 `PreToolUse`、`PostToolUse`、`Stop` は Codex が用意している既存イベントです。
 このリポジトリで実装するのは、そこから呼び出される `monitor_pre_tool.py`、`monitor_post_tool.py`、`monitor_stop.py` の中身です。
 
-`matcher`は正規表現です。`PreToolUse`と`PostToolUse`ではtool名に適用されますが、`Stop`ではmatcherがサポートされないため省略します。MCPも観測する場合は、対象serverを絞った`^mcp__<server>__.*$`などのmatcher groupを追加します。Codexはtimeoutを省略すると600秒を使用するため、この軽量Hookでは明示的に5秒へ制限します。commandはsessionの`cwd`で実行され、複数のmatching command hookは並行起動されます。project-local Hookは実行前に定義内容をtrustする必要があります。
+`matcher`は正規表現です。`PreToolUse`と`PostToolUse`ではHook APIのcanonical tool名に適用されますが、`Stop`ではmatcherがサポートされないため省略します。MCPも観測する場合は、対象serverを絞った`^mcp__<server>__.*$`などのmatcher groupを追加します。Codexはtimeoutを省略すると600秒を使用するため、この軽量Hookでは明示的に5秒へ制限します。commandはsessionの`cwd`で実行され、複数のmatching command hookは並行起動されます。project-local Hookは実行前に定義内容をtrustする必要があります。matcherやcommandなどを変更すると、以前のtrustはその新定義へ引き継がれず`modified`になります。再reviewして`trusted`になるまで実行対象として扱いません。
+
+tool名は表示面ごとに同じとは限りません。Codex Desktopのtask履歴ではlocal shell実行が`exec_command`として記録されますが、PreToolUse / PostToolUseのmatcherとHook payloadではcanonical名`Bash`を使います。Pluginのmatcherへtask履歴上の`exec_command`をそのまま追加する必要はありません。ToolUseProxyの`exec_command + tool_input.cmd`互換レイヤーは、session由来payloadや互換fixtureの解析用としてraw payloadを変えずに保持します。
+
+2026-07-30のCodex Desktop `0.146.0-alpha.3.1`実機runでは、定義変更後のPreToolUse / PostToolUseが`trustStatus: modified`のままで、実際にはtrust済みではありませんでした。また、正常終了したcommand HookのstderrはDesktop画面へ表示されません。したがって「初期化案内が見えない」だけではHook未実行とは判断できません。現在のlauncher / runtimeは非active診断をphase別JSON stdoutで返しますが、Desktop検証ではUI表示を合格条件にせず、`hooks/list`のtrust状態と定義hashを先に確認し、値を含まないmarkerまたはHook DBでPreToolUse / PostToolUse / Stopを照合します。
 
 ## 置いてあるもの
 
@@ -107,6 +111,8 @@ project単位では、trustedなrepositoryの`.codex/hooks.json`へ次のよう�
 いずれも stdin のHook payloadを受け取り、event、artifact、artifact fragmentをローカルSQLiteへ記録します。`PreToolUse`では静的なfile operationも抽出し、`PostToolUse`ではoperation outcomeとbounded resource snapshotを記録します。
 
 `PostToolUse`はtool responseを三値のoutcomeへ分類し、成功を確認できた`apply_patch`またはBash writeだけをsnapshot候補にします。`Stop`は最終応答の`final_answer` sinkを評価します。`PreToolUse`は既定では記録だけですが、`TOOLUSEPROXY_PRE_TOOL_POLICY=1`を設定すると、実payloadを確認済みの`Bash`を実行前に評価します。MCPはさらに`TOOLUSEPROXY_PRE_TOOL_MCP_POLICY=1`を設定した場合だけ評価します。
+
+file-backedな`curl --data-binary @relative-file`には、POSIXでcomponent-safeに実行前snapshotを読むresolverと、解決値を返さないpayload evidence契約があります。opt-inのshadow modeではallow / denyを変えずに観測し、別の明示opt-inではevaluated exact / exact-substringだけを実行前denyへ接続します。file-backed operandは既存graph上では引き続き`coarse_fallback`であり、no-matchやunsupportedを保護済みとは扱いません。resolver内部のpath race、Hook後にtarget toolがfileを再読込するTOCTOU、値非保持契約は[Sink payload evidenceの設計](../設計/SinkPayloadEvidence.md)を参照してください。
 
 ## 使い方
 
@@ -344,6 +350,43 @@ shell変数、command substitution、glob / brace / tilde展開、body以外のd
 
 この抽出はshell、subprocess、networkを実行せず、fileも読みません。上限は1 segmentあたり32値、1値32 KiB、合計128 KiBです。projection値を追加fragment、DB row、評価report本文へ複製しません。
 
+### File-backed payload shadow
+
+production PreToolUseで値なしの観測だけを有効にするには、Bash policyとshadowの二つをopt-inにします。
+
+```text
+TOOLUSEPROXY_PRE_TOOL_POLICY=1 TOOLUSEPROXY_PRE_TOOL_FILE_PAYLOAD_SHADOW=1 python3 /absolute/path/to/ToolUseProxy/hooks/monitor_pre_tool.py
+```
+
+対象はcurrent eventの`curl`による`external_http_request`だけです。解析runが実際に使用したactive source chunksを同じcall内で比較し、DBを後から広く再検索しません。static literalは既存graphの担当なのでshadow rowを作らず、`resolved_file`とfile resolutionへ進めなかった`coarse_fallback`だけを記録します。
+
+shadow rowにはresolution / comparison status、値なしreason、snapshot semantics、value数とpayload byte数のbucket、exact / exact substring / none、match件数、処理時間、現在policyとshadow判断の差だけを保存します。payload本文、payload由来hash、raw command、file path、source chunk IDはshadow tableへ複製しません。同一event / sink / segment / evidence versionの再実行では最初の観測を保持し、policy結果などの不一致があれば上書きしません。
+
+schema drift、SQLite lock、resolver例外、保存失敗はshadow専用の例外境界で破棄します。現在policyのHook出力を先に確定するため、shadowの失敗が既存denyを弱めたり、allowを新しいdenyへ変えたりすることはありません。現在は`would_block`も観測値にすぎず、実行を止めません。
+
+集約レポートは次のcommandで確認できます。event ID、sink ID、source IDなどのdurable identityはreportへ出しません。
+
+```bash
+python3 scripts/report_sink_payload_shadow.py \
+  --db /absolute/path/to/events.db
+```
+
+このresolverが取得するのは実行前のfile snapshotです。Hook完了後にfileが変わるTOCTOUを解消せず、実際にcurlが送ったbytesも証明しません。したがって、既存graphではfile-backed operandを引き続き`coarse_fallback`として扱い、no-matchを送信の安全証明とは表示しません。
+
+### File-backed payload exact-only enforcement
+
+TUIで検証済みのexact evidenceだけを実行前denyへ接続する場合は、Bash policyとenforcementを明示opt-inにします。既定値は無効です。
+
+```text
+TOOLUSEPROXY_PRE_TOOL_POLICY=1 TOOLUSEPROXY_PRE_TOOL_FILE_PAYLOAD_EXACT_ENFORCEMENT=1 python3 /absolute/path/to/ToolUseProxy/hooks/monitor_pre_tool.py
+```
+
+対象はcurrent Bash eventの`curl --data-binary @relative-file`です。`resolution_status`と`comparison_status`がともに`evaluated`、extractionが`resolved_file`、snapshotが`pre_execution_file_snapshot`であり、active source chunkとの`resolved_payload_exact`または`resolved_payload_exact_substring`がある場合だけcritical blockを返します。一般的なshingle、token equivalent、embedding / semantic類似はこのdenyへ接続しません。
+
+public no-match、unsupported、上限超過、resolver例外は新しいdenyを作らず、先に確定したlineage policyのallow / warn / blockを維持します。exact evidence確定後に監査保存だけが失敗した場合は外部side effectを許可せずdenyを維持します。shadow flagも同時に有効化した場合は同じ一回のfile snapshot比較から値なし観測を保存し、payloadを二重に読みません。
+
+denyは「file-backed external payloadにprotected contentが見つかった」と説明し、参照fileから保護内容を除くかpublic payloadを選ぶよう案内します。ただし実行前snapshotとcurlが後で読むbytesの一致は証明しないため、TOCTOUの制限は残ります。既定有効化は別のgo / no-go判断です。
+
 MCP Hookのmatcherは、たとえば`^mcp__.*$`、または対象を絞った`^mcp__github__.*$`を使用します。実CodexのMCP payloadは`tool_name: mcp__<server>__<tool>`で、`tool_input`にはMCP toolへ渡すraw argumentsが入ります。adapterが外部送信と分類するwrite-like toolだけがsinkとなり、read-only toolは記録して通過させます。MCP tool名はUTF-8で4 KiBを上限とし、超過時はartifact / sinkをmaterializeする前に`tool_name_bytes_exceeded`でdenyします。tool名自体が1 MiBのraw read上限を跨いで後続`cwd`を読めない場合も、明示`TOOLUSEPROXY_WORKSPACE_ROOT`が有効ならそのrootだけを早期deny scopeとして検証します。
 
 現在eventの`event_id`、`sequence_no`、`tool_use_id`、adapter種別が一致するexternal sinkだけを評価します。過去eventの未解消findingを理由に現在の呼出しを止めません。
@@ -376,7 +419,7 @@ python3 scripts/cleanup_redaction_audits.py \
 
 SQLiteのforeign key enforcementはprepare専用transaction以外のリポジトリ全体で現在offです。cleanupは`ON DELETE CASCADE`に依存せず、同じtransaction内で`redaction_decision_links`、`redaction_targets`、`redaction_plans`の順に明示削除します。dry-run / executeのJSONは3種類の件数を返します。
 
-native Web SearchはCodex CLI `0.142.5`で`matcher: "*"`を使ってもPreToolUse / PostToolUseに現れなかったため、実行前遮断へは接続していません。Search adapterはsynthetic / imported eventのoffline解析用に残します。
+Codexがhost側で実行するnative / hosted Web Searchは、Codex CLI `0.142.5`で`matcher: "*"`を使ってもPreToolUse / PostToolUseに現れませんでした。したがって現在のToolUseProxy Hookでは観測・実行前遮断できません。Search adapterはsynthetic / imported eventのoffline解析用に残します。
 
 source manifestの基準directoryはeventのcanonical workspace rootです。`protected_sources.json`の相対pathとoperationの相対pathはこのrootに閉じ、実行時cwdはBashなどの相対pathを解決するために別途使います。event、artifact、operation、snapshot、protected source、source chunk、cursor、resource、sink、edge、analysis runは`workspace_id`で分離されます。同じ`session_id`や同じsource設定上の`id`が別workspaceに存在しても混線させません。
 
