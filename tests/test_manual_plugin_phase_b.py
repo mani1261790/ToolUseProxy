@@ -267,6 +267,8 @@ class ManualPluginPhaseBTest(unittest.TestCase):
         self.assertIn("require_escalated", skill)
         self.assertIn("Do not treat Full Access as a prerequisite", skill)
         self.assertIn("offers no per-command escalation", skill)
+        self.assertIn("Manual Phase B runs keep their context-specific", skill)
+        self.assertIn("never use this normal-installation fallback", skill)
         self.assertIn("Never retry an `Operation not permitted`", skill)
         self.assertNotIn(
             "説明済みの操作をinstalled Pluginから実行する",

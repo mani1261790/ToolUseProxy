@@ -142,12 +142,12 @@ class RuntimePathsTest(unittest.TestCase):
                 / "cache"
                 / "tooluseproxy"
                 / "tooluseproxy"
-                / "0.1.0-alpha.6"
+                / "0.1.0-alpha.7"
             )
             manifest_dir = plugin_root / ".codex-plugin"
             manifest_dir.mkdir(parents=True)
             (manifest_dir / "plugin.json").write_text(
-                json.dumps({"name": "tooluseproxy", "version": "0.1.0-alpha.6"}),
+                json.dumps({"name": "tooluseproxy", "version": "0.1.0-alpha.7"}),
                 encoding="utf-8",
             )
 
@@ -962,7 +962,7 @@ class PluginBundleTest(unittest.TestCase):
                 / "cache"
                 / "tooluseproxy"
                 / "tooluseproxy"
-                / "0.1.0-alpha.6"
+                / "0.1.0-alpha.7"
             )
             plugin_root.mkdir(parents=True)
             for directory in (".codex-plugin", "hook_monitor", "hooks", "tooluseproxy"):
@@ -1165,8 +1165,9 @@ class PluginBundleTest(unittest.TestCase):
                 inactive_output["hookSpecificOutput"]["hookEventName"],
             )
             self.assertIn("database_missing", inactive_context)
-            self.assertIn(str(cli_launcher), inactive_context)
-            self.assertIn(str(data_dir), inactive_context)
+            self.assertNotIn(str(cli_launcher), inactive_context)
+            self.assertNotIn(str(data_dir), inactive_context)
+            self.assertNotIn("手動で準備する場合のコマンド", inactive_context)
             self.assertEqual("", inactive.stderr)
             self.assertFalse((data_dir / "events.db").exists())
 

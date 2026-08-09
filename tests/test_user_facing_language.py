@@ -63,6 +63,25 @@ def test_normal_onboarding_does_not_require_internal_path_diagnostics() -> None:
     assert "通常利用者がpathやcommandをコピーするための手順ではありません" in plugin_guide
 
 
+def test_normal_onboarding_continues_when_selected_permissions_already_allow_plugin_data() -> None:
+    skill = (
+        REPO_ROOT / "skills" / "tooluseproxy-setup" / "SKILL.md"
+    ).read_text(encoding="utf-8")
+    plugin_guide = (
+        REPO_ROOT / "docs" / "設定" / "Plugin導入.md"
+    ).read_text(encoding="utf-8")
+
+    assert "per-command approval is disabled" in skill
+    assert "already grants access to the installed Plugin data directory" in skill
+    assert "must not make the user copy an internal command" in skill
+    assert "run the exact setup\ncommand with the permissions already selected" in skill
+    assert "report its actual\ncount as zero" in skill
+    assert "Manual Phase B runs keep their context-specific" in skill
+    assert "do not make copying a long\ninternal command the normal recovery path" in skill
+    assert "承認UIの表示回数は0として正確に報告" in plugin_guide
+    assert "長い内部commandのコピーを通常導線として要求しません" in plugin_guide
+
+
 def test_approval_templates_stay_short_and_self_contained() -> None:
     skill = (
         REPO_ROOT / "skills" / "tooluseproxy-setup" / "SKILL.md"
@@ -128,4 +147,6 @@ def test_missing_database_explains_next_step_in_japanese(tmp_path: Path) -> None
     assert "このプロジェクトではまだ準備されていません" in message
     assert "ToolUseProxyをこのプロジェクトで使えるようにして" in message
     assert "database_missing" in message
+    assert "手動で準備する場合のコマンド" not in message
+    assert str(tmp_path) not in message
     assert "ToolUseProxy inactive" not in message
