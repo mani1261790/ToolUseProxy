@@ -68,7 +68,7 @@ def test_hook_status_messages_are_plain_japanese() -> None:
 
     assert status_messages == [
         "送信前に保護対象が含まれていないか確認しています",
-        "ツールの実行記録をこのMacに保存しています",
+        "ツールの実行記録をこの端末に保存しています",
         "回答に保護対象が含まれていないか確認しています",
     ]
 

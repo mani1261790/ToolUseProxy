@@ -24,7 +24,7 @@
             "command": "sh \"${PLUGIN_ROOT}/hooks/run_hook.sh\" post-tool-use",
             "commandWindows": "\"%PLUGIN_ROOT%\\hooks\\run_hook.cmd\" post-tool-use",
             "timeout": 10,
-            "statusMessage": "ツールの実行記録をこのMacに保存しています"
+            "statusMessage": "ツールの実行記録をこの端末に保存しています"
           }
         ]
       }

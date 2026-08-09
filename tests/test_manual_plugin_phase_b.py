@@ -112,6 +112,14 @@ class ManualPluginPhaseBTest(unittest.TestCase):
             )
             self.assertIn("Markdownを描画せず、改行を潰す", guide)
             self.assertIn("Markdownや改行に頼らない", prompt)
+            self.assertIn(
+                "160文字以内の1段落にし、事前説明とapproval justificationに同じ文",
+                prompt,
+            )
+            self.assertIn("「守る」ならapprove", prompt)
+            self.assertIn("「今回は見送る」ならreject", prompt)
+            self.assertIn("「今後は候補に出さない」ならignore", prompt)
+            self.assertIn("利用者には英語の返答を要求せず", prompt)
             self.assertNotIn("### 実行前の確認", guide)
             self.assertNotIn("### 実行前の確認", prompt)
             self.assertNotIn("**実行する操作**", guide)
