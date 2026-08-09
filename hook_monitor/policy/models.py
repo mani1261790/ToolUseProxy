@@ -16,6 +16,7 @@ class PolicyDecision:
     path_score: float
     hook_event: str | None
     reason: str
+    evidence_kind: str = "lineage"
 
 
 @dataclass(frozen=True)

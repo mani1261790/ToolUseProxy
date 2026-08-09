@@ -71,11 +71,12 @@ class ManualPluginPhaseBTest(unittest.TestCase):
             self.assertIn("`$VAR`", prompt_file.read_text())
             self.assertIn(str(context_file), prompt_file.read_text())
             for plain_language_label in (
-                "守るファイル",
-                "守る範囲",
-                "止める場面",
-                "承認すると変わるもの",
-                "承認しない場合",
+                "このファイルをToolUseProxyで守りますか？",
+                "ファイル",
+                "守る内容",
+                "できること",
+                "今回は見送る",
+                "今後は候補に出さない",
             ):
                 self.assertIn(plain_language_label, prompt_file.read_text())
 
@@ -93,25 +94,32 @@ class ManualPluginPhaseBTest(unittest.TestCase):
             self.assertIn("Desktop/GUI", guide)
             self.assertIn("別の検証", guide)
             for approval_label in (
-                "【操作】",
-                "【目的】",
-                "【影響】",
-                "【通信】",
-                "【取消】",
-                "【判断】",
+                "内容：",
+                "変更：",
+                "通信：",
+                "理由：",
+                "許可：",
             ):
                 self.assertIn(approval_label, guide)
                 self.assertIn(approval_label, prompt)
             self.assertIn(
-                "実行確認｜【操作】短い説明｜【目的】短い説明｜【影響】短い説明",
+                "ToolUseProxyの確認｜内容：短い説明｜変更：短い説明",
                 guide,
             )
             self.assertIn(
-                "実行確認｜【操作】短い説明｜【目的】短い説明｜【影響】短い説明",
+                "ToolUseProxyの確認｜内容：短い説明｜変更：短い説明",
                 prompt,
             )
             self.assertIn("Markdownを描画せず、改行を潰す", guide)
             self.assertIn("Markdownや改行に頼らない", prompt)
+            self.assertIn(
+                "160文字以内の1段落にし、事前説明とapproval justificationに同じ文",
+                prompt,
+            )
+            self.assertIn("「守る」ならapprove", prompt)
+            self.assertIn("「今回は見送る」ならreject", prompt)
+            self.assertIn("「今後は候補に出さない」ならignore", prompt)
+            self.assertIn("利用者には英語の返答を要求せず", prompt)
             self.assertNotIn("### 実行前の確認", guide)
             self.assertNotIn("### 実行前の確認", prompt)
             self.assertNotIn("**実行する操作**", guide)
@@ -225,34 +233,41 @@ class ManualPluginPhaseBTest(unittest.TestCase):
             self.assertIn(hook_name, skill)
             self.assertIn(plain_language_role, skill)
         for proposal_label in (
-            "守るファイル",
-            "守る範囲",
-            "止める場面",
-            "承認すると変わるもの",
-            "承認しない場合",
+            "このファイルをToolUseProxyで守りますか？",
+            "ファイル",
+            "守る内容",
+            "できること",
+            "今回は見送る",
+            "今後は候補に出さない",
         ):
             self.assertIn(proposal_label, skill)
         for approval_label in (
-            "【操作】",
-            "【目的】",
-            "【影響】",
-            "【通信】",
-            "【取消】",
-            "【判断】",
+            "内容：",
+            "変更：",
+            "通信：",
+            "理由：",
+            "許可：",
         ):
             self.assertIn(approval_label, skill)
         self.assertIn(
-            "実行確認｜【操作】...｜【目的】...｜【影響】...",
+            "ToolUseProxyの確認｜内容：...｜変更：...",
             skill,
         )
         self.assertIn("may collapse every newline", skill)
-        self.assertIn("Never use Markdown headings", skill)
+        self.assertIn("Never use Markdown", skill)
+        self.assertIn("headings, emphasis, bullets", skill)
         self.assertNotIn("### 実行前の確認", skill)
         self.assertNotIn("**実行する操作**", skill)
         self.assertIn("continue to any send test", skill)
         self.assertIn("long `sh ...`", skill)
         self.assertIn("self-contained", skill)
         self.assertIn("exact command arguments", skill)
+        self.assertIn("do not first try the command with", skill)
+        self.assertIn("sandbox_permissions", skill)
+        self.assertIn("require_escalated", skill)
+        self.assertIn("Do not treat Full Access as a prerequisite", skill)
+        self.assertIn("offers no per-command escalation", skill)
+        self.assertIn("Never retry an `Operation not permitted`", skill)
         self.assertNotIn(
             "説明済みの操作をinstalled Pluginから実行する",
             skill,
@@ -261,7 +276,8 @@ class ManualPluginPhaseBTest(unittest.TestCase):
         self.assertNotIn("先ほどの説明どおり", skill)
         self.assertIn("copy the CLI result's proposed source object verbatim", skill)
         self.assertIn("never rewrite it as `selectors`", skill)
-        self.assertIn("First ask whether", skill)
+        self.assertIn("Ask only the", skill)
+        self.assertIn("ordinary-language choice", skill)
 
     def test_verify_accepts_cross_checked_actual_hook_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

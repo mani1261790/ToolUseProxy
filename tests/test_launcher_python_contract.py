@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import tempfile
@@ -21,6 +22,18 @@ class WindowsLauncherPythonContractTest(unittest.TestCase):
                 python_311 = content.index("py -3.11")
                 self.assertLess(python_312, python_311)
                 self.assertNotIn("py -3.13", content)
+
+    def test_windows_hook_launcher_uses_phase_specific_json(self) -> None:
+        content = (REPO_ROOT / "hooks" / "run_hook.cmd").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn('"hookEventName":"PreToolUse"', content)
+        self.assertIn('"hookEventName":"PostToolUse"', content)
+        self.assertIn('"systemMessage"', content)
+        self.assertIn("plugin_environment", content)
+        self.assertIn("python_missing", content)
+        self.assertIn("runtime_start_failed", content)
 
 
 @unittest.skipIf(os.name == "nt", "POSIX launcher contract")
@@ -68,9 +81,21 @@ class PosixLauncherPythonContractTest(unittest.TestCase):
             )
 
             self.assertEqual(1, cli.returncode)
-            self.assertIn("Python 3.11 or 3.12 is required", cli.stderr)
+            self.assertIn(
+                "ToolUseProxyの実行にはPython 3.11または3.12が必要です。",
+                cli.stderr,
+            )
             self.assertEqual(0, hook.returncode)
-            self.assertIn("Python 3.11 or 3.12 is required", hook.stderr)
+            hook_output = json.loads(hook.stdout)
+            self.assertIn(
+                "Python 3.11または3.12が見つからないため、",
+                hook_output["hookSpecificOutput"]["additionalContext"],
+            )
+            self.assertEqual(
+                "PreToolUse",
+                hook_output["hookSpecificOutput"]["hookEventName"],
+            )
+            self.assertEqual("", hook.stderr)
             self.assertFalse(marker.exists())
 
 

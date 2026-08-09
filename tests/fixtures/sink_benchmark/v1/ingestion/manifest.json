@@ -1,0 +1,9 @@
+{
+  "schema_version": 2,
+  "dataset_id": "sink-benchmark-v1-ingestion",
+  "dataset_version": "3.0.0",
+  "description": "Raw Hook ingestion fixtures for the sink benchmark.",
+  "files": {
+    "scenarios": "scenarios.jsonl"
+  }
+}
