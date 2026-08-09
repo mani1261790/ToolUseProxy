@@ -24,7 +24,7 @@ MarketplaceとPluginのインストールは、Codex環境ごとに1回だけで
 特定versionへ固定する場合は、1つ目のコマンドで`public-alpha`の代わりにimmutable tagを指定します。
 
 ```bash
-codex plugin marketplace add mani1261790/ToolUseProxy --ref v0.1.0-alpha.4
+codex plugin marketplace add mani1261790/ToolUseProxy --ref v0.1.0-alpha.5
 ```
 
 ## 3. 3つのHookを確認してTrustする
