@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import shlex
 import sys
 from pathlib import Path
 
@@ -458,37 +457,10 @@ def _inactive_message(code: str) -> str:
 
 
 def _schema_inactive_message(exc: SchemaCompatibilityError) -> str:
-    message = (
+    return (
         f"{_inactive_message(exc.code)}\n"
         "Codexに「ToolUseProxyをこのプロジェクトで使えるようにして」"
         "と依頼してください。"
-    )
-    if exc.code not in {"database_missing", "schema_upgrade_required"}:
-        return message
-    plugin_root = os.environ.get("PLUGIN_ROOT")
-    plugin_data = os.environ.get("PLUGIN_DATA")
-    if not plugin_root or not plugin_data:
-        return message
-    if os.name == "nt":
-        launcher = Path(plugin_root) / "hooks" / "run_cli.cmd"
-        command = (
-            f'"{launcher}" init --codex --data-dir "{plugin_data}"'
-        )
-    else:
-        launcher = Path(plugin_root) / "hooks" / "run_cli.sh"
-        command = " ".join(
-            (
-                "sh",
-                shlex.quote(str(launcher)),
-                "init",
-                "--codex",
-                "--data-dir",
-                shlex.quote(plugin_data),
-            )
-        )
-    return (
-        f"{message}\n"
-        f"手動で準備する場合のコマンド: {command}"
     )
 
 

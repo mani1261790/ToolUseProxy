@@ -1,6 +1,6 @@
 # サポート範囲と既知の制限
 
-ToolUseProxy `0.1.0-alpha.6`は研究用public alpha候補です。本番環境向けのSLA、security certification、完全なDLP、全toolの遮断保証は提供しません。対応と未対応をsilent fallbackで同一視せず、次の範囲を現在の契約とします。
+ToolUseProxy `0.1.0-alpha.7`は研究用public alpha候補です。本番環境向けのSLA、security certification、完全なDLP、全toolの遮断保証は提供しません。対応と未対応をsilent fallbackで同一視せず、次の範囲を現在の契約とします。
 
 ## 実行環境
 
@@ -22,7 +22,7 @@ POSIX launcherもpackage metadataと同じPython 3.11 / 3.12だけを選びま�
 ## Codex Plugin
 
 - localでCodex CLIのmarketplace add / Plugin installを検証済み
-- Gitのmoving refを使う`codex plugin marketplace upgrade`で、install済みPluginがremove / reinstallなしにalpha.1からalpha.6へ置き換わり、Plugin dataが保持されることを実Codex CLIで自動検証
+- Gitのmoving refを使う`codex plugin marketplace upgrade`で、install済みPluginがremove / reinstallなしにalpha.1からalpha.7へ置き換わり、Plugin dataが保持されることを実Codex CLIで自動検証
 - Hook definitionのreview / trustを迂回しない
 - install後のcodeは`PLUGIN_ROOT`、mutable dataは`PLUGIN_DATA`へ分離
 - remote `main`を実行元にせず、通常更新は保護されたfast-forward-only `public-alpha`、再現性優先時はimmutable release tagを使う
@@ -33,6 +33,7 @@ POSIX launcherもpackage metadataと同じPython 3.11 / 3.12だけを選びま�
 - public化前にreachable Git blob、commit / tag message、worktreeをaggregate-onlyで監査し、危険file、provider形式credential、未知binary、oversizeを拒否する。形式を持たないsecretや画像内文字の完全検出は保証しない
 - Codex CLI TUI `0.145.0`ではmanual Hook trust、public call、protected PreToolUse block、side effect 0を確認済み。ただし自己完結型command承認説明のhuman再検証は未完了
 - Codex Desktop / GUIではmacOS実機でPlugin検索・install、3 Hookのreview / trust、PreToolUse / PostToolUse / Stop配送、public allow、file-backed protected payloadの実行前blockを確認済み。2026-08-09にはalpha.1からalpha.3へのdata migration、backup rollback、Disableなしの直接Remove、保存taskの再検証、初期化と3保護設定をまとめたatomic setup profile、read-only verificationも確認した。fresh runはcommand承認2回、public side effect 1、protected side effect 0、exact block 1、raw protected value exposure 0で`passed`
+- 通常setupは、操作ごとの承認UIを使うmodeでは限定commandごとに確認する。承認UIなしでも現在のpermission profileがPlugin dataへのaccessを明示的に許可していれば、選択済み権限内で固定setupとread-only verificationを続行し、UI表示回数を0と報告する。accessがなければ停止し、長い内部command、別path、広い権限へ自動fallbackしない
 - Desktop taskの履歴上はshell toolが`exec_command`と記録されるが、Hook matcherのcanonical tool名は`Bash`。正常終了したHookのstderrもDesktop画面へ表示されないため、画面表示だけをdispatch証拠にせず、Hook trust状態、定義hash、値を含まないmarker、Hook DB、task記録を相互照合する
 - Linux上の実Codex task、Windows、将来release間のupgrade / rollback反復E2Eは未完了
 
@@ -62,7 +63,7 @@ Codex Plugin APIやHook payloadはToolUseProxyとは別に変更され得ます�
 - candidate retrievalはartifact 50 / source 200の有限上限を持つ
 - local SQLiteにはraw Hook payloadやprotected source由来textが平文で残り得る
 - database、backup、trace exportの自動retention / secure eraseはない
-- moving marketplace refによるalpha.1からalpha.6へのnative upgrade、immutable alpha.1からalpha.6へのlifecycle upgrade、backupを使うsafe rollback、Plugin / marketplace remove、data保持 / 明示uninstallはisolated Codex CLIで検証済み。Linux実Codex CLI、Windows実機、将来version間の反復は未完了
+- moving marketplace refによるalpha.1からalpha.7へのnative upgrade、immutable alpha.1からalpha.7へのlifecycle upgrade、backupを使うsafe rollback、Plugin / marketplace remove、data保持 / 明示uninstallはisolated Codex CLIで検証済み。Linux実Codex CLI、Windows実機、将来version間の反復は未完了
 - runtime policyは他のHookやtool自体をexclusiveに制御できず、ToolUseProxy単独で完全な外部送信防止を保証しない
 
 dataの詳細は[プライバシーとデータ保持](PRIVACY.md)、導入手順は[Codex Plugin導入](docs/設定/Plugin導入.md)、実装の優先順位は[実装タスク](docs/運用/実装タスク.md)を参照してください。

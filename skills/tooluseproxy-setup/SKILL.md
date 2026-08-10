@@ -143,11 +143,27 @@ out-of-sandbox approval for that exact command. On an `exec_command` interface
 that exposes `sandbox_permissions`, set it to `require_escalated` and provide a
 short plain-language justification consistent with the permission summary.
 Do not treat Full Access as a prerequisite and do not use it merely to avoid a
-per-command decision. If the current surface offers no per-command escalation,
-stop before execution and explain that the user must either run the exact
-reviewed command themselves or deliberately choose a surface/mode that grants
-the required local path. Never retry an `Operation not permitted` result with a
-broader command or different path.
+per-command decision.
+
+For a normal marketplace installation only, a surface may explicitly report
+that per-command approval is disabled while its current filesystem permission
+profile already grants access to the installed Plugin data directory. That is
+not a permission failure and must not make the user copy an internal command
+into a terminal. A clear request to enable ToolUseProxy or protect files
+authorizes only the fixed normal setup profile needed for that request. Show the
+same short, self-contained summary in conversation, then run the exact setup
+command with the permissions already selected by the user. Run the read-only
+verification next. Do not claim that an approval UI was shown; report its actual
+count as zero. This is not permission escalation and does not authorize an
+arbitrary profile, source approval, migration, uninstall, or data deletion.
+
+If the current surface offers no per-command escalation and no explicit current
+permission profile that grants the required path, stop before execution. Explain
+the missing capability in ordinary language, but do not make copying a long
+internal command the normal recovery path. Never retry an `Operation not permitted`
+result with a broader command, different path, or silently enlarged permission.
+Manual Phase B runs keep their context-specific per-command
+escalation requirement and never use this normal-installation fallback.
 
 If the command tool reports that the process is still running and returns a
 continuation or cell ID, use only the host-provided wait/resume operation with

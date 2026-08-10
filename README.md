@@ -4,7 +4,7 @@ Codexのtool useをローカルで観測し、外部sinkへ送られるpayload�
 
 本プロジェクトは、[SecHack365](https://sechack365.nict.go.jp/)での研究・開発成果物です。
 
-> 現在のrelease candidateは`0.1.0-alpha.6`です。中核機能、再現可能な配布物、Apache-2.0の配布契約、CLI TUIでのfile-backed exact-only enforcement検証は整いましたが、完全なDLPではありません。Codex Desktopではalpha.5まで、Pluginの検索・install、Hook review、trusted Pre / Post / Stop probe、public allow、file-backed protected payloadの実行前block、data migration、backup rollback、DisableなしのRemoveを実機確認しました。alpha.6は、通常projectで内部pathを貼らずに2承認で準備できる導線、Markdown全文の1件ずつ登録、正確で読みやすい日本語の承認・block案内を追加した公開候補です。公開昇格前にfresh Desktop runを行います。adapter外のnetwork egress、hosted Web Search、Linux実Codex task、Windows実機も引き続き検証中です。
+> 現在のrelease candidateは`0.1.0-alpha.7`です。中核機能、再現可能な配布物、Apache-2.0の配布契約、CLI TUIでのfile-backed exact-only enforcement検証は整いましたが、完全なDLPではありません。Codex Desktopではalpha.5まで、Pluginの検索・install、Hook review、trusted Pre / Post / Stop probe、public allow、file-backed protected payloadの実行前block、data migration、backup rollback、DisableなしのRemoveを実機確認しました。alpha.6候補で、操作ごとの承認UIを表示しない権限modeを誤って停止扱いにする問題が見つかったため、`public-alpha`へは昇格していません。alpha.7は、選択済み権限が専用保存領域を許可する通常installをターミナル操作へ追い出さず、固定setupをその権限内で続行します。公開昇格前にfresh Desktop runを行います。adapter外のnetwork egress、hosted Web Search、Linux実Codex task、Windows実機も引き続き検証中です。
 
 - [研究紹介スライド（初めて知る方向け）](https://mani1261790.github.io/ToolUseProxy/slides/tooluseproxy-research.html)
 - [Codex Pluginとして試す](docs/設定/Plugin導入.md)
@@ -45,10 +45,10 @@ ToolUseProxyはLLM内部の状態や因果的な情報流を直接観測する�
 | 1. Trace | 中核完了 | event / artifact / resource / sinkをworkspace・session単位で追跡し、再現可能な解析runを保存 |
 | 2. Detect | 中核完了 | protected source binding、lineage、finding、policy、類似度profile v2.1を実装 |
 | 3. Stop | alpha実装済み | Stopの`continue_review`と、opt-inのBash / MCP PreToolUse denyを提供。runtime redactは無効 |
-| Plugin化 | alpha.6候補 | installable package、relocatable Plugin、通常利用では内部path不要の初期設定・診断・traceを実装 |
+| Plugin化 | alpha.7候補 | installable package、relocatable Plugin、通常利用では内部path不要の初期設定・診断・traceを実装 |
 | runtime設定 | 実装済み | workspace単位のboolean設定、環境変数override、revision付き更新、値なし監査、Plugin再導入後の保持 |
 | protected source登録 | 明示承認型を実装済み | `scan` / `suggest` → exact proposal → `approve` / `reject` / `ignore`。無承認登録はしない |
-| Public alpha | `0.1.0-alpha.6`候補 | alpha.5の検証済み保護機能とrelease契約を維持し、path貼り直し不要の2承認setup、Markdown全文の1件ずつ登録、日本語block案内を追加。公開昇格前のfresh Desktop run、cross-platform実機、少人数pilotは継続課題 |
+| Public alpha | `0.1.0-alpha.7`候補 | alpha.5の検証済み保護機能とrelease契約を維持し、承認UIありなら通常2回、UIなし・access許可済みなら0回で限定setupを完了。内部command貼り直しは禁止。公開昇格前のfresh Desktop run、cross-platform実機、少人数pilotは継続課題 |
 | 外部sink coverage | adapter allowlist | 既知のBash / MCP / Search等を分類。任意programの実network接続を網羅せず、hosted Web SearchはPreToolUse / PostToolUse Hookの観測対象外。実接続との偽陰性率は未測定 |
 
 設計全体は[アーキテクチャ概要](docs/設計/アーキテクチャ.md)、詳細な完了範囲と残作業は[実装タスク計画](docs/運用/実装タスク.md)を参照してください。
@@ -99,7 +99,7 @@ codex plugin marketplace upgrade tooluseproxy
 codex plugin list --json
 ```
 
-特定versionを固定したい場合は、`public-alpha`の代わりにimmutable tag `v0.1.0-alpha.6`を指定します。固定tagは`marketplace upgrade`を実行しても別versionへ移動しません。
+特定versionを固定したい場合は、`public-alpha`の代わりにimmutable tag `v0.1.0-alpha.7`を指定します。固定tagは`marketplace upgrade`を実行しても別versionへ移動しません。
 
 更新後は変更された3つのHookをもう一度確認し、新しいCodex taskでsetup skillによるverificationを実行します。
 

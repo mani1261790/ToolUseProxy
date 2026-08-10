@@ -24,7 +24,7 @@ MarketplaceとPluginのインストールは、Codex環境ごとに1回だけで
 特定versionへ固定する場合は、1つ目のコマンドで`public-alpha`の代わりにimmutable tagを指定します。
 
 ```bash
-codex plugin marketplace add mani1261790/ToolUseProxy --ref v0.1.0-alpha.6
+codex plugin marketplace add mani1261790/ToolUseProxy --ref v0.1.0-alpha.7
 ```
 
 ## 3. 3つのHookを確認してTrustする
@@ -56,9 +56,9 @@ Pluginのインストールは1回ですが、次の情報はworkspaceごとに�
 - runtime保護設定
 - local監査data
 
-ToolUseProxyが必要な初期設定と安全確認を案内します。通常は確認画面が2回出ます。どちらも外部通信は行わず、このprojectの外にあるToolUseProxy専用保存領域を設定・確認するためのものです。
+ToolUseProxyが必要な初期設定と安全確認を案内します。操作ごとの承認UIを使う権限modeでは通常2回確認されます。現在のmodeが専用保存領域へのaccessをすでに許可し、承認UIを表示しない場合は、その選択済み権限内で同じ限定setupを続行し、表示回数を0回と正確に報告します。どちらの場合も外部通信は行いません。
 
-通常インストールでは、ToolUseProxy自身が現在のPlugin identityを検証して専用保存領域を特定します。利用者が`database_missing`などの内部診断、absolute path、初期化commandをコピーして貼り直す必要はありません。保存先を安全に確認できない場合は、別pathを推測せず未設定のまま停止します。
+通常インストールでは、ToolUseProxy自身が現在のPlugin identityを検証して専用保存領域を特定します。利用者が`database_missing`などの内部診断、absolute path、初期化commandをコピーして貼り直す必要はありません。承認UIがないことだけを理由にターミナル実行へ切り替えません。保存先またはaccessを安全に確認できない場合は、別pathや広い権限を推測せず未設定のまま停止します。
 
 完了時に「このプロジェクトではToolUseProxyが動作しています」と表示されれば準備完了です。すべての機密ファイルが自動登録されるわけではありません。
 
