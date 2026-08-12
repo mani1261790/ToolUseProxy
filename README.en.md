@@ -16,7 +16,7 @@ ToolUseProxy is licensed under the [Apache License 2.0](LICENSE).
 - Requires explicit approval before changing `protected_sources.json`.
 - Can deny high-confidence Bash or MCP disclosures when opt-in enforcement is enabled.
 - Stores allowlisted boolean runtime policy settings per workspace with revision-checked updates and value-free audit history.
-- Uses no Hook-time network service, remote embedding, or ToolUseProxy telemetry.
+- Hooks stay local and use no remote embedding or ToolUseProxy telemetry. The experimental Externality Judge queues only value-free structural summaries locally. A first-seen unknown call is denied only when protected lineage reaches it; public-only calls continue. An explicitly run worker starts a new isolated, ephemeral Codex session for each job. ToolUseProxy does not call the OpenAI API directly or accept an API key. A revision-bound human review is required before an exact local rule can remove the conservative unknown sink.
 
 ## Install the Plugin
 
@@ -61,5 +61,6 @@ The preview does not replace manual Hook review or an actual Codex task.
 - Removing the Plugin does not delete local audit data.
 - Protected-source onboarding and manifest migration are supported on macOS and Linux for this alpha, not Windows.
 - Hosted Web Search does not appear in the current `PreToolUse` / `PostToolUse` Hook surface, so ToolUseProxy cannot observe or block it before execution.
+- The Externality Judge is experimental, off by default, and not part of the normal setup profile. LLM classification runs outside Hooks, never auto-promotes a rule, and cannot weaken an existing block. Its provider-specific processing and retention boundary is documented in [privacy and retention](PRIVACY.md).
 
 Read [support and known limitations](SUPPORT.md), [privacy and retention](PRIVACY.md), [private vulnerability reporting](SECURITY.md), and the [Japanese project documentation](README.md) before using the alpha.

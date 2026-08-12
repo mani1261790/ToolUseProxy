@@ -204,6 +204,12 @@ def _classify_command(command: str) -> tuple[str, str, str, str] | None:
     return None
 
 
+def classify_bash_sink_type(command: str) -> str | None:
+    """Return the current adapter's sink type without materializing graph data."""
+    classification = _classify_command(command)
+    return None if classification is None else classification[0]
+
+
 def _shell_tokens(command: str) -> list[str]:
     try:
         return shlex.split(command, posix=True)

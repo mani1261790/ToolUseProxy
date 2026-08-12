@@ -195,7 +195,9 @@ do not report missing initial output as a command failure.
    of separate `init` and three `config set` commands. The profile is fixed to
    `pre-tool-policy`, `file-payload-shadow`, and
    `file-payload-exact-enforcement` all enabled; it accepts no arbitrary
-   settings object. Do not substitute another profile or revision.
+   settings object. It does not enable the experimental
+   `externality-protection` setting or select a remote provider. Do not
+   substitute another profile or revision.
 
    ```text
    sh "<PLUGIN_ROOT>/hooks/run_cli.sh" setup apply file-payload-exact --codex --expected-revision <expected-revision> --workspace <workspace-root> --data-dir <PLUGIN_DATA> --json

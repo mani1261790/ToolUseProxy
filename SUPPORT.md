@@ -50,7 +50,8 @@ Codex Plugin APIやHook payloadはToolUseProxyとは別に変更され得ます�
 | Bash / MCP PreToolUse deny | opt-in | 既定off。static evidenceと現在eventのcritical findingに限定 |
 | Stop final-answer review | alpha対応 | critical findingを`continue_review`で差し戻す |
 | runtime redact / `updatedInput` | 未対応 | 複数Hook後の最終採用inputを証明できないため無効 |
-| remote embedding / telemetry | 非搭載 | Hook内network accessなし |
+| Externality Judge | experimental / 既定off | Hookは値非保持要約をlocal queueへ保存し、初見unknown＋protected flowを保守的にdeny。Hook外worker、人間review、workspace単位の完全一致cacheを使い、LLM分類を自動昇格しない |
+| remote embedding / telemetry | 非搭載 | Hook内network serviceなし。telemetryは送信しない |
 | explicit managed-data uninstall | macOS / Linux alpha対応 | Plugin removeは保持。`uninstall plan`のexact tokenを`apply`へ渡した場合だけ管理dataを削除 |
 
 ## 既知の制限
@@ -65,6 +66,7 @@ Codex Plugin APIやHook payloadはToolUseProxyとは別に変更され得ます�
 - database、backup、trace exportの自動retention / secure eraseはない
 - moving marketplace refによるalpha.1からalpha.7へのnative upgrade、immutable alpha.1からalpha.7へのlifecycle upgrade、backupを使うsafe rollback、Plugin / marketplace remove、data保持 / 明示uninstallはisolated Codex CLIで検証済み。Linux実Codex CLI、Windows実機、将来version間の反復は未完了
 - runtime policyは他のHookやtool自体をexclusiveに制御できず、ToolUseProxy単独で完全な外部送信防止を保証しない
+- Externality JudgeのCodex routeは事前probe合格と24時間以内のreceiptを要求する。実測latencyは約3.4〜6.3秒だが、この待ち時間はHook外workerに限定され、PreToolUseには入らない
 
 dataの詳細は[プライバシーとデータ保持](PRIVACY.md)、導入手順は[Codex Plugin導入](docs/設定/Plugin導入.md)、実装の優先順位は[実装タスク](docs/運用/実装タスク.md)を参照してください。
 

@@ -10,6 +10,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from hook_monitor.runtime.settings import (
+    EXTERNALITY_PROTECTION_KEY,
     FILE_PAYLOAD_EXACT_ENFORCEMENT_KEY,
     FILE_PAYLOAD_SHADOW_KEY,
     PRE_TOOL_POLICY_KEY,
@@ -65,6 +66,14 @@ class RuntimeSettingsDomainTest(unittest.TestCase):
                 "workspace",
                 {FILE_PAYLOAD_EXACT_ENFORCEMENT_KEY: True},
             )
+        with self.assertRaisesRegex(
+            RuntimeSettingsError,
+            "pre-tool-policy must be on",
+        ):
+            make_workspace_runtime_settings(
+                "workspace",
+                {EXTERNALITY_PROTECTION_KEY: True},
+            )
 
     def test_environment_precedence_and_invalid_value_are_explicit(self) -> None:
         state = make_workspace_runtime_settings(
@@ -89,6 +98,13 @@ class RuntimeSettingsDomainTest(unittest.TestCase):
         self.assertFalse(shadow.effective_value)
         self.assertEqual("invalid_environment", shadow.source)
         self.assertEqual("environment_value_invalid", shadow.diagnostic_code)
+
+        judge_shadow = resolve_effective_runtime_settings(
+            state,
+            {"TOOLUSEPROXY_EXTERNALITY_PROTECTION": "on"},
+        ).settings[EXTERNALITY_PROTECTION_KEY]
+        self.assertTrue(judge_shadow.effective_value)
+        self.assertEqual("environment", judge_shadow.source)
 
     def test_boolean_parser_is_strict(self) -> None:
         self.assertTrue(parse_runtime_setting_value("ON"))
@@ -365,8 +381,12 @@ class RuntimeSettingsCliTest(unittest.TestCase):
         self.assertEqual(0, exit_code)
         revision = str(shown["settings_revision"])
         self.assertEqual(
-            [PRE_TOOL_POLICY_KEY, FILE_PAYLOAD_SHADOW_KEY,
-             FILE_PAYLOAD_EXACT_ENFORCEMENT_KEY],
+            [
+                PRE_TOOL_POLICY_KEY,
+                FILE_PAYLOAD_SHADOW_KEY,
+                FILE_PAYLOAD_EXACT_ENFORCEMENT_KEY,
+                EXTERNALITY_PROTECTION_KEY,
+            ],
             [item["key"] for item in shown["settings"]],
         )
 
@@ -598,6 +618,73 @@ class RuntimeSettingsCliTest(unittest.TestCase):
         self.assertEqual(1, stale_code)
         self.assertEqual("settings_revision_stale", stale["error"]["code"])
         self.assertFalse(manifest.exists())
+
+    def test_setup_verify_allows_additive_externality_shadow_setting(self) -> None:
+        fresh_workspace = self.root / "setup-additive-workspace"
+        fresh_data = self.root / "setup-additive-data"
+        fresh_workspace.mkdir()
+        initial_revision = empty_workspace_runtime_settings(
+            "revision-is-settings-only"
+        ).revision
+        apply_code, _, _ = self._run(
+            [
+                "setup",
+                "apply",
+                SETUP_PROFILE_FILE_PAYLOAD_EXACT,
+                "--codex",
+                "--expected-revision",
+                initial_revision,
+                "--workspace",
+                str(fresh_workspace),
+                "--data-dir",
+                str(fresh_data),
+                "--json",
+            ]
+        )
+        self.assertEqual(0, apply_code)
+        _, shown, _ = self._run(
+            [
+                "config",
+                "show",
+                "--workspace",
+                str(fresh_workspace),
+                "--data-dir",
+                str(fresh_data),
+                "--json",
+            ]
+        )
+        set_code, _, _ = self._run(
+            [
+                "config",
+                "set",
+                EXTERNALITY_PROTECTION_KEY,
+                "on",
+                "--expected-revision",
+                str(shown["settings_revision"]),
+                "--workspace",
+                str(fresh_workspace),
+                "--data-dir",
+                str(fresh_data),
+                "--json",
+            ]
+        )
+        self.assertEqual(0, set_code)
+
+        verify_code, verified, _ = self._run(
+            [
+                "setup",
+                "verify",
+                SETUP_PROFILE_FILE_PAYLOAD_EXACT,
+                "--workspace",
+                str(fresh_workspace),
+                "--data-dir",
+                str(fresh_data),
+                "--json",
+            ]
+        )
+
+        self.assertEqual(0, verify_code)
+        self.assertEqual("passed", verified["status"])
 
     def test_setup_profile_rolls_back_manifest_when_database_write_fails(self) -> None:
         fresh_workspace = self.root / "rollback-workspace"

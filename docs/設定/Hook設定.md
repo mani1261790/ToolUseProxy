@@ -406,7 +406,9 @@ Post event本体を保存した後、runnerはdormantなredaction confirmation�
 - medium以下またはfindingなし: stdoutなしで実行継続
 - session ID欠落、policy無効、解析例外: fail-open
 
-未サポートの`permissionDecision: ask`と`continue: false`には依存しません。Hook内ではSQLite、静的adapter、indexed lexical candidate、差分lineageだけを使い、network、embedding、全DB再解析は行いません。
+未サポートの`permissionDecision: ask`と`continue: false`には依存しません。通常のHook処理はSQLite、静的adapter、indexed lexical candidate、差分lineageだけを使い、network、embedding、全DB再解析は行いません。
+
+既定offの`externality-protection`を有効にした場合も、Hookが行うのはadapter・static rule・承認済みcacheのlocal照合と、unknown envelopeのlocal queue保存だけです。Hookはproviderを呼びません。初見unknownは保守的なexternal sink候補として現在callのgraphへ追加し、protected lineageが到達した場合だけ実行前denyします。publicだけなら止めません。provider通信はHook外workerを明示実行した場合だけ発生し、その分類はrevision付きの人間reviewなしにruleへ昇格しません。provider失敗や不明判定はallowへ変換しません。承認済みlocal ruleが外せるのは同じworkspace・構造の保守的unknown sinkだけで、既存adapter/static blockは解除しません。詳細は[Externality Judge](../設計/ExternalityJudge.md)を参照してください。
 
 preview auditのretentionは所有するPreToolUse eventのscopeに合わせます。次のcommandはdry-runで件数だけを返し、`--execute`を追加した場合だけ削除します。
 

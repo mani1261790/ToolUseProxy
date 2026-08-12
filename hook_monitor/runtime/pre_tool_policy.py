@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal
 
@@ -8,6 +8,7 @@ from hook_monitor.analysis.adapters.mcp import (
     classify_mcp_sink_type,
     parse_mcp_tool_name,
 )
+from hook_monitor.analysis.adapters.externality_rule import ExternalityPolicyRisk
 from hook_monitor.analysis.adapters.mcp_profiles import (
     MCP_TOOL_NAME_MAX_BYTES,
     inspect_mcp_input,
@@ -21,7 +22,7 @@ from hook_monitor.policy.codex_output import (
     render_codex_hook_output,
     select_strongest_decision,
 )
-from hook_monitor.policy.engine import evaluate_policy
+from hook_monitor.policy.engine import evaluate_policy, make_policy_decision_id
 from hook_monitor.policy.sink_payload_exact import (
     build_exact_file_payload_decisions,
 )
@@ -42,6 +43,7 @@ from hook_monitor.runtime.sink_payload_shadow import (
     store_sink_payload_shadow_observations,
 )
 from hook_monitor.runtime.storage import EventStore
+from hook_monitor.runtime.externality_rules import ExternalityHookDecision
 from hook_monitor.runtime.tool_compat import (
     is_enforced_shell_tool,
     shell_command_from_input,
@@ -151,6 +153,7 @@ def evaluate_pre_tool_hook_policy(
     sink_payload_exact_enforcement_enabled: bool = False,
     minimum_path_score: float = 0.15,
     leak_min_score: float = 0.3,
+    externality_decision: ExternalityHookDecision | None = None,
 ) -> dict[str, object]:
     current_adapter = pre_tool_adapter(current_event.tool_name)
     if (
@@ -169,11 +172,17 @@ def evaluate_pre_tool_hook_policy(
     if bounded_input_guard.disposition != "continue":
         return bounded_input_guard.hook_output
 
+    externality_risk = _externality_policy_risk(
+        current_event,
+        current_adapter=current_adapter,
+        decision=externality_decision,
+    )
     runtime_result = update_runtime_analysis(
         store,
         current_event_id=current_event.event_id,
         detector_version=RUNTIME_GRAPH_DETECTOR_VERSION,
         minimum_path_score=minimum_path_score,
+        externality_policy_risk=externality_risk,
     )
     current_sequence_no = store.get_event_sequence_no(current_event.event_id)
     current_sinks = _current_external_sinks(
@@ -190,6 +199,32 @@ def evaluate_pre_tool_hook_policy(
         sink_types={sink.sink_type for sink in current_sinks},
     )
     decisions = evaluate_policy(findings)
+    if externality_risk is not None:
+        externality_sink_ids = {
+            sink.node_id
+            for sink in current_sinks
+            if sink.metadata.get("basis") == externality_risk.basis
+            and sink.metadata.get("envelope_sha256")
+            == externality_risk.envelope_sha256
+        }
+        decisions = [
+            replace(
+                decision,
+                action="block",
+                decision_id=make_policy_decision_id(
+                    decision.finding_id,
+                    "block",
+                    decision.hook_event,
+                ),
+                reason=(
+                    "block because protected lineage reached a conservatively "
+                    "classified externality sink"
+                ),
+            )
+            if decision.sink_node_id in externality_sink_ids
+            else decision
+            for decision in decisions
+        ]
     selected = select_strongest_decision(decisions, "PreToolUse")
     if selected is not None and selected.action != "allow":
         store_policy_decision(
@@ -278,6 +313,54 @@ def evaluate_pre_tool_hook_policy(
                     analysis_run_id=runtime_result.analysis_run.analysis_run_id,
                 )
     return hook_output
+
+
+def _externality_policy_risk(
+    current_event: NormalizedEvent,
+    *,
+    current_adapter: str,
+    decision: ExternalityHookDecision | None,
+) -> ExternalityPolicyRisk | None:
+    if decision is None:
+        return None
+    if decision.state == "known_external":
+        return ExternalityPolicyRisk(
+            event_id=current_event.event_id,
+            adapter=current_adapter,
+            envelope_sha256=decision.envelope_sha256,
+            verdict="external",
+            basis="static_external",
+        )
+    if decision.state == "queued":
+        return ExternalityPolicyRisk(
+            event_id=current_event.event_id,
+            adapter=current_adapter,
+            envelope_sha256=decision.envelope_sha256,
+            verdict="unknown",
+            basis="unknown_pending",
+        )
+    if decision.state == "analysis_failed":
+        return ExternalityPolicyRisk(
+            event_id=current_event.event_id,
+            adapter=current_adapter,
+            envelope_sha256=decision.envelope_sha256,
+            verdict="unknown",
+            basis="analysis_failed",
+        )
+    if (
+        decision.state == "cache_hit"
+        and decision.rule is not None
+        and decision.rule.adds_external_sink
+    ):
+        return ExternalityPolicyRisk(
+            event_id=current_event.event_id,
+            adapter=current_adapter,
+            envelope_sha256=decision.envelope_sha256,
+            verdict=decision.rule.verdict,
+            basis="approved_rule",
+            review_revision=decision.rule.review_revision,
+        )
+    return None
 
 
 def _store_mcp_redaction_preview(

@@ -104,7 +104,7 @@ if TYPE_CHECKING:
 
 
 DEFAULT_DB_PATH = Path(".tooluseproxy/events.db")
-CURRENT_SCHEMA_VERSION = 6
+CURRENT_SCHEMA_VERSION = 7
 RUNTIME_REQUIRED_TABLES = frozenset(
     {
         "analysis_cursors",
@@ -118,6 +118,9 @@ RUNTIME_REQUIRED_TABLES = frozenset(
         "artifacts",
         "event_payload_metadata",
         "events",
+        "externality_approved_rules",
+        "externality_classification_jobs",
+        "externality_rule_reviews",
         "flow_edges",
         "fragment_exact_index",
         "fragment_shingles",
@@ -1522,6 +1525,15 @@ class EventStore:
                 )
                 """
             )
+            from hook_monitor.runtime.externality_shadow import (
+                initialize_externality_shadow_schema,
+            )
+            from hook_monitor.runtime.externality_rules import (
+                initialize_externality_rule_schema,
+            )
+
+            initialize_externality_shadow_schema(conn)
+            initialize_externality_rule_schema(conn)
             self._backfill_event_sequence_numbers(conn)
             self._backfill_event_workspaces(conn)
             self._backfill_tool_operation_outcomes(conn)
