@@ -4,7 +4,7 @@ ToolUseProxy is a local-first research implementation for tracing information fl
 
 This project is a research and development outcome of [SecHack365](https://sechack365.nict.go.jp/).
 
-The current release candidate is `0.1.0-alpha.7`. Alpha.6 was not promoted to the public channel because normal onboarding incorrectly stopped when per-command approval UI was disabled even though the selected permission profile already allowed Plugin-data access. Alpha.7 keeps the same bounded setup while continuing within explicitly selected permissions and never makes terminal command copying the normal path. It is not a complete DLP system.
+The current release candidate is `0.1.0-alpha.8`. It adds conservative, opt-in externality protection while keeping LLM classification outside Hooks and requiring human review before any local allow rule is created. The public channel remains on alpha.7 until the alpha.8 fresh Desktop gate passes. It is not a complete DLP system.
 
 ToolUseProxy is licensed under the [Apache License 2.0](LICENSE).
 
