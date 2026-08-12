@@ -7,7 +7,7 @@ public alphaのinstall、明示upgrade、safe rollback、disable、remove、data
 baselineはPlugin packagingを導入したimmutable commit `22974427ab62e55a00d21af164d8fc837cb5e8b7`です。
 
 - baseline: Plugin `0.1.0-alpha.1`、Python `0.1.0a1`、SQLite schema v1
-- upgrade先: 現在の検証済みrelease candidate、Plugin `0.1.0-alpha.7`、SQLite schema v6
+- upgrade先: 現在の検証済みrelease candidate、Plugin `0.1.0-alpha.7`、SQLite schema v7
 
 baseline treeは`git archive`から一時directoryへ展開します。CI checkoutはこのcompatibility fixtureを取得できるようfull historyを使います。repositoryやworkspaceは変更しません。
 
@@ -54,10 +54,10 @@ python3.11 scripts/rehearse_plugin_lifecycle.py \
 1. alpha.1をinstallし、schema v1 DBへsynthetic eventを記録
 2. PluginをremoveしてHook codeを無効化し、marketplace削除前後でdata保持を確認
 3. alpha.7をinstallし、旧schemaに対するHookがfail-openしてDDLやevent書込みをしないことを確認
-4. Hook外の明示`init --codex`でv1 backupを作り、schema v6へupgrade
+4. Hook外の明示`init --codex`でv1 backupを作り、schema v7へupgrade
 5. baseline event、workspace登録、runtime activeを確認し、workspace runtime設定を保存してupgrade後eventを記録
 6. alpha.7 codeをremoveしてdataを保持し、同じversionを再installしてruntime設定のrevisionと有効値が残ることを確認
-7. alpha.1をinstallし、schema v6を旧runtimeがinactiveとして拒否してDBを変更しないことを確認
+7. alpha.1をinstallし、schema v7を旧runtimeがinactiveとして拒否してDBを変更しないことを確認
 8. pre-migration v1 backupを別のrollback data directoryへSQLite backup APIでimport
 9. alpha.1 runtimeがactiveになり、baseline eventを保持し、backup後のalpha.7 eventとruntime設定を含まないことを確認
 10. Plugin / marketplaceをremoveし、両data directoryをcurrent artifactの`uninstall plan / apply`で明示削除

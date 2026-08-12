@@ -162,6 +162,14 @@ jobs:
               --check
           done
 
+      - name: Check network-egress differential foundation
+        run: >-
+          python -m hook_monitor.evaluation.network_egress_cli
+          --dataset tests/fixtures/network_egress/v1
+          --split all
+          --format text
+          --check
+
       - name: Check protected-source discovery development gate
         run: >-
           python -m hook_monitor.evaluation.protected_source_discovery_cli

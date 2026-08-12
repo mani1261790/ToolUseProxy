@@ -9,6 +9,11 @@ from hook_monitor.analysis.adapters.registry import (
     run_adapters,
     run_adapters_incremental,
 )
+from hook_monitor.analysis.adapters.externality_rule import (
+    ExternalityPolicyRisk,
+    externality_policy_adapter_result,
+)
+from hook_monitor.analysis.adapters.base import AdapterResult
 from hook_monitor.analysis.chunking import SOURCE_CHUNKER_VERSION
 from hook_monitor.analysis.bash_submission import BASH_SUBMISSION_EXTRACTOR_VERSION
 from hook_monitor.analysis.graph import (
@@ -75,6 +80,7 @@ def update_runtime_analysis(
     current_event_id: str,
     detector_version: str,
     minimum_path_score: float,
+    externality_policy_risk: ExternalityPolicyRisk | None = None,
 ) -> RuntimeAnalysisResult:
     scope = store.get_runtime_analysis_scope(current_event_id)
     repo_root = Path(scope.canonical_root)
@@ -121,6 +127,7 @@ def update_runtime_analysis(
             sources=sources,
             chunks=chunks,
             minimum_path_score=minimum_path_score,
+            externality_policy_risk=externality_policy_risk,
         )
     return _update_session_delta(
         store,
@@ -134,6 +141,7 @@ def update_runtime_analysis(
         sources=sources,
         chunks=chunks,
         minimum_path_score=minimum_path_score,
+        externality_policy_risk=externality_policy_risk,
     )
 
 
@@ -149,6 +157,7 @@ def _rebuild_session(
     sources: list[ProtectedSource],
     chunks: list[SourceChunk],
     minimum_path_score: float,
+    externality_policy_risk: ExternalityPolicyRisk | None,
 ) -> RuntimeAnalysisResult:
     contexts = store.list_artifact_contexts_for_scope(
         workspace_id,
@@ -174,6 +183,10 @@ def _rebuild_session(
         repo_root,
         operations=operations,
         snapshots=snapshots,
+    )
+    adapter_result = _merge_adapter_results(
+        adapter_result,
+        externality_policy_adapter_result(contexts, externality_policy_risk),
     )
     artifact_edges = build_artifact_flow_edges(contexts) + list(adapter_result.edges)
     source_edges = build_source_binding_edges(chunks, contexts, artifact_edges)
@@ -273,6 +286,7 @@ def _update_session_delta(
     sources: list[ProtectedSource],
     chunks: list[SourceChunk],
     minimum_path_score: float,
+    externality_policy_risk: ExternalityPolicyRisk | None,
 ) -> RuntimeAnalysisResult:
     delta_contexts = store.list_artifact_contexts_for_scope(
         workspace_id,
@@ -350,6 +364,7 @@ def _update_session_delta(
             sources=sources,
             chunks=chunks,
             minimum_path_score=minimum_path_score,
+            externality_policy_risk=externality_policy_risk,
         )
     adapter_result = run_adapters_incremental(
         adapter_contexts,
@@ -357,6 +372,13 @@ def _update_session_delta(
         existing_resources,
         adapter_operations,
         adapter_snapshots,
+    )
+    adapter_result = _merge_adapter_results(
+        adapter_result,
+        externality_policy_adapter_result(
+            adapter_contexts,
+            externality_policy_risk,
+        ),
     )
     similarity_edges = _build_delta_similarity_edges(
         store,
@@ -484,6 +506,18 @@ def _update_session_delta(
         source_digest=source_digest,
         mode="session-incremental",
     )
+
+
+def _merge_adapter_results(
+    base: AdapterResult,
+    extra: AdapterResult,
+) -> AdapterResult:
+    edges = {edge.edge_id: edge for edge in (*base.edges, *extra.edges)}
+    resources = {
+        resource.node_id: resource for resource in (*base.resources, *extra.resources)
+    }
+    sinks = {sink.node_id: sink for sink in (*base.sinks, *extra.sinks)}
+    return AdapterResult(tuple(edges.values()), tuple(resources.values()), tuple(sinks.values()))
 
 
 def _build_delta_similarity_edges(

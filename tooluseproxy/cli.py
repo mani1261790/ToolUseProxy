@@ -133,6 +133,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _run_config(args)
         if args.command == "protect":
             return _run_protect(args)
+        if args.command == "externality":
+            return _run_externality(args)
         if args.command == "uninstall":
             return _run_uninstall(args)
         if args.command == "trace":
@@ -394,6 +396,38 @@ def _build_parser() -> argparse.ArgumentParser:
     trace = subparsers.add_parser("trace", help="Show source lineage for a stored analysis run.")
     trace.add_argument("arguments", nargs=argparse.REMAINDER)
 
+    externality = subparsers.add_parser(
+        "externality",
+        help="Classify and review value-free externality summaries outside Hooks.",
+    )
+    externality_subparsers = externality.add_subparsers(
+        dest="externality_command",
+        required=True,
+    )
+    externality_process = externality_subparsers.add_parser(
+        "process",
+        help="Classify queued summaries with the explicitly configured LLM provider.",
+    )
+    externality_process.add_argument("--limit", type=int, default=10)
+    externality_process.add_argument("--retry-failed", action="store_true")
+    externality_process.add_argument("--json", action="store_true")
+    _add_runtime_path_arguments(externality_process)
+    externality_list = externality_subparsers.add_parser(
+        "review-list",
+        help="List value-free classifications waiting for human review.",
+    )
+    externality_list.add_argument("--json", action="store_true")
+    _add_runtime_path_arguments(externality_list)
+    for decision in ("approve", "reject"):
+        review = externality_subparsers.add_parser(
+            decision,
+            help=f"{decision.title()} one exact reviewed classification revision.",
+        )
+        review.add_argument("job_id")
+        review.add_argument("--expected-revision", required=True)
+        review.add_argument("--json", action="store_true")
+        _add_runtime_path_arguments(review)
+
     uninstall = subparsers.add_parser(
         "uninstall",
         help="Review or delete only ToolUseProxy-managed local data.",
@@ -422,6 +456,48 @@ def _add_runtime_path_arguments(parser: argparse.ArgumentParser) -> None:
     paths = parser.add_mutually_exclusive_group()
     paths.add_argument("--db", type=Path, help="Use an explicit SQLite database path.")
     paths.add_argument("--data-dir", type=Path, help="Use an explicit writable data directory.")
+
+
+def _run_externality(args: argparse.Namespace) -> int:
+    from hook_monitor.runtime.externality_rules import (
+        list_externality_reviews,
+        process_externality_jobs,
+        review_externality_job,
+    )
+
+    paths = resolve_runtime_paths(db_path=args.db, data_dir=args.data_dir)
+    EventStore(paths.db_path).require_runtime_schema()
+    if args.externality_command == "process":
+        payload = process_externality_jobs(
+            paths.db_path,
+            environ=os.environ,
+            limit=args.limit,
+            retry_failed=args.retry_failed,
+        )
+    elif args.externality_command == "review-list":
+        items = list_externality_reviews(paths.db_path)
+        payload = {
+            "count": len(items),
+            "items": [item.to_payload() for item in items],
+            "network_used": False,
+        }
+    else:
+        match = review_externality_job(
+            paths.db_path,
+            job_id=args.job_id,
+            expected_revision=args.expected_revision,
+            decision=args.externality_command,
+        )
+        payload = {
+            "status": "approved" if match is not None else "rejected",
+            "job_id": args.job_id,
+            "adds_external_sink": (
+                match.adds_external_sink if match is not None else False
+            ),
+            "network_used": False,
+        }
+    _render(payload, as_json=args.json)
+    return 0
 
 
 def _run_uninstall(args: argparse.Namespace) -> int:
@@ -661,10 +737,13 @@ def _run_setup_verify(args: argparse.Namespace) -> int:
                 settings,
                 os.environ,
             )
-            profile_configured = settings.settings == SETUP_PROFILE_SETTINGS
+            profile_configured = all(
+                settings.settings.get(key) == value
+                for key, value in SETUP_PROFILE_SETTINGS.items()
+            )
             profile_effective = all(
                 effective.settings[key].effective_value
-                for key in RUNTIME_SETTING_KEYS
+                for key in SETUP_PROFILE_SETTINGS
             )
             invalid_environment = sorted(
                 key

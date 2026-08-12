@@ -41,7 +41,7 @@ Codexが表示するHookを、次の条件と照合してください。
 - `PostToolUse`: tool実行後に入力と結果をlocal DBへ記録する
 - `Stop`: 最終回答にprotected contentが残っていないか確認する
 
-HookはCodex sandbox外でユーザー権限により実行されます。ToolUseProxyのHook自身はlocal dataへ書き込み、network通信は行いません。source、件数、command pathが異なる場合はTrustしないでください。無関係なHookも表示されている場合は`Trust all`を使わず、ToolUseProxyの3件を個別に確認します。
+HookはCodex sandbox外でユーザー権限により実行されます。Hook自体はlocal dataだけを読み書きし、network通信やLLM待機を行いません。実験的なExternality Judgeを別途有効にすると、未知callは値非保持のlocal queueへ入り、protected情報がそのcallへ流れている場合は分類を待たず止まります。publicだけなら止まりません。LLM分類は、Hook外workerを利用者が明示実行した場合に、jobごとの新しい隔離済みCodex一時セッションでだけ行われ、この手順では有効になりません。ToolUseProxyはOpenAI APIやAPI keyを直接扱いません。source、件数、command pathが異なる場合はTrustしないでください。無関係なHookも表示されている場合は`Trust all`を使わず、ToolUseProxyの3件を個別に確認します。
 
 ## 4. 利用するprojectを初期設定する
 

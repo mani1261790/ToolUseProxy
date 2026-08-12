@@ -943,7 +943,9 @@ class PluginBundleTest(unittest.TestCase):
             (
                 "ToolUseProxy checks tool inputs before execution, records tool "
                 "results locally, and reviews final responses for protected content. "
-                "These hooks do not use the network."
+                "It stays local by default. The experimental Externality Judge sends "
+                "only a value-free structural summary to the model provider you "
+                "explicitly select."
             ),
             hooks["description"],
         )

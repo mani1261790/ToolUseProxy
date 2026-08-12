@@ -29,7 +29,12 @@ from hook_monitor.runtime.pre_tool_policy import (
     pre_tool_adapter,
     render_mcp_input_limit_deny,
 )
+from hook_monitor.runtime.externality_rules import (
+    failed_externality_hook_decision,
+    prepare_externality_hook_decision,
+)
 from hook_monitor.runtime.settings import (
+    EXTERNALITY_PROTECTION_KEY,
     FILE_PAYLOAD_EXACT_ENFORCEMENT_KEY,
     FILE_PAYLOAD_SHADOW_KEY,
     PRE_TOOL_POLICY_KEY,
@@ -294,6 +299,23 @@ def run_hook(
         post_operation_ids=post_operation_ids,
         resource_snapshots=post_snapshots,
     )
+    externality_decision = None
+    if (
+        phase == "pre_tool_use"
+        and effective_runtime_settings.enabled(EXTERNALITY_PROTECTION_KEY)
+        and _runtime_policy_workspace_enabled(event)
+    ):
+        try:
+            externality_decision = prepare_externality_hook_decision(
+                store.db_path,
+                event,
+                workspace_root=Path(event.workspace_root or ""),
+            )
+        except Exception:
+            # Preserve a value-free conservative sink when queue/cache/static
+            # preparation fails. The existing policy still decides based on
+            # whether protected lineage reaches that sink.
+            externality_decision = failed_externality_hook_decision()
     if phase == "post_tool_use":
         try:
             store.confirm_redaction_post_input(event)
@@ -328,6 +350,7 @@ def run_hook(
                         FILE_PAYLOAD_EXACT_ENFORCEMENT_KEY
                     )
                 ),
+                externality_decision=externality_decision,
             )
         except Exception:  # pragma: no cover - defensive hook boundary
             _emit_inactive_hook_output(

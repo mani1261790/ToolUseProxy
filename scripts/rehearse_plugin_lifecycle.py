@@ -538,14 +538,31 @@ def _runtime_settings_revision(
 
 def _all_runtime_settings_enabled(payload: dict[str, Any]) -> bool:
     settings = payload.get("settings")
-    if not isinstance(settings, list) or len(settings) != 3:
+    if not isinstance(settings, list):
         return False
-    return all(
-        isinstance(setting, dict)
-        and setting.get("configured_value") is True
-        and setting.get("effective_value") is True
-        and setting.get("source") == "workspace"
+    by_key = {
+        setting.get("key"): setting
         for setting in settings
+        if isinstance(setting, dict) and isinstance(setting.get("key"), str)
+    }
+    protected_keys = {
+        "pre-tool-policy",
+        "file-payload-shadow",
+        "file-payload-exact-enforcement",
+    }
+    shadow = by_key.get("externality-protection")
+    return (
+        set(by_key) == protected_keys | {"externality-protection"}
+        and all(
+            by_key[key].get("configured_value") is True
+            and by_key[key].get("effective_value") is True
+            and by_key[key].get("source") == "workspace"
+            for key in protected_keys
+        )
+        and shadow is not None
+        and shadow.get("configured_value") is None
+        and shadow.get("effective_value") is False
+        and shadow.get("source") == "default"
     )
 
 
