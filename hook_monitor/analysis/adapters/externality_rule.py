@@ -107,4 +107,8 @@ def _risk_identity(basis: str) -> tuple[str, str, str]:
             "Externality analysis unavailable for protected information flow",
             "conservative_externality_failure",
         )
-    raise ValueError("unsupported externality policy risk basis")
+    return (
+        "external_analysis_failed",
+        "Externality analysis unavailable for protected information flow",
+        "conservative_externality_failure",
+    )

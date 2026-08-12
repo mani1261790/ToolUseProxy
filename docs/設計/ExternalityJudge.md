@@ -72,7 +72,7 @@ Hook外workerは次の環境設定で明示されたproviderだけを使いま�
 - `TOOLUSEPROXY_EXTERNALITY_JUDGE_CODEX_RECEIPT`
 - `TOOLUSEPROXY_EXTERNALITY_JUDGE_TIMEOUT_SECONDS`
 
-provider chain全体のtimeoutは既定7秒、上限8秒です。2026-08-12のCodex実probeではlocal 4,632 ms、risk 4,075 msで、追加の値非保持corpusでは最大6,315 msでした。この待ち時間はHookに入りません。fallback時も各providerへ同じ秒数を与えず、chainの残り時間だけを渡します。時間切れやprovider failureはfailed jobになり、local判定やallow ruleへ変換しません。
+provider chain全体のtimeoutは既定7秒、上限8秒です。正本とする2026-08-12のcapability probeは、Codex CLI 0.145.0、固定value-free envelope 2件、probe contract `codex-externality-probe-v2`を使い、local `5,208 ms` / `local`、risk `4,511 ms` / `possibly_external`、reason code 0でeligibleでした。この待ち時間はHookに入りません。時間切れやprovider failureはfailed jobになり、local判定やallow ruleへ変換しません。
 
 queueとreviewに保存するのはenvelope、envelope hash、model hash、closed verdict、value-free failure codeだけです。raw command、source、URL、host、path、source identity、model名、API keyを保存しません。tableとimmutable triggerはHook外の明示的な`init` / setupで準備し、production HookはDDLやmigrationを行いません。
 

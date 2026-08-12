@@ -56,7 +56,7 @@ def _event(root: Path, command: str, *, event_id: str = "event-pre"):
         {
             "session_id": "session",
             "turn_id": "turn",
-            "tool_use_id": "tool-use",
+            "tool_use_id": event_id,
             "tool_name": "Bash",
             "cwd": str(root),
             "tool_input": {"command": command},

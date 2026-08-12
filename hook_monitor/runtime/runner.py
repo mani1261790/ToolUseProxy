@@ -29,6 +29,10 @@ from hook_monitor.runtime.pre_tool_policy import (
     pre_tool_adapter,
     render_mcp_input_limit_deny,
 )
+from hook_monitor.runtime.externality_rules import (
+    failed_externality_hook_decision,
+    prepare_externality_hook_decision,
+)
 from hook_monitor.runtime.settings import (
     EXTERNALITY_PROTECTION_KEY,
     FILE_PAYLOAD_EXACT_ENFORCEMENT_KEY,
@@ -302,11 +306,6 @@ def run_hook(
         and _runtime_policy_workspace_enabled(event)
     ):
         try:
-            from hook_monitor.runtime.externality_rules import (
-                failed_externality_hook_decision,
-                prepare_externality_hook_decision,
-            )
-
             externality_decision = prepare_externality_hook_decision(
                 store.db_path,
                 event,

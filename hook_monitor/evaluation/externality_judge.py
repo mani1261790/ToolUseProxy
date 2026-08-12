@@ -10,6 +10,9 @@ from hook_monitor.runtime.externality_shadow import combine_externality_verdicts
 
 
 GROUND_TRUTHS = frozenset({"external", "local"})
+JUDGE_VERDICTS = frozenset(
+    {"external", "possibly_external", "local", "unknown", "not_run"}
+)
 
 
 @dataclass(frozen=True)
@@ -36,10 +39,16 @@ def evaluate_externality_judge_cases(
     judge_verdicts: Mapping[str, str] | None = None,
 ) -> dict[str, object]:
     supplied_judgments = dict(judge_verdicts or {})
+    if any(verdict not in JUDGE_VERDICTS for verdict in supplied_judgments.values()):
+        raise ValueError("externality judge verdict is invalid")
     results: list[ExternalityJudgeCaseResult] = []
+    seen_case_ids: set[str] = set()
     for case in cases:
         if case.ground_truth not in GROUND_TRUTHS:
             raise ValueError("externality case ground truth is invalid")
+        if not case.case_id or case.case_id in seen_case_ids:
+            raise ValueError("externality case id is invalid or duplicated")
+        seen_case_ids.add(case.case_id)
         static = analyze_bash_externality(
             case.command,
             workspace_root=workspace_root,
@@ -67,6 +76,8 @@ def evaluate_externality_judge_cases(
                 combined_verdict=combined,
             )
         )
+    if set(supplied_judgments) - seen_case_ids:
+        raise ValueError("externality judge case id is unknown")
     external = [result for result in results if result.ground_truth == "external"]
     local = [result for result in results if result.ground_truth == "local"]
     false_local = sum(result.combined_verdict == "local" for result in external)

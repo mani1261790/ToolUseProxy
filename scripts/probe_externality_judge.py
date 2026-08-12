@@ -13,6 +13,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from hook_monitor.externality.providers import (  # noqa: E402
     CodexExecJudge,
+    JudgeProviderError,
     build_codex_probe_receipt,
     resolve_codex_executable_identity,
     write_codex_probe_receipt,
@@ -33,12 +34,30 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    identity = resolve_codex_executable_identity(args.codex)
-    probe = CodexExecJudge(
-        executable=identity.executable_path,
-        model=args.model,
-        timeout_seconds=args.timeout_seconds,
-    ).probe()
+    try:
+        identity = resolve_codex_executable_identity(args.codex)
+        probe = CodexExecJudge(
+            executable=identity.executable_path,
+            model=args.model,
+            timeout_seconds=args.timeout_seconds,
+        ).probe()
+    except (JudgeProviderError, ValueError) as error:
+        print(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "eligible": False,
+                    "reason_codes": [
+                        error.code
+                        if isinstance(error, JudgeProviderError)
+                        else "configuration_invalid"
+                    ],
+                },
+                ensure_ascii=True,
+                sort_keys=True,
+            )
+        )
+        return 1
     if probe.eligible and args.write_receipt is not None:
         identity_after_probe = resolve_codex_executable_identity(
             identity.executable_path

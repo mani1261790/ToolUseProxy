@@ -8348,9 +8348,10 @@ class InformationFlowTest(unittest.TestCase):
             output,
         )
         self.assertNotIn(SECRET, json.dumps(output))
+        assert event.workspace_id is not None
         sinks = self.store.list_sink_candidates_for_session(
             "session-1",
-            workspace_id=event.workspace_id or "",
+            workspace_id=event.workspace_id,
         )
         approved = [
             sink
@@ -8403,9 +8404,10 @@ class InformationFlowTest(unittest.TestCase):
             denied["hookSpecificOutput"]["permissionDecision"],
         )
         self.assertNotIn(SECRET, json.dumps(denied))
+        assert protected.workspace_id is not None
         protected_sinks = self.store.list_sink_candidates_for_session(
             "session-1",
-            workspace_id=protected.workspace_id or "",
+            workspace_id=protected.workspace_id,
         )
         self.assertTrue(
             any(
@@ -8448,9 +8450,10 @@ class InformationFlowTest(unittest.TestCase):
             "deny",
             output["hookSpecificOutput"]["permissionDecision"],
         )
+        assert event.workspace_id is not None
         sinks = self.store.list_sink_candidates_for_session(
             "session-1",
-            workspace_id=event.workspace_id or "",
+            workspace_id=event.workspace_id,
         )
         self.assertTrue(
             any(
@@ -8487,9 +8490,10 @@ class InformationFlowTest(unittest.TestCase):
         )
 
         self.assertEqual({}, output)
+        assert event.workspace_id is not None
         sinks = self.store.list_sink_candidates_for_session(
             "session-1",
-            workspace_id=event.workspace_id or "",
+            workspace_id=event.workspace_id,
         )
         self.assertFalse(
             any(

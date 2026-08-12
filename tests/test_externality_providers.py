@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import ast
+import subprocess
 import tempfile
 import unittest
 from datetime import datetime, timezone
@@ -23,6 +24,7 @@ from hook_monitor.externality.providers import (
     build_codex_probe_receipt,
     build_codex_exec_argv,
     codex_events_contain_tool_activity,
+    resolve_codex_executable_identity,
     verify_codex_probe_receipt,
     write_codex_probe_receipt,
 )
@@ -40,6 +42,48 @@ def _envelope() -> ExternalityEnvelope:
 
 
 class CodexExecJudgeTest(unittest.TestCase):
+    def test_codex_identity_requires_supported_version_and_is_cached(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            executable = Path(temporary_directory) / "codex"
+            executable.write_bytes(b"codex-test-binary")
+            executable.chmod(0o700)
+            with patch(
+                "hook_monitor.externality.providers.shutil.which",
+                return_value=str(executable),
+            ), patch(
+                "hook_monitor.externality.providers.subprocess.run",
+                return_value=subprocess.CompletedProcess(
+                    [str(executable), "--version"],
+                    0,
+                    stdout=b"codex-cli 0.144.9\n",
+                    stderr=b"",
+                ),
+            ):
+                with self.assertRaisesRegex(
+                    JudgeProviderError, "codex_version_unsupported"
+                ):
+                    resolve_codex_executable_identity("codex")
+
+            executable.write_bytes(b"codex-test-binary-supported")
+            with patch(
+                "hook_monitor.externality.providers.shutil.which",
+                return_value=str(executable),
+            ), patch(
+                "hook_monitor.externality.providers.subprocess.run",
+                return_value=subprocess.CompletedProcess(
+                    [str(executable), "--version"],
+                    0,
+                    stdout=b"codex-cli 0.145.0\n",
+                    stderr=b"",
+                ),
+            ) as version_call:
+                first = resolve_codex_executable_identity("codex")
+                second = resolve_codex_executable_identity("codex")
+
+            self.assertEqual("codex-cli 0.145.0", first.version)
+            self.assertEqual(first, second)
+            self.assertEqual(1, version_call.call_count)
+
     def test_provider_module_has_no_direct_http_or_api_key_contract(self) -> None:
         provider_path = (
             Path(__file__).resolve().parents[1]

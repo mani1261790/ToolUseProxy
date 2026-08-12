@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -23,9 +24,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--db", type=Path, required=True)
     args = parser.parse_args(argv)
-    report = build_externality_shadow_report(
-        list_externality_shadow_observations(args.db)
-    )
+    try:
+        report = build_externality_shadow_report(
+            list_externality_shadow_observations(args.db)
+        )
+    except (sqlite3.Error, RuntimeError, OSError) as error:
+        print(f"Externality shadow report error: {error}", file=sys.stderr)
+        return 2
     print(json.dumps(report, ensure_ascii=True, sort_keys=True))
     return 0
 

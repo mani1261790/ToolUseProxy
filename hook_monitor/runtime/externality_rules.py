@@ -3,9 +3,10 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, Mapping
+from typing import Iterator, Literal, Mapping
 
 from hook_monitor.analysis.adapters.bash import classify_bash_sink_type
 from hook_monitor.analysis.adapters.mcp import classify_mcp_sink_type
@@ -261,8 +262,13 @@ def process_externality_jobs(
         if claimed is None:
             break
         job_id, envelope = claimed
-        result = configuration.chain.judge(envelope)
         processed += 1
+        try:
+            result = configuration.chain.judge(envelope)
+        except Exception:
+            _finish_failed(db_path, job_id, "provider_call_failed")
+            failed += 1
+            continue
         observation = result.observation
         if observation is None or not _observation_matches(observation, envelope):
             _finish_failed(
@@ -427,7 +433,7 @@ def _finish_classified(
 
 def _finish_failed(db_path: Path, job_id: str, failure_code: str) -> None:
     with _connect(db_path) as conn:
-        conn.execute(
+        updated = conn.execute(
             """
             UPDATE externality_classification_jobs
             SET status = 'failed', provider = NULL, model_sha256 = NULL,
@@ -436,7 +442,9 @@ def _finish_failed(db_path: Path, job_id: str, failure_code: str) -> None:
             WHERE job_id = ? AND status = 'processing'
             """,
             (failure_code, job_id),
-        )
+        ).rowcount
+        if updated != 1:
+            raise sqlite3.IntegrityError("externality job state changed")
 
 
 def _observation_matches(
@@ -483,13 +491,18 @@ def _job_id(workspace_id: str, envelope_sha256: str) -> str:
     )
 
 
-def _connect(db_path: Path) -> sqlite3.Connection:
+@contextmanager
+def _connect(db_path: Path) -> Iterator[sqlite3.Connection]:
     conn = sqlite3.connect(
         db_path,
         timeout=EXTERNALITY_RULE_BUSY_TIMEOUT_MS / 1000,
     )
-    conn.execute(f"PRAGMA busy_timeout = {EXTERNALITY_RULE_BUSY_TIMEOUT_MS}")
-    return conn
+    try:
+        conn.execute(f"PRAGMA busy_timeout = {EXTERNALITY_RULE_BUSY_TIMEOUT_MS}")
+        with conn:
+            yield conn
+    finally:
+        conn.close()
 
 
 def _sha256(value: str) -> str:

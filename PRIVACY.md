@@ -75,7 +75,7 @@ Pluginのdisable、remove、marketplace remove、package uninstallはlocal data�
 
 `init`はdata directoryへ値を含まないprivateな識別markerを作成します。既存directoryにmarkerがない場合はToolUseProxy SQLite schemaを識別できた場合だけ削除planを作ります。`apply`はmarker、`events.db`とSQLite sidecar、migration backup、`manifest-backups`だけを管理対象として削除します。管理外entryは削除せずdata directoryを残します。plan後に管理dataの内容が変化した場合、tokenは無効になり再planが必要です。symlinkやgroup / otherから読めるdata directoryは拒否します。
 
-複数workspaceが同じdatabaseを共有している場合、uninstallは全workspaceの履歴を削除します。alpha.3にはworkspace単位の完全なerase command、secure erase、外部backup追跡、復元不能性の保証はありません。SSD、filesystem snapshot、backup serviceには削除後もcopyが残る可能性があります。
+複数workspaceが同じdatabaseを共有している場合、uninstallは全workspaceの履歴を削除します。現在の`0.1.0-alpha.7`候補にはworkspace単位の完全なerase command、secure erase、外部backup追跡、復元不能性の保証はありません。SSD、filesystem snapshot、backup serviceには削除後もcopyが残る可能性があります。
 
 ## 共有時の注意
 

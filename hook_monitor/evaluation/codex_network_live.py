@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import json
 import os
+import queue
 import re
-import selectors
 import statistics
 import subprocess
 import tempfile
@@ -12,7 +12,7 @@ import time
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, TextIO
 
 
 REPORT_SCHEMA_VERSION = 1
@@ -23,6 +23,9 @@ _SYNTHETIC_URL = f"https://{_SYNTHETIC_HOST}/"
 _MAX_LINE_BYTES = 2 * 1024 * 1024
 _MAX_STDERR_BYTES = 256 * 1024
 _VERSION_PATTERN = re.compile(r"^codex-cli ([0-9][A-Za-z0-9.+-]*)$")
+_NETWORK_PROXY_FEATURE_PATTERN = re.compile(
+    r"^network_proxy\s+[a-z][a-z0-9_-]*\s+(?:true|false)$"
+)
 
 
 class CodexNetworkLiveError(RuntimeError):
@@ -102,6 +105,9 @@ class _OtelState:
         try:
             document = json.loads(payload)
             records = _otel_log_records(document)
+            parsed_records = [
+                (record, _otel_attributes(record)) for record in records
+            ]
         except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
             with self.lock:
                 self.request_count += 1
@@ -110,8 +116,7 @@ class _OtelState:
 
         with self.lock:
             self.request_count += 1
-            for record in records:
-                attributes = _otel_attributes(record)
+            for record, attributes in parsed_records:
                 event_name = attributes.get("event.name")
                 if event_name != "codex.network_proxy.policy_decision":
                     self.other_event_count += 1
@@ -174,6 +179,7 @@ def run_codex_network_live_probe(
     if not 5.0 <= timeout_seconds <= 120.0:
         raise CodexNetworkLiveError("timeout_seconds must be between 5 and 120")
     codex_version = _read_codex_version(codex_bin, timeout_seconds)
+    _require_network_proxy_feature(codex_bin, timeout_seconds)
     observations = [
         _run_single_observation(codex_bin, timeout_seconds=timeout_seconds)
         for _ in range(repeats)
@@ -280,10 +286,9 @@ def run_codex_network_live_probe(
             },
         },
     }
-    privacy_violations = _privacy_violations(report)
     report["privacy"] = {
-        "raw_value_exposure_count": len(privacy_violations),
-        "violation_paths": privacy_violations,
+        "raw_value_exposure_count": 0,
+        "violation_paths": [],
         "request_bodies_stored": False,
         "response_bodies_stored": False,
         "subprocess_output_stored": False,
@@ -294,19 +299,10 @@ def run_codex_network_live_probe(
         "protected_values_used": False,
     }
     report["summary"] = {
-        "live_contract_passed": (
-            otel_supported_count == repeats
-            and len(otel_latencies) == repeats
-            and not privacy_violations
-        ),
+        "live_contract_passed": False,
         "managed_network_approval_supported": supported_count == repeats,
         "otel_observer_supported": otel_supported_count == repeats,
-        "production_observer_eligible": (
-            otel_supported_count == repeats
-            and otel_exact_join_count == repeats
-            and otel_unfiltered_event_count == 0
-            and not privacy_violations
-        ),
+        "production_observer_eligible": False,
         "unsupported_reason": (
             None
             if otel_supported_count == repeats
@@ -314,6 +310,26 @@ def run_codex_network_live_probe(
         ),
         "production_behavior_changed": False,
     }
+    privacy_violations = _privacy_violations(report)
+    report["privacy"].update(
+        {
+            "raw_value_exposure_count": len(privacy_violations),
+            "violation_paths": privacy_violations,
+        }
+    )
+    report["summary"].update({
+        "live_contract_passed": (
+            otel_supported_count == repeats
+            and len(otel_latencies) == repeats
+            and not privacy_violations
+        ),
+        "production_observer_eligible": (
+            otel_supported_count == repeats
+            and otel_exact_join_count == repeats
+            and otel_unfiltered_event_count == 0
+            and not privacy_violations
+        ),
+    })
     return report
 
 
@@ -531,7 +547,7 @@ def _run_app_server_turn(
             stderr=subprocess.PIPE,
             text=True,
             bufsize=1,
-            env={**os.environ, "CODEX_HOME": str(codex_home)},
+            env=_isolated_probe_environment(codex_home),
             start_new_session=True,
         )
     except OSError as error:
@@ -540,9 +556,28 @@ def _run_app_server_turn(
         process.kill()
         raise CodexNetworkLiveError("Codex app-server stdio is unavailable")
 
-    selector = selectors.DefaultSelector()
-    selector.register(process.stdout, selectors.EVENT_READ, "stdout")
-    selector.register(process.stderr, selectors.EVENT_READ, "stderr")
+    line_queue: queue.Queue[tuple[str, str | None]] = queue.Queue()
+
+    def read_stream(stream: TextIO, label: str) -> None:
+        while True:
+            line = stream.readline(_MAX_LINE_BYTES + 2)
+            line_queue.put((label, line or None))
+            if not line:
+                return
+
+    reader_threads = [
+        threading.Thread(
+            target=read_stream,
+            args=(stream, label),
+            daemon=True,
+        )
+        for stream, label in (
+            (process.stdout, "stdout"),
+            (process.stderr, "stderr"),
+        )
+    ]
+    for thread in reader_threads:
+        thread.start()
     command_item_ids: set[str] = set()
     approval_item_ids: list[str] = []
     command_started_at: dict[str, float] = {}
@@ -577,123 +612,123 @@ def _run_app_server_turn(
     deadline = time.monotonic() + timeout_seconds
     try:
         while time.monotonic() < deadline and not turn_completed:
-            events = selector.select(timeout=max(0.0, deadline - time.monotonic()))
-            if not events:
+            try:
+                stream_label, line = line_queue.get(
+                    timeout=max(0.0, deadline - time.monotonic())
+                )
+            except queue.Empty:
                 break
-            for key, _ in events:
-                line = key.fileobj.readline()
-                if not line:
-                    continue
-                if len(line.encode("utf-8")) > _MAX_LINE_BYTES:
-                    raise CodexNetworkLiveError("Codex app-server line exceeded limit")
-                if key.data == "stderr":
-                    stderr_bytes += len(line.encode("utf-8"))
-                    if stderr_bytes > _MAX_STDERR_BYTES:
-                        raise CodexNetworkLiveError(
-                            "Codex app-server stderr exceeded limit"
+            if line is None:
+                continue
+            if len(line.encode("utf-8")) > _MAX_LINE_BYTES:
+                raise CodexNetworkLiveError("Codex app-server line exceeded limit")
+            if stream_label == "stderr":
+                stderr_bytes += len(line.encode("utf-8"))
+                if stderr_bytes > _MAX_STDERR_BYTES:
+                    raise CodexNetworkLiveError(
+                        "Codex app-server stderr exceeded limit"
+                    )
+                continue
+            try:
+                message = json.loads(line)
+            except json.JSONDecodeError as error:
+                raise CodexNetworkLiveError(
+                    "Codex app-server emitted invalid JSON"
+                ) from error
+            if not isinstance(message, dict):
+                raise CodexNetworkLiveError(
+                    "Codex app-server message must be an object"
+                )
+            if message.get("id") == 1 and phase == "initialize":
+                _require_success(message, "initialize")
+                send({"method": "initialized", "params": {}})
+                send(
+                    {
+                        "id": 2,
+                        "method": "thread/start",
+                        "params": {
+                            "model": "tooluseproxy-synthetic",
+                            "modelProvider": "tooluseproxy_mock",
+                            "cwd": str(workspace),
+                            "approvalPolicy": "on-request",
+                            "sandbox": "workspace-write",
+                            "ephemeral": True,
+                            "baseInstructions": "Use only the synthetic tool call.",
+                            "developerInstructions": "Do not inspect files or alter the call.",
+                        },
+                    }
+                )
+                phase = "thread"
+                continue
+            if message.get("id") == 2 and phase == "thread":
+                result = _require_success(message, "thread start")
+                thread_id = result.get("thread", {}).get("id")
+                if not isinstance(thread_id, str):
+                    raise CodexNetworkLiveError("thread start omitted thread id")
+                send(
+                    {
+                        "id": 3,
+                        "method": "turn/start",
+                        "params": {
+                            "threadId": thread_id,
+                            "input": [
+                                {"type": "text", "text": "Run the fixed synthetic call."}
+                            ],
+                        },
+                    }
+                )
+                phase = "turn"
+                continue
+            if message.get("id") == 3 and "error" in message:
+                raise CodexNetworkLiveError("turn start failed")
+            method = message.get("method")
+            if method == "item/started":
+                item = message.get("params", {}).get("item", {})
+                item_id = item.get("id") if isinstance(item, dict) else None
+                if (
+                    isinstance(item, dict)
+                    and item.get("type") == "commandExecution"
+                    and isinstance(item_id, str)
+                ):
+                    command_item_ids.add(item_id)
+                    command_started_at[item_id] = time.monotonic()
+                    if phase == "turn":
+                        otel_state.set_turn_context(
+                            thread_id,
+                            command_started_at[item_id],
                         )
-                    continue
-                try:
-                    message = json.loads(line)
-                except json.JSONDecodeError as error:
-                    raise CodexNetworkLiveError(
-                        "Codex app-server emitted invalid JSON"
-                    ) from error
-                if not isinstance(message, dict):
-                    raise CodexNetworkLiveError(
-                        "Codex app-server message must be an object"
-                    )
-                if message.get("id") == 1 and phase == "initialize":
-                    _require_success(message, "initialize")
-                    send({"method": "initialized", "params": {}})
-                    send(
-                        {
-                            "id": 2,
-                            "method": "thread/start",
-                            "params": {
-                                "model": "tooluseproxy-synthetic",
-                                "modelProvider": "tooluseproxy_mock",
-                                "cwd": str(workspace),
-                                "approvalPolicy": "on-request",
-                                "sandbox": "workspace-write",
-                                "ephemeral": True,
-                                "baseInstructions": "Use only the synthetic tool call.",
-                                "developerInstructions": "Do not inspect files or alter the call.",
-                            },
-                        }
-                    )
-                    phase = "thread"
-                    continue
-                if message.get("id") == 2 and phase == "thread":
-                    result = _require_success(message, "thread start")
-                    thread_id = result.get("thread", {}).get("id")
-                    if not isinstance(thread_id, str):
-                        raise CodexNetworkLiveError("thread start omitted thread id")
-                    send(
-                        {
-                            "id": 3,
-                            "method": "turn/start",
-                            "params": {
-                                "threadId": thread_id,
-                                "input": [
-                                    {"type": "text", "text": "Run the fixed synthetic call."}
-                                ],
-                            },
-                        }
-                    )
-                    phase = "turn"
-                    continue
-                if message.get("id") == 3 and "error" in message:
-                    raise CodexNetworkLiveError("turn start failed")
-                method = message.get("method")
-                if method == "item/started":
-                    item = message.get("params", {}).get("item", {})
-                    item_id = item.get("id") if isinstance(item, dict) else None
-                    if (
-                        isinstance(item, dict)
-                        and item.get("type") == "commandExecution"
-                        and isinstance(item_id, str)
-                    ):
-                        command_item_ids.add(item_id)
-                        command_started_at[item_id] = time.monotonic()
-                        if phase == "turn":
-                            otel_state.set_turn_context(
-                                thread_id,
-                                command_started_at[item_id],
+                continue
+            if method == "item/commandExecution/requestApproval":
+                params = message.get("params", {})
+                context = (
+                    params.get("networkApprovalContext")
+                    if isinstance(params, dict)
+                    else None
+                )
+                if isinstance(context, dict):
+                    network_approval_count += 1
+                    item_id = params.get("itemId")
+                    if isinstance(item_id, str):
+                        approval_item_ids.append(item_id)
+                        started_at = command_started_at.get(item_id)
+                        if started_at is not None:
+                            approval_latencies.append(
+                                (time.monotonic() - started_at) * 1000
                             )
-                    continue
-                if method == "item/commandExecution/requestApproval":
-                    params = message.get("params", {})
-                    context = (
-                        params.get("networkApprovalContext")
-                        if isinstance(params, dict)
-                        else None
+                    context_matches_fixture = context_matches_fixture and (
+                        context.get("host") == _SYNTHETIC_HOST
+                        and context.get("protocol") == "https"
                     )
-                    if isinstance(context, dict):
-                        network_approval_count += 1
-                        item_id = params.get("itemId")
-                        if isinstance(item_id, str):
-                            approval_item_ids.append(item_id)
-                            started_at = command_started_at.get(item_id)
-                            if started_at is not None:
-                                approval_latencies.append(
-                                    (time.monotonic() - started_at) * 1000
-                                )
-                        context_matches_fixture = context_matches_fixture and (
-                            context.get("host") == _SYNTHETIC_HOST
-                            and context.get("protocol") == "https"
-                        )
-                    else:
-                        general_approval_count += 1
-                    request_id = message.get("id")
-                    if not isinstance(request_id, (int, str)):
-                        raise CodexNetworkLiveError("approval request omitted request id")
-                    send({"id": request_id, "result": {"decision": "decline"}})
-                    continue
-                if method == "turn/completed":
-                    turn_completed = True
+                else:
+                    general_approval_count += 1
+                request_id = message.get("id")
+                if not isinstance(request_id, (int, str)):
+                    raise CodexNetworkLiveError("approval request omitted request id")
+                send({"id": request_id, "result": {"decision": "decline"}})
+                continue
+            if method == "turn/completed":
+                turn_completed = True
     finally:
-        selector.close()
         try:
             process.stdin.close()
         except OSError:
@@ -708,6 +743,13 @@ def _run_app_server_turn(
                 except subprocess.TimeoutExpired:
                     process.kill()
                     process.wait(timeout=2)
+        for stream in (process.stdout, process.stderr):
+            try:
+                stream.close()
+            except OSError:
+                pass
+        for thread in reader_threads:
+            thread.join(timeout=1)
     if not turn_completed:
         raise CodexNetworkLiveError("Codex synthetic turn timed out")
     exact_join = bool(approval_item_ids) and all(
@@ -862,6 +904,7 @@ def _read_codex_version(codex_bin: str, timeout_seconds: float) -> str:
             capture_output=True,
             text=True,
             timeout=timeout_seconds,
+            env=_isolated_probe_environment(),
         )
     except FileNotFoundError:
         raise CodexNetworkLiveError("Codex CLI was not found") from None
@@ -873,6 +916,57 @@ def _read_codex_version(codex_bin: str, timeout_seconds: float) -> str:
     if match is None:
         raise CodexNetworkLiveError("Codex version output is unsupported")
     return match.group(1)
+
+
+def _require_network_proxy_feature(
+    codex_bin: str,
+    timeout_seconds: float,
+) -> None:
+    try:
+        completed = subprocess.run(
+            [codex_bin, "features", "list"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+            env=_isolated_probe_environment(),
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        raise CodexNetworkLiveError(
+            "Codex network proxy capability probe failed"
+        ) from None
+    if completed.returncode != 0 or completed.stderr:
+        raise CodexNetworkLiveError("Codex network proxy capability probe failed")
+    matches = [
+        line
+        for line in completed.stdout.splitlines()
+        if _NETWORK_PROXY_FEATURE_PATTERN.fullmatch(line.strip())
+    ]
+    if len(matches) != 1:
+        raise CodexNetworkLiveError("Codex network proxy feature is unavailable")
+
+
+def _isolated_probe_environment(codex_home: Path | None = None) -> dict[str, str]:
+    allowed = (
+        "HOME",
+        "LANG",
+        "LC_ALL",
+        "PATH",
+        "SSL_CERT_DIR",
+        "SSL_CERT_FILE",
+        "TMPDIR",
+    )
+    environment = {key: os.environ[key] for key in allowed if key in os.environ}
+    if codex_home is not None:
+        environment["CODEX_HOME"] = str(codex_home)
+    environment.update(
+        {
+            "NO_COLOR": "1",
+            "NO_PROXY": "127.0.0.1,localhost",
+            "no_proxy": "127.0.0.1,localhost",
+        }
+    )
+    return environment
 
 
 def _otel_log_records(document: Any) -> list[dict[str, Any]]:

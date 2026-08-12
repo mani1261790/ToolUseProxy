@@ -159,6 +159,37 @@ class CodexNetworkBoundaryProbeTest(unittest.TestCase):
             with self.assertRaisesRegex(ProbeError, "too large"):
                 _load_schema(oversized)
 
+    def test_malformed_schema_container_is_rejected(self) -> None:
+        malformed = _request_params()
+        malformed["definitions"] = []
+
+        def fake_run(
+            argv: list[str], **kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
+            del kwargs
+            if argv[1:] == ["--version"]:
+                stdout = "codex-cli 0.145.0\n"
+            elif argv[1:] == ["features", "list"]:
+                stdout = "network_proxy experimental false\n"
+            else:
+                output_root = Path(argv[-1])
+                (output_root / "CommandExecutionRequestApprovalParams.json").write_text(
+                    json.dumps(malformed), encoding="utf-8"
+                )
+                (output_root / "CommandExecutionRequestApprovalResponse.json").write_text(
+                    json.dumps(_response_schema()), encoding="utf-8"
+                )
+                (output_root / "ServerRequest.json").write_text(
+                    json.dumps({"enum": ["item/commandExecution/requestApproval"]}),
+                    encoding="utf-8",
+                )
+                stdout = ""
+            return subprocess.CompletedProcess(argv, 0, stdout=stdout, stderr="")
+
+        with patch("scripts.probe_codex_network_boundary.subprocess.run", fake_run):
+            with self.assertRaisesRegex(ProbeError, "definitions"):
+                probe_codex_network_boundary("codex")
+
 
 if __name__ == "__main__":
     unittest.main()

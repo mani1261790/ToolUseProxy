@@ -50,7 +50,7 @@ Codex Plugin APIやHook payloadはToolUseProxyとは別に変更され得ます�
 | Bash / MCP PreToolUse deny | opt-in | 既定off。static evidenceと現在eventのcritical findingに限定 |
 | Stop final-answer review | alpha対応 | critical findingを`continue_review`で差し戻す |
 | runtime redact / `updatedInput` | 未対応 | 複数Hook後の最終採用inputを証明できないため無効 |
-| Externality Judge | experimental / 既定off | Hookは値非保持要約をlocal queueへ保存し、初見unknown＋protected flowを保守的にdeny。Hook外worker、人間review、workspace単位の完全一致cacheを使い、LLM分類を自動昇格しない |
+| Externality Judge | experimental / 既定off | runtime解析、DB、schemaが正常に利用できる場合、Hookは値非保持要約をlocal queueへ保存し、初見unknown＋protected flowを保守的にdeny。初期化・解析・DB・schema failureでは既存のfail-open境界が残る。Hook外worker、人間review、workspace単位の完全一致cacheを使い、LLM分類を自動昇格しない |
 | remote embedding / telemetry | 非搭載 | Hook内network serviceなし。telemetryは送信しない |
 | explicit managed-data uninstall | macOS / Linux alpha対応 | Plugin removeは保持。`uninstall plan`のexact tokenを`apply`へ渡した場合だけ管理dataを削除 |
 

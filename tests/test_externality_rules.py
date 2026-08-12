@@ -39,6 +39,29 @@ class _FakeChain:
         )
 
 
+class _RaisingChain:
+    def judge(self, _envelope):  # type: ignore[no-untyped-def]
+        raise RuntimeError("sensitive provider diagnostic")
+
+
+class _MismatchedChain:
+    def judge(self, _envelope):  # type: ignore[no-untyped-def]
+        return JudgeChainResult(
+            JudgeObservation(
+                provider="codex_exec",
+                model="test-model",
+                envelope_sha256="0" * 64,
+                latency_ms=1,
+                verdict=ExternalityVerdict(
+                    verdict="unknown",
+                    confidence="low",
+                    reason_codes=("insufficient_evidence",),
+                ),
+            ),
+            (),
+        )
+
+
 class ExternalityRuleTest(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
@@ -167,6 +190,55 @@ class ExternalityRuleTest(unittest.TestCase):
         self.assertEqual("cache_hit", second.state)
         self.assertEqual(match, second.rule)
         self.assertEqual(1, chain.calls)
+
+    def test_provider_exception_marks_job_failed_without_stranding_processing(self) -> None:
+        prepare_externality_hook_decision(
+            self.db_path,
+            self._event("./opaque-agent"),
+            workspace_root=self.root,
+        )
+        configuration = type(
+            "Configuration",
+            (),
+            {"status": "ready", "chain": _RaisingChain(), "failure_code": None},
+        )()
+        with patch(
+            "hook_monitor.runtime.externality_rules.resolve_judge_configuration",
+            return_value=configuration,
+        ):
+            result = process_externality_jobs(self.db_path, environ={})
+
+        self.assertEqual(1, result["failed"])
+        with sqlite3.connect(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT status, failure_code FROM externality_classification_jobs"
+            ).fetchone()
+        self.assertEqual(("failed", "provider_call_failed"), row)
+
+    def test_mismatched_observation_digest_never_enters_review(self) -> None:
+        prepare_externality_hook_decision(
+            self.db_path,
+            self._event("./opaque-agent"),
+            workspace_root=self.root,
+        )
+        configuration = type(
+            "Configuration",
+            (),
+            {"status": "ready", "chain": _MismatchedChain(), "failure_code": None},
+        )()
+        with patch(
+            "hook_monitor.runtime.externality_rules.resolve_judge_configuration",
+            return_value=configuration,
+        ):
+            result = process_externality_jobs(self.db_path, environ={})
+
+        self.assertEqual(1, result["failed"])
+        self.assertEqual([], list_externality_reviews(self.db_path))
+        with sqlite3.connect(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT status, failure_code FROM externality_classification_jobs"
+            ).fetchone()
+        self.assertEqual(("failed", "provider_observation_invalid"), row)
 
     def test_revision_mismatch_and_unknown_approval_stop_safely(self) -> None:
         prepare_externality_hook_decision(

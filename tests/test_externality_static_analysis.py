@@ -123,7 +123,18 @@ class ExternalityStaticAnalysisTest(unittest.TestCase):
                 workspace_root=Path(temporary_directory),
             )
 
+            self.assertEqual("external", result.verdict)
+
+    def test_network_device_read_redirection_is_external(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            result = analyze_bash_externality(
+                "cat < /dev/tcp/example.invalid/443",
+                workspace_root=Path(temporary_directory),
+                cwd=Path(temporary_directory),
+            )
+
         self.assertEqual("external", result.verdict)
+        self.assertIn("socket", result.envelope.capabilities)
         self.assertIn("socket", result.envelope.capabilities)
 
     def test_unrecognized_python_or_node_program_is_not_proven_local(self) -> None:

@@ -151,7 +151,10 @@ class NetworkEgressEvaluationTest(unittest.TestCase):
                 json.loads(result.stdout),
                 json.loads(output_path.read_text(encoding="utf-8")),
             )
-            self.assertEqual([], list(Path(temporary_directory).glob(".*.tmp")))
+            self.assertEqual(
+                [output_path.name],
+                sorted(item.name for item in Path(temporary_directory).iterdir()),
+            )
 
 
 if __name__ == "__main__":

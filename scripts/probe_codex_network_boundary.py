@@ -189,12 +189,12 @@ def _load_schema(path: Path) -> dict[str, Any]:
 def _inspect_request_contract(
     params: dict[str, Any], server_request: dict[str, Any]
 ) -> dict[str, bool]:
-    required = set(params.get("required", []))
-    properties = params.get("properties", {})
-    definitions = params.get("definitions", {})
-    network_context = definitions.get("NetworkApprovalContext", {})
-    network_required = set(network_context.get("required", []))
-    network_properties = network_context.get("properties", {})
+    required = _string_set_field(params, "required")
+    properties = _object_field(params, "properties")
+    definitions = _object_field(params, "definitions")
+    network_context = _object_field(definitions, "NetworkApprovalContext")
+    network_required = _string_set_field(network_context, "required")
+    network_properties = _object_field(network_context, "properties")
     request_method_present = _contains_enum_value(
         server_request, "item/commandExecution/requestApproval"
     )
@@ -212,8 +212,9 @@ def _inspect_request_contract(
 
 
 def _inspect_response_contract(response: dict[str, Any]) -> dict[str, bool]:
-    decisions = response.get("definitions", {}).get(
-        "CommandExecutionApprovalDecision", {}
+    decisions = _object_field(
+        _object_field(response, "definitions"),
+        "CommandExecutionApprovalDecision",
     )
     return {
         "per_request_decisions_present": (
@@ -228,6 +229,26 @@ def _inspect_response_contract(response: dict[str, Any]) -> dict[str, bool]:
             decisions, "applyNetworkPolicyAmendment"
         ),
     }
+
+
+def _object_field(value: dict[str, Any], key: str) -> dict[str, Any]:
+    nested = value.get(key)
+    if nested is None:
+        return {}
+    if not isinstance(nested, dict):
+        raise ProbeError(f"Codex schema field {key} is not an object")
+    return nested
+
+
+def _string_set_field(value: dict[str, Any], key: str) -> set[str]:
+    nested = value.get(key)
+    if nested is None:
+        return set()
+    if not isinstance(nested, list) or any(
+        not isinstance(item, str) for item in nested
+    ):
+        raise ProbeError(f"Codex schema field {key} is not a string array")
+    return set(nested)
 
 
 def _contains_enum_value(value: Any, expected: str) -> bool:

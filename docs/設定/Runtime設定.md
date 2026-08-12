@@ -62,6 +62,6 @@ sh "<PLUGIN_ROOT>/hooks/run_cli.sh" config history \
 
 Hookは設定を短いread-only transactionで読みます。Hook内ではschema migration、設定変更、workspace scanを行いません。DB lock、schema不一致、設定破損では永続設定をfail-openで使わず、明示された有効な環境変数と安全な既定値だけへ戻ります。migrationが必要な場合はHook外で`init --codex`を実行します。
 
-Externality JudgeのHook処理はnetworkを使いません。Hook外workerはworkspace設定に加えて`codex` routeを明示し、事前probe receiptが一致した場合だけ、jobごとの新しい隔離済みCodex一時セッションを使います。別provider、fallback、OpenAI API直接呼出し、API key設定はありません。既存のsetup profileには含まれません。送信項目、review、failure時の扱いは[Externality Judge](../設計/ExternalityJudge.md)、保持境界は[プライバシーとデータ保持](../../PRIVACY.md)を参照してください。
+Externality JudgeのHook処理はnetworkを使いません。Hook外workerはworkspace設定に加えて`codex` routeを明示し、事前probe receiptが一致した場合だけ、jobごとの新しい隔離済みCodex一時セッションを使います。Codex CLIは`0.145.0`以上を必要とします。receiptは24時間以内で、現在のCodex executableのbinary SHA-256、canonical path SHA-256、version、judge contract、modelがすべて一致する必要があります。期限切れまたは不一致ならworkerは起動しません。別provider、fallback、OpenAI API直接呼出し、API key設定はありません。既存のsetup profileには含まれません。送信項目、review、failure時の扱いは[Externality Judge](../設計/ExternalityJudge.md)、保持境界は[プライバシーとデータ保持](../../PRIVACY.md)を参照してください。
 
 設定storeへsecret本文や任意文字列は保存しません。保存対象は固定keyのboolean、revision、workspace ID、値を含まない変更監査だけです。

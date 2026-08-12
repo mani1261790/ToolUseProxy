@@ -176,8 +176,7 @@ def analyze_bash_externality(
             state.risk_signals.add("environment_override")
             state.lower_coverage("partial")
         if any(
-            operation.operation != "read"
-            and operation.path.startswith(("/dev/tcp/", "/dev/udp/"))
+            operation.path.startswith(("/dev/tcp/", "/dev/udp/"))
             for operation in segment.operations
         ):
             state.capabilities.add("socket")

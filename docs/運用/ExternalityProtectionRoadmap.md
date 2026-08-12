@@ -19,7 +19,7 @@ Hookはnetwork通信やLLM待機を行いません。LLM分類はjobごとに新
 - read-only sandbox、Hook / Plugin / shell / browser / MCP無効
 - timeout、tool activity、unexpected write、schema不一致はruleを作らない
 
-実probeはlocal `5,208 ms` / `local`、risk `4,511 ms` / `possibly_external`で、reason code 0、eligibleでした。これは値非保持の固定envelope 2件だけを使ったcapability確認であり、実projectの精度評価ではありません。
+正本とする2026-08-12のcapability probeは、Codex CLI 0.145.0、固定value-free envelope 2件、probe contract `codex-externality-probe-v2`を使い、local `5,208 ms` / `local`、risk `4,511 ms` / `possibly_external`、reason code 0でeligibleでした。これは実projectの精度評価ではありません。
 
 ## Phase 2: isolated dogfood
 

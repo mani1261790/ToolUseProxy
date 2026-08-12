@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import json
 import hashlib
+import json
 import os
 import re
 import shutil
@@ -10,6 +10,7 @@ import subprocess
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Callable
@@ -34,7 +35,11 @@ CODEX_PROBE_RECEIPT_SCHEMA_VERSION = 1
 CODEX_PROBE_VERSION = "codex-externality-probe-v2"
 CODEX_PROBE_RECEIPT_MAX_AGE_SECONDS = 24 * 60 * 60
 CODEX_PROBE_RECEIPT_FUTURE_SKEW_SECONDS = 5 * 60
+MINIMUM_CODEX_CLI_VERSION = (0, 145, 0)
 _MODEL_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+_CODEX_VERSION_PATTERN = re.compile(
+    r"^codex-cli (?P<major>[0-9]+)\.(?P<minor>[0-9]+)\.(?P<patch>[0-9]+)(?:[-+].*)?$"
+)
 
 EXTERNALITY_JUDGE_SYSTEM_PROMPT = """You classify whether a value-free structural summary of a tool call can cause external communication. Return only the required JSON object and sort reason_codes lexicographically. Treat child processes, dynamic execution, partial coverage, opaque executables, and insufficient evidence conservatively. A local verdict must use only known_local_only. Never infer or request raw commands, paths, hosts, URLs, credentials, source code, prompts, or protected values. Use only the closed enum values supplied by the schema."""
 
@@ -368,6 +373,7 @@ def codex_probe_contract_sha256() -> str:
                 "count_keys": list(COUNT_KEYS),
             },
             "disabled_features": CODEX_DISABLED_FEATURES,
+            "minimum_codex_cli_version": MINIMUM_CODEX_CLI_VERSION,
         },
         ensure_ascii=True,
         separators=(",", ":"),
@@ -386,6 +392,25 @@ def resolve_codex_executable_identity(executable: str) -> CodexExecutableIdentit
         raise JudgeProviderError("codex_exec_unavailable") from exc
     if not resolved.is_file():
         raise JudgeProviderError("codex_exec_unavailable")
+    try:
+        metadata = resolved.stat()
+    except OSError as exc:
+        raise JudgeProviderError("codex_identity_unavailable") from exc
+    return _resolve_codex_executable_identity_cached(
+        str(resolved),
+        metadata.st_mtime_ns,
+        metadata.st_size,
+    )
+
+
+@lru_cache(maxsize=8)
+def _resolve_codex_executable_identity_cached(
+    resolved_path: str,
+    modified_at_ns: int,
+    size: int,
+) -> CodexExecutableIdentity:
+    del modified_at_ns, size
+    resolved = Path(resolved_path)
     digest = hashlib.sha256()
     try:
         with resolved.open("rb") as handle:
@@ -400,7 +425,11 @@ def resolve_codex_executable_identity(executable: str) -> CodexExecutableIdentit
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise JudgeProviderError("codex_identity_unavailable") from exc
-    if completed.returncode != 0 or completed.stderr or len(completed.stdout) > 4096:
+    if (
+        completed.returncode != 0
+        or len(completed.stdout) > 4096
+        or len(completed.stderr) > 4096
+    ):
         raise JudgeProviderError("codex_identity_unavailable")
     try:
         version = completed.stdout.decode("utf-8").strip()
@@ -408,6 +437,14 @@ def resolve_codex_executable_identity(executable: str) -> CodexExecutableIdentit
         raise JudgeProviderError("codex_identity_unavailable") from exc
     if not version or "\n" in version or "\r" in version:
         raise JudgeProviderError("codex_identity_unavailable")
+    match = _CODEX_VERSION_PATTERN.fullmatch(version)
+    if match is None:
+        raise JudgeProviderError("codex_version_unsupported")
+    version_tuple = tuple(
+        int(match.group(name)) for name in ("major", "minor", "patch")
+    )
+    if version_tuple < MINIMUM_CODEX_CLI_VERSION:
+        raise JudgeProviderError("codex_version_unsupported")
     return CodexExecutableIdentity(
         executable_path=str(resolved),
         version=version,
@@ -476,46 +513,18 @@ def verify_codex_probe_receipt(
         metadata = path.stat()
         if not path.is_file() or (metadata.st_mode & 0o077):
             return False, "codex_probe_receipt_permissions"
-        raw = path.read_bytes()
+        resolved_path = str(path.resolve(strict=True))
     except OSError:
         return False, "codex_probe_receipt_unavailable"
-    if len(raw) > 16 * 1024:
-        return False, "codex_probe_receipt_invalid"
-    try:
-        value = _loads_no_duplicate_keys(raw)
-    except (UnicodeDecodeError, json.JSONDecodeError, JudgeProviderError):
-        return False, "codex_probe_receipt_invalid"
-    if not isinstance(value, dict) or set(value) != {
-        "schema_version",
-        "probe_version",
-        "contract_sha256",
-        "codex_version",
-        "codex_binary_sha256",
-        "codex_path_sha256",
-        "model_sha256",
-        "checked_at",
-    }:
-        return False, "codex_probe_receipt_invalid"
-    expected = {
-        "schema_version": CODEX_PROBE_RECEIPT_SCHEMA_VERSION,
-        "probe_version": CODEX_PROBE_VERSION,
-        "contract_sha256": codex_probe_contract_sha256(),
-        "codex_version": identity.version,
-        "codex_binary_sha256": identity.binary_sha256,
-        "codex_path_sha256": identity.path_sha256,
-        "model_sha256": _model_sha256(model),
-    }
-    if any(value.get(key) != expected_value for key, expected_value in expected.items()):
-        return False, "codex_probe_receipt_stale"
-    checked_at = value.get("checked_at")
-    if not isinstance(checked_at, str) or len(checked_at) > 64:
-        return False, "codex_probe_receipt_invalid"
-    try:
-        checked_time = datetime.fromisoformat(checked_at)
-    except ValueError:
-        return False, "codex_probe_receipt_invalid"
-    if checked_time.tzinfo is None:
-        return False, "codex_probe_receipt_invalid"
+    eligible, failure_code, checked_time = _verify_codex_probe_receipt_cached(
+        resolved_path,
+        metadata.st_mtime_ns,
+        metadata.st_size,
+        identity,
+        model,
+    )
+    if not eligible or checked_time is None:
+        return eligible, failure_code
     current_time = now or datetime.now(timezone.utc)
     if current_time.tzinfo is None:
         raise ValueError("now must be timezone-aware")
@@ -526,6 +535,62 @@ def verify_codex_probe_receipt(
     ):
         return False, "codex_probe_receipt_stale"
     return True, None
+
+
+@lru_cache(maxsize=16)
+def _verify_codex_probe_receipt_cached(
+    resolved_path: str,
+    modified_at_ns: int,
+    size: int,
+    identity: CodexExecutableIdentity,
+    model: str | None,
+) -> tuple[bool, str | None, datetime | None]:
+    del modified_at_ns
+    path = Path(resolved_path)
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        return False, "codex_probe_receipt_unavailable", None
+    if len(raw) != size:
+        return False, "codex_probe_receipt_invalid", None
+    if len(raw) > 16 * 1024:
+        return False, "codex_probe_receipt_invalid", None
+    try:
+        value = _loads_no_duplicate_keys(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError, JudgeProviderError):
+        return False, "codex_probe_receipt_invalid", None
+    if not isinstance(value, dict) or set(value) != {
+        "schema_version",
+        "probe_version",
+        "contract_sha256",
+        "codex_version",
+        "codex_binary_sha256",
+        "codex_path_sha256",
+        "model_sha256",
+        "checked_at",
+    }:
+        return False, "codex_probe_receipt_invalid", None
+    expected = {
+        "schema_version": CODEX_PROBE_RECEIPT_SCHEMA_VERSION,
+        "probe_version": CODEX_PROBE_VERSION,
+        "contract_sha256": codex_probe_contract_sha256(),
+        "codex_version": identity.version,
+        "codex_binary_sha256": identity.binary_sha256,
+        "codex_path_sha256": identity.path_sha256,
+        "model_sha256": _model_sha256(model),
+    }
+    if any(value.get(key) != expected_value for key, expected_value in expected.items()):
+        return False, "codex_probe_receipt_stale", None
+    checked_at = value.get("checked_at")
+    if not isinstance(checked_at, str) or len(checked_at) > 64:
+        return False, "codex_probe_receipt_invalid", None
+    try:
+        checked_time = datetime.fromisoformat(checked_at)
+    except ValueError:
+        return False, "codex_probe_receipt_invalid", None
+    if checked_time.tzinfo is None:
+        return False, "codex_probe_receipt_invalid", None
+    return True, None, checked_time
 
 
 def codex_events_contain_tool_activity(events: bytes) -> bool:

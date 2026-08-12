@@ -100,6 +100,23 @@ class ExternalityJudgeEvaluationTest(unittest.TestCase):
         self.assertEqual(1.0, report["risk_recall"])
         self.assertEqual("unknown", report["cases"][0]["combined_verdict"])
 
+    def test_unknown_case_id_and_invalid_verdict_are_rejected(self) -> None:
+        cases = (ExternalityJudgeCase("opaque", "./opaque-agent", "external"),)
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            with self.assertRaisesRegex(ValueError, "verdict is invalid"):
+                evaluate_externality_judge_cases(
+                    cases,
+                    workspace_root=root,
+                    judge_verdicts={"opaque": "typo"},
+                )
+            with self.assertRaisesRegex(ValueError, "case id is unknown"):
+                evaluate_externality_judge_cases(
+                    cases,
+                    workspace_root=root,
+                    judge_verdicts={"missing": "unknown"},
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

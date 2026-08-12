@@ -224,16 +224,23 @@ def evaluate_network_egress(
         },
         "cases": case_reports,
     }
-    privacy_violations = _privacy_violations(report)
     report["privacy"] = {
-        "raw_value_exposure_count": len(privacy_violations),
-        "violation_paths": privacy_violations,
+        "raw_value_exposure_count": 0,
+        "violation_paths": [],
     }
     report["summary"] = {
-        "foundation_gate_passed": not privacy_violations,
+        "foundation_gate_passed": False,
         "accuracy_gated": False,
         "production_behavior_changed": False,
     }
+    privacy_violations = _privacy_violations(report)
+    report["privacy"].update(
+        {
+            "raw_value_exposure_count": len(privacy_violations),
+            "violation_paths": privacy_violations,
+        }
+    )
+    report["summary"]["foundation_gate_passed"] = not privacy_violations
     return report
 
 
@@ -371,6 +378,14 @@ def _validate_coverage(cases: tuple[NetworkEgressCase, ...], location: Path) -> 
             raise NetworkEgressDatasetError(
                 f"{location}: split {split} needs public and protected payload classes"
             )
+        if "hosted_external" not in ground_truths:
+            raise NetworkEgressDatasetError(
+                f"{location}: split {split} needs a hosted external surface"
+            )
+        if "unobservable" not in ground_truths:
+            raise NetworkEgressDatasetError(
+                f"{location}: split {split} needs an unobservable surface"
+            )
 
 
 def _case_report(case: NetworkEgressCase) -> dict[str, str]:
@@ -459,7 +474,7 @@ def _privacy_violations(report: dict[str, Any]) -> list[str]:
             for index, nested in enumerate(value):
                 visit(nested, f"{path}[{index}]")
 
-    visit(report, "$.")
+    visit(report, "$")
     return sorted(violations)
 
 

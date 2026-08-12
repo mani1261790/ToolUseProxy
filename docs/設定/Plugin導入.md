@@ -140,7 +140,7 @@ Plugin Hookは未初期化DBを検出してもschema migrationやworkspace変更
 
 通常setupの固定profileは次を行います。
 
-- `PLUGIN_DATA/events.db`を候補、監査、workspace runtime設定を含むschema v6へ初期化または明示的にmigrationする
+- `PLUGIN_DATA/events.db`を候補、監査、workspace runtime設定、Externality Judge job / reviewを含むschema v7へ初期化または明示的にmigrationする
 - 古いschemaをmigrationする前にSQLite backupを作る
 - canonical workspace rootをDBへ登録する
 - `protected_sources.json`がない場合だけ、schema v2の空manifestをatomicに作る

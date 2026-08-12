@@ -6,9 +6,10 @@ import re
 import sqlite3
 import time
 from collections import Counter
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Literal, Mapping
+from typing import Iterable, Iterator, Literal, Mapping
 
 from hook_monitor.analysis.adapters.bash import classify_bash_sink_type
 from hook_monitor.analysis.adapters.mcp import classify_mcp_sink_type
@@ -366,11 +367,16 @@ def _require_schema(conn: sqlite3.Connection) -> None:
         raise RuntimeError("externality shadow schema mismatch")
 
 
-def _connect(db_path: Path) -> sqlite3.Connection:
+@contextmanager
+def _connect(db_path: Path) -> Iterator[sqlite3.Connection]:
     timeout_seconds = EXTERNALITY_SHADOW_BUSY_TIMEOUT_MS / 1000
     conn = sqlite3.connect(db_path, timeout=timeout_seconds)
-    conn.execute(f"PRAGMA busy_timeout = {EXTERNALITY_SHADOW_BUSY_TIMEOUT_MS}")
-    return conn
+    try:
+        conn.execute(f"PRAGMA busy_timeout = {EXTERNALITY_SHADOW_BUSY_TIMEOUT_MS}")
+        with conn:
+            yield conn
+    finally:
+        conn.close()
 
 
 def _validate_observation(observation: ExternalityShadowObservation) -> None:
@@ -517,7 +523,26 @@ def _verify_stored(conn: sqlite3.Connection, observation: ExternalityShadowObser
 
 
 def _immutable_signature(observation: ExternalityShadowObservation) -> tuple[object, ...]:
-    return _observation_values(observation)[:18]
+    return (
+        observation.observation_id,
+        observation.pre_event_id,
+        observation.workspace_id,
+        observation.session_id,
+        observation.tool_use_id,
+        observation.tool_family,
+        observation.envelope_sha256,
+        observation.adapter_verdict,
+        observation.static_verdict,
+        observation.judge_status,
+        observation.judge_verdict,
+        observation.shadow_verdict,
+        observation.provider,
+        observation.model_sha256,
+        observation.failure_code,
+        observation.analysis_coverage,
+        observation.capability_count,
+        observation.risk_signal_count,
+    )
 
 
 def _observation_id(event_id: str, envelope_sha256: str) -> str:
