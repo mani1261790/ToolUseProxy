@@ -17,8 +17,9 @@ import sys
 import time
 import urllib.parse
 import zipfile
+from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, Iterator
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -3739,13 +3740,14 @@ def _write_desktop_guidance(
         "権限昇格と承認要求を使ってください。Full Accessを前提にせず、"
         "権限昇格手段がない場合は実行せず停止してください。承認が必要な理由は"
         "外部通信ではなく、Desktop taskのworkspace外にあるPlugin dataの操作"
-        "です。setup applyの説明とjustificationは「ToolUseProxyの確認｜内容：この"
-        "プロジェクトの保護を有効にする｜変更：初期設定と3つの保護設定｜通信："
-        "なし｜理由：プロジェクト外の専用保存領域を使うため｜許可：この初期設定"
-        "だけなら許可」を使ってください。setup verifyでは「ToolUseProxyの確認｜"
-        "内容：設定が正しく有効か確認する｜変更：なし｜通信：なし｜理由："
-        "プロジェクト外の専用保存領域を読むため｜許可：確認だけなら許可」を"
-        "使ってください。"
+        "です。setup applyの説明とjustificationは「ToolUseProxyの操作確認｜行うこと："
+        "このプロジェクトの保護を有効にします｜変更されるもの：初期設定と、保護"
+        "ファイルの外部送信を実行前に止める設定｜外部通信：ありません｜確認が必要"
+        "な理由：プロジェクト外の専用保存領域へ設定を保存するためです｜この内容で"
+        "実行してよいですか？」を使ってください。setup verifyでは「ToolUseProxyの"
+        "操作確認｜行うこと：設定が正しく有効か確認します｜変更されるもの：ありま"
+        "せん｜外部通信：ありません｜確認が必要な理由：プロジェクト外の専用保存"
+        "領域を読み取るためです｜この内容で実行してよいですか？」を使ってください。"
         f"{setup_command_sentence}verification"
         "がpassedになった後、payload fileを読まず、次の二つだけを順に"
         f"実行してください。public call: {public_command}｜protected call: "
@@ -4503,11 +4505,33 @@ def _parse_session(
                                 justification = arguments.get(
                                     "justification"
                                 )
-                                scoped_reason = bool(
+                                current_reason = bool(
                                     isinstance(justification, str)
-                                    and "workspace外" in justification
-                                    and "外部通信：なし" in justification
+                                    and justification.startswith(
+                                        "ToolUseProxyの操作確認｜"
+                                    )
+                                    and "｜外部通信：ありません｜確認が必要な理由："
+                                    in justification
+                                    and "プロジェクト外の専用保存領域"
+                                    in justification
+                                    and justification.endswith(
+                                        "｜この内容で実行してよいですか？"
+                                    )
                                 )
+                                legacy_reason = bool(
+                                    isinstance(justification, str)
+                                    and justification.startswith(
+                                        "ToolUseProxyの確認｜"
+                                    )
+                                    and "｜通信：なし｜理由：" in justification
+                                    and (
+                                        "プロジェクト外の専用保存領域"
+                                        in justification
+                                        or "workspace外のPlugin data"
+                                        in justification
+                                    )
+                                )
+                                scoped_reason = current_reason or legacy_reason
                                 scoped_escalation_count += int(scoped)
                                 justified_plugin_data_call_count += int(
                                     justified
@@ -5040,7 +5064,7 @@ def _read_hook_evidence(
     minimum_sequence_no: int | None = None,
 ) -> dict[str, Any]:
     try:
-        with sqlite3.connect(f"{database.resolve().as_uri()}?mode=ro", uri=True) as conn:
+        with _immutable_database_snapshot(database) as conn:
             if minimum_sequence_no is not None:
                 resolved_public = _hook_tool_use_ids_for_commands(
                     conn,
@@ -5205,7 +5229,7 @@ def _read_runtime_settings(
             "workspace_identity_missing",
         )
     try:
-        with sqlite3.connect(f"{database.resolve().as_uri()}?mode=ro", uri=True) as conn:
+        with _immutable_database_snapshot(database) as conn:
             row = conn.execute(
                 """
                 SELECT settings_revision, settings_json
@@ -5232,6 +5256,44 @@ def _read_runtime_settings(
         "effective": configured,
         "revision": str(row[0]),
     }
+
+
+@contextmanager
+def _immutable_database_snapshot(
+    database: Path,
+) -> Iterator[sqlite3.Connection]:
+    resolved = database.resolve()
+    if database.is_symlink() or not resolved.is_file():
+        raise sqlite3.OperationalError("database snapshot is unavailable")
+    wal = Path(f"{resolved}-wal")
+    shm = Path(f"{resolved}-shm")
+    if wal.is_symlink() or (wal.exists() and not wal.is_file()):
+        raise sqlite3.OperationalError("database WAL is unavailable")
+    if shm.is_symlink() or (shm.exists() and not shm.is_file()):
+        raise sqlite3.OperationalError("database SHM is unavailable")
+
+    def snapshot() -> tuple[tuple[int, int] | None, tuple[int, int] | None, int | None]:
+        database_state, wal_state = (
+            (path.stat().st_size, path.stat().st_mtime_ns)
+            if path.exists()
+            else None
+            for path in (resolved, wal)
+        )
+        shm_size = shm.stat().st_size if shm.exists() else None
+        return database_state, wal_state, shm_size
+
+    before = snapshot()
+    query = "mode=ro" if wal.exists() else "mode=ro&immutable=1"
+    connection = sqlite3.connect(
+        f"{resolved.as_uri()}?{query}",
+        uri=True,
+    )
+    try:
+        yield connection
+    finally:
+        connection.close()
+    if snapshot() != before:
+        raise sqlite3.OperationalError("database changed during snapshot read")
 
 
 def _desktop_plugin_identity_ok(state: dict[str, Any]) -> bool:

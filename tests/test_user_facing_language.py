@@ -27,7 +27,10 @@ def test_setup_skill_keeps_implementation_words_out_of_user_choices() -> None:
         REPO_ROOT / "skills" / "tooluseproxy-setup" / "SKILL.md"
     ).read_text(encoding="utf-8")
 
-    assert "ToolUseProxyの確認｜内容：...｜変更：...｜通信：...｜理由：...｜許可：..." in skill
+    assert (
+        "ToolUseProxyの操作確認｜行うこと：...｜変更されるもの：...｜"
+        "外部通信：...｜確認が必要な理由：...｜この内容で実行してよいですか？"
+    ) in skill
     assert "このファイルをToolUseProxyで守りますか？" in skill
     assert "`守る` / `今回は見送る` / `今後は候補に出さない`" in skill
     assert "Never require the user to" in skill
@@ -89,20 +92,30 @@ def test_approval_templates_stay_short_and_self_contained() -> None:
     templates = [
         line.split("`", 2)[1]
         for line in skill.splitlines()
-        if line.startswith("- ") and "`ToolUseProxyの確認｜" in line
+        if line.startswith("- ") and "`ToolUseProxyの操作確認｜" in line
     ]
 
     assert len(templates) == 12
-    labels = ("｜内容：", "｜変更：", "｜通信：", "｜理由：", "｜許可：")
+    labels = (
+        "｜行うこと：",
+        "｜変更されるもの：",
+        "｜外部通信：",
+        "｜確認が必要な理由：",
+        "｜この内容で実行してよいですか？",
+    )
     for template in templates:
         assert len(template) <= 160
         positions = [template.index(label) for label in labels]
         assert positions == sorted(positions)
-        assert "通信：なし" in template
+        assert "外部通信：ありません" in template
+        assert template.endswith("｜この内容で実行してよいですか？")
+        assert "なら許可" not in template
+        assert "なら拒否" not in template
+        assert "許可条件" not in template
         assert "`" not in template
 
     setup = next(value for value in templates if "このプロジェクトの保護を有効" in value)
-    scan = next(value for value in templates if "守った方がよいファイルを探す" in value)
+    scan = next(value for value in templates if "守った方がよいファイルを探します" in value)
     assert "外部送信を実行前に止める" in setup
     assert "専用保存領域へ設定を保存" in setup
     assert "専用保存領域へ確認結果を記録" in scan

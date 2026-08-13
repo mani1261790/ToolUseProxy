@@ -33,7 +33,7 @@ Desktopのtask履歴で使われる`exec_command`は、Hook matcherのtool名で
 
 ただし、承認の理由は外部通信ではありません。Desktop taskのworkspace外にある`PLUGIN_DATA`をCLIが読み書きするため、各commandに一時的な権限昇格が必要になります。2026-08-09のfresh runでは、短いplain textの説明、継続中commandのwait、public allow、protected blockまで機能上は完走しました。Hook review、command説明、block説明はいずれも理解できたという評価でしたが、初期設定で約10回の承認が必要な点は製品UXとして残っています。
 
-承認理由は160文字以内のplain textとし、区切りは`すること：`、`変わるもの：`、`外部通信：`、`許可判断：`の4つだけにします。absolute path、Markdown、過去の説明への参照を含めません。同じ文を承認直前とtool callのjustificationへ渡します。command toolがcell IDを返した場合は、CLIを再実行せず、そのIDによるwaitだけで元commandの完了まで待ちます。
+承認理由は160文字以内のplain textとし、`行うこと：`、`変更されるもの：`、`外部通信：`、`確認が必要な理由：`の順で示し、最後に`この内容で実行してよいですか？`と尋ねます。ToolUseProxy側から許可・拒否を指示しません。absolute path、Markdown、過去の説明への参照を含めません。同じ文を承認直前とtool callのjustificationへ渡します。command toolがcell IDを返した場合は、CLIを再実行せず、そのIDによるwaitだけで元commandの完了まで待ちます。
 
 Issue [#63](https://github.com/mani1261790/ToolUseProxy/issues/63)では、`init`と3つの明示設定を固定`file-payload-exact` profileの一括適用へ、`doctor` / `status` / `config show`を一つのread-only verificationへまとめました。3設定は一つのSQLite transactionと一つのrevisionで更新し、stale revisionでは変更せず停止します。新しいharnessはprofile apply 1回、verification 1回、再利用可能permission 0件を必須にします。Desktop session parserは、setupとsendではexactな`text(JSON.stringify(r));`だけを受理し、`text(r.output);`は単独probeとcontext・setup skillの固定読み取りだけに限定します。任意statement、追加command、同じoutput-only wrapperによるsetupやsendは拒否します。2026-08-09のfresh runは全checks trueで正式な`passed`です。
 

@@ -113,7 +113,7 @@ prepareは同じrootへmode `0600`の`phase-b-prompt.txt`、`phase-b-guide.md`�
 
 1. guideでPreToolUse / PostToolUse / Stopの役割、sandbox外実行、local data、networkなし、想定source / 件数 / command rootを理解する
 2. Codexが表示する3件のHook definitionをreviewし、guideと一致する場合だけtrustする
-3. 長いPlugin commandの承認ごとに、160文字以内の同じplain textが事前説明と承認理由の両方へ表示され、`内容：` `変更：` `通信：` `理由：` `許可：` で区切られている。absolute pathやMarkdownは承認理由へ含めない
+3. 長いPlugin commandの承認ごとに、160文字以内の同じplain textが事前説明と承認理由の両方へ表示され、`行うこと：` `変更されるもの：` `外部通信：` `確認が必要な理由：`の順で説明した後に`この内容で実行してよいですか？`と尋ねている。absolute pathやMarkdownは承認理由へ含めない
 4. synthetic workspaceで`init`、`doctor`、`status`を実行する
 5. 候補について、exact JSONより先に「このファイルをToolUseProxyで守りますか？」と表示され、「ファイル」「守る内容」「できること」「守るを選ぶと」の説明と「守る」「今回は見送る」「今後は候補に出さない」の選択肢を読む
 6. その説明を理解した場合だけexact proposalを明示approveする
@@ -169,7 +169,7 @@ verify出力はroot path、source hash、candidate ID、tool input、raw canary�
 
 2026-07-24のPhase B v2 human runでは、candidate approve、public allow、protected PreToolUse block、protected side effect 0、session / Hook DB / markerの相互照合はすべて成功しました。一方、最初のUX評価はHook review理解`no`、proposal説明理解`no`でした。起動前guideとcandidate review cardを追加した次のrunではcandidate説明は理解でき、同じ機能動作も成功しましたが、command承認は「起動前guideを覚えている」前提が残っていました。長い`sh ...`を理解せず、その承認直前の説明だけで判断することはできなかったため、command説明は`no`です。どちらのrunも`needs_followup`であり、機能成功を説明UX成功へ読み替えません。
 
-次のrunでは、各command承認の直前にexact command argumentsから作った自己完結型の7項目を表示します。「説明済み」「上記の操作」「先ほどの説明」のような過去参照は禁止し、「承認判断」で今回のsubcommand・scope・照合結果・拒否条件を繰り返します。このTUI再検証とは別に、Desktop / GUI専用のPhase B caseを用意します。
+現在のrunでは、各command承認の直前にexact command argumentsから作った自己完結型の説明を表示します。「説明済み」「上記の操作」「先ほどの説明」のような過去参照は禁止し、行うこと、変更されるもの、外部通信、確認が必要な理由を示したうえで「この内容で実行してよいですか？」と尋ねます。ToolUseProxy側から許可や拒否を指示しません。このTUI再検証とは別に、Desktop / GUI専用のPhase B caseを用意します。
 
 その後のhuman runでは7項目は出ましたが、`- ラベル: 長い文章`が連続し、承認時に読みづらいという評価でした。また`doctor`の一時的な`OperationalError`後もagentがscanと送信テストへ進み、protected callは遮断されませんでした。DBはrun終了後にSQLite `quick_check`とdoctorが正常へ戻り、恒久破損ではありませんでしたが、このrunは明確に不合格です。次の改修では縦型Markdown cardを採用しましたが、TUIの承認導線ではMarkdown記号がそのまま見え、改行も判断に利用できないことがhuman runで判明しました。このためMarkdown cardを廃止し、改行がすべて消えても読める全角ラベル区切りの短いplain textへ変更します。異常時に送信テストへ進まず停止する契約は維持します。
 

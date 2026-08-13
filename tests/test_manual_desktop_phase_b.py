@@ -222,7 +222,8 @@ text(JSON.stringify(r));
             self.assertIn("setup apply file-payload-exact", prompt)
             self.assertIn("setup verify file-payload-exact", prompt)
             self.assertIn("プロジェクト外の専用保存領域", prompt)
-            self.assertIn("通信：なし", prompt)
+            self.assertIn("外部通信：ありません", prompt)
+            self.assertIn("この内容で実行してよいですか？", prompt)
             self.assertIn("個別のinit、doctor、status、config show、config setは実行しない", prompt)
 
     def test_desktop_prompt_defers_setup_commands_until_data_is_known(
@@ -2803,8 +2804,10 @@ text(JSON.stringify(r));
                 f"--workspace {workspace} --data-dir {plugin_data} --json"
             )
             reason = (
-                "実行確認｜すること：workspace外のPlugin dataを確認｜"
-                "変わるもの：なし｜外部通信：なし｜許可判断：確認だけなら許可。"
+                "ToolUseProxyの操作確認｜行うこと：設定が正しく有効か確認します｜"
+                "変更されるもの：ありません｜外部通信：ありません｜確認が必要な"
+                "理由：プロジェクト外の専用保存領域を読み取るためです｜"
+                "この内容で実行してよいですか？"
             )
             records = [
                 {
@@ -2948,6 +2951,7 @@ text(JSON.stringify(r));
         with tempfile.TemporaryDirectory() as temporary_directory:
             database = Path(temporary_directory) / "events.db"
             with sqlite3.connect(database) as conn:
+                self.assertEqual("wal", conn.execute("PRAGMA journal_mode = WAL").fetchone()[0])
                 conn.executescript(
                     """
                     CREATE TABLE events (
@@ -2991,6 +2995,13 @@ text(JSON.stringify(r));
                         "blocked by pre-execution file payload evidence",
                     ),
                 )
+                conn.commit()
+                conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+
+            Path(f"{database}-wal").unlink(missing_ok=True)
+            Path(f"{database}-shm").unlink(missing_ok=True)
+            self.assertFalse(Path(f"{database}-wal").exists())
+            self.assertFalse(Path(f"{database}-shm").exists())
 
             evidence = _read_hook_evidence(
                 database,
