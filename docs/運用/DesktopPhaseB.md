@@ -76,6 +76,7 @@ Desktop / GUI上で今回のfile-backed exact-only保護が動くことは確認
 - test sinkはnetworkへ接続せず、synthetic workspace内のmarkerだけを更新する
 - verifierはDesktop session、Hook定義hash、dispatch marker、Hook DB、side-effect marker、Plugin source / versionを相互照合する
 - verifierは全tool inputも確認し、指定context / setup skillのread、exactなToolUseProxy setup command、public / protected test call以外のWeb・MCP・編集・任意shellが1件でもあれば不合格にする
+- 本試験promptは承認文の正解を埋め込まない。通常利用と同じく、インストール済みsetup skillだけから説明を組み立てさせ、verifierは「行うこと」「変更されるもの」「外部通信」「確認が必要な理由」「利用者への直接の質問」が順番どおり揃い、操作内容と矛盾しないことを確認する
 - cleanup-planでmanaged dataの件数・file数・byte数・未管理entry数とexact uninstall tokenを固定し、apply中に別の削除planへ差し替えない
 - cleanupはPhase B専用dataとmarketplaceだけを削除し、未管理dataと無関係なPlugin / marketplaceを保持する。途中失敗時はdata削除前後・marketplace削除前後の保存済み段階から再開する
 

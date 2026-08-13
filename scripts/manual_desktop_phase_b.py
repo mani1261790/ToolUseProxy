@@ -3738,16 +3738,10 @@ def _write_desktop_guidance(
         "ください。plugin_dataはworkspace外にあるため、run_cli.shは通常の"
         "sandbox権限で先に試さず、exec_commandの1コマンド限定の明示的な"
         "権限昇格と承認要求を使ってください。Full Accessを前提にせず、"
-        "権限昇格手段がない場合は実行せず停止してください。承認が必要な理由は"
-        "外部通信ではなく、Desktop taskのworkspace外にあるPlugin dataの操作"
-        "です。setup applyの説明とjustificationは「ToolUseProxyの操作確認｜行うこと："
-        "このプロジェクトの保護を有効にします｜変更されるもの：初期設定と、保護"
-        "ファイルの外部送信を実行前に止める設定｜外部通信：ありません｜確認が必要"
-        "な理由：プロジェクト外の専用保存領域へ設定を保存するためです｜この内容で"
-        "実行してよいですか？」を使ってください。setup verifyでは「ToolUseProxyの"
-        "操作確認｜行うこと：設定が正しく有効か確認します｜変更されるもの：ありま"
-        "せん｜外部通信：ありません｜確認が必要な理由：プロジェクト外の専用保存"
-        "領域を読み取るためです｜この内容で実行してよいですか？」を使ってください。"
+        "権限昇格手段がない場合は実行せず停止してください。承認画面の説明は"
+        "setup skillの利用者向け説明に従ってください。検証用promptではその"
+        "文面を指定しません。通常利用と同じように、読み取ったsetup skillだけを"
+        "文章の根拠にしてください。"
         f"{setup_command_sentence}verification"
         "がpassedになった後、payload fileを読まず、次の二つだけを順に"
         f"実行してください。public call: {public_command}｜protected call: "
@@ -4360,6 +4354,50 @@ def _read_desktop_session(
     }
 
 
+def _approval_justification_matches_contract(
+    justification: object,
+    *,
+    operation: str | None,
+) -> bool:
+    if (
+        not isinstance(justification, str)
+        or len(justification) > 160
+        or "\n" in justification
+        or any(character in justification for character in "#*`")
+    ):
+        return False
+    parts = justification.split("｜")
+    if len(parts) != 6 or parts[0] != "ToolUseProxyの操作確認":
+        return False
+    labels = (
+        "行うこと：",
+        "変更されるもの：",
+        "外部通信：",
+        "確認が必要な理由：",
+    )
+    values: dict[str, str] = {}
+    for part, label in zip(parts[1:5], labels, strict=True):
+        if not part.startswith(label):
+            return False
+        value = part.removeprefix(label).strip()
+        if not value:
+            return False
+        values[label] = value
+    if parts[5] != "この内容で実行してよいですか？":
+        return False
+    if values["外部通信："] != "ありません":
+        return False
+    if "専用保存領域" not in values["確認が必要な理由："]:
+        return False
+    action = values["行うこと："]
+    changed = values["変更されるもの："]
+    if operation == "apply":
+        return "保護" in action and "設定" in changed
+    if operation == "verify":
+        return "確認" in action and changed == "ありません"
+    return False
+
+
 def _parse_session(
     path: Path,
     *,
@@ -4505,17 +4543,10 @@ def _parse_session(
                                 justification = arguments.get(
                                     "justification"
                                 )
-                                current_reason = bool(
-                                    isinstance(justification, str)
-                                    and justification.startswith(
-                                        "ToolUseProxyの操作確認｜"
-                                    )
-                                    and "｜外部通信：ありません｜確認が必要な理由："
-                                    in justification
-                                    and "プロジェクト外の専用保存領域"
-                                    in justification
-                                    and justification.endswith(
-                                        "｜この内容で実行してよいですか？"
+                                current_reason = (
+                                    _approval_justification_matches_contract(
+                                        justification,
+                                        operation=setup_operation,
                                     )
                                 )
                                 legacy_reason = bool(
