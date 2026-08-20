@@ -94,20 +94,20 @@ class ManualPluginPhaseBTest(unittest.TestCase):
             self.assertIn("Desktop/GUI", guide)
             self.assertIn("別の検証", guide)
             for approval_label in (
-                "内容：",
-                "変更：",
-                "通信：",
-                "理由：",
-                "許可：",
+                "行うこと：",
+                "変更されるもの：",
+                "外部通信：",
+                "確認が必要な理由：",
+                "この内容で実行してよいですか？",
             ):
                 self.assertIn(approval_label, guide)
                 self.assertIn(approval_label, prompt)
             self.assertIn(
-                "ToolUseProxyの確認｜内容：短い説明｜変更：短い説明",
+                "ToolUseProxyの操作確認｜行うこと：短い説明｜変更されるもの：短い説明",
                 guide,
             )
             self.assertIn(
-                "ToolUseProxyの確認｜内容：短い説明｜変更：短い説明",
+                "ToolUseProxyの操作確認｜行うこと：短い説明｜変更されるもの：短い説明",
                 prompt,
             )
             self.assertIn("Markdownを描画せず、改行を潰す", guide)
@@ -242,15 +242,15 @@ class ManualPluginPhaseBTest(unittest.TestCase):
         ):
             self.assertIn(proposal_label, skill)
         for approval_label in (
-            "内容：",
-            "変更：",
-            "通信：",
-            "理由：",
-            "許可：",
+            "行うこと：",
+            "変更されるもの：",
+            "外部通信：",
+            "確認が必要な理由：",
+            "この内容で実行してよいですか？",
         ):
             self.assertIn(approval_label, skill)
         self.assertIn(
-            "ToolUseProxyの確認｜内容：...｜変更：...",
+            "ToolUseProxyの操作確認｜行うこと：...｜変更されるもの：...",
             skill,
         )
         self.assertIn("may collapse every newline", skill)

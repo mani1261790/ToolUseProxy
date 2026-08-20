@@ -23,6 +23,8 @@ Hookはnetwork通信やLLM待機を行いません。LLM分類はjobごとに新
 
 ## Phase 2: isolated dogfood
 
+状態: 実装・自動test・2026-08-12のfresh `0.1.0-alpha.8` artifact runまで完了。
+
 合成値だけを使うfresh Plugin dataで次を確認します。
 
 - public local callは継続
@@ -34,6 +36,10 @@ Hookはnetwork通信やLLM待機を行いません。LLM分類はjobごとに新
 - background分類後も自動昇格0
 - revision不一致、stale receipt、workspace違いはrule不採用
 - approved localは完全一致unknownだけを解除
+
+正本とするrunでは全17 checkが合格しました。HookはmacOS sandboxでnetworkをdenyした状態で10回実行し、p50 `270.295 ms`、p95 / max `330.589 ms`（hard budget `500 ms`）でした。protected unknown、static external、既知adapterはいずれも実行前deny、external side effect、raw value exposure、LLM verdictからの自動rule昇格、別workspaceへのrule流用はすべて0件でした。
+
+分類からreview、明示承認、完全一致local ruleまでの決定的なE2E確認には、実Codexと同じCLI・receipt・value-free schema契約を実装したfake Codexを使っています。実CodexそのものはPhase 1のcapability probeで別に確認しています。この区別を実project精度の証拠として扱ってはいけません。
 
 ## Phase 3: 実project pilot
 
@@ -56,7 +62,7 @@ review表示は、利用者が構造要約、判定、影響、revisionを一画
 
 ## Phase 5: 公開候補
 
-公開前にfresh Desktop run、package install / update / rollback / remove、macOS実機を完走します。Linux / Windowsは未検証のまま保証しません。
+公開前にfresh Desktop run、package install / update / rollback / remove、macOS実機を完走します。isolated dogfood合格だけでは公開昇格しません。Linux / Windowsは未検証のまま保証しません。
 
 公開判断の必須条件:
 

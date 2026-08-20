@@ -25,7 +25,7 @@ alphaのthreat modelは、Pluginやcoding agentの無承認manifest変更、stal
 
 ## 現在versionと更新
 
-現在のrelease candidateは`0.1.0-alpha.7`です。類似度profile v2とruntime graph v19を維持し、通常projectで内部pathを貼らずに行える限定setup、Markdown全文の1件ずつ登録、正確で読みやすい日本語の承認・block案内を追加しています。操作ごとの承認UIがあるmodeでは通常2回、UIがなく現在の権限でPlugin dataへaccessできるmodeでは0回で同じ固定setupを実行します。alpha.6候補は後者を誤って停止扱いにしたため`public-alpha`へ昇格していません。既存sessionを次に解析する際は古いcandidate indexを使い続けず、そのsessionのgraphとindexを一度全再構築します。
+現在のrelease candidateは`0.1.0-alpha.8`です。`public-alpha`はfresh Desktop gateが完了するまでalpha.7を配信します。alpha.8候補は、既知adapter、bounded static analysis、protected unknownの保守的deny、値非保持queue、Hook外Codex judge、人間review済みruleからなるExternality Protectionを追加します。この機能は既定offで、LLM verdictからallow ruleを自動作成しません。
 
 Codex CLIはPluginごとの自動更新commandではなく、登録済みGit marketplaceを明示的に更新する`codex plugin marketplace upgrade`を提供します。moving refを登録している場合、更新されたmarketplace snapshotからinstall済みPluginも置き換わります。ToolUseProxyは次の2方式を分けます。
 
@@ -38,7 +38,7 @@ Codex CLIはPluginごとの自動更新commandではなく、登録済みGit mar
 
 Codex Desktopも同じmarketplaceからPluginをinstallし、複数workspaceで利用できます。Plugin codeのinstallはCodex環境単位ですが、初期化、protected source、runtime設定、監査dataはworkspace単位です。新しいworkspaceを使うたびに、そのworkspaceでbundled setup skillを実行し、保護対象を個別にreviewします。2026-08-09のmacOS実機runでは、3 Hookのreview / trust、PreToolUse / PostToolUse / Stop、public allow、file-backed protected payloadの実行前block、data migration、backup rollback、Disableなしの直接Removeを確認しました。fresh setup profile runは承認2回、public side effect 1、protected side effect 0、exact block 1、raw exposure 0で`passed`です。Desktop task履歴のshell名`exec_command`とHook APIのcanonical名`Bash`は別namespaceであり、画面表示だけでなくHook trust、定義hash、値なしmarker、Hook DB、task記録を証拠にします。hosted Web SearchはPreToolUse / PostToolUse Hookの対象外です。
 
-SQLite schemaはalpha.3からalpha.7までv6のままなので、alpha.5からalpha.7への更新だけを理由にDB migrationを実行する必要はありません。古いschemaから更新した場合、またはbundled setup skillがsetup必要と判定した場合だけ、Hook外で明示的なatomic setup profileを適用します。更新後は変更されたHook definitionをreview・trustして新しいtaskを開始し、bundled skillのread-only verificationを実行してください。
+SQLite schemaはalpha.8でv7です。Externality Protection用tableを追加するため、alpha.7から更新した場合はbundled setup skillの案内に従ってHook外で明示的なatomic setupを行います。更新後は変更されたHook definitionをreview・trustして新しいtaskを開始し、bundled skillのread-only verificationを実行してください。
 
 ## install
 

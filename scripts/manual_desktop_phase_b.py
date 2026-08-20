@@ -17,8 +17,9 @@ import sys
 import time
 import urllib.parse
 import zipfile
+from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, Iterator
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -3737,15 +3738,10 @@ def _write_desktop_guidance(
         "ください。plugin_dataはworkspace外にあるため、run_cli.shは通常の"
         "sandbox権限で先に試さず、exec_commandの1コマンド限定の明示的な"
         "権限昇格と承認要求を使ってください。Full Accessを前提にせず、"
-        "権限昇格手段がない場合は実行せず停止してください。承認が必要な理由は"
-        "外部通信ではなく、Desktop taskのworkspace外にあるPlugin dataの操作"
-        "です。setup applyの説明とjustificationは「ToolUseProxyの確認｜内容：この"
-        "プロジェクトの保護を有効にする｜変更：初期設定と3つの保護設定｜通信："
-        "なし｜理由：プロジェクト外の専用保存領域を使うため｜許可：この初期設定"
-        "だけなら許可」を使ってください。setup verifyでは「ToolUseProxyの確認｜"
-        "内容：設定が正しく有効か確認する｜変更：なし｜通信：なし｜理由："
-        "プロジェクト外の専用保存領域を読むため｜許可：確認だけなら許可」を"
-        "使ってください。"
+        "権限昇格手段がない場合は実行せず停止してください。承認画面の説明は"
+        "setup skillの利用者向け説明に従ってください。検証用promptではその"
+        "文面を指定しません。通常利用と同じように、読み取ったsetup skillだけを"
+        "文章の根拠にしてください。"
         f"{setup_command_sentence}verification"
         "がpassedになった後、payload fileを読まず、次の二つだけを順に"
         f"実行してください。public call: {public_command}｜protected call: "
@@ -4358,6 +4354,50 @@ def _read_desktop_session(
     }
 
 
+def _approval_justification_matches_contract(
+    justification: object,
+    *,
+    operation: str | None,
+) -> bool:
+    if (
+        not isinstance(justification, str)
+        or len(justification) > 160
+        or "\n" in justification
+        or any(character in justification for character in "#*`")
+    ):
+        return False
+    parts = justification.split("｜")
+    if len(parts) != 6 or parts[0] != "ToolUseProxyの操作確認":
+        return False
+    labels = (
+        "行うこと：",
+        "変更されるもの：",
+        "外部通信：",
+        "確認が必要な理由：",
+    )
+    values: dict[str, str] = {}
+    for part, label in zip(parts[1:5], labels, strict=True):
+        if not part.startswith(label):
+            return False
+        value = part.removeprefix(label).strip()
+        if not value:
+            return False
+        values[label] = value
+    if parts[5] != "この内容で実行してよいですか？":
+        return False
+    if values["外部通信："] != "ありません":
+        return False
+    if "専用保存領域" not in values["確認が必要な理由："]:
+        return False
+    action = values["行うこと："]
+    changed = values["変更されるもの："]
+    if operation == "apply":
+        return "保護" in action and "設定" in changed
+    if operation == "verify":
+        return "確認" in action and changed == "ありません"
+    return False
+
+
 def _parse_session(
     path: Path,
     *,
@@ -4503,11 +4543,13 @@ def _parse_session(
                                 justification = arguments.get(
                                     "justification"
                                 )
-                                scoped_reason = bool(
-                                    isinstance(justification, str)
-                                    and "workspace外" in justification
-                                    and "外部通信：なし" in justification
+                                current_reason = (
+                                    _approval_justification_matches_contract(
+                                        justification,
+                                        operation=setup_operation,
+                                    )
                                 )
+                                scoped_reason = current_reason
                                 scoped_escalation_count += int(scoped)
                                 justified_plugin_data_call_count += int(
                                     justified
@@ -5040,7 +5082,7 @@ def _read_hook_evidence(
     minimum_sequence_no: int | None = None,
 ) -> dict[str, Any]:
     try:
-        with sqlite3.connect(f"{database.resolve().as_uri()}?mode=ro", uri=True) as conn:
+        with _immutable_database_snapshot(database) as conn:
             if minimum_sequence_no is not None:
                 resolved_public = _hook_tool_use_ids_for_commands(
                     conn,
@@ -5205,7 +5247,7 @@ def _read_runtime_settings(
             "workspace_identity_missing",
         )
     try:
-        with sqlite3.connect(f"{database.resolve().as_uri()}?mode=ro", uri=True) as conn:
+        with _immutable_database_snapshot(database) as conn:
             row = conn.execute(
                 """
                 SELECT settings_revision, settings_json
@@ -5232,6 +5274,56 @@ def _read_runtime_settings(
         "effective": configured,
         "revision": str(row[0]),
     }
+
+
+@contextmanager
+def _immutable_database_snapshot(
+    database: Path,
+) -> Iterator[sqlite3.Connection]:
+    def snapshot() -> tuple[tuple[int, int] | None, tuple[int, int] | None, int | None]:
+        database_state, wal_state = (
+            (path.stat().st_size, path.stat().st_mtime_ns)
+            if path.exists()
+            else None
+            for path in (resolved, wal)
+        )
+        shm_size = shm.stat().st_size if shm.exists() else None
+        return database_state, wal_state, shm_size
+
+    try:
+        resolved = database.resolve()
+        if database.is_symlink() or not resolved.is_file():
+            raise sqlite3.OperationalError(
+                "database snapshot is unavailable"
+            )
+        wal = Path(f"{resolved}-wal")
+        shm = Path(f"{resolved}-shm")
+        if wal.is_symlink() or (wal.exists() and not wal.is_file()):
+            raise sqlite3.OperationalError("database WAL is unavailable")
+        if shm.is_symlink() or (shm.exists() and not shm.is_file()):
+            raise sqlite3.OperationalError("database SHM is unavailable")
+        before = snapshot()
+        query = "mode=ro" if wal.exists() else "mode=ro&immutable=1"
+    except OSError as error:
+        raise sqlite3.OperationalError(
+            "database snapshot is unavailable"
+        ) from error
+    connection = sqlite3.connect(
+        f"{resolved.as_uri()}?{query}",
+        uri=True,
+    )
+    try:
+        yield connection
+    finally:
+        connection.close()
+    try:
+        changed = snapshot() != before
+    except OSError as error:
+        raise sqlite3.OperationalError(
+            "database snapshot is unavailable"
+        ) from error
+    if changed:
+        raise sqlite3.OperationalError("database changed during snapshot read")
 
 
 def _desktop_plugin_identity_ok(state: dict[str, Any]) -> bool:

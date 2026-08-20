@@ -41,7 +41,15 @@ class PluginDogfoodTest(unittest.TestCase):
         self.assertTrue(payload["checks"]["stale_source_rejected"])
         self.assertTrue(payload["checks"]["candidate_approved"])
         self.assertTrue(payload["checks"]["negative_reviews_suppressed"])
+        self.assertTrue(payload["checks"]["setup_profile_applied"])
+        self.assertTrue(payload["checks"]["setup_profile_verified"])
+        self.assertTrue(payload["checks"]["public_file_payload_executed"])
+        self.assertTrue(
+            payload["checks"]["protected_file_payload_denied_before_execution"]
+        )
         self.assertEqual(0, payload["metrics"]["external_side_effect_count"])
+        self.assertEqual(1, payload["metrics"]["public_side_effect_count"])
+        self.assertEqual(0, payload["metrics"]["protected_side_effect_count"])
         self.assertEqual(4, payload["metrics"]["proposal_review_count"])
         self.assertEqual(
             {"bounded_scan": 1, "explicit_suggestion": 3},

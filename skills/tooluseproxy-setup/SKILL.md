@@ -94,11 +94,11 @@ particular, do not emit `#`, `*`, backticks, or a leading `-`.
 
 Use these plain-text delimiters in this exact order:
 
-`ToolUseProxyの確認｜内容：...｜変更：...｜通信：...｜理由：...｜許可：...`
+`ToolUseProxyの操作確認｜行うこと：...｜変更されるもの：...｜外部通信：...｜確認が必要な理由：...｜この内容で実行してよいですか？`
 
-Keep `内容` and `変更` in ordinary language. Use `なし` for no
-state change or no network. In `許可`, name the one operation that is safe
-to approve and the extra or different operation that requires rejection.
+Keep every field in ordinary language. Use `ありません` for no state change
+or no network. End with the direct question exactly as shown. Do not tell the
+user to approve or reject, and do not describe an internal permission rule.
 
 Do not list absolute paths in the summary. Name the workspace briefly and say
 that the submitted arguments were checked against the approved context file.
@@ -109,18 +109,18 @@ Pass exactly the same short paragraph as the tool call's approval
 For common operations, follow these models and adapt only the project name or
 whether state changes:
 
-- fixed setup profile apply: `ToolUseProxyの確認｜内容：このプロジェクトの保護を有効にする｜変更：初期設定と、保護ファイルの外部送信を実行前に止める設定｜通信：なし｜理由：プロジェクト外の専用保存領域へ設定を保存するため｜許可：この初期設定だけなら許可`
-- fixed setup profile verify: `ToolUseProxyの確認｜内容：設定が正しく有効か確認する｜変更：なし｜通信：なし｜理由：プロジェクト外の専用保存領域を読むため｜許可：確認だけなら許可`
-- init: `ToolUseProxyの確認｜内容：このプロジェクトで利用を開始する｜変更：初期設定と記録用DB｜通信：なし｜理由：プロジェクト外の専用保存領域を使うため｜許可：この初期設定だけなら許可`
-- doctor/status/config show: `ToolUseProxyの確認｜内容：このプロジェクトで正しく動くか確認する｜変更：なし｜通信：なし｜理由：専用保存領域の状態を読むため｜許可：確認だけなら許可`
-- config set: `ToolUseProxyの確認｜内容：表示した保護設定を変更する｜変更：このプロジェクトの設定1件｜通信：なし｜理由：専用保存領域へ設定を保存するため｜許可：表示した1件だけなら許可`
-- protected-source scan: `ToolUseProxyの確認｜内容：守った方がよいファイルを探す｜変更：候補の確認記録だけ｜通信：なし｜理由：プロジェクト外の専用保存領域へ確認結果を記録するため｜許可：候補探しだけなら許可`
-- protected-source approval: `ToolUseProxyの確認｜内容：表示したファイルを保護対象にする｜変更：保護対象リストに1件追加｜通信：なし｜理由：専用保存領域へ承認を記録するため｜許可：表示した1件だけなら許可`
-- protected-source reject or ignore: `ToolUseProxyの確認｜内容：表示した候補を見送る｜変更：見送りの記録だけ｜通信：なし｜理由：同じ候補の扱いを専用保存領域へ記録するため｜許可：表示した1件だけなら許可`
-- protected-source migration plan: `ToolUseProxyの確認｜内容：保護対象リストを安全に更新できるか確認する｜変更：なし｜通信：なし｜理由：プロジェクト外の専用保存領域の状態を読むため｜許可：更新前の確認だけなら許可`
-- protected-source migration apply: `ToolUseProxyの確認｜内容：保護対象リストを新しい形式へ更新する｜変更：リストの形式と専用保存領域のバックアップ｜通信：なし｜理由：ToolUseProxy専用保存領域へバックアップを保存するため｜許可：表示した更新だけなら許可`
-- removal without data deletion: `ToolUseProxyの確認｜内容：このプロジェクトでの利用を止める｜変更：Pluginの有効状態だけ｜通信：なし｜理由：新しい記録を止めるため｜許可：データを残した停止だけなら許可`
-- managed-data deletion: `ToolUseProxyの確認｜内容：表示したToolUseProxyデータを削除する｜変更：表示した管理対象データ｜通信：なし｜理由：削除は元に戻せないため｜許可：表示した範囲だけなら許可`
+- fixed setup profile apply: `ToolUseProxyの操作確認｜行うこと：このプロジェクトの保護を有効にします｜変更されるもの：初期設定と、保護ファイルの外部送信を実行前に止める設定｜外部通信：ありません｜確認が必要な理由：プロジェクト外の専用保存領域へ設定を保存するためです｜この内容で実行してよいですか？`
+- fixed setup profile verify: `ToolUseProxyの操作確認｜行うこと：設定が正しく有効か確認します｜変更されるもの：ありません｜外部通信：ありません｜確認が必要な理由：プロジェクト外の専用保存領域を読み取るためです｜この内容で実行してよいですか？`
+- init: `ToolUseProxyの操作確認｜行うこと：このプロジェクトで利用を開始します｜変更されるもの：初期設定と記録用DB｜外部通信：ありません｜確認が必要な理由：プロジェクト外の専用保存領域を使うためです｜この内容で実行してよいですか？`
+- doctor/status/config show: `ToolUseProxyの操作確認｜行うこと：このプロジェクトで正しく動くか確認します｜変更されるもの：ありません｜外部通信：ありません｜確認が必要な理由：専用保存領域の状態を読み取るためです｜この内容で実行してよいですか？`
+- config set: `ToolUseProxyの操作確認｜行うこと：表示した保護設定を変更します｜変更されるもの：このプロジェクトの設定1件｜外部通信：ありません｜確認が必要な理由：専用保存領域へ設定を保存するためです｜この内容で実行してよいですか？`
+- protected-source scan: `ToolUseProxyの操作確認｜行うこと：守った方がよいファイルを探します｜変更されるもの：候補を確認した記録だけ｜外部通信：ありません｜確認が必要な理由：プロジェクト外の専用保存領域へ確認結果を記録するためです｜この内容で実行してよいですか？`
+- protected-source approval: `ToolUseProxyの操作確認｜行うこと：表示したファイルを保護対象にします｜変更されるもの：保護対象リストに1件追加｜外部通信：ありません｜確認が必要な理由：専用保存領域へ選択結果を記録するためです｜この内容で実行してよいですか？`
+- protected-source reject or ignore: `ToolUseProxyの操作確認｜行うこと：表示した候補を今回は見送ります｜変更されるもの：見送った記録だけ｜外部通信：ありません｜確認が必要な理由：専用保存領域へ選択結果を記録するためです｜この内容で実行してよいですか？`
+- protected-source migration plan: `ToolUseProxyの操作確認｜行うこと：保護対象リストを安全に更新できるか確認します｜変更されるもの：ありません｜外部通信：ありません｜確認が必要な理由：プロジェクト外の専用保存領域を読み取るためです｜この内容で実行してよいですか？`
+- protected-source migration apply: `ToolUseProxyの操作確認｜行うこと：保護対象リストを新しい形式へ更新します｜変更されるもの：リストの形式と専用保存領域のバックアップ｜外部通信：ありません｜確認が必要な理由：更新前の状態を安全に保存するためです｜この内容で実行してよいですか？`
+- removal without data deletion: `ToolUseProxyの操作確認｜行うこと：このプロジェクトでの利用を止めます｜変更されるもの：Pluginの有効状態だけ｜外部通信：ありません｜確認が必要な理由：新しい記録を止めるためです｜この内容で実行してよいですか？`
+- managed-data deletion: `ToolUseProxyの操作確認｜行うこと：表示したToolUseProxyデータを削除します｜変更されるもの：表示した管理対象データ｜外部通信：ありません｜確認が必要な理由：削除すると元に戻せないためです｜この内容で実行してよいですか？`
 
 Do not use implementation terms such as revision, manifest hash, Hook data
 directory, or opaque token as the primary permission explanation. Those terms
@@ -128,8 +128,8 @@ may follow as technical detail. If a command combines multiple read-only
 checks after one local initialization, say so explicitly.
 
 Never use memory-dependent references such as `説明済み`, `上記の操作`, or
-`先ほどの説明` in the permission summary. The `許可` segment must stand
-on its own. Before submitting the tool call, verify that the long `sh ...`
+`先ほどの説明` in the permission summary. Before submitting the tool call,
+verify that the long `sh ...`
 display uses the expected installed Plugin launcher, exact subcommand,
 workspace, and data directory, and contains no unmentioned command. State that
 verification in the summary. Tell the user to reject if the command differs from
