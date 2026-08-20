@@ -2,6 +2,24 @@
 
 公開Plugin marketplace artifactから、public alphaのlifecycleをsynthetic dataだけで反復する手順です。CodexのHook trustはユーザーがdefinitionをreviewして行うmanual gateであり、このrunnerは承認を自動化・迂回しません。
 
+## 一括再現試験
+
+日常的な回帰確認では、個別runnerを手作業で順番に呼びません。次の1コマンドが、現在のcheckoutからfresh artifactと隔離dataを作り、再現可能な検証を一度ずつ実行します。
+
+```bash
+python3.11 scripts/dogfood_all.py
+```
+
+一括runnerはruff、全自動test、`git diff --check`、isolated Codex marketplaceでのPlugin workflow、Externality Protection、旧版からのupdate、rollback、remove、managed data cleanupを実行します。各runnerはsynthetic valueと一時directoryだけを使い、最後にvalue-freeなaggregate JSONを1件返します。途中で失敗した場合は値や長いcommand出力を表示せず、失敗stageと固定error codeだけを返します。
+
+Codex CLIを利用できないhostでは、runtime artifactだけを対象にできます。
+
+```bash
+python3.11 scripts/dogfood_all.py --installation-mode extracted
+```
+
+この一括結果の`automated.status=passed`は、繰り返せるCore／Hook／Plugin lifecycle検証の合格です。Codex Desktop自身はComputer Useによる自己操作を許可しないため、Desktopの3 Hook review、生成済みtaskを開く操作、2回の限定承認の判断は`desktop.status=human_required`として残します。task完了後の証跡回収、public allow、protected pre-execution block、raw exposure 0、report生成、cleanup planは既存Desktop verifierが自動処理します。自動試験の合格をDesktop UIや説明理解の合格へ読み替えません。
+
 ## 実projectでのself-dogfood
 
 自分の別projectで試す場合も、最初から日常利用へ全面適用しません。公開済みartifactの利用と、まだreleaseへ昇格していない最新mainの評価を区別します。
