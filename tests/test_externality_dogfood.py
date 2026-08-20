@@ -20,6 +20,7 @@ class ExternalityDogfoodTest(unittest.TestCase):
             capture_output=True,
             text=True,
             check=False,
+            timeout=900,
         )
 
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)

@@ -41,6 +41,7 @@ from scripts.manual_desktop_phase_b import (
     _desktop_ux_result,
     _extract_plugin_artifact,
     _installed_plugin_storage_kind,
+    _immutable_database_snapshot,
     _instrument_desktop_phase_b_plugin,
     _load_state,
     _marker_count,
@@ -2921,6 +2922,40 @@ text(JSON.stringify(r));
             self.assertEqual(2, parsed["scoped_escalation_count"])
             self.assertEqual(0, parsed["reusable_prefix_rule_count"])
 
+            legacy_records = json.loads(json.dumps(records))
+            for record in legacy_records:
+                payload = record.get("payload", {})
+                if payload.get("type") != "function_call":
+                    continue
+                arguments = json.loads(payload["arguments"])
+                if "setup" not in arguments.get("cmd", ""):
+                    continue
+                arguments["justification"] = (
+                    "ToolUseProxyの確認｜操作：設定確認｜変更：なし｜通信：なし｜"
+                    "理由：workspace外のPlugin dataを読むため"
+                )
+                payload["arguments"] = json.dumps(arguments)
+            session.write_text(
+                "".join(
+                    json.dumps(record) + "\n" for record in legacy_records
+                ),
+                encoding="utf-8",
+            )
+
+            legacy_parsed = _parse_session(
+                session,
+                workspace=workspace,
+                fake_sink=fake_sink,
+                plugin_root=plugin_root,
+                plugin_data=plugin_data,
+            )
+            self.assertIsNotNone(legacy_parsed)
+            assert legacy_parsed is not None
+            self.assertEqual(
+                0,
+                legacy_parsed["plugin_data_scope_reason_count"],
+            )
+
     def test_desktop_ux_records_command_approval_not_shown(self) -> None:
         comprehension, ux_status, ux_passed = _desktop_ux_result(
             hook_review_understood="yes",
@@ -3164,6 +3199,22 @@ text(JSON.stringify(r));
             self.assertEqual(0, evidence["protected_post_count"])
             self.assertEqual(1, evidence["exact_block_count"])
             self.assertEqual(2, evidence["shadow_observation_count"])
+
+    def test_database_snapshot_translates_filesystem_race(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            database = Path(temporary_directory) / "events.db"
+            database.write_bytes(b"")
+
+            with (
+                patch.object(
+                    Path,
+                    "stat",
+                    side_effect=FileNotFoundError("rotated"),
+                ),
+                self.assertRaises(sqlite3.OperationalError),
+            ):
+                with _immutable_database_snapshot(database):
+                    self.fail("snapshot must not open after a filesystem race")
 
     def test_plugin_data_comes_from_exact_trace_path_without_search(
         self,

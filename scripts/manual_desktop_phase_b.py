@@ -4549,20 +4549,7 @@ def _parse_session(
                                         operation=setup_operation,
                                     )
                                 )
-                                legacy_reason = bool(
-                                    isinstance(justification, str)
-                                    and justification.startswith(
-                                        "ToolUseProxyの確認｜"
-                                    )
-                                    and "｜通信：なし｜理由：" in justification
-                                    and (
-                                        "プロジェクト外の専用保存領域"
-                                        in justification
-                                        or "workspace外のPlugin data"
-                                        in justification
-                                    )
-                                )
-                                scoped_reason = current_reason or legacy_reason
+                                scoped_reason = current_reason
                                 scoped_escalation_count += int(scoped)
                                 justified_plugin_data_call_count += int(
                                     justified
@@ -5293,16 +5280,6 @@ def _read_runtime_settings(
 def _immutable_database_snapshot(
     database: Path,
 ) -> Iterator[sqlite3.Connection]:
-    resolved = database.resolve()
-    if database.is_symlink() or not resolved.is_file():
-        raise sqlite3.OperationalError("database snapshot is unavailable")
-    wal = Path(f"{resolved}-wal")
-    shm = Path(f"{resolved}-shm")
-    if wal.is_symlink() or (wal.exists() and not wal.is_file()):
-        raise sqlite3.OperationalError("database WAL is unavailable")
-    if shm.is_symlink() or (shm.exists() and not shm.is_file()):
-        raise sqlite3.OperationalError("database SHM is unavailable")
-
     def snapshot() -> tuple[tuple[int, int] | None, tuple[int, int] | None, int | None]:
         database_state, wal_state = (
             (path.stat().st_size, path.stat().st_mtime_ns)
@@ -5313,8 +5290,24 @@ def _immutable_database_snapshot(
         shm_size = shm.stat().st_size if shm.exists() else None
         return database_state, wal_state, shm_size
 
-    before = snapshot()
-    query = "mode=ro" if wal.exists() else "mode=ro&immutable=1"
+    try:
+        resolved = database.resolve()
+        if database.is_symlink() or not resolved.is_file():
+            raise sqlite3.OperationalError(
+                "database snapshot is unavailable"
+            )
+        wal = Path(f"{resolved}-wal")
+        shm = Path(f"{resolved}-shm")
+        if wal.is_symlink() or (wal.exists() and not wal.is_file()):
+            raise sqlite3.OperationalError("database WAL is unavailable")
+        if shm.is_symlink() or (shm.exists() and not shm.is_file()):
+            raise sqlite3.OperationalError("database SHM is unavailable")
+        before = snapshot()
+        query = "mode=ro" if wal.exists() else "mode=ro&immutable=1"
+    except OSError as error:
+        raise sqlite3.OperationalError(
+            "database snapshot is unavailable"
+        ) from error
     connection = sqlite3.connect(
         f"{resolved.as_uri()}?{query}",
         uri=True,
@@ -5323,7 +5316,13 @@ def _immutable_database_snapshot(
         yield connection
     finally:
         connection.close()
-    if snapshot() != before:
+    try:
+        changed = snapshot() != before
+    except OSError as error:
+        raise sqlite3.OperationalError(
+            "database snapshot is unavailable"
+        ) from error
+    if changed:
         raise sqlite3.OperationalError("database changed during snapshot read")
 
 

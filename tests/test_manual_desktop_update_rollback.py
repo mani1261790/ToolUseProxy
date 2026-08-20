@@ -267,6 +267,7 @@ class ManualDesktopUpdateRollbackTest(unittest.TestCase):
         self.assertIn("外部通信：ありません", prompt)
         self.assertIn("確認が必要な理由：", prompt)
         self.assertIn("この内容で実行してよいですか？", prompt)
+        self.assertIn("プロジェクト外の専用保存領域へ書き込み", prompt)
         self.assertNotIn("拒否条件", prompt)
         self.assertIn(command, prompt)
         self.assertIn("trueを1回だけ", prompt)

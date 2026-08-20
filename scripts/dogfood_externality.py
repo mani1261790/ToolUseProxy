@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import closing
 import json
 import math
 import os
+import shlex
 import shutil
 import sqlite3
 import subprocess
@@ -94,6 +96,14 @@ def run_externality_dogfood(*, hook_p95_budget_ms: float) -> dict[str, Any]:
         if len(artifacts) != 1:
             raise DogfoodFailure("build", "artifact_count_invalid")
         with zipfile.ZipFile(artifacts[0]) as archive:
+            extracted_root = extracted.resolve()
+            for name in archive.namelist():
+                target = (extracted / name).resolve()
+                if not target.is_relative_to(extracted_root):
+                    raise DogfoodFailure(
+                        "build",
+                        "artifact_member_path_invalid",
+                    )
             archive.extractall(extracted)
             manifest = json.loads(
                 archive.read("tooluseproxy/.codex-plugin/plugin.json").decode()
@@ -111,6 +121,12 @@ def run_externality_dogfood(*, hook_p95_budget_ms: float) -> dict[str, Any]:
             "TOOLUSEPROXY_PYTHON": sys.executable,
         }
         environment.pop("PYTHONPATH", None)
+        fake_log = root / "fake-codex-inputs.jsonl"
+        fake_codex = fake_bin / "codex"
+        _write_fake_codex(fake_codex, fake_log)
+        environment["PATH"] = (
+            f"{fake_bin}{os.pathsep}{environment.get('PATH', '')}"
+        )
         _initialize_workspace(
             cli,
             workspace,
@@ -134,20 +150,23 @@ def run_externality_dogfood(*, hook_p95_budget_ms: float) -> dict[str, Any]:
         )
         _install_opaque_local_tool(workspace)
 
+        touch = shutil.which("touch", path=environment["PATH"])
+        if touch is None:
+            raise DogfoodFailure("public_local", "touch_missing")
         local_marker = workspace / "public-local-marker"
         local_output = _timed_hook(
             hook,
             workspace,
             data_dir,
             environment,
-            "/usr/bin/touch public-local-marker",
+            f"{shlex.quote(touch)} public-local-marker",
             "public-local",
             captured_outputs,
             hook_latencies,
         )
         _assert_allowed(local_output, "public_local")
         _execute_allowed(
-            ["/usr/bin/touch", local_marker.name],
+            [touch, local_marker.name],
             workspace,
             "public_local",
         )
@@ -237,15 +256,11 @@ def run_externality_dogfood(*, hook_p95_budget_ms: float) -> dict[str, Any]:
             "protected_adapter",
         )
 
-        fake_log = root / "fake-codex-inputs.jsonl"
-        fake_codex = fake_bin / "codex"
-        _write_fake_codex(fake_codex, fake_log)
         if fake_log.exists():
             raise DogfoodFailure("hook_boundary", "codex_called_inside_hook")
         valid_receipt = root / "valid-receipt.json"
         probe_environment = {
             **environment,
-            "PATH": f"{fake_bin}{os.pathsep}{environment.get('PATH', '')}",
             "CODEX_HOME": str(codex_home),
         }
         _run(
@@ -336,7 +351,10 @@ def run_externality_dogfood(*, hook_p95_budget_ms: float) -> dict[str, Any]:
         if not isinstance(items, list) or len(items) != 1:
             raise DogfoodFailure("review_list", "review_count_invalid")
         review = items[0]
-        if not isinstance(review, dict) or review.get("verdict", {}).get("verdict") != "local":
+        if not isinstance(review, dict):
+            raise DogfoodFailure("review_list", "review_invalid")
+        verdict = review.get("verdict")
+        if not isinstance(verdict, dict) or verdict.get("verdict") != "local":
             raise DogfoodFailure("review_list", "local_verdict_required")
         job_id = _required_string(review, "job_id", "review_list")
         revision = _required_string(review, "review_revision", "review_list")
@@ -467,6 +485,8 @@ def run_externality_dogfood(*, hook_p95_budget_ms: float) -> dict[str, Any]:
             rules=1,
         )
 
+        if not fake_log.is_file():
+            raise DogfoodFailure("privacy", "judge_call_missing")
         codex_inputs = fake_log.read_text(encoding="utf-8")
         if SYNTHETIC_CANARY in codex_inputs or "example.invalid" in codex_inputs:
             raise DogfoodFailure("privacy", "raw_value_sent_to_judge")
@@ -682,7 +702,7 @@ int main(int argc, char **argv) {
         check=False,
     )
     source.unlink()
-    if completed.returncode != 0 or completed.stdout or completed.stderr:
+    if completed.returncode != 0 or not destination.is_file():
         raise DogfoodFailure("prepare", "opaque_tool_compile_failed")
 
 
@@ -797,7 +817,14 @@ def _assert_job_counts(
     approved: int = 0,
     rules: int,
 ) -> None:
-    with sqlite3.connect(database) as connection:
+    if not database.is_file():
+        raise DogfoodFailure("database", "database_missing")
+    with closing(
+        sqlite3.connect(
+            f"{database.resolve().as_uri()}?mode=ro",
+            uri=True,
+        )
+    ) as connection:
         counts = dict(
             connection.execute(
                 "SELECT status, COUNT(*) FROM externality_classification_jobs "
