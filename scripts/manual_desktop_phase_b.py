@@ -624,7 +624,7 @@ def checkpoint_installed(root_argument: Path) -> dict[str, Any]:
         "plugin_version": state["plugin_version"],
         "hook_trust": "manual_required_not_bypassed",
         "next": (
-            "In Codex Desktop review the exact three Phase B hooks. Then run "
+            "In Codex Desktop review the exact five Phase B hooks. Then run "
             "checkpoint-hooks-trusted before starting any test task."
         ),
         "hooks": hook_inventory["hooks"],

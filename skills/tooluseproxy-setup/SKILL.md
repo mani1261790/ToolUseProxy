@@ -87,7 +87,7 @@ command path. For a normal installation, the expected source is
 that context-specific ID with the normal installation ID. Every command must
 point inside the expected installed Plugin root. In an isolated manual Phase B
 harness, those five must be the only pending Hooks. Outside that harness, if
-unrelated Hooks are also pending, do not use `Trust all`; review the three
+unrelated Hooks are also pending, do not use `Trust all`; review the five
 ToolUseProxy entries individually. Explain that trust applies to the exact
 definitions currently shown and changed definitions require review again. If
 any ToolUseProxy source, count, or path differs, tell the user not to trust and
