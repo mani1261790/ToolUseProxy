@@ -29,6 +29,7 @@ EXTERNALITY_RULE_CONTRACT_SHA256 = hashlib.sha256(
     EXTERNALITY_RULE_CONTRACT_VERSION.encode("utf-8")
 ).hexdigest()
 EXTERNALITY_RULE_BUSY_TIMEOUT_MS = 10
+GENERIC_FUNCTION_EXTERNALITY_CONTRACT = b"generic-function-externality-v1"
 
 
 @dataclass(frozen=True)
@@ -82,6 +83,18 @@ def failed_externality_hook_decision() -> ExternalityHookDecision:
         hashlib.sha256(b"externality-analysis-failed-v1").hexdigest(),
         "analysis_failed",
     )
+
+
+def conservative_function_tool_decision(tool_name: str | None) -> ExternalityHookDecision:
+    """Treat an unclassified Hook-visible function tool as a potential sink."""
+
+    encoded_name = (tool_name or "unknown").encode("utf-8", errors="replace")
+    digest = hashlib.sha256(
+        GENERIC_FUNCTION_EXTERNALITY_CONTRACT
+        + b"\0"
+        + hashlib.sha256(encoded_name).digest()
+    ).hexdigest()
+    return ExternalityHookDecision(digest, "analysis_failed")
 
 
 def prepare_externality_hook_decision(

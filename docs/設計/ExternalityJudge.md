@@ -2,11 +2,11 @@
 
 ## Status
 
-Externality Judgeは、adapterに登録されていないBash / MCP callについて、外部通信の可能性を値非保持で評価するための実験境界です。現在は初見unknownの保守的な実行前保護、Hook外classification queue、人間review、承認済みlocal rule cacheまで実装しています。remote modelもworkerも既定では動きません。
+Externality Judgeは、adapterで外部性を確定できないHook-visibleなlocal function callについて、外部通信の可能性を値非保持で評価するための実験境界です。現在は初見unknownの保守的な実行前保護、Hook外classification queue、人間review、承認済みlocal rule cacheまで実装しています。remote modelもworkerも既定では動きません。
 
 ## 解決する問題
 
-現行のBash / MCP adapterは、`curl`、`git push`、既知のpublish command、登録済みMCP profileなどをexternal sinkとして扱います。この方式だけでは、Python、Node.js、subprocess、custom binary、未知のMCP toolが実際に外部通信する可能性を網羅できません。
+現行のBash / MCP adapterは、`curl`、`git push`、既知のpublish command、登録済みMCP profileなどをexternal sinkとして扱います。さらに、Hookへ届く未知のfunction toolはprotected flowが入力へ到達した場合に保守的なexternal sinkとして扱います。ただしこの方式でも、hosted tool、`write_stdin`による継続入力、Hookを省略する特殊経路は実行前に捕捉できません。
 
 Externality Judgeは次の順で判定材料を作ります。
 

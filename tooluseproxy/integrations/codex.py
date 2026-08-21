@@ -26,7 +26,7 @@ HOSTED_TOOL_BOUNDARY_CONTEXT = (
     "WebSearchなどのhosted toolへ入力しないでください。hosted toolはCodex Hookに"
     "届かないため、ToolUseProxyは実行前に検査・遮断できません。外部検索が必要な場合は、"
     "保護内容を含まない公開情報だけで問い合わせを作ってください。公開情報だけに分離できない"
-    "場合はhosted toolを呼ばず、その理由を利用者へ説明してください。BashやMCPなどHook対象の"
+    "場合はhosted toolを呼ばず、その理由を利用者へ説明してください。Hookから見えるローカル"
     "toolは、通常のToolUseProxy判定に従ってください。"
 )
 
@@ -36,10 +36,16 @@ def codex_enforcement_coverage() -> dict[str, object]:
 
     return {
         "scope": "partial",
-        "local_function_tools": "pre_execution_hook_enforced",
+        "hook_visible_local_tool_subscription": "all",
+        "active_workspace_pre_execution_policy": (
+            "adapter_or_conservative_unknown"
+        ),
+        "local_file_mutations": "observed_not_external_sink",
         "hosted_tools": "not_interceptable",
         "hosted_tool_mitigation": "session_and_subagent_developer_context",
         "hosted_tool_pre_execution_block": False,
+        "write_stdin_continuations": "not_rechecked",
+        "specialized_tool_paths": "unverified",
     }
 
 

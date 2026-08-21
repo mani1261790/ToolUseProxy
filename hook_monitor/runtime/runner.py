@@ -30,6 +30,7 @@ from hook_monitor.runtime.pre_tool_policy import (
     render_mcp_input_limit_deny,
 )
 from hook_monitor.runtime.externality_rules import (
+    conservative_function_tool_decision,
     failed_externality_hook_decision,
     prepare_externality_hook_decision,
 )
@@ -85,7 +86,6 @@ def run_hook(
     bounded_pre_tool_input = (
         phase == "pre_tool_use"
         and _pre_tool_policy_enabled()
-        and _pre_tool_mcp_policy_enabled()
     )
     raw_payload = sys.stdin.buffer.read(
         PRE_TOOL_RAW_JSON_MAX_BYTES + 1
@@ -300,7 +300,9 @@ def run_hook(
         resource_snapshots=post_snapshots,
     )
     externality_decision = None
-    if (
+    if phase == "pre_tool_use" and event_pre_tool_adapter == "function":
+        externality_decision = conservative_function_tool_decision(event.tool_name)
+    elif (
         phase == "pre_tool_use"
         and effective_runtime_settings.enabled(EXTERNALITY_PROTECTION_KEY)
         and _runtime_policy_workspace_enabled(event)
@@ -412,11 +414,6 @@ def _pre_tool_policy_enabled() -> bool:
     return configured.lower() in {"1", "true", "yes", "on"}
 
 
-def _pre_tool_mcp_policy_enabled() -> bool:
-    configured = os.environ.get("TOOLUSEPROXY_PRE_TOOL_MCP_POLICY", "0")
-    return configured.lower() in {"1", "true", "yes", "on"}
-
-
 def _effective_runtime_settings(
     store: EventStore,
     event: NormalizedEvent,
@@ -439,10 +436,7 @@ def _enabled_pre_tool_adapters(
 ) -> frozenset[str]:
     if not settings.enabled(PRE_TOOL_POLICY_KEY):
         return frozenset()
-    adapters = {"bash"}
-    if _pre_tool_policy_enabled() and _pre_tool_mcp_policy_enabled():
-        adapters.add("mcp")
-    return frozenset(adapters)
+    return frozenset({"bash", "mcp", "function"})
 
 
 def _inactive_message(code: str) -> str:

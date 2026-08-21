@@ -2498,13 +2498,13 @@ def _desktop_plugin_hooks(
         "preToolUse": (
             "PreToolUse",
             "pre-tool-use",
-            "^(Bash|apply_patch|mcp__.*)$",
+            "^.*$",
             PROBE_LAUNCHER_FILENAME,
         ),
         "postToolUse": (
             "PostToolUse",
             "post-tool-use",
-            "^(Bash|apply_patch|mcp__.*)$",
+            "^.*$",
             PROBE_LAUNCHER_FILENAME,
         ),
         "stop": ("Stop", "stop", None, PROBE_LAUNCHER_FILENAME),

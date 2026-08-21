@@ -646,7 +646,7 @@ text(JSON.stringify(r));
                 "hooks": {
                     "PreToolUse": [
                         {
-                            "matcher": "^(Bash|apply_patch|mcp__.*)$",
+                            "matcher": "^.*$",
                             "hooks": [
                                 {
                                     "type": "command",
@@ -658,7 +658,7 @@ text(JSON.stringify(r));
                     ],
                     "PostToolUse": [
                         {
-                            "matcher": "^(Bash|apply_patch|mcp__.*)$",
+                            "matcher": "^.*$",
                             "hooks": [
                                 {
                                     "type": "command",
@@ -710,7 +710,7 @@ text(JSON.stringify(r));
             )
             for event in ("PreToolUse", "PostToolUse"):
                 self.assertEqual(
-                    "^(Bash|apply_patch|mcp__.*)$",
+                    "^.*$",
                     instrumented["hooks"][event][0]["matcher"],
                 )
             launcher = hooks_root / PROBE_LAUNCHER_FILENAME
@@ -3454,13 +3454,13 @@ text(JSON.stringify(r));
             (
                 "preToolUse",
                 "pre-tool-use",
-                "^(Bash|apply_patch|mcp__.*)$",
+                "^.*$",
                 launcher,
             ),
             (
                 "postToolUse",
                 "post-tool-use",
-                "^(Bash|apply_patch|mcp__.*)$",
+                "^.*$",
                 launcher,
             ),
             ("stop", "stop", None, launcher),

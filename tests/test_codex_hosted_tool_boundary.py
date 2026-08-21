@@ -48,10 +48,14 @@ def test_coverage_never_claims_hosted_tool_enforcement() -> None:
 
     assert coverage == {
         "scope": "partial",
-        "local_function_tools": "pre_execution_hook_enforced",
+        "hook_visible_local_tool_subscription": "all",
+        "active_workspace_pre_execution_policy": "adapter_or_conservative_unknown",
+        "local_file_mutations": "observed_not_external_sink",
         "hosted_tools": "not_interceptable",
         "hosted_tool_mitigation": "session_and_subagent_developer_context",
         "hosted_tool_pre_execution_block": False,
+        "write_stdin_continuations": "not_rechecked",
+        "specialized_tool_paths": "unverified",
     }
 
 
@@ -81,6 +85,8 @@ def test_status_exposes_partial_enforcement_coverage(tmp_path: Path) -> None:
     assert coverage["scope"] == "partial"
     assert coverage["hosted_tools"] == "not_interceptable"
     assert coverage["hosted_tool_pre_execution_block"] is False
+    assert coverage["write_stdin_continuations"] == "not_rechecked"
+    assert coverage["specialized_tool_paths"] == "unverified"
 
 
 def test_plugin_registers_session_start_before_tool_hooks() -> None:

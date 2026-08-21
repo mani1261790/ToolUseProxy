@@ -84,11 +84,9 @@ class PluginArtifactTest(unittest.TestCase):
                 [name for name in names if name.startswith("tooluseproxy/hook_monitor/evaluation/")]
             )
             pre_tool_matcher = hooks["hooks"]["PreToolUse"][0]["matcher"]
-            self.assertIn("Bash", pre_tool_matcher)
-            self.assertNotIn("exec_command", pre_tool_matcher)
+            self.assertEqual("^.*$", pre_tool_matcher)
             post_tool_matcher = hooks["hooks"]["PostToolUse"][0]["matcher"]
-            self.assertIn("Bash", post_tool_matcher)
-            self.assertNotIn("exec_command", post_tool_matcher)
+            self.assertEqual("^.*$", post_tool_matcher)
             for name in names:
                 parts = set(Path(name).parts)
                 self.assertFalse(parts & FORBIDDEN_PARTS, name)

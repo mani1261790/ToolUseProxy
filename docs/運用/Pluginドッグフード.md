@@ -89,8 +89,8 @@ runnerは一時directoryとisolated `CODEX_HOME`を使い、次を順番に検�
 5. 提案後に内容を変更したsourceのapproveが`source_changed`で拒否されることを確認
 6. synthetic `.env`を`protect scan`し、保存されたexact proposalをapprove
 7. 再scanでreject / ignoreが抑止され、approved sourceが再提示されないことを確認
-8. public Bash / MCPがallowされることを確認
-9. protected Bash / MCPがPreToolUseでdenyされることを確認
+8. publicなHook-visible local toolがallowされることを確認
+9. protected flowを含む既知 / 未知local toolがPreToolUseでdenyされることを確認
 10. protected final answerがStopで`continue_review`になることを確認
 11. decision traceを`--no-preview`で取得
 12. Pluginとmarketplaceをremove

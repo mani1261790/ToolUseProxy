@@ -928,9 +928,11 @@ class PluginBundleTest(unittest.TestCase):
         self.assertNotIn("hooks", manifest)
         self.assertEqual(
             (
-                "ToolUseProxy checks supported local function-tool inputs before "
-                "execution, records tool results locally, and reviews final responses "
-                "for protected content. Hosted tools cannot be intercepted, so "
+                "ToolUseProxy checks every Hook-visible local function-tool input "
+                "before execution, records tool results locally, and reviews final "
+                "responses for protected content. Unknown local function tools are "
+                "treated conservatively when protected information reaches their "
+                "input. Hosted tools cannot be intercepted, so "
                 "SessionStart and SubagentStart add a developer-context safety boundary "
                 "instead. It stays local by default. The experimental Externality Judge sends only "
                 "a value-free structural summary to the model provider you explicitly "

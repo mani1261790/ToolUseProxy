@@ -39,11 +39,13 @@ Codexが表示するHookを、次の条件と照合してください。
 
 - `SessionStart`: Web SearchなどHookで技術的に遮断できないhosted toolへ、protected contentやそこから得た内容を渡さない安全境界をCodexへ伝える
 - `SubagentStart`: subagentにも同じhosted tool境界を伝える
-- `PreToolUse`: tool実行前にpayloadを確認し、protected contentの外部送信を止める
+- `PreToolUse`: Hookから見えるlocal toolの実行前にpayloadを確認し、protected contentの外部送信を止める
 - `PostToolUse`: tool実行後に入力と結果をlocal DBへ記録する
 - `Stop`: 最終回答にprotected contentが残っていないか確認する
 
 HookはCodex sandbox外でユーザー権限により実行されます。Hook自体はlocal dataだけを読み書きし、network通信やLLM待機を行いません。実験的なExternality Judgeを別途有効にすると、未知callは値非保持のlocal queueへ入り、protected情報がそのcallへ流れている場合は分類を待たず止まります。publicだけなら止まりません。LLM分類は、Hook外workerを利用者が明示実行した場合に、jobごとの新しい隔離済みCodex一時セッションでだけ行われ、この手順では有効になりません。ToolUseProxyはOpenAI APIやAPI keyを直接扱いません。source、件数、command pathが異なる場合はTrustしないでください。無関係なHookも表示されている場合は`Trust all`を使わず、ToolUseProxyの5件を個別に確認します。
+
+この実行前blockはCodex Hookへ届くlocal toolが対象です。hosted Web SearchはHookへ届かず、実行中processへの`write_stdin`追加入力では新しい`PreToolUse`が発火しません。これらを保護済みとは表示しません。
 
 ## 4. 利用するprojectを初期設定する
 

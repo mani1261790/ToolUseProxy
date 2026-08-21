@@ -178,6 +178,24 @@ def build_source_binding_edges(
     available for the same topology decision as a full rebuild.
     """
     canonical_contexts = select_canonical_similarity_contexts(contexts)
+    submitted_fragment_ids = {
+        edge.src_node_id
+        for edge in artifact_edges or []
+        if edge.src_node_kind == "artifact_fragment"
+        and edge.dst_node_kind == "sink_candidate"
+        and edge.relation == "submitted_to"
+    }
+    canonical_ids = {
+        context.fragment.fragment_id for context in canonical_contexts
+    }
+    canonical_contexts.extend(
+        context
+        for context in contexts
+        if context.fragment.fragment_id in submitted_fragment_ids
+        and context.fragment.fragment_id not in canonical_ids
+        and context.fragment.fragment_kind != "json_key"
+        and bool(context.fragment.normalized_text)
+    )
     by_id = {context.fragment.fragment_id: context for context in canonical_contexts}
     prepared_contexts = {
         context.fragment.fragment_id: prepare_similarity_text(

@@ -29,7 +29,7 @@ ToolUseProxyは、次の3段階で外部流出を調べます。
 - `.env`、JSON、Markdownなどを、利用者の明示承認後だけ保護対象へ登録する
 - protected sourceと送信payloadをexact、substring、token、shingleで比較する
 - file read / writeやtool I/Oから、保護情報の到達経路を補助的に推定する
-- 対応済みのBash / MCP外部送信を`PreToolUse`で実行前に止める
+- Hookから見える全ローカルToolを`PreToolUse`で確認し、保護情報が外部へ渡る可能性がある入力を実行前に止める
 - final answerにcriticalな候補がある場合、`Stop`で再確認を求める
 - 判定根拠と監査記録をworkspaceごとのlocal SQLiteへ保存する
 
@@ -91,7 +91,7 @@ adapterにない未知のcallは、raw commandやpathなどを含まない構造
 | 領域 | 状態 | 現在の境界 |
 | --- | --- | --- |
 | Trace / Detect | 中核実装済み | tool I/O、file operation、内容対応から観測可能なprovenanceを再構成 |
-| Stop | alpha実装済み | 明示的に有効化したworkspaceで、対応済みBash / MCPを実行前deny。Stop再確認も提供 |
+| Stop | alpha実装済み | 明示的に有効化したworkspaceで、既知adapterと未知のローカルToolを実行前判定。Stop再確認も提供 |
 | Plugin配布 | alpha.8候補 | clean artifactのlifecycleとExternality Protectionのisolated dogfoodを検証。公開昇格前のfresh Desktop runが必要 |
 | 外部性判定 | 実験段階・既定off | adapter、bounded static analysis、protected unknownの保守的deny、Codex-only background judge、人間review済みrule |
 | 実network観測 | 評価専用 | Codex network proxyのOTLP eventは実行後かつtool単位join不能のため、production blockには不採用 |
@@ -112,6 +112,8 @@ adapterにない未知のcallは、raw commandやpathなどを含まない構造
 
 - 数学的な偽陰性ゼロ、または完全なDLP
 - hosted Web Searchなど、Codex Hookへ現れない経路の技術的な実行前遮断（SessionStart / SubagentStartのdeveloper contextで誤送信を緩和するが、強制境界ではない）
+- 実行中processへの`write_stdin`追加入力の再検査（新しい`PreToolUse`が発火しない）
+- CodexがHookを省略する特殊なtool経路の遮断（現時点では未検証として表示する）
 - 任意program、暗号化・圧縮payload、Git objectの完全な解決
 - LLM内部の完全なtaint trackingや、意味類似度による因果関係の証明
 - Linux / Windowsを含む全環境での同一動作

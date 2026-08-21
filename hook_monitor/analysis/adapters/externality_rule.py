@@ -33,9 +33,11 @@ def externality_policy_adapter_result(
         and context.phase == "pre_tool_use"
         and context.artifact_role == "tool_input"
         and (
-            context.fragment.semantic_role == "command"
+            risk.adapter == "function"
+            or context.fragment.semantic_role == "command"
             or context.fragment.json_pointer == "/"
         )
+        and context.fragment.fragment_kind != "json_key"
     ]
     if not candidates:
         return AdapterResult((), (), ())

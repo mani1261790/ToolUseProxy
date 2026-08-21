@@ -70,7 +70,7 @@ plain language:
   contentを渡さない安全境界をCodexへ伝える。これは技術的遮断ではない。
 - `SubagentStart`: subagentにも同じhosted tool境界を伝える。これは技術的
   遮断ではない。
-- `PreToolUse`: toolを実行する前に、Bash、file edit、MCPへ渡す内容を確認し、
+- `PreToolUse`: Hookから見えるローカルtoolを実行する前に、その入力を確認し、
   protected contentの外部送信を実行前に止める。
 - `PostToolUse`: toolを実行した後に、入力と結果をlocal DBへ記録する。すでに
   実行されたtoolを取り消すものではない。
@@ -385,7 +385,8 @@ do not report missing initial output as a command failure.
    Do not infer approval from a request to remove Plugin code, uninstall a Python package, clear a different cache, or approve a protected source. If managed data changes after review, `apply` rejects the stale token; create and present a new plan. The command deletes only the ToolUseProxy database / SQLite sidecars, migration backups, and manifest backups. It retains unknown entries, workspace manifests, protected source files, symlink targets, filesystem snapshots, and external backups. It does not provide secure erase.
 
 The core defaults record tool activity and review final responses; PreToolUse
-and MCP blocking are disabled until explicitly configured. The normal fixed
+blocking is disabled until explicitly configured. The normal fixed
 setup profile described above explicitly enables PreToolUse file-payload
-blocking after the user approves the setup. MCP blocking remains a separate
-explicit opt-in and must never be enabled silently.
+blocking after the user approves the setup. Enabling PreToolUse also enables
+MCP leak evaluation; do not describe ordinary MCP protection as requiring
+another opt-in.

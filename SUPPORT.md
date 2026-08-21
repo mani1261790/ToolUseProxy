@@ -47,7 +47,7 @@ Codex Plugin APIやHook payloadはToolUseProxyとは別に変更され得ます�
 | `init / doctor / status / trace` | alpha対応 | migrationは通常Hook内では行わない |
 | protected source候補scan | POSIX対応 | bounded offline scan。上限到達時は完全探索と主張しない |
 | candidate batch review | POSIX対応 | 最大10件のvalue-free proposalをまとめて提示し、候補ごとの明示判断を一度に反映。1件用commandも互換維持 |
-| Bash / MCP PreToolUse deny | opt-in | 既定off。static evidenceと現在eventのcritical findingに限定 |
+| Hook-visible local toolのPreToolUse deny | opt-in | 既定off。既知adapterを精密判定し、未知toolは保護情報が入力へ到達した場合だけ保守的にdeny |
 | Stop final-answer review | alpha対応 | critical findingを`continue_review`で差し戻す |
 | runtime redact / `updatedInput` | 未対応 | 複数Hook後の最終採用inputを証明できないため無効 |
 | Externality Judge | experimental / 既定off | runtime解析、DB、schemaが正常に利用できる場合、Hookは値非保持要約をlocal queueへ保存し、初見unknown＋protected flowを保守的にdeny。初期化・解析・DB・schema failureでは既存のfail-open境界が残る。Hook外worker、人間review、workspace単位の完全一致cacheを使い、LLM分類を自動昇格しない |
@@ -58,6 +58,8 @@ Codex Plugin APIやHook payloadはToolUseProxyとは別に変更され得ます�
 
 - Hookの解析失敗、DB lock、未知schema、未初期化では原則fail-openする
 - hosted Web Searchは現在のPreToolUse / PostToolUse Hookへ現れず、技術的な実行前遮断の対象外。SessionStart / SubagentStartのdeveloper contextでprotected contentを渡さないよう指示するが、これは強制境界ではない
+- 実行中processへ`write_stdin`で追加する入力は、新しいPreToolUseが発火しないため再検査できない
+- Codexの特殊なtool経路がHookを省略する可能性は未検証であり、coverage statusでも`unverified`として扱う
 - Bashのshell変数、command substitution、未知option、複雑なpipelineを一般shellとして完全評価しない
 - Codex Hook payloadに信頼できる終了statusがない操作は、write成功を推測せず`unknown`として扱う
 - lexical similarityは意味的な言い換えを一般には検知しない
