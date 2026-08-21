@@ -451,7 +451,7 @@ def plan_desktop_phase_b(
         "planned_changes": [
             f"add marketplace {MARKETPLACE_NAME}",
             f"install Plugin {PLUGIN_ID} in Codex Desktop",
-            "trust exactly three Plugin hooks manually",
+            "trust exactly five Plugin hooks manually",
             "create workspace-scoped ToolUseProxy data",
         ],
         "cleanup_contract": [
