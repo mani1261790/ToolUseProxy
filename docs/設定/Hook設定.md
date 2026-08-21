@@ -1,6 +1,6 @@
 # Hook Setup
 
-このリポジトリには、Codex の `PreToolUse` / `PostToolUse` / `Stop` に接続するための最小スクリプトを置いています。
+このリポジトリには、Codex の `SessionStart` / `SubagentStart` / `PreToolUse` / `PostToolUse` / `Stop` に接続するための最小スクリプトを置いています。
 
 新規導入では、ユーザー固有の絶対pathをHook定義へ書かないCodex Plugin方式を推奨します。Pluginはrepository rootの`.codex-plugin/plugin.json`から読み込まれ、既定の`hooks/hooks.json`を使います。Hook commandは`PLUGIN_ROOT`、SQLiteは`PLUGIN_DATA`を参照します。install、trust、初期化の手順は[Plugin導入](Plugin導入.md)を参照してください。
 
@@ -8,7 +8,7 @@
 
 ## 参考
 
-- 公式仕様: [Codex Hooks](https://learn.chatgpt.com/docs/hooks.md)
+- 公式仕様: [Codex Hooks](https://learn.chatgpt.com/docs/hooks)
 - Hooks の全体像をつかむための補助動画: [YouTube](https://www.youtube.com/watch?v=03CfGf9iw_U)
 
 ## Hooks の構造
@@ -22,6 +22,8 @@ Codex の Hooks は、Codex 本体に組み込まれた拡張機構です。
 Codex 本体
   └─ Codex Hooks
        └─ Hook event
+            ├─ SessionStart
+            ├─ SubagentStart
             ├─ UserPromptSubmit
             ├─ PreToolUse
             ├─ PostToolUse
@@ -40,12 +42,14 @@ Codex Hooks の設定と、そこから呼び出される監視プログラム�
 
 ## この研究での役割分担
 
+- `SessionStart` は、Hookへ現れないhosted toolへprotected contentを渡さないdeveloper contextをCodexへ追加する。これは技術的遮断ではない
+- `SubagentStart` は、subagentへ同じdeveloper contextを追加する。これは技術的遮断ではない
 - `PreToolUse` は、tool 実行前の入力を観測する
 - `PostToolUse` は、tool 実行後の出力とoperation outcomeを記録し、成功を確認できた変更だけをsnapshot候補にする
 - `UserPromptSubmit` は、最初のユーザー入力に秘密情報が混ざっていないかを見る候補
 - `Stop` は、最終応答に漏えいがないかを見る候補
 
-この4つの観測点を使って、秘密情報源から tool input / tool output / 最終応答までの流れを追跡します。
+local function toolと最終応答の観測点を使って、秘密情報源から tool input / tool output / 最終応答までの流れを追跡します。hosted toolはこの観測経路へ現れないため、SessionStartのdeveloper contextは緩和策であり、完全なenforcementとして数えません。
 
 ## 設定イメージ
 
@@ -605,7 +609,7 @@ migration plan後にmanifestが変わればapplyせず、agentは新しいplan�
 
 coding agentがmanifestを直接編集する代わりに、schema v2へ明示移行した後のPluginでは`sh "<PLUGIN_ROOT>/hooks/run_cli.sh" protect scan --workspace <workspace-root> --data-dir <PLUGIN_DATA> --json`を明示的に実行できます。`scan`はVCS、依存関係、virtual environment、build / cache、runtime dataなどを除外し、深さ、entry数、file数、総read bytes、candidate数の固定上限内でworkspaceをoffline探索します。`.env` / `.env.*` / JSONのsecretらしいfield名に一致した非空stringだけをdotenv key / JSON Pointerとして候補化し、stableな相対path順で次の1件だけを提示します。sourceとmanifestは変更しませんが、local runtime DBにはvalue-freeな候補・review監査と内部再検証用のsource hash/statを保存します。raw valueと本文previewはstdout、stderr、候補row、review rowのいずれにも残さず、source hashとabsolute pathは外向きoutputやreviewには出しません。
 
-`scan_complete: false`は固定上限で探索が部分結果になったことを表すため、agentは候補なしと言い切らず、到達した上限reasonと未探索範囲が残ることを説明します。候補は1件ずつ明示承認し、approveによってmanifest hashが変わった後は残りの旧revision / hashを使わず、必ずscanを再実行して次の提案へ新しい承認を得ます。ユーザーまたはagentが既にpathを特定した場合は、従来の`protect suggest --path <relative-path> --json`をfallbackとして使えます。`init`、PreToolUse、PostToolUse、Stopはこのworkspace scanを暗黙実行しません。
+`scan_complete: false`は固定上限で探索が部分結果になったことを表すため、agentは候補なしと言い切らず、到達した上限reasonと未探索範囲が残ることを説明します。候補は最大10件を番号付きでまとめて提示し、候補ごとの明示判断を`protect review`で一度に反映します。batch適用は全candidate revisionと共有manifest hashを再確認し、manifestを1回だけ更新します。ユーザーまたはagentが既にpathを特定した場合は、`protect suggest --path <relative-path> --json`を使い、`--path`を繰り返して最大10件を同じreview batchにできます。`init`、PreToolUse、PostToolUse、Stopはこのworkspace scanを暗黙実行しません。
 
 Plugin更新でprotected-source detector versionが変わった場合も、更新前の`proposed`候補のID / opaque revisionは再利用しません。旧proposalへのapprove、reject、ignoreはcandidateやreviewを変更する前にvalue-freeな`candidate_detector_stale`で終了します。agentは`protect scan`を再実行し、現在versionが作った新しいcandidate IDとrevisionを提示して改めて承認を得ます。旧versionのreject / ignoreは新versionの候補を抑止しません。すでにmanifestへ登録されたapproved sourceは更新後も維持し、detector変更だけを理由にentryやselectorを自動変更しません。更新前に開始した`approving`または完了した`approved`へのexact approve再試行だけは、途中停止のdurability recoveryとして扱います。Hookはこの候補互換処理やscanを暗黙実行しません。
 

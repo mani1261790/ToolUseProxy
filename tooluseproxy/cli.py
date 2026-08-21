@@ -42,7 +42,11 @@ from hook_monitor.runtime.storage import (
 )
 from hook_monitor.runtime.workspace import WorkspaceContext, resolve_workspace
 from tooluseproxy import __version__
-from tooluseproxy.integrations.codex import CODEX_HOOK_PHASES, run_codex_hook
+from tooluseproxy.integrations.codex import (
+    CODEX_HOOK_PHASES,
+    codex_enforcement_coverage,
+    run_codex_hook,
+)
 from tooluseproxy.paths import (
     PathConfigurationError,
     RuntimePaths,
@@ -61,6 +65,7 @@ from tooluseproxy.protected_sources import (
     ProtectedSourceWorkspaceLock,
     ProtectedSourceRegistrationError,
     approve_protected_source,
+    approve_protected_source_batch,
     apply_protected_source_manifest_migration,
     ignore_protected_source_candidate,
     lock_protected_source_workspace,
@@ -81,6 +86,7 @@ MANIFEST_FILENAME = "protected_sources.json"
 PROTECT_OUTPUT_SCHEMA_VERSION = 1
 CONFIG_OUTPUT_SCHEMA_VERSION = 1
 SETUP_OUTPUT_SCHEMA_VERSION = 1
+PROTECTED_SOURCE_REVIEW_BATCH_LIMIT = 10
 SETUP_PROFILE_FILE_PAYLOAD_EXACT = "file-payload-exact"
 SETUP_PROFILE_SETTINGS = {
     PRE_TOOL_POLICY_KEY: True,
@@ -307,8 +313,9 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     suggest.add_argument(
         "--path",
+        action="append",
         required=True,
-        help="One workspace-relative path.",
+        help="One workspace-relative path; repeat for up to 10 paths.",
     )
     suggest.add_argument(
         "--whole-file",
@@ -324,7 +331,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     scan = protect_subparsers.add_parser(
         "scan",
-        help="Discover one value-free proposal with a bounded offline workspace scan.",
+        help="Discover a value-free review batch with a bounded offline workspace scan.",
     )
     scan.add_argument("--workspace", type=Path, default=Path.cwd())
     scan.add_argument("--json", action="store_true", help="Print machine-readable output.")
@@ -343,6 +350,23 @@ def _build_parser() -> argparse.ArgumentParser:
     approve.add_argument("--workspace", type=Path, default=Path.cwd())
     approve.add_argument("--json", action="store_true", help="Print machine-readable output.")
     _add_runtime_path_arguments(approve)
+
+    review = protect_subparsers.add_parser(
+        "review",
+        help="Apply one explicitly reviewed candidate batch.",
+    )
+    review.add_argument(
+        "--decision",
+        action="append",
+        nargs=3,
+        required=True,
+        metavar=("CANDIDATE_ID", "CANDIDATE_REVISION", "DECISION"),
+        help="Repeat for each reviewed candidate; DECISION is approve, reject, or ignore.",
+    )
+    review.add_argument("--expected-manifest-sha256", required=True)
+    review.add_argument("--workspace", type=Path, default=Path.cwd())
+    review.add_argument("--json", action="store_true", help="Print machine-readable output.")
+    _add_runtime_path_arguments(review)
 
     for decision in ("reject", "ignore"):
         decision_parser = protect_subparsers.add_parser(
@@ -856,6 +880,7 @@ def _run_setup_verify(args: argparse.Namespace) -> int:
             },
             "protected_sources": protected_sources,
             "runtime_settings": settings_payload,
+            "enforcement_coverage": codex_enforcement_coverage(),
         }
     except (
         OSError,
@@ -998,6 +1023,7 @@ def _run_doctor(args: argparse.Namespace) -> int:
         "checks": checks,
         "protected_sources": protected_sources,
         "runtime_settings": runtime_settings,
+        "enforcement_coverage": codex_enforcement_coverage(),
     }
     _render(payload, as_json=args.json)
     return 0 if ok else 1
@@ -1041,6 +1067,7 @@ def _run_status(args: argparse.Namespace) -> int:
         },
         "protected_sources": protected_sources,
         "runtime_settings": runtime_settings,
+        "enforcement_coverage": codex_enforcement_coverage(),
     }
     _render(payload, as_json=args.json)
     return 0 if payload["status"] == "active" else 1
@@ -1229,7 +1256,7 @@ def _run_protect(args: argparse.Namespace) -> int:
                 store,
                 workspace,
                 workspace_path,
-                (args.path,),
+                tuple(args.path),
                 whole_file=args.whole_file,
             )
         elif args.protect_command == "scan":
@@ -1246,6 +1273,14 @@ def _run_protect(args: argparse.Namespace) -> int:
                 workspace_path,
                 candidate_id=args.candidate_id,
                 candidate_revision=args.candidate_revision,
+                expected_manifest_sha256=args.expected_manifest_sha256,
+            )
+        elif args.protect_command == "review":
+            payload = _review_protected_source_candidate_batch(
+                store,
+                workspace,
+                workspace_path,
+                decisions=tuple(tuple(item) for item in args.decision),
                 expected_manifest_sha256=args.expected_manifest_sha256,
             )
         elif args.protect_command in {"reject", "ignore"}:
@@ -1397,7 +1432,7 @@ def _save_next_scanned_candidate(
     workspace: WorkspaceContext,
     scan: ProtectedSourceScanResult,
 ) -> dict[str, Any]:
-    """Persist and expose at most one candidate from one bounded scan."""
+    """Persist and expose one bounded, value-free review batch."""
 
     assert workspace.workspace_id is not None
     suppression_fingerprints = tuple(
@@ -1413,8 +1448,7 @@ def _save_next_scanned_candidate(
         candidate.suppression_fingerprint: candidate
         for candidate in stored_candidates
     }
-    selected: ProtectedSourceCandidate | None = None
-    selected_candidate_id: str | None = None
+    selected: list[tuple[ProtectedSourceCandidate, str]] = []
     for candidate in scan.candidates:
         stored = stored_by_fingerprint.get(candidate.suppression_fingerprint)
         if not _scan_candidate_requires_proposal(candidate, stored):
@@ -1436,9 +1470,9 @@ def _save_next_scanned_candidate(
                 "candidate_state_conflict",
                 "protected source candidate changed during scan",
             )
-        selected = candidate
-        selected_candidate_id = created.candidate.candidate_id
-        break
+        selected.append((candidate, created.candidate.candidate_id))
+        if len(selected) >= PROTECTED_SOURCE_REVIEW_BATCH_LIMIT:
+            break
 
     current_candidates = (
         store.list_protected_source_candidates_by_suppression_fingerprints(
@@ -1451,31 +1485,33 @@ def _save_next_scanned_candidate(
         for candidate in current_candidates
     }
     candidates: list[dict[str, object]] = []
-    selected_fingerprint: str | None = None
-    if selected is not None and selected_candidate_id is not None:
-        current = current_by_fingerprint.get(selected.suppression_fingerprint)
+    selected_fingerprints: set[str] = set()
+    for selected_candidate, selected_candidate_id in selected:
+        current = current_by_fingerprint.get(selected_candidate.suppression_fingerprint)
         if (
             current is None
             or current.candidate_id != selected_candidate_id
             or current.status != "proposed"
             or current.candidate_revision_sha256
-            != selected.candidate_revision_sha256
+            != selected_candidate.candidate_revision_sha256
         ):
             raise _ProtectCliError(
                 "candidate_state_conflict",
                 "protected source candidate changed during scan",
             )
         candidates.append(
-            selected.with_candidate_id(selected_candidate_id).to_public_payload()
+            selected_candidate.with_candidate_id(
+                selected_candidate_id
+            ).to_public_payload()
         )
-        selected_fingerprint = selected.suppression_fingerprint
+        selected_fingerprints.add(selected_candidate.suppression_fingerprint)
 
     suppressed_count = 0
     approved_count = int(scan.already_registered_count)
     approval_in_progress_count = 0
     remaining_candidate_count = 0
     for candidate in scan.candidates:
-        if candidate.suppression_fingerprint == selected_fingerprint:
+        if candidate.suppression_fingerprint in selected_fingerprints:
             continue
         stored = current_by_fingerprint.get(candidate.suppression_fingerprint)
         if _scan_candidate_requires_proposal(candidate, stored):
@@ -1538,8 +1574,9 @@ def _save_next_scanned_candidate(
         "approval_in_progress_count": approval_in_progress_count,
         "remaining_candidate_count": remaining_candidate_count,
         "continuation_required": continuation_required,
-        "approval_mode": "one_at_a_time",
-        "rescan_required_after_manifest_change": True,
+        "approval_mode": "batch",
+        "review_batch_limit": PROTECTED_SOURCE_REVIEW_BATCH_LIMIT,
+        "rescan_required_after_manifest_change": False,
     }
 
 
@@ -1619,6 +1656,11 @@ def _suggest_protected_sources_under_lock(
     workspace_lock: ProtectedSourceWorkspaceLock,
 ) -> dict[str, Any]:
     assert workspace.workspace_id is not None
+    if not 1 <= len(relative_paths) <= PROTECTED_SOURCE_REVIEW_BATCH_LIMIT:
+        raise _ProtectCliError(
+            "candidate_batch_invalid",
+            "protected source suggestion must contain between 1 and 10 paths",
+        )
     candidates: list[dict[str, object]] = []
     manifest_sha256: str | None = None
     suppressed_count = 0
@@ -1848,6 +1890,178 @@ def _approve_protected_source_candidate_under_lock(
     return result.to_public_payload()
 
 
+def _review_protected_source_candidate_batch(
+    store: EventStore,
+    workspace: WorkspaceContext,
+    workspace_path: Path,
+    *,
+    decisions: tuple[tuple[str, str, str], ...],
+    expected_manifest_sha256: str,
+) -> dict[str, object]:
+    if not 1 <= len(decisions) <= PROTECTED_SOURCE_REVIEW_BATCH_LIMIT:
+        raise _ProtectCliError(
+            "candidate_batch_invalid",
+            "candidate review batch must contain between 1 and 10 decisions",
+        )
+    candidate_ids = [item[0] for item in decisions]
+    if len(set(candidate_ids)) != len(candidate_ids):
+        raise _ProtectCliError(
+            "candidate_batch_invalid",
+            "candidate review batch contains a duplicate candidate",
+        )
+    if any(item[2] not in {"approve", "reject", "ignore"} for item in decisions):
+        raise _ProtectCliError(
+            "candidate_batch_invalid",
+            "candidate review decision must be approve, reject, or ignore",
+        )
+
+    with lock_protected_source_workspace(workspace_path) as workspace_lock:
+        loaded: list[tuple[StoredProtectedSourceCandidate, str, str]] = []
+        for candidate_id, candidate_revision, decision in decisions:
+            stored = _load_workspace_candidate(store, workspace, candidate_id)
+            _reject_stale_candidate(
+                stored,
+                allow_legacy_approval_recovery=decision == "approve",
+            )
+            _verify_stored_candidate_revision(
+                stored.candidate_revision_sha256,
+                candidate_revision,
+            )
+            allowed_statuses = (
+                {"proposed", "approving", "approved"}
+                if decision == "approve"
+                else {"proposed"}
+            )
+            if stored.status not in allowed_statuses:
+                raise _ProtectCliError(
+                    "candidate_not_proposed",
+                    "candidate is not awaiting the requested review",
+                )
+            if stored.status != "approved" and (
+                stored.manifest_sha256 is None
+                or not hmac.compare_digest(
+                    stored.manifest_sha256,
+                    expected_manifest_sha256,
+                )
+            ):
+                raise ProtectedSourceRegistrationError("manifest_conflict")
+            loaded.append((stored, candidate_revision, decision))
+
+        approval_items = [item for item in loaded if item[2] == "approve"]
+        claimed: list[StoredProtectedSourceCandidate] = []
+        newly_claimed: list[StoredProtectedSourceCandidate] = []
+        try:
+            for stored, _, _ in approval_items:
+                if stored.status == "proposed":
+                    stored = store.claim_protected_source_candidate_approval(
+                        stored.candidate_id,
+                        expected_revision_sha256=stored.candidate_revision_sha256,
+                        expected_manifest_sha256=expected_manifest_sha256,
+                    )
+                    newly_claimed.append(stored)
+                claimed.append(stored)
+        except Exception:
+            for reserved in reversed(newly_claimed):
+                if (
+                    reserved.status == "approving"
+                    and reserved.approval_attempt_id is not None
+                ):
+                    store.release_protected_source_candidate_approval(
+                        reserved.candidate_id,
+                        approval_attempt_id=reserved.approval_attempt_id,
+                        expected_revision_sha256=reserved.candidate_revision_sha256,
+                        expected_manifest_sha256=reserved.manifest_sha256,
+                        result_manifest_sha256=None,
+                        decision_code="approval_released",
+                    )
+            raise
+
+        results_by_id: dict[str, object] = {}
+        result_manifest_sha256 = expected_manifest_sha256
+        if approval_items:
+            claimed_by_id = {item.candidate_id: item for item in claimed}
+            batch_candidates = [
+                (
+                    asdict(claimed_by_id[stored.candidate_id]),
+                    candidate_revision,
+                )
+                for stored, candidate_revision, _ in approval_items
+            ]
+            try:
+                approval_results = approve_protected_source_batch(
+                    workspace_path,
+                    batch_candidates,
+                    expected_manifest_sha256=expected_manifest_sha256,
+                    workspace_lock=workspace_lock,
+                )
+            except ProtectedSourceRegistrationError as exc:
+                if exc.code not in {
+                    "manifest_durability_unknown",
+                    "manifest_postcondition_failed",
+                }:
+                    for reserved in reversed(newly_claimed):
+                        if reserved.approval_attempt_id is None:
+                            continue
+                        store.release_protected_source_candidate_approval(
+                            reserved.candidate_id,
+                            approval_attempt_id=reserved.approval_attempt_id,
+                            expected_revision_sha256=reserved.candidate_revision_sha256,
+                            expected_manifest_sha256=reserved.manifest_sha256,
+                            result_manifest_sha256=None,
+                            decision_code=(
+                                "source_changed"
+                                if exc.code == "source_changed"
+                                else "manifest_changed"
+                                if exc.code == "manifest_conflict"
+                                else "approval_released"
+                            ),
+                        )
+                raise
+            result_manifest_sha256 = approval_results[0].manifest_sha256
+            for result in approval_results:
+                results_by_id[result.candidate_id] = result.to_public_payload()
+                reserved = claimed_by_id[result.candidate_id]
+                if reserved.status == "approved":
+                    continue
+                assert reserved.approval_attempt_id is not None
+                store.finalize_protected_source_candidate_approval(
+                    reserved.candidate_id,
+                    approval_attempt_id=reserved.approval_attempt_id,
+                    expected_revision_sha256=reserved.candidate_revision_sha256,
+                    expected_manifest_sha256=reserved.manifest_sha256,
+                    result_manifest_sha256=result.manifest_sha256,
+                    approved_source_id=result.source_id,
+                    decision_code=(
+                        "approved"
+                        if result.status == "approved"
+                        else "already_registered"
+                    ),
+                )
+
+        for stored, candidate_revision, decision in loaded:
+            if decision == "approve":
+                continue
+            result = _review_protected_source_candidate(
+                store,
+                workspace,
+                candidate_id=stored.candidate_id,
+                candidate_revision=candidate_revision,
+                decision=decision,
+            )
+            results_by_id[stored.candidate_id] = result
+
+    return {
+        "schema_version": PROTECT_OUTPUT_SCHEMA_VERSION,
+        "status": "reviewed",
+        "decision_count": len(decisions),
+        "approved_count": sum(item[2] == "approve" for item in decisions),
+        "rejected_count": sum(item[2] == "reject" for item in decisions),
+        "ignored_count": sum(item[2] == "ignore" for item in decisions),
+        "manifest_sha256": result_manifest_sha256,
+        "results": [results_by_id[candidate_id] for candidate_id in candidate_ids],
+    }
+
+
 def _review_protected_source_candidate(
     store: EventStore,
     workspace: WorkspaceContext,
@@ -1968,7 +2182,12 @@ def _render_protect_payload(payload: dict[str, Any], *, as_json: bool) -> None:
         "remaining_candidate_count",
         "continuation_required",
         "approval_mode",
+        "review_batch_limit",
         "rescan_required_after_manifest_change",
+        "decision_count",
+        "approved_count",
+        "rejected_count",
+        "ignored_count",
     ):
         if key not in payload:
             continue
@@ -1978,6 +2197,8 @@ def _render_protect_payload(payload: dict[str, Any], *, as_json: bool) -> None:
         print(f"{key}: {value}")
     for candidate in payload.get("candidates", []):
         print(json.dumps(candidate, ensure_ascii=False, sort_keys=True))
+    for result in payload.get("results", []):
+        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
     if "candidate_id" in payload:
         print(f"candidate_id: {payload['candidate_id']}")
     if "source_id" in payload:

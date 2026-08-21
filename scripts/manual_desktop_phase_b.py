@@ -2439,9 +2439,9 @@ def _desktop_plugin_hooks(
         )
     ]
     if (
-        len(selected) != 3
+        len(selected) != 5
         or sorted(str(hook.get("eventName")) for hook in selected)
-        != ["postToolUse", "preToolUse", "stop"]
+        != ["postToolUse", "preToolUse", "sessionStart", "stop", "subagentStart"]
     ):
         raise DesktopPhaseBFailure(
             "hook_inventory",
@@ -2483,17 +2483,31 @@ def _desktop_plugin_hooks(
         )
 
     expected = {
+        "sessionStart": (
+            "SessionStart",
+            "session-start",
+            None,
+            "run_hook.sh",
+        ),
+        "subagentStart": (
+            "SubagentStart",
+            "subagent-start",
+            None,
+            "run_hook.sh",
+        ),
         "preToolUse": (
             "PreToolUse",
             "pre-tool-use",
             "^(Bash|apply_patch|mcp__.*)$",
+            PROBE_LAUNCHER_FILENAME,
         ),
         "postToolUse": (
             "PostToolUse",
             "post-tool-use",
             "^(Bash|apply_patch|mcp__.*)$",
+            PROBE_LAUNCHER_FILENAME,
         ),
-        "stop": ("Stop", "stop", None),
+        "stop": ("Stop", "stop", None, PROBE_LAUNCHER_FILENAME),
     }
     sanitized: list[dict[str, Any]] = []
     for hook in selected:
@@ -2504,9 +2518,9 @@ def _desktop_plugin_hooks(
                 "hook_inventory",
                 "plugin_hook_event_invalid",
             )
-        event, phase, matcher = spec
+        event, phase, matcher, launcher_filename = spec
         command = (
-            f'sh "{hook_root / "hooks" / PROBE_LAUNCHER_FILENAME}" {phase}'
+            f'sh "{hook_root / "hooks" / launcher_filename}" {phase}'
         )
         current_hash = hook.get("currentHash")
         trust_status = hook.get("trustStatus")
@@ -3758,14 +3772,19 @@ def _write_desktop_guidance(
         f"対象Plugin: {PLUGIN_ID}\n"
         f"対象version: {state['plugin_version']}\n"
         f"対象workspace: {state['workspace']}\n\n"
-        "確認するHookは次の3件だけです。\n\n"
+        "確認するHookは次の5件だけです。\n\n"
+        "SessionStart: WebSearchなどHookで遮断できないhosted toolへ"
+        "protected contentを渡さない安全境界をCodexへ伝えます。技術的な"
+        "実行前遮断ではありません。\n"
+        "SubagentStart: subagentにも同じhosted tool境界を伝えます。技術的な"
+        "実行前遮断ではありません。\n"
         "PreToolUse: toolの実行前に、外部送信へprotected contentが"
         "含まれないか確認します。\n"
         "PostToolUse: toolの実行後に、入出力をlocal DBへ記録します。\n"
         "Stop: 最終回答を返す前に、protected contentが残っていないか"
         "確認します。\n\n"
         "Hook commandはCodex sandboxの外で、あなたのlocal権限により"
-        "実行されます。source、version、Hookが3件であること、各commandが"
+        "実行されます。source、version、Hookが5件であること、各commandが"
         "対象Plugin root内を指すことを毎回確認してください。1つでも違う場合は"
         "trustせず停止してください。以前にtrustしていても、定義が変わって"
         "modifiedになったHookは再reviewが必要です。\n\n"

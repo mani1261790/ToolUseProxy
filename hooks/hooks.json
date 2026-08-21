@@ -1,6 +1,32 @@
 {
-  "description": "ToolUseProxy checks tool inputs before execution, records tool results locally, and reviews final responses for protected content. It stays local by default. The experimental Externality Judge sends only a value-free structural summary to the model provider you explicitly select.",
+  "description": "ToolUseProxy checks supported local function-tool inputs before execution, records tool results locally, and reviews final responses for protected content. Hosted tools cannot be intercepted, so SessionStart and SubagentStart add a developer-context safety boundary instead. It stays local by default. The experimental Externality Judge sends only a value-free structural summary to the model provider you explicitly select.",
   "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${PLUGIN_ROOT}/hooks/run_hook.sh\" session-start",
+            "commandWindows": "\"%PLUGIN_ROOT%\\hooks\\run_hook.cmd\" session-start",
+            "timeout": 10,
+            "statusMessage": "ToolUseProxyの保護範囲を確認しています"
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${PLUGIN_ROOT}/hooks/run_hook.sh\" subagent-start",
+            "commandWindows": "\"%PLUGIN_ROOT%\\hooks\\run_hook.cmd\" subagent-start",
+            "timeout": 10,
+            "statusMessage": "SubagentへToolUseProxyの保護範囲を伝えています"
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "matcher": "^(Bash|apply_patch|mcp__.*)$",

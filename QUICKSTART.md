@@ -27,21 +27,23 @@ MarketplaceとPluginのインストールは、Codex環境ごとに1回だけで
 codex plugin marketplace add mani1261790/ToolUseProxy --ref v0.1.0-alpha.7
 ```
 
-## 3. 3つのHookを確認してTrustする
+## 3. 5つのHookを確認してTrustする
 
 Codexが表示するHookを、次の条件と照合してください。
 
 - sourceが`Plugin - tooluseproxy@tooluseproxy`
-- `PreToolUse`、`PostToolUse`、`Stop`の3件
+- `SessionStart`、`SubagentStart`、`PreToolUse`、`PostToolUse`、`Stop`の5件
 - commandがインストール済みToolUseProxy Plugin内の`hooks/run_hook.sh`を指す
 
 役割は次のとおりです。
 
+- `SessionStart`: Web SearchなどHookで技術的に遮断できないhosted toolへ、protected contentやそこから得た内容を渡さない安全境界をCodexへ伝える
+- `SubagentStart`: subagentにも同じhosted tool境界を伝える
 - `PreToolUse`: tool実行前にpayloadを確認し、protected contentの外部送信を止める
 - `PostToolUse`: tool実行後に入力と結果をlocal DBへ記録する
 - `Stop`: 最終回答にprotected contentが残っていないか確認する
 
-HookはCodex sandbox外でユーザー権限により実行されます。Hook自体はlocal dataだけを読み書きし、network通信やLLM待機を行いません。実験的なExternality Judgeを別途有効にすると、未知callは値非保持のlocal queueへ入り、protected情報がそのcallへ流れている場合は分類を待たず止まります。publicだけなら止まりません。LLM分類は、Hook外workerを利用者が明示実行した場合に、jobごとの新しい隔離済みCodex一時セッションでだけ行われ、この手順では有効になりません。ToolUseProxyはOpenAI APIやAPI keyを直接扱いません。source、件数、command pathが異なる場合はTrustしないでください。無関係なHookも表示されている場合は`Trust all`を使わず、ToolUseProxyの3件を個別に確認します。
+HookはCodex sandbox外でユーザー権限により実行されます。Hook自体はlocal dataだけを読み書きし、network通信やLLM待機を行いません。実験的なExternality Judgeを別途有効にすると、未知callは値非保持のlocal queueへ入り、protected情報がそのcallへ流れている場合は分類を待たず止まります。publicだけなら止まりません。LLM分類は、Hook外workerを利用者が明示実行した場合に、jobごとの新しい隔離済みCodex一時セッションでだけ行われ、この手順では有効になりません。ToolUseProxyはOpenAI APIやAPI keyを直接扱いません。source、件数、command pathが異なる場合はTrustしないでください。無関係なHookも表示されている場合は`Trust all`を使わず、ToolUseProxyの5件を個別に確認します。
 
 ## 4. 利用するprojectを初期設定する
 
@@ -62,23 +64,23 @@ ToolUseProxyが必要な初期設定と安全確認を案内します。操作�
 
 完了時に「このプロジェクトではToolUseProxyが動作しています」と表示されれば準備完了です。すべての機密ファイルが自動登録されるわけではありません。
 
-## 5. protected sourceを1件確認する
+## 5. protected source候補をまとめて確認する
 
 続けて、自然な言葉で保護候補を探すよう依頼します。次は入力例であり、固定フレーズではありません。
 
 > 守った方がよいファイルを探して
 
-候補が見つかると、次の内容が日本語で表示されます。
+候補が見つかると、最大10件が番号付きでまとめて表示されます。
 
 - ファイル：project内の相対pathだけ
 - 守る内容：値を表示せず、どの設定項目を守るか
 - できること：選んだ内容の外部送信を実行前に止められること
-- 「守る」を選ぶと：保護対象リストに1件追加され、元ファイルは変わらないこと
+- 「守る」を選ぶと：その候補が保護対象リストに追加され、元ファイルは変わらないこと
 - 選択肢：「守る」「今回は見送る」「今後は候補に出さない」
 
-候補の値、file preview、source hash、ユーザーのabsolute pathは表示しません。初期設定や候補探しだけでは保護対象に登録されません。
+候補の値、file preview、source hash、ユーザーのabsolute pathは表示しません。「全部守る」「1と3は守る、2は見送る」のように自然な言葉でまとめて回答できます。判断が曖昧な候補があれば、その番号だけを確認してから一括反映します。初期設定や候補探しだけでは保護対象に登録されません。
 
-既にpathが分かっているMarkdownなどの文書は、例えば「研究計画と研究方針のMarkdownを全文守りたい」のように依頼できます。ToolUseProxyは本文を表示せず、対象pathと「全文を守る」ことを1件ずつ示します。directory単位の依頼でも一括登録はせず、各ファイルについて「守る」を選んだ後だけ登録します。
+既にpathが分かっているMarkdownなどの文書は、例えば「研究計画と研究方針のMarkdownを全文守りたい」のように依頼できます。ToolUseProxyは本文を表示せず、最大10件の対象pathと「全文を守る」ことをまとめて示します。明示的に「守る」と判断したファイルだけを、一度の操作で登録します。
 
 この初期設定では、PreToolUseによる実行前blockとfile-backed payload保護をworkspace単位で有効にします。既存の異なる設定がある場合は上書きせず停止します。
 
@@ -87,7 +89,7 @@ ToolUseProxyが必要な初期設定と安全確認を案内します。操作�
 最初は、production credential、顧客data、署名鍵を含まない低riskなprojectを選びます。次の順で確認してください。
 
 1. 有効なToolUseProxy Pluginが1つだけである
-2. 3つのHookを確認してTrustした
+2. 5つのHookを確認してTrustした
 3. 「このプロジェクトではToolUseProxyが動作しています」と表示された
 4. harmlessなpublic操作が通常どおり完了した
 5. syntheticなprotected valueが外部操作の実行前にblockされた

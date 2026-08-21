@@ -18,7 +18,7 @@ Codex CLIを利用できないhostでは、runtime artifactだけを対象にで
 python3.11 scripts/dogfood_all.py --installation-mode extracted
 ```
 
-この一括結果の`automated.status=passed`は、繰り返せるCore／Hook／Plugin lifecycle検証の合格です。Codex Desktop自身はComputer Useによる自己操作を許可しないため、Desktopの3 Hook review、生成済みtaskを開く操作、2回の限定承認の判断は`desktop.status=human_required`として残します。task完了後の証跡回収、public allow、protected pre-execution block、raw exposure 0、report生成、cleanup planは既存Desktop verifierが自動処理します。自動試験の合格をDesktop UIや説明理解の合格へ読み替えません。
+この一括結果の`automated.status=passed`は、繰り返せるCore／Hook／Plugin lifecycle検証の合格です。Codex Desktop自身はComputer Useによる自己操作を許可しないため、Desktopの4 Hook review、生成済みtaskを開く操作、2回の限定承認の判断は`desktop.status=human_required`として残します。task完了後の証跡回収、public allow、protected pre-execution block、raw exposure 0、report生成、cleanup planは既存Desktop verifierが自動処理します。自動試験の合格をDesktop UIや説明理解の合格へ読み替えません。
 
 ## 実projectでのself-dogfood
 
@@ -45,7 +45,7 @@ codex plugin marketplace add /absolute/path/to/ToolUseProxy
 codex plugin add tooluseproxy@tooluseproxy
 ```
 
-同名marketplaceがすでにある場合に上書きや混在を推測実行しません。既存installのremove、marketplace remove、新しいinstallをそれぞれ確認し、Plugin codeのremoveとmanaged dataの削除を分離します。install後はPreToolUse / PostToolUse / Stopの定義をreviewし、3件とも意図したsourceとhashである場合だけtrustして、新しいtaskを開始します。
+同名marketplaceがすでにある場合に上書きや混在を推測実行しません。既存installのremove、marketplace remove、新しいinstallをそれぞれ確認し、Plugin codeのremoveとmanaged dataの削除を分離します。install後はSessionStart / SubagentStart / PreToolUse / PostToolUse / Stopの定義をreviewし、5件とも意図したsourceとhashである場合だけtrustして、新しいtaskを開始します。
 
 最初のtaskではbundled setup skillだけを使います。最新buildでは、workspace外のPlugin dataへ初期化と3保護設定を一つのatomic profileとして適用し、その後に一つのread-only verificationを行います。承認理由は「外部通信」ではなく「workspace外のPlugin data操作」であり、通常の承認UIは2回程度です。広い再利用可能permission prefixは許可しません。
 
@@ -129,8 +129,8 @@ task launcherは起動直前にprepare時のCodex versionとfake sinkのpath、m
 
 prepareは同じrootへmode `0600`の`phase-b-prompt.txt`、`phase-b-guide.md`、`phase-b-context.json`を作ります。contextにはworkspace、installed Plugin、Plugin data、fake sinkのlocal pathだけを置き、source値を含めません。setup skillはこのcontextを使い、`ps`やworkspace外の広い検索でpathを推測しません。このpromptを新しいCodex taskへ渡し、次を人間が確認します。
 
-1. guideでPreToolUse / PostToolUse / Stopの役割、sandbox外実行、local data、networkなし、想定source / 件数 / command rootを理解する
-2. Codexが表示する3件のHook definitionをreviewし、guideと一致する場合だけtrustする
+1. guideでSessionStart / SubagentStart / PreToolUse / PostToolUse / Stopの役割、sandbox外実行、local data、networkなし、想定source / 件数 / command rootを理解する
+2. Codexが表示する5件のHook definitionをreviewし、guideと一致する場合だけtrustする
 3. 長いPlugin commandの承認ごとに、160文字以内の同じplain textが事前説明と承認理由の両方へ表示され、`行うこと：` `変更されるもの：` `外部通信：` `確認が必要な理由：`の順で説明した後に`この内容で実行してよいですか？`と尋ねている。absolute pathやMarkdownは承認理由へ含めない
 4. synthetic workspaceで`init`、`doctor`、`status`を実行する
 5. 候補について、exact JSONより先に「このファイルをToolUseProxyで守りますか？」と表示され、「ファイル」「守る内容」「できること」「守るを選ぶと」の説明と「守る」「今回は見送る」「今後は候補に出さない」の選択肢を読む
@@ -208,7 +208,7 @@ pre-tool-policy=on
 file-payload-shadow=on
 ```
 
-macOSではlauncherがpreflight後にsynthetic promptを`pbcopy`へ渡します。起動後はHook 3件をreviewし、clipboardのpromptを新しいtaskへ貼り付けます。prompt本文やsource値をterminal commandとして組み立て直す必要はありません。
+macOSではlauncherがpreflight後にsynthetic promptを`pbcopy`へ渡します。起動後はHook 5件をreviewし、clipboardのpromptを新しいtaskへ貼り付けます。prompt本文やsource値をterminal commandとして組み立て直す必要はありません。
 
 taskではpayload fileを読まず、fake sinkへ`--data-binary @shadow-public.txt`と`--data-binary @.env.phase-b`を1回ずつ送ります。shadowはobserve-onlyなので両方にPostToolUseとlocal side effectが必要です。protected callをblockしたrun、system curlを使ったrun、source値をassistant messageへ含めたrunは不合格です。
 

@@ -14,10 +14,33 @@ from tooluseproxy.paths import (
 
 
 CODEX_HOOK_PHASES = {
+    "session-start": "session_start",
+    "subagent-start": "subagent_start",
     "pre-tool-use": "pre_tool_use",
     "post-tool-use": "post_tool_use",
     "stop": "stop",
 }
+
+HOSTED_TOOL_BOUNDARY_CONTEXT = (
+    "ToolUseProxyの保護境界です。登録された保護対象と、そこから得た内容を、"
+    "WebSearchなどのhosted toolへ入力しないでください。hosted toolはCodex Hookに"
+    "届かないため、ToolUseProxyは実行前に検査・遮断できません。外部検索が必要な場合は、"
+    "保護内容を含まない公開情報だけで問い合わせを作ってください。公開情報だけに分離できない"
+    "場合はhosted toolを呼ばず、その理由を利用者へ説明してください。BashやMCPなどHook対象の"
+    "toolは、通常のToolUseProxy判定に従ってください。"
+)
+
+
+def codex_enforcement_coverage() -> dict[str, object]:
+    """Describe the enforceable Codex boundary without claiming full coverage."""
+
+    return {
+        "scope": "partial",
+        "local_function_tools": "pre_execution_hook_enforced",
+        "hosted_tools": "not_interceptable",
+        "hosted_tool_mitigation": "session_and_subagent_developer_context",
+        "hosted_tool_pre_execution_block": False,
+    }
 
 
 def run_codex_hook(
@@ -30,6 +53,23 @@ def run_codex_hook(
         runtime_phase = CODEX_HOOK_PHASES[phase]
     except KeyError:
         raise ValueError(f"unsupported Codex hook phase: {phase}") from None
+    if runtime_phase in {"session_start", "subagent_start"}:
+        hook_event = (
+            "SessionStart" if runtime_phase == "session_start" else "SubagentStart"
+        )
+        print(
+            json.dumps(
+                {
+                    "hookSpecificOutput": {
+                        "hookEventName": hook_event,
+                        "additionalContext": HOSTED_TOOL_BOUNDARY_CONTEXT,
+                    }
+                },
+                ensure_ascii=False,
+            )
+        )
+        return 0
+
     captured = io.StringIO()
     try:
         paths = resolve_runtime_paths(db_path=db_path, data_dir=data_dir)
@@ -90,6 +130,17 @@ def _validated_hook_output(
         ):
             return None
         return payload
+    if runtime_phase in {"session_start", "subagent_start"}:
+        expected_event = (
+            "SessionStart" if runtime_phase == "session_start" else "SubagentStart"
+        )
+        hook_output = payload.get("hookSpecificOutput")
+        if (
+            isinstance(hook_output, dict)
+            and hook_output.get("hookEventName") == expected_event
+            and isinstance(hook_output.get("additionalContext"), str)
+        ):
+            return payload
     if runtime_phase == "stop" and (
         isinstance(payload.get("systemMessage"), str)
         or payload.get("decision") == "block"

@@ -30,6 +30,8 @@ class WindowsLauncherPythonContractTest(unittest.TestCase):
 
         self.assertIn('"hookEventName":"PreToolUse"', content)
         self.assertIn('"hookEventName":"PostToolUse"', content)
+        self.assertIn('"hookEventName":"SessionStart"', content)
+        self.assertIn('"hookEventName":"SubagentStart"', content)
         self.assertIn('"systemMessage"', content)
         self.assertIn("plugin_environment", content)
         self.assertIn("python_missing", content)

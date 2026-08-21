@@ -51,11 +51,21 @@ if /i "%inactive_code%"=="python_missing" set "inactive_message=Python 3.11ま�
 if /i "%phase%"=="pre-tool-use" goto emit_pre
 if /i "%phase%"=="post-tool-use" goto emit_post
 if /i "%phase%"=="stop" goto emit_stop
+if /i "%phase%"=="session-start" goto emit_session
+if /i "%phase%"=="subagent-start" goto emit_subagent
 echo %inactive_message%（技術情報: %inactive_code%） 1>&2
 exit /b 0
 
 :emit_pre
 echo {"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":"%inactive_message%（技術情報: %inactive_code%）"}}
+exit /b 0
+
+:emit_session
+echo {"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"%inactive_message% WebSearchなどのhosted toolはToolUseProxyで検査・遮断できません。保護対象やそこから得た内容をhosted toolへ入力しないでください。（技術情報: %inactive_code%）"}}
+exit /b 0
+
+:emit_subagent
+echo {"hookSpecificOutput":{"hookEventName":"SubagentStart","additionalContext":"%inactive_message% WebSearchなどのhosted toolはToolUseProxyで検査・遮断できません。保護対象やそこから得た内容をhosted toolへ入力しないでください。（技術情報: %inactive_code%）"}}
 exit /b 0
 
 :emit_post

@@ -46,9 +46,9 @@ codex plugin add tooluseproxy@tooluseproxy
 
 これはCodex環境に対して1回だけ行います。Pluginは複数projectで使えますが、保護設定と監査dataはprojectごとに分離されます。
 
-### 2. 3つのHookを確認する
+### 2. 5つのHookを確認する
 
-Codexに表示されるsourceが`Plugin - tooluseproxy@tooluseproxy`で、`PreToolUse`、`PostToolUse`、`Stop`の3件だけであることを確認してTrustします。source、件数、command pathが違う場合は許可しないでください。
+Codexに表示されるsourceが`Plugin - tooluseproxy@tooluseproxy`で、`SessionStart`、`SubagentStart`、`PreToolUse`、`PostToolUse`、`Stop`の5件だけであることを確認してTrustします。source、件数、command pathが違う場合は許可しないでください。
 
 ### 3. projectで有効にする
 
@@ -64,7 +64,7 @@ Codexに表示されるsourceが`Plugin - tooluseproxy@tooluseproxy`で、`PreTo
 
 > 守った方がよいファイルを探して
 
-これも固定フレーズではありません。候補ごとに「どのファイルの何を守るか」「何を止められるか」「元ファイルを変更しないこと」を説明し、1件ずつ確認します。ToolUseProxyが候補を無断で登録することはありません。
+これも固定フレーズではありません。最大10件の候補について「どのファイルの何を守るか」「何を止められるか」「元ファイルを変更しないこと」を番号付きでまとめて説明します。「全部守る」「1と3は守る、2は見送る」のように一度に判断でき、ToolUseProxyが未判断の候補を無断で登録することはありません。
 
 安全な試し方、更新、削除、data保持は[5分クイックスタート](QUICKSTART.md)にまとめています。
 
@@ -95,6 +95,7 @@ adapterにない未知のcallは、raw commandやpathなどを含まない構造
 | Plugin配布 | alpha.8候補 | clean artifactのlifecycleとExternality Protectionのisolated dogfoodを検証。公開昇格前のfresh Desktop runが必要 |
 | 外部性判定 | 実験段階・既定off | adapter、bounded static analysis、protected unknownの保守的deny、Codex-only background judge、人間review済みrule |
 | 実network観測 | 評価専用 | Codex network proxyのOTLP eventは実行後かつtool単位join不能のため、production blockには不採用 |
+| hosted tool境界 | 緩和のみ | SessionStart / SubagentStartでprotected contentをhosted toolへ渡さないdeveloper contextを注入。Hook非可視のため技術的遮断ではない |
 
 ## 安全側の約束
 
@@ -110,7 +111,7 @@ adapterにない未知のcallは、raw commandやpathなどを含まない構造
 ## まだ保証しないこと
 
 - 数学的な偽陰性ゼロ、または完全なDLP
-- hosted Web Searchなど、Codex Hookへ現れない経路の実行前遮断
+- hosted Web Searchなど、Codex Hookへ現れない経路の技術的な実行前遮断（SessionStart / SubagentStartのdeveloper contextで誤送信を緩和するが、強制境界ではない）
 - 任意program、暗号化・圧縮payload、Git objectの完全な解決
 - LLM内部の完全なtaint trackingや、意味類似度による因果関係の証明
 - Linux / Windowsを含む全環境での同一動作

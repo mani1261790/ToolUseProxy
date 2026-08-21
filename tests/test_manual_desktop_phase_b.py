@@ -363,7 +363,7 @@ text(JSON.stringify(r));
             )
             self.assertEqual(str(hook_root), inventory["plugin_root"])
             self.assertEqual(
-                ["PostToolUse", "PreToolUse", "Stop"],
+                ["PostToolUse", "PreToolUse", "SessionStart", "Stop", "SubagentStart"],
                 [item["event"] for item in inventory["hooks"]],
             )
             self.assertTrue(
@@ -409,7 +409,7 @@ text(JSON.stringify(r));
                     expected_plugin_id=expected_plugin_id,
                 )
 
-            self.assertEqual(3, len(inventory["hooks"]))
+            self.assertEqual(5, len(inventory["hooks"]))
 
     def test_hooks_list_allows_generated_python_cache(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -599,7 +599,7 @@ text(JSON.stringify(r));
                 workspace=workspace,
                 hook_root=hook_root,
             )
-            duplicate = response["data"][0]["hooks"][1]
+            duplicate = response["data"][0]["hooks"][3]
             duplicate.update(
                 {
                     "eventName": "preToolUse",
@@ -3440,19 +3440,33 @@ text(JSON.stringify(r));
         launcher = hook_root / "hooks" / PROBE_LAUNCHER_FILENAME
         specifications = (
             (
+                "sessionStart",
+                "session-start",
+                None,
+                hook_root / "hooks" / "run_hook.sh",
+            ),
+            (
+                "subagentStart",
+                "subagent-start",
+                None,
+                hook_root / "hooks" / "run_hook.sh",
+            ),
+            (
                 "preToolUse",
                 "pre-tool-use",
                 "^(Bash|apply_patch|mcp__.*)$",
+                launcher,
             ),
             (
                 "postToolUse",
                 "post-tool-use",
                 "^(Bash|apply_patch|mcp__.*)$",
+                launcher,
             ),
-            ("stop", "stop", None),
+            ("stop", "stop", None, launcher),
         )
         hooks = []
-        for index, (event, phase, matcher) in enumerate(specifications):
+        for index, (event, phase, matcher, event_launcher) in enumerate(specifications):
             hooks.append(
                 {
                     "pluginId": PLUGIN_ID,
@@ -3463,7 +3477,7 @@ text(JSON.stringify(r));
                     "handlerType": "command",
                     "eventName": event,
                     "matcher": matcher,
-                    "command": f'sh "{launcher}" {phase}',
+                    "command": f'sh "{event_launcher}" {phase}',
                     "timeoutSec": 10,
                     "currentHash": f"sha256:{index:064x}",
                     "trustStatus": "trusted",
