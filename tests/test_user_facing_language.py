@@ -23,15 +23,16 @@ def test_quickstart_presents_examples_without_requiring_fixed_phrases() -> None:
 
 
 def test_setup_skill_keeps_implementation_words_out_of_user_choices() -> None:
-    skill = (REPO_ROOT / "skills" / "tooluseproxy-setup" / "SKILL.md").read_text(encoding="utf-8")
+    skill = (
+        REPO_ROOT / "skills" / "tooluseproxy-setup" / "SKILL.md"
+    ).read_text(encoding="utf-8")
 
     assert (
         "ToolUseProxyの操作確認｜行うこと：...｜変更されるもの：...｜"
         "外部通信：...｜確認が必要な理由：...｜この内容で実行してよいですか？"
     ) in skill
-    assert "Present every returned candidate in one numbered review list" in skill
-    assert "`全部守る`" in skill
-    assert "1と3は守る、2は見送る、4は今後表示しない" in skill
+    assert "このファイルをToolUseProxyで守りますか？" in skill
+    assert "`守る` / `今回は見送る` / `今後は候補に出さない`" in skill
     assert "Never require the user to" in skill
     assert "reply with the English command words" in skill
     assert "Never require or compare against" in skill
@@ -42,8 +43,12 @@ def test_setup_skill_keeps_implementation_words_out_of_user_choices() -> None:
 def test_normal_onboarding_does_not_require_internal_path_diagnostics() -> None:
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
     quickstart = (REPO_ROOT / "QUICKSTART.md").read_text(encoding="utf-8")
-    plugin_guide = (REPO_ROOT / "docs" / "設定" / "Plugin導入.md").read_text(encoding="utf-8")
-    skill = (REPO_ROOT / "skills" / "tooluseproxy-setup" / "SKILL.md").read_text(encoding="utf-8")
+    plugin_guide = (
+        REPO_ROOT / "docs" / "設定" / "Plugin導入.md"
+    ).read_text(encoding="utf-8")
+    skill = (
+        REPO_ROOT / "skills" / "tooluseproxy-setup" / "SKILL.md"
+    ).read_text(encoding="utf-8")
 
     assert "--expect-empty-settings" in skill
     assert "--whole-file" in skill
@@ -52,21 +57,22 @@ def test_normal_onboarding_does_not_require_internal_path_diagnostics() -> None:
     assert "If `PLUGIN_DATA` is not available" not in skill
     assert skill.count("--data-dir <PLUGIN_DATA>") == 2
     assert "Plugin is installed but this workspace is not\nprotected yet" in skill
-    assert "番号付きでまとめて説明" in readme
+    assert "1件ずつ確認" in readme
     assert "コピーして貼り直す必要はありません" in quickstart
     assert "ToolUseProxyが外部送信を実行前に止めました" in quickstart
     assert "結果：外部操作は実行されていません" in quickstart
     assert "貼り直しを要求しません" in plugin_guide
-    assert (
-        "利用者が`doctor`、`status`、`init`、`PLUGIN_DATA`を組み立てる必要はありません"
-        in plugin_guide
-    )
+    assert "利用者が`doctor`、`status`、`init`、`PLUGIN_DATA`を組み立てる必要はありません" in plugin_guide
     assert "通常利用者がpathやcommandをコピーするための手順ではありません" in plugin_guide
 
 
 def test_normal_onboarding_continues_when_selected_permissions_already_allow_plugin_data() -> None:
-    skill = (REPO_ROOT / "skills" / "tooluseproxy-setup" / "SKILL.md").read_text(encoding="utf-8")
-    plugin_guide = (REPO_ROOT / "docs" / "設定" / "Plugin導入.md").read_text(encoding="utf-8")
+    skill = (
+        REPO_ROOT / "skills" / "tooluseproxy-setup" / "SKILL.md"
+    ).read_text(encoding="utf-8")
+    plugin_guide = (
+        REPO_ROOT / "docs" / "設定" / "Plugin導入.md"
+    ).read_text(encoding="utf-8")
 
     assert "per-command approval is disabled" in skill
     assert "already grants access to the installed Plugin data directory" in skill
@@ -80,14 +86,16 @@ def test_normal_onboarding_continues_when_selected_permissions_already_allow_plu
 
 
 def test_approval_templates_stay_short_and_self_contained() -> None:
-    skill = (REPO_ROOT / "skills" / "tooluseproxy-setup" / "SKILL.md").read_text(encoding="utf-8")
+    skill = (
+        REPO_ROOT / "skills" / "tooluseproxy-setup" / "SKILL.md"
+    ).read_text(encoding="utf-8")
     templates = [
         line.split("`", 2)[1]
         for line in skill.splitlines()
         if line.startswith("- ") and "`ToolUseProxyの操作確認｜" in line
     ]
 
-    assert len(templates) == 11
+    assert len(templates) == 12
     labels = (
         "｜行うこと：",
         "｜変更されるもの：",

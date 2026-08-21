@@ -115,7 +115,8 @@ whether state changes:
 - doctor/status/config show: `ToolUseProxyの操作確認｜行うこと：このプロジェクトで正しく動くか確認します｜変更されるもの：ありません｜外部通信：ありません｜確認が必要な理由：専用保存領域の状態を読み取るためです｜この内容で実行してよいですか？`
 - config set: `ToolUseProxyの操作確認｜行うこと：表示した保護設定を変更します｜変更されるもの：このプロジェクトの設定1件｜外部通信：ありません｜確認が必要な理由：専用保存領域へ設定を保存するためです｜この内容で実行してよいですか？`
 - protected-source scan: `ToolUseProxyの操作確認｜行うこと：守った方がよいファイルを探します｜変更されるもの：候補を確認した記録だけ｜外部通信：ありません｜確認が必要な理由：プロジェクト外の専用保存領域へ確認結果を記録するためです｜この内容で実行してよいですか？`
-- protected-source batch review: `ToolUseProxyの操作確認｜行うこと：表示した候補への選択をまとめて反映します｜変更されるもの：選んだ保護対象と見送った記録｜外部通信：ありません｜確認が必要な理由：専用保存領域へ選択結果を保存するためです｜この内容で実行してよいですか？`
+- protected-source approval: `ToolUseProxyの操作確認｜行うこと：表示したファイルを保護対象にします｜変更されるもの：保護対象リストに1件追加｜外部通信：ありません｜確認が必要な理由：専用保存領域へ選択結果を記録するためです｜この内容で実行してよいですか？`
+- protected-source reject or ignore: `ToolUseProxyの操作確認｜行うこと：表示した候補を今回は見送ります｜変更されるもの：見送った記録だけ｜外部通信：ありません｜確認が必要な理由：専用保存領域へ選択結果を記録するためです｜この内容で実行してよいですか？`
 - protected-source migration plan: `ToolUseProxyの操作確認｜行うこと：保護対象リストを安全に更新できるか確認します｜変更されるもの：ありません｜外部通信：ありません｜確認が必要な理由：プロジェクト外の専用保存領域を読み取るためです｜この内容で実行してよいですか？`
 - protected-source migration apply: `ToolUseProxyの操作確認｜行うこと：保護対象リストを新しい形式へ更新します｜変更されるもの：リストの形式と専用保存領域のバックアップ｜外部通信：ありません｜確認が必要な理由：更新前の状態を安全に保存するためです｜この内容で実行してよいですか？`
 - removal without data deletion: `ToolUseProxyの操作確認｜行うこと：このプロジェクトでの利用を止めます｜変更されるもの：Pluginの有効状態だけ｜外部通信：ありません｜確認が必要な理由：新しい記録を止めるためです｜この内容で実行してよいですか？`
@@ -281,11 +282,12 @@ do not report missing initial output as a command failure.
    sh "<PLUGIN_ROOT>/hooks/run_cli.sh" protect scan --workspace <workspace-root> --json
    ```
 
-   The scanner is read-only for source files and the manifest, performs no network access, and uses fixed limits for traversal depth, entries, supported files, total bytes, and candidates. It excludes VCS, dependencies, virtual environments, build/cache directories, symlinks, and ToolUseProxy runtime data. It writes only a value-free candidate/review audit plus internal source hash/stat to the local runtime database and returns up to ten review candidates in stable relative-path order. Show the relative path, selected scope, reason codes, confidence, and scan completeness. Never show or repeat source values, source hashes, absolute paths, or file previews. If `scan_complete` is false, explain the reached limit reasons and that unscanned scope remains; never report that no protected source exists.
+   The scanner is read-only for source files and the manifest, performs no network access, and uses fixed limits for traversal depth, entries, supported files, total bytes, and candidates. It excludes VCS, dependencies, virtual environments, build/cache directories, symlinks, and ToolUseProxy runtime data. It writes only a value-free candidate/review audit plus internal source hash/stat to the local runtime database and returns at most one review candidate in stable relative-path order. Show the relative path, reason codes, confidence, proposed source entry, and scan completeness. Never show or repeat source values, source hashes, absolute paths, or file previews. If `scan_complete` is false, explain the reached limit reasons and that unscanned scope remains; never report that no protected source exists.
 
-   Present every returned candidate in one numbered review list. Each item must
-   include:
+   Before showing the exact JSON proposal, translate it into this user-facing
+   review card:
 
+   - Start with `このファイルをToolUseProxyで守りますか？`
    - `ファイル`: show only the workspace-relative path.
    - `守る内容`: explain selectors as scope, not syntax. For `dotenv_keys`,
      say that only the values of the named settings are selected, not every
@@ -294,24 +296,27 @@ do not report missing initial output as a command failure.
      content is selected.
    - `できること`: say that ToolUseProxy can stop an attempt to send the
      selected content outside before the tool runs.
-   - `「守る」を選ぶと`: say that the item is added to ToolUseProxy's protected
+   - `「守る」を選ぶと`: say that one item is added to ToolUseProxy's protected
      list and the source file itself is not changed. Do not name the manifest.
-   After the list, ask for all decisions in one reply. Explain that natural
-   answers such as `全部守る` or `1と3は守る、2は見送る、4は今後表示しない`
-   are accepted. Do not require an exact reply format. If only some items have
-   an unambiguous decision, ask only about the undecided item numbers before
-   changing anything.
+   - `選んでください`: offer exactly these ordinary-language choices:
+     `守る` / `今回は見送る` / `今後は候補に出さない`.
 
    Map `守る` to approve, `今回は見送る` to reject, and
    `今後は候補に出さない` to ignore internally. Never require the user to
    reply with the English command words.
 
-   Keep the exact value-free proposals and opaque revisions from the CLI result
-   for the apply command, but do not make the user read raw JSON or internal
-   candidate IDs. If the exact result is no longer available, stop and rerun
-   the same bounded discovery command instead of reconstructing it. If the user
-   says an item is unclear, explain its `守る内容` and what changes, then collect
-   the remaining decisions in the same review batch.
+   After the card, place `技術情報（判断には読まなくてもかまいません）` and
+   copy the CLI result's proposed source object verbatim as the exact value-free
+   JSON proposal. Do not reconstruct it from memory, rename
+   keys, change singular/plural forms, change arrays or objects, add or remove
+   fields, or normalize its contents. In particular, preserve `selector`
+   exactly; never rewrite it as `selectors`. If the exact object is no longer
+   available, stop and rerun the same bounded discovery command instead of
+   presenting a reconstructed proposal. Follow the JSON with reason codes,
+   confidence, and scan completeness as technical detail. Ask only the
+   ordinary-language choice after the card. If the user says the explanation
+   is unclear, explain `守る内容` and what changes again before accepting a
+   choice.
 8. If the user or agent already knows one `.env`, `.env.*`, or JSON path, use
    the selector-aware explicit-path fallback:
 
@@ -319,7 +324,7 @@ do not report missing initial output as a command failure.
    sh "<PLUGIN_ROOT>/hooks/run_cli.sh" protect suggest --path <workspace-relative-path> --workspace <workspace-root> --json
    ```
 
-   `suggest` has the same source/manifest read-only and value-free output/storage boundary as `scan`. Repeat `--path` to review up to ten known paths together.
+   `suggest` has the same source/manifest read-only and value-free output/storage boundary as `scan`, but it evaluates only the requested path.
 
    If the user explicitly asks to protect a complete UTF-8 text file such as a
    Markdown research plan, use the whole-file form instead. It remains bounded
@@ -333,26 +338,20 @@ do not report missing initial output as a command failure.
    In the review card, say plainly that the entire file content is selected.
    Never preview or quote it. A directory-level request may be translated into
    a value-free list of relative file paths, but it is only a scope plan: it is
-   not approval. Suggest the bounded path batch, show every relative path and
-   scope together, and collect an explicit decision for every item.
-9. Wait for explicit user decisions for the reviewed batch. Approval is not implied by setup, diagnosis, manifest migration, running a scan, a prior request to inspect a file, or permission to edit other project files. After every item has a clear decision, pass each unchanged candidate ID and opaque revision plus the shared manifest hash returned by `scan` or `suggest` in one command:
+   not approval. Suggest, show, and obtain a decision for exactly one file at a
+   time. After one approval changes the manifest, create a fresh proposal for
+   the next file.
+9. Wait for explicit user approval of that exact source proposal. Approval is not implied by setup, diagnosis, manifest migration, running a scan, a prior request to inspect the file, or permission to edit other project files. After approval, pass the unchanged opaque revision and manifest hash returned by `scan` or `suggest`:
 
    ```text
-   sh "<PLUGIN_ROOT>/hooks/run_cli.sh" protect review --decision <candidate-id> <opaque-revision> <approve|reject|ignore> [--decision ...] --expected-manifest-sha256 <manifest-sha256> --workspace <workspace-root> --json
+   sh "<PLUGIN_ROOT>/hooks/run_cli.sh" protect approve <candidate-id> --candidate-revision <opaque-revision> --expected-manifest-sha256 <manifest-sha256> --workspace <workspace-root> --json
    ```
 
-   Batch review holds the workspace lock while every candidate is checked and
-   writes the manifest once for all approved items. A changed source, manifest,
-   duplicate decision, unknown candidate, or stale detector stops the batch;
-   never drop the failing item or weaken the comparison. For an interruption or
-   durability-unknown result, retry the exact same review command. Run a fresh
-   scan after a successful batch only when `remaining_candidate_count` was
-   nonzero or the scan was incomplete. The single-candidate approve, reject,
-   and ignore commands remain compatibility fallbacks, not the normal UX.
+   Approval holds the workspace lock from the candidate reservation through manifest I/O and DB finalize/release. The expected manifest hash is an optimistic precondition; the lock serializes cooperating ToolUseProxy writers but does not exclude a same-UID non-cooperating editor. Filesystem/DB serialization is therefore not guaranteed across either the final validation-to-replace window or the durability-revalidation-to-DB-finalize window. For an interruption or transient state failure, retry the exact same approve command and unchanged candidate ID, opaque revision, and manifest hash. Exact-entry recovery re-fsyncs the workspace directory and revalidates the source and manifest before finalizing. One approval changes the manifest hash, so never use another candidate's old scan revision/hash afterward. Run `protect scan` again, show the refreshed next proposal, and obtain a separate explicit approval. If an explicit-path approval reports that the source or manifest changed, run `suggest` again and present the new proposal. Do not weaken the comparison or retry with an edited proposal. Use `protect reject` or `protect ignore` to persist a user's negative decision.
 
    After a Plugin update, never reuse a pending candidate ID, opaque revision, or approval command created by an older protected-source detector. If approve, reject, or ignore returns `candidate_detector_stale`, treat it as a version boundary rather than a transient error: do not retry the cached command, run `protect scan`, present the current detector's new proposal, and obtain new explicit approval. Old reject/ignore decisions do not suppress a new detector version. Already-approved manifest entries remain registered. Only an exact retry for a candidate already in `approving` or `approved` may cross the version boundary to recover an interrupted durable approval.
 
-   Run the whole `protect scan / suggest / review / approve / reject / ignore` workflow only on POSIX (macOS/Linux); it is not supported on Windows yet. Neither `init` nor a Hook runs the scanner implicitly.
+   Run the whole `protect scan / suggest / approve / reject / ignore` workflow only on POSIX (macOS/Linux); it is not supported on Windows yet. Neither `init` nor a Hook runs the scanner implicitly.
 
 10. Use `status` to verify the database, canonical workspace registration, schema v2 manifest, and protected sources all resolve to the same workspace. `status: active` means runtime health, not that a complete scan ran or that every sensitive file is registered.
 

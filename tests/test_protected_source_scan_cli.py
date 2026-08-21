@@ -80,7 +80,9 @@ class ProtectedSourceScanCliTest(unittest.TestCase):
         )
 
     def _scan(self) -> tuple[dict[str, object], str]:
-        exit_code, payload, stderr = self._run_json(*self._protect_arguments("scan"))
+        exit_code, payload, stderr = self._run_json(
+            *self._protect_arguments("scan")
+        )
         self.assertEqual(0, exit_code, stderr)
         return payload, stderr
 
@@ -89,36 +91,13 @@ class ProtectedSourceScanCliTest(unittest.TestCase):
         payload: dict[str, object],
     ) -> dict[str, object]:
         self.assertEqual("review_required", payload["status"])
-        self.assertGreaterEqual(payload["candidate_count"], 1)
+        self.assertEqual(1, payload["candidate_count"])
         candidates = payload["candidates"]
         self.assertIsInstance(candidates, list)
-        self.assertGreaterEqual(len(candidates), 1)
+        self.assertEqual(1, len(candidates))
         candidate = candidates[0]
         self.assertIsInstance(candidate, dict)
         return candidate
-
-    def _review_batch(
-        self,
-        payload: dict[str, object],
-        decisions: tuple[tuple[dict[str, object], str], ...],
-    ) -> tuple[int, dict[str, object], str]:
-        arguments: list[str] = []
-        for candidate, decision in decisions:
-            arguments.extend(
-                (
-                    "--decision",
-                    str(candidate["candidate_id"]),
-                    str(candidate["candidate_revision"]),
-                    decision,
-                )
-            )
-        arguments.extend(
-            (
-                "--expected-manifest-sha256",
-                str(payload["manifest_sha256"]),
-            )
-        )
-        return self._run_json(*self._protect_arguments("review", *arguments))
 
     def _approve(
         self,
@@ -180,7 +159,8 @@ class ProtectedSourceScanCliTest(unittest.TestCase):
         values: list[str] = []
         with sqlite3.connect(self.data_dir / "events.db") as conn:
             tables = conn.execute(
-                "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+                "SELECT name FROM sqlite_master "
+                "WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
             ).fetchall()
             for (table_name,) in tables:
                 columns = conn.execute(f'PRAGMA table_info("{table_name}")').fetchall()
@@ -355,9 +335,8 @@ class ProtectedSourceScanCliTest(unittest.TestCase):
             },
             payload["scan_limits"],
         )
-        self.assertEqual("batch", payload["approval_mode"])
-        self.assertEqual(10, payload["review_batch_limit"])
-        self.assertFalse(payload["rescan_required_after_manifest_change"])
+        self.assertEqual("one_at_a_time", payload["approval_mode"])
+        self.assertTrue(payload["rescan_required_after_manifest_change"])
         self.assertEqual(0, payload["remaining_candidate_count"])
         self.assertTrue(payload["continuation_required"])
         self.assertEqual("config/runtime.json", candidate["path"])
@@ -383,27 +362,34 @@ class ProtectedSourceScanCliTest(unittest.TestCase):
             ).fetchall()
         self.assertEqual([("bounded_scan",)], stored)
 
-    def test_batch_review_applies_multiple_candidates_without_user_rescan(self) -> None:
+    def test_one_at_a_time_approval_requires_rescan_for_the_next_candidate(self) -> None:
         self._write_json_source("config/a.json", "SCAN.FIRST.SECRET.8a12")
         self._write_json_source("config/z.json", "SCAN.SECOND.SECRET.12f8")
 
         first_scan, _ = self._scan()
-        candidates = first_scan["candidates"]
-        self.assertIsInstance(candidates, list)
-        self.assertEqual(2, len(candidates))
-        first, second = candidates
+        first = self._single_candidate(first_scan)
         self.assertEqual("config/a.json", first["path"])
-        self.assertEqual("config/z.json", second["path"])
-        self.assertEqual(0, first_scan["remaining_candidate_count"])
+        self.assertEqual(1, first_scan["remaining_candidate_count"])
         self.assertTrue(first_scan["continuation_required"])
 
-        exit_code, approved, stderr = self._review_batch(
-            first_scan,
-            ((first, "approve"), (second, "approve")),
-        )
+        exit_code, approved, stderr = self._approve(first_scan, first)
         self.assertEqual(0, exit_code, stderr)
-        self.assertEqual("reviewed", approved["status"])
-        self.assertEqual(2, approved["approved_count"])
+        self.assertEqual("approved", approved["status"])
+
+        second_scan, _ = self._scan()
+        second = self._single_candidate(second_scan)
+        self.assertEqual("config/z.json", second["path"])
+        self.assertNotEqual(
+            first_scan["manifest_sha256"],
+            second_scan["manifest_sha256"],
+        )
+        self.assertEqual(0, second_scan["remaining_candidate_count"])
+        self.assertTrue(second_scan["continuation_required"])
+        self.assertGreaterEqual(second_scan["already_registered_count"], 1)
+
+        exit_code, approved, stderr = self._approve(second_scan, second)
+        self.assertEqual(0, exit_code, stderr)
+        self.assertEqual("approved", approved["status"])
         final_scan, _ = self._scan()
         self.assertEqual("no_candidate", final_scan["status"])
         self.assertEqual([], final_scan["candidates"])
@@ -413,95 +399,6 @@ class ProtectedSourceScanCliTest(unittest.TestCase):
         self.assertEqual(
             ["config/a.json", "config/z.json"],
             [source["path"] for source in manifest["sources"]],
-        )
-
-    def test_batch_review_applies_mixed_decisions_in_one_command(self) -> None:
-        for name in ("a", "b", "c"):
-            self._write_json_source(
-                f"config/{name}.json",
-                f"SCAN.MIXED.{name}.SECRET.71c2",
-            )
-        scan, _ = self._scan()
-        candidates = scan["candidates"]
-        self.assertIsInstance(candidates, list)
-        self.assertEqual(3, len(candidates))
-
-        exit_code, reviewed, stderr = self._review_batch(
-            scan,
-            (
-                (candidates[0], "approve"),
-                (candidates[1], "reject"),
-                (candidates[2], "ignore"),
-            ),
-        )
-
-        self.assertEqual(0, exit_code, stderr)
-        self.assertEqual("reviewed", reviewed["status"])
-        self.assertEqual(1, reviewed["approved_count"])
-        self.assertEqual(1, reviewed["rejected_count"])
-        self.assertEqual(1, reviewed["ignored_count"])
-        manifest = json.loads(self.manifest_path.read_text(encoding="utf-8"))
-        self.assertEqual(["config/a.json"], [item["path"] for item in manifest["sources"]])
-        with sqlite3.connect(self.data_dir / "events.db") as conn:
-            statuses = dict(
-                conn.execute(
-                    "SELECT relative_path, status FROM protected_source_candidates"
-                ).fetchall()
-            )
-        self.assertEqual(
-            {
-                "config/a.json": "approved",
-                "config/b.json": "rejected",
-                "config/c.json": "ignored",
-            },
-            statuses,
-        )
-
-    def test_batch_review_source_change_stops_before_manifest_mutation(self) -> None:
-        first_path = self._write_json_source(
-            "config/a.json",
-            "SCAN.STALE.A.SECRET.41d2",
-        )
-        self._write_json_source("config/b.json", "SCAN.STALE.B.SECRET.52e3")
-        scan, _ = self._scan()
-        candidates = scan["candidates"]
-        self.assertIsInstance(candidates, list)
-        manifest_before = self.manifest_path.read_bytes()
-        first_path.write_text(
-            json.dumps({"private_token": "changed"}),
-            encoding="utf-8",
-        )
-
-        exit_code, payload, stderr = self._review_batch(
-            scan,
-            tuple((candidate, "approve") for candidate in candidates),
-        )
-
-        self.assertEqual(1, exit_code)
-        self.assertEqual({}, payload)
-        self.assertEqual("source_changed", json.loads(stderr)["error"]["code"])
-        self.assertEqual(manifest_before, self.manifest_path.read_bytes())
-        with sqlite3.connect(self.data_dir / "events.db") as conn:
-            statuses = {
-                row[0]
-                for row in conn.execute("SELECT status FROM protected_source_candidates").fetchall()
-            }
-        self.assertEqual({"stale"}, statuses)
-
-    def test_scan_limits_one_review_batch_to_ten_candidates(self) -> None:
-        for index in range(11):
-            self._write_json_source(
-                f"config/{index:02d}.json",
-                f"SCAN.PAGE.{index:02d}.SECRET.83f1",
-            )
-
-        scan, _ = self._scan()
-
-        self.assertEqual(10, scan["candidate_count"])
-        self.assertEqual(1, scan["remaining_candidate_count"])
-        self.assertEqual(
-            [f"config/{index:02d}.json" for index in range(10)],
-            [candidate["path"] for candidate in scan["candidates"]],
         )
 
     def test_rejected_candidate_is_suppressed_before_the_next_candidate(self) -> None:
@@ -578,7 +475,9 @@ class ProtectedSourceScanCliTest(unittest.TestCase):
             refreshed["candidate_revision"],
         )
         with sqlite3.connect(self.data_dir / "events.db") as conn:
-            status = conn.execute("SELECT status FROM protected_source_candidates").fetchone()[0]
+            status = conn.execute(
+                "SELECT status FROM protected_source_candidates"
+            ).fetchone()[0]
         self.assertEqual("proposed", status)
 
     def test_approved_candidate_is_refreshed_beyond_recent_history_limit(self) -> None:
@@ -672,7 +571,8 @@ class ProtectedSourceScanCliTest(unittest.TestCase):
         with sqlite3.connect(self.data_dir / "events.db") as conn:
             versions = dict(
                 conn.execute(
-                    "SELECT candidate_id, detector_version FROM protected_source_candidates"
+                    "SELECT candidate_id, detector_version "
+                    "FROM protected_source_candidates"
                 ).fetchall()
             )
         self.assertEqual(LEGACY_DETECTOR_VERSION, versions[candidate_id])
@@ -791,7 +691,9 @@ class ProtectedSourceScanCliTest(unittest.TestCase):
             str(first["candidate_id"]),
             LEGACY_DETECTOR_VERSION,
         )
-        approved_storage = self._candidate_storage_snapshot(str(first["candidate_id"]))
+        approved_storage = self._candidate_storage_snapshot(
+            str(first["candidate_id"])
+        )
 
         exit_code, recovered, stderr = self._approve(first_scan, first)
         self.assertEqual(0, exit_code, stderr)
@@ -891,7 +793,9 @@ class ProtectedSourceScanCliTest(unittest.TestCase):
             encoding="utf-8",
         )
 
-        exit_code, payload, stderr = self._run_json(*self._protect_arguments("scan"))
+        exit_code, payload, stderr = self._run_json(
+            *self._protect_arguments("scan")
+        )
 
         self.assertEqual(1, exit_code)
         self.assertEqual({}, payload)
@@ -899,7 +803,9 @@ class ProtectedSourceScanCliTest(unittest.TestCase):
         self.assertEqual("manifest_schema_legacy", error["error"]["code"])
         self.assertNotIn(secret, stderr)
         with sqlite3.connect(self.data_dir / "events.db") as conn:
-            count = conn.execute("SELECT COUNT(*) FROM protected_source_candidates").fetchone()[0]
+            count = conn.execute(
+                "SELECT COUNT(*) FROM protected_source_candidates"
+            ).fetchone()[0]
         self.assertEqual(0, count)
 
     def test_partial_scan_without_a_candidate_never_reports_no_candidate(self) -> None:
@@ -946,8 +852,7 @@ class ProtectedSourceScanCliTest(unittest.TestCase):
         self.assertEqual(0, exit_code, stderr)
         self.assertIn("status: review_required", stdout)
         self.assertIn("scan_complete: True", stdout)
-        self.assertIn("approval_mode: batch", stdout)
-        self.assertIn("review_batch_limit: 10", stdout)
+        self.assertIn("approval_mode: one_at_a_time", stdout)
         self.assertIn("remaining_candidate_count: 0", stdout)
         self.assertIn('"path": "config/runtime.json"', stdout)
         self.assertNotIn(secret, stdout + stderr)

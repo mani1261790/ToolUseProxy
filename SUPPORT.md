@@ -15,7 +15,7 @@ ToolUseProxy `0.1.0-alpha.8`は研究用public alpha候補です。公開channel
 
 macOS Python 3.12はGitHub CI run `29672165132`でartifact build、nested venv、wheel install、CLI / relocated Plugin smokeを検証しました。localのuv-managed Python 3.12では`venv`内`ensurepip`が`SIGABRT`する環境事例があり、ToolUseProxy codeより前のPython配布環境問題として区別します。
 
-Windowsでは既存manifestのruntime読み取りとlauncherを将来互換のため維持しますが、`protect scan / suggest / review / approve / reject / ignore`とmanifest migration applyはalphaでは未対応です。成功したように見せず、CLIの明示エラーとして扱います。
+Windowsでは既存manifestのruntime読み取りとlauncherを将来互換のため維持しますが、`protect scan / suggest / approve / reject / ignore`とmanifest migration applyはalphaでは未対応です。成功したように見せず、CLIの明示エラーとして扱います。
 
 POSIX launcherもpackage metadataと同じPython 3.11 / 3.12だけを選びます。`TOOLUSEPROXY_PYTHON`や`python3`が3.13以降または3.10以前を指す場合は実行せず、別の対応runtimeを探した後に明示エラーまたはHook fail-openとします。
 
@@ -46,7 +46,7 @@ Codex Plugin APIやHook payloadはToolUseProxyとは別に変更され得ます�
 | PreToolUse / PostToolUse / Stop記録 | alpha対応 | trust済みでmatcherに一致するHookが対象。未初期化、Python / runtime起動失敗、内部policy例外の診断は入力や例外本文を含めないphase別JSONで返し、Codexを壊さないようfail-open |
 | `init / doctor / status / trace` | alpha対応 | migrationは通常Hook内では行わない |
 | protected source候補scan | POSIX対応 | bounded offline scan。上限到達時は完全探索と主張しない |
-| candidate batch review | POSIX対応 | 最大10件のvalue-free proposalをまとめて提示し、候補ごとの明示判断を一度に反映。1件用commandも互換維持 |
+| candidate approve / reject / ignore | POSIX対応 | 1件ずつのexact proposalと明示承認が必要 |
 | Bash / MCP PreToolUse deny | opt-in | 既定off。static evidenceと現在eventのcritical findingに限定 |
 | Stop final-answer review | alpha対応 | critical findingを`continue_review`で差し戻す |
 | runtime redact / `updatedInput` | 未対応 | 複数Hook後の最終採用inputを証明できないため無効 |
