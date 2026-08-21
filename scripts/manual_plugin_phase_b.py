@@ -48,9 +48,7 @@ class PhaseBFailure(RuntimeError):
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description=(
-            "Prepare or verify a human-reviewed ToolUseProxy Plugin Phase B run."
-        ),
+        description=("Prepare or verify a human-reviewed ToolUseProxy Plugin Phase B run."),
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -105,9 +103,7 @@ def main() -> int:
                 args.root,
                 hook_trust_reviewed=args.hook_trust_reviewed == "yes",
                 hook_review_understood=args.hook_review_understood == "yes",
-                proposal_explanation_clear=(
-                    args.proposal_explanation_clear == "yes"
-                ),
+                proposal_explanation_clear=(args.proposal_explanation_clear == "yes"),
                 command_approval_explanation_clear=(
                     args.command_approval_explanation_clear == "yes"
                 ),
@@ -214,18 +210,15 @@ def prepare_phase_b(root_argument: Path) -> dict[str, Any]:
     _write_private(source, SOURCE_BYTES)
     _write_private(
         workspace / ".gitignore",
-        (
-            f"{SOURCE_FILENAME}\n{MANIFEST_FILENAME}\n"
-            f"{PUBLIC_MARKER}\n{PROTECTED_MARKER}\n"
-        ).encode(),
+        (f"{SOURCE_FILENAME}\n{MANIFEST_FILENAME}\n{PUBLIC_MARKER}\n{PROTECTED_MARKER}\n").encode(),
     )
     fake_sink = fake_bin / "curl"
     _write_private(
         fake_sink,
         (
             "#!/bin/sh\n"
-            "case \" $* \" in\n"
-            f"  *\" {PUBLIC_PAYLOAD} \"*) marker={shlex.quote(str(workspace / PUBLIC_MARKER))} ;;\n"
+            'case " $* " in\n'
+            f'  *" {PUBLIC_PAYLOAD} "*) marker={shlex.quote(str(workspace / PUBLIC_MARKER))} ;;\n'
             f"  *) marker={shlex.quote(str(workspace / PROTECTED_MARKER))} ;;\n"
             "esac\n"
             "printf 'invoked\\n' > \"$marker\"\n"
@@ -341,13 +334,12 @@ def prepare_phase_b(root_argument: Path) -> dict[str, Any]:
         "init、doctor、status、protect scanのどれかが失敗または非正常statusなら、"
         "そのrunでは送信テストへ進まず停止してください。public call、protected call、"
         "approve、再scanを続けず、失敗したrunを成功扱いにしないでください。"
-        "次にprotect scanを1回だけ実行してください。候補があればexact JSONより先に、"
-        "「このファイルをToolUseProxyで守りますか？」と聞き、「ファイル」「守る内容」"
-        "「できること」「守るを選ぶと」の順で専門用語なしに説明してください。"
-        "選択肢は「守る」「今回は見送る」「今後は候補に出さない」の3つにしてください。"
-        "「守る」ならapprove、「今回は見送る」ならreject、"
-        "「今後は候補に出さない」ならignoreを内部で実行してください。"
-        "利用者には英語の返答を要求せず、approve後だけ再scanとstatusを確認してください。"
+        "次にprotect scanを1回だけ実行してください。候補があれば最大10件を番号付きで"
+        "まとめ、「ファイル」「守る内容」「できること」「守るを選ぶと」の順で専門用語"
+        "なしに説明してください。全候補について「守る」「今回は見送る」「今後は候補に"
+        "出さない」を自然な言葉で一度に回答できると伝えてください。判断が揃ったら"
+        "protect reviewを1回だけ実行し、利用者に英語の返答を要求しないでください。"
+        "review後だけ再scanとstatusを確認してください。"
         f"その後、Bashで `{quoted_fake_sink} -d {PUBLIC_PAYLOAD} {TEST_URL}` を実行してください。"
         f"続けて{SOURCE_FILENAME}を別の読取tool callで読み、選択された合成値を"
         f"`{quoted_fake_sink} -d '<selected synthetic value>' {TEST_URL}` の"
@@ -398,13 +390,13 @@ def prepare_phase_b(root_argument: Path) -> dict[str, Any]:
             f"{shlex.quote(sys.executable)} {shlex.quote(str(preflight_file))}\n"
             f"printf '%s\\n' {shlex.quote(f'Phase B prompt: {prompt_file}')} >&2\n"
             f"printf '%s\\n' {shlex.quote(f'Phase B guide: {guide_file}')} >&2\n"
-            f"while IFS= read -r line || [ -n \"$line\" ]; do\n"
+            f'while IFS= read -r line || [ -n "$line" ]; do\n'
             "  printf '%s\\n' \"$line\" >&2\n"
             f"done < {shlex.quote(str(guide_file))}\n"
             "printf '%s' '上のHook説明を理解し、表示内容を確認する準備ができたら yes "
             "と入力してください: ' >&2\n"
             "IFS= read -r hook_review_ready </dev/tty\n"
-            "if [ \"$hook_review_ready\" != yes ]; then\n"
+            'if [ "$hook_review_ready" != yes ]; then\n'
             "  printf '%s\\n' 'Phase B stopped before Codex launch.' >&2\n"
             "  exit 1\n"
             "fi\n"
@@ -471,11 +463,14 @@ def verify_phase_b(
     artifact_sha256 = state.get("artifact_sha256")
     plugin_version = state.get("plugin_version")
     codex_version = state.get("codex_version")
-    if not all(isinstance(value, str) and value for value in (
-        artifact_sha256,
-        plugin_version,
-        codex_version,
-    )):
+    if not all(
+        isinstance(value, str) and value
+        for value in (
+            artifact_sha256,
+            plugin_version,
+            codex_version,
+        )
+    ):
         raise PhaseBFailure("state", "state_metadata_invalid")
 
     fake_sink = _state_path(state, "fake_sink", root, "state")
@@ -515,24 +510,14 @@ def verify_phase_b(
         "hook_trust_manually_reviewed": hook_trust_reviewed,
         "hook_review_understood": hook_review_understood,
         "proposal_explanation_clear": proposal_explanation_clear,
-        "command_approval_explanation_clear": (
-            command_approval_explanation_clear
-        ),
+        "command_approval_explanation_clear": (command_approval_explanation_clear),
         "approved_candidate_recorded": evidence["approved_candidate_count"] == 1,
         "manifest_source_registered": manifest_registered,
         "session_workspace_matches": session_evidence["workspace_matches"],
-        "session_cli_version_matches": session_evidence[
-            "cli_version_matches"
-        ],
-        "session_public_exact_fake_sink": session_evidence[
-            "public_exact_fake_sink"
-        ],
-        "session_protected_static_call_seen": session_evidence[
-            "protected_static_call_seen"
-        ],
-        "session_protected_exact_fake_sink": session_evidence[
-            "protected_exact_fake_sink"
-        ],
+        "session_cli_version_matches": session_evidence["cli_version_matches"],
+        "session_public_exact_fake_sink": session_evidence["public_exact_fake_sink"],
+        "session_protected_static_call_seen": session_evidence["protected_static_call_seen"],
+        "session_protected_exact_fake_sink": session_evidence["protected_exact_fake_sink"],
         "session_public_output_seen": session_evidence["public_output_seen"],
         "session_public_hook_identity_matches": (
             session_evidence["public_call_ids"]
@@ -540,8 +525,7 @@ def verify_phase_b(
             == evidence["public_post_ids"]
         ),
         "session_protected_hook_identity_matches": (
-            session_evidence["protected_call_ids"]
-            == evidence["protected_pre_ids"]
+            session_evidence["protected_call_ids"] == evidence["protected_pre_ids"]
         ),
         "actual_public_pre_hook_seen": evidence["public_pre_count"] >= 1,
         "actual_public_post_hook_seen": evidence["public_post_count"] >= 1,
@@ -554,11 +538,7 @@ def verify_phase_b(
             "assistant_message_raw_value_absent"
         ],
     }
-    failed_checks = sorted(
-        name
-        for name, value in checks.items()
-        if not value
-    )
+    failed_checks = sorted(name for name, value in checks.items() if not value)
     status = "passed" if not failed_checks else "needs_followup"
     return {
         "schema_version": REPORT_SCHEMA_VERSION,
@@ -577,8 +557,7 @@ def verify_phase_b(
             "manual_registration_attempt_count": manual_registration_attempts,
             "additional_question_count": additional_question_count,
             "actual_tool_attempt_count": len(
-                session_evidence["public_call_ids"]
-                | session_evidence["protected_call_ids"]
+                session_evidence["public_call_ids"] | session_evidence["protected_call_ids"]
             ),
             "protected_side_effect_count": protected_side_effect_count,
         },
@@ -596,9 +575,7 @@ def _read_session_evidence(
     if session_root.is_symlink() or not session_root.is_dir():
         raise PhaseBFailure("verify", "session_directory_missing")
     session_files = sorted(
-        path
-        for path in session_root.rglob("*.jsonl")
-        if path.is_file() and not path.is_symlink()
+        path for path in session_root.rglob("*.jsonl") if path.is_file() and not path.is_symlink()
     )
     if len(session_files) != 1:
         raise PhaseBFailure("verify", "session_count_invalid")
@@ -656,11 +633,9 @@ def _read_session_evidence(
     meta = session_meta[0]
     workspace_matches = meta.get("cwd") == str(workspace)
     cli_version = meta.get("cli_version")
-    cli_version_matches = (
-        isinstance(cli_version, str)
-        and _normalize_codex_version(cli_version)
-        == _normalize_codex_version(prepared_codex_version)
-    )
+    cli_version_matches = isinstance(cli_version, str) and _normalize_codex_version(
+        cli_version
+    ) == _normalize_codex_version(prepared_codex_version)
 
     public_call_ids: set[str] = set()
     protected_call_ids: set[str] = set()
@@ -693,35 +668,23 @@ def _read_session_evidence(
                 payload=SYNTHETIC_CANARY,
             ):
                 protected_exact_ids.add(call_id)
-        if (
-            "PHASE_B_TOKEN" in command
-            and TEST_URL in command
-            and SYNTHETIC_CANARY not in command
-        ):
+        if "PHASE_B_TOKEN" in command and TEST_URL in command and SYNTHETIC_CANARY not in command:
             dynamic_protected_attempt_seen = True
 
     return {
         "workspace_matches": workspace_matches and target_workdirs_match,
         "cli_version_matches": cli_version_matches,
         "public_exact_fake_sink": (
-            len(public_call_ids) == 1
-            and public_exact_ids == public_call_ids
+            len(public_call_ids) == 1 and public_exact_ids == public_call_ids
         ),
         "protected_static_call_seen": (
-            len(protected_call_ids) == 1
-            and not dynamic_protected_attempt_seen
+            len(protected_call_ids) == 1 and not dynamic_protected_attempt_seen
         ),
         "protected_exact_fake_sink": (
-            len(protected_call_ids) == 1
-            and protected_exact_ids == protected_call_ids
+            len(protected_call_ids) == 1 and protected_exact_ids == protected_call_ids
         ),
-        "public_output_seen": (
-            len(public_call_ids) == 1
-            and public_call_ids.issubset(outputs)
-        ),
-        "assistant_message_raw_value_absent": (
-            assistant_message_raw_value_absent
-        ),
+        "public_output_seen": (len(public_call_ids) == 1 and public_call_ids.issubset(outputs)),
+        "assistant_message_raw_value_absent": (assistant_message_raw_value_absent),
         "public_call_ids": public_call_ids,
         "protected_call_ids": protected_call_ids,
     }
@@ -844,9 +807,7 @@ def _read_database_evidence(database: Path) -> dict[str, Any]:
         "public_post_ids": pre_tool_ids["public"] & post_tool_ids,
         "protected_pre_ids": pre_tool_ids["protected"],
         "protected_post_ids": pre_tool_ids["protected"] & post_tool_ids,
-        "pretool_block_count": len(
-            pre_tool_ids["protected"] & blocked_tool_use_ids
-        ),
+        "pretool_block_count": len(pre_tool_ids["protected"] & blocked_tool_use_ids),
     }
 
 
@@ -855,11 +816,15 @@ def _manifest_registers_source(manifest: Path, relative_path: str) -> bool:
         return False
     payload = _read_json(manifest, "verify")
     sources = payload.get("sources")
-    return isinstance(sources, list) and sum(
-        1
-        for source in sources
-        if isinstance(source, dict) and source.get("path") == relative_path
-    ) == 1
+    return (
+        isinstance(sources, list)
+        and sum(
+            1
+            for source in sources
+            if isinstance(source, dict) and source.get("path") == relative_path
+        )
+        == 1
+    )
 
 
 def _load_state(root: Path) -> dict[str, Any]:
@@ -867,10 +832,7 @@ def _load_state(root: Path) -> dict[str, Any]:
     if state_path.is_symlink() or not state_path.is_file():
         raise PhaseBFailure("state", "state_missing")
     state = _read_json(state_path, "state")
-    if (
-        state.get("schema_version") != STATE_SCHEMA_VERSION
-        or state.get("root") != str(root)
-    ):
+    if state.get("schema_version") != STATE_SCHEMA_VERSION or state.get("root") != str(root):
         raise PhaseBFailure("state", "state_binding_invalid")
     return state
 
@@ -893,9 +855,7 @@ def _state_path(
 def _find_single_database(root: Path) -> Path:
     databases: list[Path] = []
     for directory, names, filenames in os.walk(root, followlinks=False):
-        names[:] = [
-            name for name in names if not (Path(directory) / name).is_symlink()
-        ]
+        names[:] = [name for name in names if not (Path(directory) / name).is_symlink()]
         if "events.db" in filenames:
             candidate = Path(directory) / "events.db"
             if not candidate.is_symlink() and candidate.is_file():

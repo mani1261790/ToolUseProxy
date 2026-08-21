@@ -119,16 +119,12 @@ _PROTECTED_SOURCE_SCAN_REASON_ORDER = (
     "no_secret_selector",
 )
 
-_DOTENV_ASSIGNMENT = re.compile(
-    r"^(?:export\s+)?([A-Za-z_][A-Za-z0-9_.-]*)\s*=(.*)$"
-)
+_DOTENV_ASSIGNMENT = re.compile(r"^(?:export\s+)?([A-Za-z_][A-Za-z0-9_.-]*)\s*=(.*)$")
 _ACRONYM_KEY_BOUNDARY = re.compile(r"([A-Z]+)([A-Z][a-z])")
 _CAMEL_KEY_BOUNDARY = re.compile(r"([a-z0-9])([A-Z])")
 _NON_ASCII_ALNUM = re.compile(r"[^A-Za-z0-9]+")
 _SHELL_REFERENCE = re.compile(r"\$[A-Za-z_][A-Za-z0-9_]*\Z")
-_BRACED_SHELL_REFERENCE = re.compile(
-    r"\$\{[A-Za-z_][A-Za-z0-9_]*(?::[-+?=][^{}]*)?\}\Z"
-)
+_BRACED_SHELL_REFERENCE = re.compile(r"\$\{[A-Za-z_][A-Za-z0-9_]*(?::[-+?=][^{}]*)?\}\Z")
 _MUSTACHE_REFERENCE = re.compile(r"\{\{[^{}]+\}\}\Z")
 _ANGLE_PLACEHOLDER = re.compile(r"<[^<>]+>\Z")
 _REFERENCE_URI = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://\S+\Z")
@@ -152,9 +148,7 @@ _SECRET_MARKERS = frozenset(
         "access_key",
     }
 )
-_V2_SECRET_MARKERS = _SECRET_MARKERS | frozenset(
-    {"authentication", "authorization"}
-)
+_V2_SECRET_MARKERS = _SECRET_MARKERS | frozenset({"authentication", "authorization"})
 _DEFINITIVE_PLACEHOLDER_VALUES = frozenset(
     {
         "change_me",
@@ -460,10 +454,7 @@ class ProtectedSourceCandidate:
         return replace(self, candidate_id=candidate_id)
 
     def to_public_payload(self) -> dict[str, object]:
-        if (
-            self.candidate_revision is None
-            or _CANDIDATE_ID.fullmatch(self.candidate_id) is None
-        ):
+        if self.candidate_revision is None or _CANDIDATE_ID.fullmatch(self.candidate_id) is None:
             _raise("candidate_revision_invalid")
         return {
             "candidate_id": self.candidate_id,
@@ -490,9 +481,7 @@ class ProtectedSourceCandidate:
             "discovery_source": discovery_source,
             "rule_ids": self.reason_codes,
             "confidence": self.confidence,
-            "proposed_source_json": _canonical_json_bytes(
-                self.proposed_source
-            ).decode("utf-8"),
+            "proposed_source_json": _canonical_json_bytes(self.proposed_source).decode("utf-8"),
             "source_sha256": self.source_binding.sha256,
             "source_size": self.source_binding.size,
             "source_mtime_ns": self.source_binding.mtime_ns,
@@ -525,10 +514,7 @@ class ProtectedSourceCandidate:
                     LEGACY_DETECTOR_VERSION,
                 }:
                     _raise("candidate_detector_stale")
-                if (
-                    detector_version == LEGACY_DETECTOR_VERSION
-                    and status == "proposed"
-                ):
+                if detector_version == LEGACY_DETECTOR_VERSION and status == "proposed":
                     _raise("candidate_detector_stale")
             if (
                 not isinstance(candidate_id, str)
@@ -548,8 +534,7 @@ class ProtectedSourceCandidate:
                 or not isinstance(proposed_source, Mapping)
                 or not isinstance(revision_sha256, str)
                 or _HEX_SHA256.fullmatch(revision_sha256) is None
-                or detector_version
-                not in {DETECTOR_VERSION, LEGACY_DETECTOR_VERSION}
+                or detector_version not in {DETECTOR_VERSION, LEGACY_DETECTOR_VERSION}
                 or status not in {"proposed", "approving", "approved"}
             ):
                 _raise("candidate_invalid")
@@ -841,9 +826,7 @@ def scan_protected_sources(
         _raise("manifest_conflict")
 
     candidates = () if state.entry_limit_reached else tuple(state.candidates)
-    public_candidate_bytes = (
-        0 if state.entry_limit_reached else state.public_candidate_bytes
-    )
+    public_candidate_bytes = 0 if state.entry_limit_reached else state.public_candidate_bytes
     return ProtectedSourceScanResult(
         scanner_version=PROTECTED_SOURCE_SCANNER_VERSION,
         manifest_sha256=manifest_binding.sha256,
@@ -950,8 +933,8 @@ def plan_protected_source_manifest_migration(
             root_fd,
             root_stat.st_dev,
         )
-        payload, effective_schema, schema_was_omitted = (
-            _parse_manifest_for_migration(manifest_text, root_path)
+        payload, effective_schema, schema_was_omitted = _parse_manifest_for_migration(
+            manifest_text, root_path
         )
         _validate_runtime_manifest(root_path, workspace_id)
         _verify_workspace_path(root_path, root_stat)
@@ -1021,8 +1004,8 @@ def apply_protected_source_manifest_migration(
             manifest_binding.sha256,
             expected_manifest_sha256,
         ):
-            payload, effective_schema, schema_was_omitted = (
-                _parse_manifest_for_migration(manifest_text, root_path)
+            payload, effective_schema, schema_was_omitted = _parse_manifest_for_migration(
+                manifest_text, root_path
             )
             if effective_schema != LEGACY_MANIFEST_SCHEMA_VERSION:
                 _raise("manifest_migration_conflict")
@@ -1112,9 +1095,7 @@ def approve_protected_source(
     temporary_name: str | None = None
     try:
         _verify_workspace_path(root_path, root_stat)
-        manifest_text, initial_manifest_binding = _read_manifest_text(
-            root_fd, root_stat.st_dev
-        )
+        manifest_text, initial_manifest_binding = _read_manifest_text(root_fd, root_stat.st_dev)
         manifest = _parse_and_validate_manifest(manifest_text, root_path)
         existing = _find_existing_source(manifest, saved.proposed_source, root_path)
         source_id = _required_source_id(saved.proposed_source)
@@ -1129,14 +1110,10 @@ def approve_protected_source(
                     saved,
                 )
             except ProtectedSourceRegistrationError as exc:
-                if (
-                    saved.status == "approving"
-                    and exc.code
-                    not in {
-                        "manifest_durability_unknown",
-                        "manifest_postcondition_failed",
-                    }
-                ):
+                if saved.status == "approving" and exc.code not in {
+                    "manifest_durability_unknown",
+                    "manifest_postcondition_failed",
+                }:
                     _raise("manifest_postcondition_failed")
                 raise
             return ApprovalResult(
@@ -1225,6 +1202,187 @@ def approve_protected_source(
             candidate_id=saved.candidate_id,
             source_id=source_id,
             manifest_sha256=installed_sha256,
+        )
+    finally:
+        if temporary_name is not None:
+            try:
+                os.unlink(temporary_name, dir_fd=root_fd)
+            except FileNotFoundError:
+                pass
+
+
+def approve_protected_source_batch(
+    workspace_root: Path,
+    candidates: Sequence[tuple[ProtectedSourceCandidate | Mapping[str, object], str]],
+    *,
+    expected_manifest_sha256: str,
+    workspace_lock: ProtectedSourceWorkspaceLock | None = None,
+) -> tuple[ApprovalResult, ...]:
+    """Revalidate and install one explicitly reviewed candidate batch.
+
+    All sources are bound to the same input manifest and the manifest is
+    replaced once.  Exact entries from an interrupted prior apply are accepted
+    only when every approved entry is already present.
+    """
+
+    if workspace_lock is None:
+        with lock_protected_source_workspace(workspace_root) as acquired_lock:
+            return approve_protected_source_batch(
+                workspace_root,
+                candidates,
+                expected_manifest_sha256=expected_manifest_sha256,
+                workspace_lock=acquired_lock,
+            )
+    if not isinstance(candidates, Sequence) or isinstance(candidates, (str, bytes)):
+        _raise("candidate_invalid")
+    if not 1 <= len(candidates) <= DEFAULT_PROTECTED_SOURCE_SCAN_LIMITS.max_candidates:
+        _raise("candidate_invalid")
+    if (
+        not isinstance(expected_manifest_sha256, str)
+        or _HEX_SHA256.fullmatch(expected_manifest_sha256) is None
+    ):
+        _raise("candidate_invalid")
+
+    saved_candidates: list[ProtectedSourceCandidate] = []
+    candidate_ids: set[str] = set()
+    workspace_ids: set[str] = set()
+    for candidate, revision in candidates:
+        saved = _coerce_candidate(candidate, allow_legacy_recovery=True)
+        _verify_candidate_revision(saved, revision)
+        if saved.candidate_id in candidate_ids:
+            _raise("candidate_invalid")
+        candidate_ids.add(saved.candidate_id)
+        workspace_ids.add(saved.workspace_id)
+        saved_candidates.append(saved)
+    if len(workspace_ids) != 1:
+        _raise("candidate_invalid")
+
+    root_fd, root_path, root_stat = _require_workspace_lock(
+        workspace_root,
+        workspace_lock,
+    )
+    temporary_name: str | None = None
+    try:
+        _verify_workspace_path(root_path, root_stat)
+        manifest_text, initial_manifest_binding = _read_manifest_text(
+            root_fd,
+            root_stat.st_dev,
+        )
+        manifest = _parse_and_validate_manifest(manifest_text, root_path)
+        existing_states = [
+            _find_existing_source(manifest, saved.proposed_source, root_path)
+            for saved in saved_candidates
+        ]
+        if all(state == "exact" for state in existing_states):
+            confirmed_sha256: str | None = None
+            results: list[ApprovalResult] = []
+            for saved in saved_candidates:
+                if saved.status in {"proposed", "approving"}:
+                    _revalidate_source(root_fd, root_stat.st_dev, saved)
+                binding = _confirm_exact_manifest_durability(
+                    root_fd,
+                    root_path,
+                    root_stat,
+                    saved,
+                )
+                if confirmed_sha256 is None:
+                    confirmed_sha256 = binding.sha256
+                elif not hmac.compare_digest(confirmed_sha256, binding.sha256):
+                    _raise("manifest_postcondition_failed")
+                results.append(
+                    ApprovalResult(
+                        status="already_registered",
+                        candidate_id=saved.candidate_id,
+                        source_id=_required_source_id(saved.proposed_source),
+                        manifest_sha256=binding.sha256,
+                    )
+                )
+            return tuple(results)
+        if any(state == "exact" for state in existing_states):
+            _raise("manifest_conflict")
+        if any(state == "id_conflict" for state in existing_states):
+            _raise("source_id_conflict")
+        if any(state == "path_conflict" for state in existing_states):
+            _raise("source_path_conflict")
+        if any(saved.status == "approved" for saved in saved_candidates):
+            _raise("manifest_conflict")
+        if not hmac.compare_digest(
+            initial_manifest_binding.sha256,
+            expected_manifest_sha256,
+        ):
+            _raise("manifest_conflict")
+        if any(
+            not hmac.compare_digest(
+                saved.manifest_sha256,
+                expected_manifest_sha256,
+            )
+            for saved in saved_candidates
+        ):
+            _raise("manifest_conflict")
+
+        _preflight_manifest_sources(root_fd, root_path, root_stat.st_dev, manifest)
+        raw_sources = manifest["sources"]
+        assert isinstance(raw_sources, list)
+        if len(raw_sources) + len(saved_candidates) > MAX_MANIFEST_SOURCES:
+            _raise("manifest_too_many_sources")
+        for saved in saved_candidates:
+            _revalidate_source(root_fd, root_stat.st_dev, saved)
+            if _find_existing_source(manifest, saved.proposed_source, root_path) != "none":
+                _raise("source_path_conflict")
+            raw_sources.append(_copy_json_object(saved.proposed_source))
+
+        encoded = _encode_manifest(manifest)
+        temporary_name = _write_temporary_manifest(root_fd, encoded)
+        temporary_path = root_path / temporary_name
+        _verify_workspace_path(root_path, root_stat)
+        try:
+            load_sources_and_chunks(
+                root_path,
+                temporary_path,
+                workspace_id=saved_candidates[0].workspace_id,
+            )
+        except Exception:
+            _raise("manifest_validation_failed")
+        _verify_temporary_file(root_fd, temporary_name, root_stat.st_dev, encoded)
+        for saved in saved_candidates:
+            _revalidate_source(root_fd, root_stat.st_dev, saved)
+        _, final_manifest_binding = _read_manifest_text(root_fd, root_stat.st_dev)
+        if (
+            not hmac.compare_digest(
+                final_manifest_binding.sha256,
+                expected_manifest_sha256,
+            )
+            or final_manifest_binding != initial_manifest_binding
+        ):
+            _raise("manifest_conflict")
+        _verify_workspace_path(root_path, root_stat)
+        try:
+            os.replace(
+                temporary_name,
+                MANIFEST_FILENAME,
+                src_dir_fd=root_fd,
+                dst_dir_fd=root_fd,
+            )
+        except OSError:
+            _raise("manifest_write_failed")
+        temporary_name = None
+        try:
+            os.fsync(root_fd)
+        except OSError:
+            _raise("manifest_durability_unknown")
+        _verify_workspace_path(root_path, root_stat)
+        _, installed_binding = _read_manifest_text(root_fd, root_stat.st_dev)
+        installed_sha256 = hashlib.sha256(encoded).hexdigest()
+        if not hmac.compare_digest(installed_binding.sha256, installed_sha256):
+            _raise("manifest_postcondition_failed")
+        return tuple(
+            ApprovalResult(
+                status="approved",
+                candidate_id=saved.candidate_id,
+                source_id=_required_source_id(saved.proposed_source),
+                manifest_sha256=installed_sha256,
+            )
+            for saved in saved_candidates
         )
     finally:
         if temporary_name is not None:
@@ -1401,17 +1559,17 @@ def _discover_dotenv_keys(
         value = _parse_dotenv_value(match.group(2))
         if value is None:
             _raise("source_not_parseable")
-        secret_like_key = (
-            _is_secret_like_key(key)
-            if value_aware
-            else _is_secret_like_key_v1(key)
-        )
-        if value.strip() and secret_like_key and (
-            not value_aware
-            or _is_supported_secret_scalar(
-                key,
-                value,
-                relative_path=relative_path,
+        secret_like_key = _is_secret_like_key(key) if value_aware else _is_secret_like_key_v1(key)
+        if (
+            value.strip()
+            and secret_like_key
+            and (
+                not value_aware
+                or _is_supported_secret_scalar(
+                    key,
+                    value,
+                    relative_path=relative_path,
+                )
             )
         ):
             selected.append(key)
@@ -1499,9 +1657,7 @@ def _discover_json_pointers(
                     _raise("json_too_many_items")
                 child_pointer = f"{pointer}/{_escape_json_pointer_segment(key)}"
                 secret_like_key = (
-                    _is_secret_like_key(key)
-                    if value_aware
-                    else _is_secret_like_key_v1(key)
+                    _is_secret_like_key(key) if value_aware else _is_secret_like_key_v1(key)
                 )
                 if (
                     isinstance(child, str)
@@ -1530,10 +1686,7 @@ def _discover_json_pointers(
         _raise("no_secret_selector")
     if len(pointers) > MAX_SELECTOR_VALUES:
         _raise("too_many_selectors")
-    if any(
-        len(pointer.encode("utf-8")) > MAX_SELECTOR_VALUE_BYTES
-        for pointer in pointers
-    ):
+    if any(len(pointer.encode("utf-8")) > MAX_SELECTOR_VALUE_BYTES for pointer in pointers):
         _raise("selector_too_long")
     return sorted(pointers)
 
@@ -1579,16 +1732,9 @@ def _is_secret_like_key(key: str) -> bool:
     normalized = "_".join(segments)
     if normalized in _V2_SECRET_MARKERS:
         return True
-    if any(
-        marker in segments
-        for marker in _V2_SECRET_MARKERS
-        if "_" not in marker
-    ):
+    if any(marker in segments for marker in _V2_SECRET_MARKERS if "_" not in marker):
         return True
-    joined_pairs = {
-        "_".join(segments[index : index + 2])
-        for index in range(len(segments) - 1)
-    }
+    joined_pairs = {"_".join(segments[index : index + 2]) for index in range(len(segments) - 1)}
     return bool(joined_pairs & _V2_SECRET_MARKERS)
 
 
@@ -1604,10 +1750,7 @@ def _is_secret_like_key_v1(key: str) -> bool:
     segments = tuple(part for part in normalized.split("_") if part)
     if any(marker in segments for marker in _SECRET_MARKERS if "_" not in marker):
         return True
-    joined_pairs = {
-        "_".join(segments[index : index + 2])
-        for index in range(len(segments) - 1)
-    }
+    joined_pairs = {"_".join(segments[index : index + 2]) for index in range(len(segments) - 1)}
     return bool(joined_pairs & _SECRET_MARKERS)
 
 
@@ -1627,10 +1770,7 @@ def _is_supported_secret_scalar(
     if len(stripped) <= _MAX_VALUE_CLASSIFICATION_CHARACTERS:
         if _is_definitive_placeholder(stripped):
             return False
-        if (
-            _has_weak_placeholder_value(stripped)
-            and _has_placeholder_like_basename(relative_path)
-        ):
+        if _has_weak_placeholder_value(stripped) and _has_placeholder_like_basename(relative_path):
             return False
         key_segments = _normalized_identifier_segments(key)
         if _is_metadata_scalar(key_segments, stripped):
@@ -1674,17 +1814,12 @@ def _is_definitive_placeholder(value: str) -> bool:
 
 
 def _has_weak_placeholder_value(value: str) -> bool:
-    return bool(
-        set(_normalized_identifier_segments(value)) & _WEAK_PLACEHOLDER_TOKENS
-    )
+    return bool(set(_normalized_identifier_segments(value)) & _WEAK_PLACEHOLDER_TOKENS)
 
 
 def _has_placeholder_like_basename(relative_path: str) -> bool:
     basename = PurePath(relative_path).name
-    return bool(
-        set(_normalized_identifier_segments(basename))
-        & _PLACEHOLDER_BASENAME_TOKENS
-    )
+    return bool(set(_normalized_identifier_segments(basename)) & _PLACEHOLDER_BASENAME_TOKENS)
 
 
 def _is_secret_manager_reference(value: str) -> bool:
@@ -1707,8 +1842,7 @@ def _is_metadata_scalar(key_segments: tuple[str, ...], value: str) -> bool:
     value_label = _canonical_scalar_label(value)
     qualifiers = key_tokens & _METADATA_KEY_QUALIFIERS
     protocol_key = bool(
-        key_tokens
-        & {"auth", "authentication", "authorization", "bearer", "token"}
+        key_tokens & {"auth", "authentication", "authorization", "bearer", "token"}
         or qualifiers & {"method", "mode", "scheme", "type"}
     )
     # Exact protocol vocabulary is metadata only when the key also describes
@@ -1719,9 +1853,7 @@ def _is_metadata_scalar(key_segments: tuple[str, ...], value: str) -> bool:
     if not qualifiers:
         return False
     if qualifiers & {"algorithm", "format"}:
-        return value_label in (
-            _ALGORITHM_METADATA_VALUES | _PROTOCOL_METADATA_VALUES
-        )
+        return value_label in (_ALGORITHM_METADATA_VALUES | _PROTOCOL_METADATA_VALUES)
     if qualifiers & {"method", "mode", "scheme", "type"}:
         return value_label in _PROTOCOL_METADATA_VALUES
     if "policy" in qualifiers:
@@ -1751,8 +1883,7 @@ def _is_metadata_scalar(key_segments: tuple[str, ...], value: str) -> bool:
         "version",
     }
     return bool(
-        reference_qualifiers
-        and _looks_like_reference_metadata(value, reference_qualifiers)
+        reference_qualifiers and _looks_like_reference_metadata(value, reference_qualifiers)
     )
 
 
@@ -2133,10 +2264,7 @@ def _scan_protected_source_file(
         state.skip("candidate_limit", incomplete=True)
         return
     public_bytes = _protected_source_candidate_public_bytes(candidate)
-    if (
-        state.public_candidate_bytes + public_bytes
-        > state.limits.max_public_metadata_bytes
-    ):
+    if state.public_candidate_bytes + public_bytes > state.limits.max_public_metadata_bytes:
         state.skip("public_metadata_limit", incomplete=True)
         return
     state.candidates.append(candidate)
@@ -2178,11 +2306,7 @@ def _read_scan_source_text(
         before = os.fstat(file_fd)
         if not _same_stat(expected, before):
             _raise("source_changed")
-        if (
-            not stat.S_ISREG(before.st_mode)
-            or before.st_dev != root_device
-            or before.st_nlink != 1
-        ):
+        if not stat.S_ISREG(before.st_mode) or before.st_dev != root_device or before.st_nlink != 1:
             _raise("source_not_safe")
         if before.st_size > MAX_PROTECTED_FILE_BYTES:
             _raise("source_too_large")
@@ -2240,8 +2364,7 @@ def _scan_path_is_excluded(
     exclusions: tuple[tuple[str, ...], ...],
 ) -> bool:
     return any(
-        len(relative_parts) >= len(excluded)
-        and relative_parts[: len(excluded)] == excluded
+        len(relative_parts) >= len(excluded) and relative_parts[: len(excluded)] == excluded
         for excluded in exclusions
     )
 
@@ -2295,9 +2418,7 @@ def _resolve_scan_exclusion_identities(
 
 
 def _ordered_scan_reason_codes(values: set[str]) -> tuple[str, ...]:
-    order = {
-        code: index for index, code in enumerate(_PROTECTED_SOURCE_SCAN_REASON_ORDER)
-    }
+    order = {code: index for index, code in enumerate(_PROTECTED_SOURCE_SCAN_REASON_ORDER)}
     return tuple(sorted(values, key=lambda code: (order.get(code, len(order)), code)))
 
 
@@ -2497,11 +2618,7 @@ def _read_relative_text(
         flags |= getattr(os, "O_NONBLOCK", 0)
         file_fd = os.open(parts[-1], flags, dir_fd=current_fd)
         before = os.fstat(file_fd)
-        if (
-            not stat.S_ISREG(before.st_mode)
-            or before.st_dev != root_device
-            or before.st_nlink != 1
-        ):
+        if not stat.S_ISREG(before.st_mode) or before.st_dev != root_device or before.st_nlink != 1:
             _raise(unsafe_code)
         if before.st_size > maximum_bytes:
             _raise(too_large_code)
@@ -2704,10 +2821,7 @@ def _parse_manifest_for_migration(
             or not sensitivity.strip()
             or not isinstance(policy_tags, list)
             or not all(isinstance(tag, str) for tag in policy_tags)
-            or (
-                schema_version == LEGACY_MANIFEST_SCHEMA_VERSION
-                and "selector" in source
-            )
+            or (schema_version == LEGACY_MANIFEST_SCHEMA_VERSION and "selector" in source)
         ):
             _raise("manifest_source_invalid")
         if source_id in source_ids:
@@ -2803,15 +2917,16 @@ def _encode_migrated_manifest(
     *,
     schema_version_was_omitted: bool,
 ) -> bytes:
-    if manifest.get(
-        "schema_version",
-        LEGACY_MANIFEST_SCHEMA_VERSION,
-    ) != LEGACY_MANIFEST_SCHEMA_VERSION:
+    if (
+        manifest.get(
+            "schema_version",
+            LEGACY_MANIFEST_SCHEMA_VERSION,
+        )
+        != LEGACY_MANIFEST_SCHEMA_VERSION
+    ):
         _raise("manifest_migration_not_required")
     if schema_version_was_omitted:
-        migrated: dict[str, object] = {
-            "schema_version": CURRENT_MANIFEST_SCHEMA_VERSION
-        }
+        migrated: dict[str, object] = {"schema_version": CURRENT_MANIFEST_SCHEMA_VERSION}
         migrated.update(manifest)
     else:
         migrated = dict(manifest)
@@ -2989,12 +3104,10 @@ def _recover_applied_manifest_migration(
         expected_manifest_sha256,
     ):
         _raise("manifest_backup_conflict")
-    backup_payload, backup_schema, schema_was_omitted = (
-        _parse_manifest_for_migration(
-            backup_text,
-            root_path,
-            validate_source_paths=False,
-        )
+    backup_payload, backup_schema, schema_was_omitted = _parse_manifest_for_migration(
+        backup_text,
+        root_path,
+        validate_source_paths=False,
     )
     if backup_schema != LEGACY_MANIFEST_SCHEMA_VERSION:
         _raise("manifest_backup_conflict")
@@ -3002,10 +3115,13 @@ def _recover_applied_manifest_migration(
         backup_payload,
         schema_version_was_omitted=schema_was_omitted,
     )
-    if not hmac.compare_digest(
-        hashlib.sha256(expected_manifest).hexdigest(),
-        current_manifest_binding.sha256,
-    ) or current_manifest_text.encode("utf-8") != expected_manifest:
+    if (
+        not hmac.compare_digest(
+            hashlib.sha256(expected_manifest).hexdigest(),
+            current_manifest_binding.sha256,
+        )
+        or current_manifest_text.encode("utf-8") != expected_manifest
+    ):
         _raise("manifest_migration_conflict")
     try:
         os.fsync(root_fd)
@@ -3016,10 +3132,7 @@ def _recover_applied_manifest_migration(
         root_fd,
         root_stat.st_dev,
     )
-    if (
-        confirmed_binding != current_manifest_binding
-        or confirmed_text != current_manifest_text
-    ):
+    if confirmed_binding != current_manifest_binding or confirmed_text != current_manifest_text:
         _raise("manifest_postcondition_failed")
     return ProtectedSourceManifestMigrationResult(
         status="already_migrated",
@@ -3209,12 +3322,10 @@ def _ensure_manifest_backup(
     backup_relative_path: str,
     original_bytes: bytes,
 ) -> FileBinding:
-    root_fd, backup_parent_fd, namespace_fd, filename = (
-        _open_private_backup_namespace(
-            backup_root,
-            backup_relative_path,
-            create=True,
-        )
+    root_fd, backup_parent_fd, namespace_fd, filename = _open_private_backup_namespace(
+        backup_root,
+        backup_relative_path,
+        create=True,
     )
     temporary_name = f".{filename}.tmp"
     temporary_fd: int | None = None
@@ -3257,10 +3368,7 @@ def _ensure_manifest_backup(
             not stat.S_ISREG(temporary_stat.st_mode)
             or temporary_stat.st_nlink != 1
             or stat.S_IMODE(temporary_stat.st_mode) != 0o600
-            or (
-                hasattr(os, "geteuid")
-                and temporary_stat.st_uid != os.geteuid()
-            )
+            or (hasattr(os, "geteuid") and temporary_stat.st_uid != os.geteuid())
         ):
             _raise("manifest_backup_unavailable")
         os.close(temporary_fd)
@@ -3312,12 +3420,10 @@ def _read_manifest_backup(
     *,
     missing_code: str,
 ) -> tuple[str, FileBinding]:
-    root_fd, backup_parent_fd, namespace_fd, filename = (
-        _open_private_backup_namespace(
-            backup_root,
-            backup_relative_path,
-            create=False,
-        )
+    root_fd, backup_parent_fd, namespace_fd, filename = _open_private_backup_namespace(
+        backup_root,
+        backup_relative_path,
+        create=False,
     )
     try:
         result = _read_private_backup_file(
