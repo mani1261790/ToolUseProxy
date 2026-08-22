@@ -7,7 +7,7 @@ from hook_monitor.policy.models import PolicyDecision
 from hook_monitor.runtime.models import SinkCandidate
 
 
-EXACT_FILE_PAYLOAD_POLICY_VERSION = "exact-file-payload-policy-v2-fail-closed"
+EXACT_FILE_PAYLOAD_POLICY_VERSION = "exact-external-payload-policy-v3-fail-closed"
 _ENFORCED_MATCH_METHODS = frozenset(
     {
         "resolved_payload_exact",

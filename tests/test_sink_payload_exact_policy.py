@@ -178,7 +178,7 @@ class SinkPayloadExactPolicyTest(unittest.TestCase):
         )[0]
 
         self.assertEqual(first, second)
-        self.assertIn("v2", EXACT_FILE_PAYLOAD_POLICY_VERSION)
+        self.assertIn("v3", EXACT_FILE_PAYLOAD_POLICY_VERSION)
 
     @staticmethod
     def _evidence(

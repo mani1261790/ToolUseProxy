@@ -132,7 +132,7 @@ Codex の GUI か設定ファイルで、次の command を指定します。`/a
 
 `TOOLUSEPROXY_WORKSPACE_ROOT`の指定を推奨します。rootは既存の絶対directoryで、root自身がsymlinkではなく、Hook payloadの`cwd`がその配下にある必要があります。canonical rootのSHA-256から安定した`workspace_id`を作り、lexical rootと実行時cwdも別fieldで監査保存します。rootを指定しない場合はHook payloadの`cwd`自体をworkspace rootとして扱うため、同じrepositoryでもsubdirectoryごとに別workspaceになり得ます。
 
-明示rootの検証に失敗したeventはraw evidenceとして保存しますが、snapshot取得とruntime policy評価はfail-openで省略します。workspaceを推測するための親directory走査やGit探索は行いません。
+明示rootの検証に失敗したPreToolUseは別workspaceを推測せず実行前denyします。PostToolUse / Stopは不確かなsnapshotやruntime graphを作らずadvisoryに留めます。workspaceを推測するための親directory走査やGit探索は行いません。
 
 この段階の目的は、hook から I/O を受け取り、後から情報流を再解析できる観測ログを残すことです。加えて `Stop` では、最終応答をユーザーへ出す直前の確認点として `continue_review` を返す最小接続を行います。
 
@@ -283,7 +283,7 @@ moveではsourceが消えたこととtargetの現在内容を別snapshotで確�
 
 既定の`TOOLUSEPROXY_SNAPSHOT_PLAINTEXT=0`では、UTF-8 textでも`body_text`を保存せず`captured_hash_only`にします。opt-in時だけ`captured_text`として本文を保存します。binary本文はopt-inでも保存しません。同じpathの取得結果を再利用する場合も、重複本文を保存せず`cached_hash_only`にします。
 
-`content_sha256`は、上限内のファイル全体を安定して読み切った場合だけ計算します。apply_patch文字列やBash segmentのhashをfile content hashとして代用しません。capture全体の例外はHookをfail-openにし、outcome evidenceへ例外型だけを追記します。path単位の失敗は`capture_status`と`error_code`を保存し、可能な場合はhashless resource versionへfallbackします。ただし、delete tombstoneは不在を確認した場合だけ作り、`execution_unknown`と`ambiguous_final_writer`はmaterializeしません。
+`content_sha256`は、上限内のファイル全体を安定して読み切った場合だけ計算します。apply_patch文字列やBash segmentのhashをfile content hashとして代用しません。実行後のPostToolUse capture全体の例外は、すでに完了した操作の結果を変えずadvisoryに留め、outcome evidenceへ例外型だけを追記します。path単位の失敗は`capture_status`と`error_code`を保存し、可能な場合はhashless resource versionへfallbackします。ただし、delete tombstoneは不在を確認した場合だけ作り、`execution_unknown`と`ambiguous_final_writer`はmaterializeしません。
 
 snapshotの自動retentionやpruneはまだ実装していないため、recordはDBを削除または明示的に整理するまで残ります。SQLite自体も暗号化しません。snapshot本文をoffにしても、raw Hook payload、artifact、operation fragmentにはtool input/outputが平文で保存され得ます。さらにcompleted offline runの`analysis_node_snapshots.metadata_json`はcontent-addressedですが暗号化・匿名化ではなく、artifact fragmentやsource chunkのtextを過去run再現用に保持します。live sourceを削除しても過去run snapshotは自動pruneされません。DBを外部へ共有せず、OSのfile permissionとdisk encryptionで保護してください。
 
@@ -385,11 +385,13 @@ TOOLUSEPROXY_PRE_TOOL_POLICY=1 TOOLUSEPROXY_PRE_TOOL_FILE_PAYLOAD_EXACT_ENFORCEM
 
 対象はcurrent Bash eventの`curl --data-binary @relative-file`です。`resolution_status`と`comparison_status`がともに`evaluated`、extractionが`resolved_file`、snapshotが`pre_execution_file_snapshot`であり、active source chunkとの`resolved_payload_exact`または`resolved_payload_exact_substring`がある場合だけcritical blockを返します。一般的なshingle、token equivalent、embedding / semantic類似はこのdenyへ接続しません。
 
-public no-match、unsupported、上限超過、resolver例外は新しいdenyを作らず、先に確定したlineage policyのallow / warn / blockを維持します。exact evidence確定後に監査保存だけが失敗した場合は外部side effectを許可せずdenyを維持します。shadow flagも同時に有効化した場合は同じ一回のfile snapshot比較から値なし観測を保存し、payloadを二重に読みません。
+public no-matchは、active source全体との比較が上限内で完了した場合だけallow候補になります。unsupported、上限超過、resolver / comparison例外、外部sinkのpayload未確認は、protected sourceが有効なら実行前denyします。exact evidence確定後に監査保存だけが失敗した場合もdenyを維持します。shadow flagを同時に有効化した場合は同じ一回のfile snapshot比較から値なし観測を保存し、payloadを二重に読みません。
+
+MCPは`get`、`list`、`search`を含め、引数がMCP serverへ送られる全callをexternal boundaryとして扱います。32 KiB / 32 fields / depth 8以内の全scalar値とkeyを、最大512 chunks / 512 KiBのactive source全体と候補省略なしで比較します。protected一致、入力・source上限超過、比較時間超過、解析例外は実行前denyし、全比較が完了したpublic inputだけを通します。
 
 denyは「file-backed external payloadにprotected contentが見つかった」と説明し、参照fileから保護内容を除くかpublic payloadを選ぶよう案内します。ただし実行前snapshotとcurlが後で読むbytesの一致は証明しないため、TOCTOUの制限は残ります。既定有効化は別のgo / no-go判断です。
 
-MCP Hookのmatcherは、たとえば`^mcp__.*$`、または対象を絞った`^mcp__github__.*$`を使用します。実CodexのMCP payloadは`tool_name: mcp__<server>__<tool>`で、`tool_input`にはMCP toolへ渡すraw argumentsが入ります。adapterが外部送信と分類するwrite-like toolだけがsinkとなり、read-only toolは記録して通過させます。MCP tool名はUTF-8で4 KiBを上限とし、超過時はartifact / sinkをmaterializeする前に`tool_name_bytes_exceeded`でdenyします。tool名自体が1 MiBのraw read上限を跨いで後続`cwd`を読めない場合も、明示`TOOLUSEPROXY_WORKSPACE_ROOT`が有効ならそのrootだけを早期deny scopeとして検証します。
+MCP Hookのmatcherは`^mcp__.*$`です。実CodexのMCP payloadは`tool_name: mcp__<server>__<tool>`で、`tool_input`にはMCP toolへ渡すraw argumentsが入ります。read-only名を含む全MCP callがexternal boundaryとなり、mutation名はsink種別の精密化にだけ使います。MCP tool名はUTF-8で4 KiBを上限とし、超過時はartifact / sinkをmaterializeする前に`tool_name_bytes_exceeded`でdenyします。tool名自体が1 MiBのraw read上限を跨いで後続`cwd`を読めない場合も、明示`TOOLUSEPROXY_WORKSPACE_ROOT`が有効ならそのrootだけを早期deny scopeとして検証します。
 
 現在eventの`event_id`、`sequence_no`、`tool_use_id`、adapter種別が一致するexternal sinkだけを評価します。過去eventの未解消findingを理由に現在の呼出しを止めません。
 
@@ -406,7 +408,8 @@ Post event本体を保存した後、runnerはdormantなredaction confirmation�
 - critical: `permissionDecision: deny`
 - high: `additionalContext`を返して実行継続
 - medium以下またはfindingなし: stdoutなしで実行継続
-- session ID欠落、policy無効、解析例外: fail-open
+- session / workspace / tool identity欠落、解析例外: 初期化後のPreToolUseは実行前deny
+- policyを利用者が明示的に無効化したworkspace: policyなしで実行継続
 
 未サポートの`permissionDecision: ask`と`continue: false`には依存しません。通常のHook処理はSQLite、静的adapter、indexed lexical candidate、差分lineageだけを使い、network、embedding、全DB再解析は行いません。
 
@@ -488,7 +491,7 @@ source manifestの基準directoryはeventのcanonical workspace rootです。`pr
   - `.env` や `private.py` を「守るべき source」として定義する入口です
 - `hook_monitor/runtime/runner.py`
   - 全体の実行順序をまとめる orchestrator です
-  - direct Hook環境でMCP raw gateも有効な場合は`bounded prefix read -> top-level tool/workspace scope -> real MCP raw gate -> parse -> normalize -> bounded input preflight`を先に行います。ready workspaceのreal MCPだけをraw JSON 1 MiB / depth 64 / numeric token 128 charsで制限し、超過したwriteはdeny、read-only / unsinked / workspace未確定は空stdoutで早期bypassします。既知の非MCP toolは従来経路を維持し、Hook JSONはUTF-8・BOMなしだけを受理します
+  - direct Hook環境でMCP raw gateも有効な場合は`bounded prefix read -> top-level tool/workspace scope -> real MCP raw gate -> parse -> normalize -> bounded input preflight`を先に行います。ready workspaceのreal MCPをraw JSON 1 MiB / depth 64 / numeric token 128 charsで制限し、read-only名を含む超過callとworkspace未確定callをdenyします。既知の非MCP toolは従来経路を維持し、Hook JSONはUTF-8・BOMなしだけを受理します
 - `hook_monitor/analysis/chunking.py`
   - 保護対象 source を chunk に分割します
   - `.py` は関数や class 単位、テキストは段落単位で分割します

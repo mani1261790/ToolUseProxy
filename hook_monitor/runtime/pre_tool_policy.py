@@ -14,6 +14,9 @@ from hook_monitor.analysis.adapters.mcp_profiles import (
     inspect_mcp_input,
 )
 from hook_monitor.analysis.leak_detection import LeakFinding, detect_leaks
+from hook_monitor.analysis.mcp_payload_evidence import (
+    verify_mcp_payload_against_sources,
+)
 from hook_monitor.analysis.sink_payload_evidence import (
     BashSinkPayloadEvidence,
     inspect_bash_sink_payload_evidence,
@@ -61,6 +64,10 @@ MCP_INPUT_LIMIT_DENY_REASON = (
     "ToolUseProxy blocked this MCP call because its input exceeds bounded "
     "static-analysis limits"
 )
+PRE_TOOL_PREREQUISITE_DENY_REASON = (
+    "ToolUseProxy blocked this call because required Hook identity could not "
+    "be verified"
+)
 MCP_INPUT_REJECTION_CODES = frozenset(
     {
         "field_count_exceeded",
@@ -97,6 +104,18 @@ def render_mcp_input_limit_deny(rejection_code: str) -> dict[str, object]:
             "permissionDecision": "deny",
             "permissionDecisionReason": (
                 f"{MCP_INPUT_LIMIT_DENY_REASON} ({safe_code})."
+            ),
+        }
+    }
+
+
+def render_pre_tool_prerequisite_deny(rejection_code: str) -> dict[str, object]:
+    return {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": (
+                f"{PRE_TOOL_PREREQUISITE_DENY_REASON} ({rejection_code})."
             ),
         }
     }
@@ -168,11 +187,14 @@ def evaluate_pre_tool_hook_policy(
     externality_decision: ExternalityHookDecision | None = None,
 ) -> dict[str, object]:
     current_adapter = pre_tool_adapter(current_event.tool_name)
+    if current_event.session_id is None:
+        return render_pre_tool_prerequisite_deny("session_identity_missing")
+    if current_event.workspace_status != "ready" or current_event.workspace_id is None:
+        return render_pre_tool_prerequisite_deny("workspace_identity_unavailable")
+    if not isinstance(current_event.tool_name, str) or not current_event.tool_name.strip():
+        return render_pre_tool_prerequisite_deny("tool_identity_missing")
     if (
-        current_event.session_id is None
-        or current_event.workspace_status != "ready"
-        or current_event.workspace_id is None
-        or current_adapter is None
+        current_adapter is None
         or current_adapter not in enabled_adapters
     ):
         return {}
@@ -362,6 +384,55 @@ def evaluate_pre_tool_hook_policy(
                     db_path=store.db_path,
                     analysis_run_id=runtime_result.analysis_run.analysis_run_id,
                 )
+    if (
+        sink_payload_exact_enforcement_enabled
+        and current_adapter == "mcp"
+        and runtime_result.source_chunks
+    ):
+        try:
+            verification = verify_mcp_payload_against_sources(
+                current_event.raw_payload.get("tool_input"),
+                runtime_result.source_chunks,
+            )
+        except Exception:
+            verified_sink_node_ids = frozenset()
+        else:
+            verified_sink_node_ids = (
+                frozenset(
+                    sink.node_id
+                    for sink in current_sinks
+                    if sink.sink_type.startswith("external_")
+                )
+                if verification.status == "safe"
+                else frozenset()
+            )
+        conservative_decisions = build_unverified_external_sink_decisions(
+            sink_candidates=tuple(current_sinks),
+            analysis_run_id=runtime_result.analysis_run.analysis_run_id,
+            protected_source_node_ids=tuple(
+                chunk.chunk_id for chunk in runtime_result.source_chunks
+            ),
+            verified_sink_node_ids=verified_sink_node_ids,
+        )
+        conservative_selected = select_strongest_decision(
+            conservative_decisions,
+            "PreToolUse",
+        )
+        if conservative_selected is not None:
+            try:
+                store_policy_decision(
+                    store,
+                    conservative_selected,
+                    runtime_result.analysis_run.analysis_run_id,
+                )
+            except Exception:
+                pass
+            return render_codex_hook_output(
+                conservative_selected,
+                "PreToolUse",
+                db_path=store.db_path,
+                analysis_run_id=runtime_result.analysis_run.analysis_run_id,
+            )
     if (
         sink_payload_exact_enforcement_enabled
         and current_adapter == "function"

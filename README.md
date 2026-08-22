@@ -78,6 +78,8 @@ ToolUseProxyの中心課題は、次の2つを組み合わせて漏えいを検�
 
    protected sourceをchunkに分け、外部sinkへ渡されるpayloadとの内容対応を調べます。完全一致だけでなく、部分一致や変形も段階的に評価します。
 
+   MCPの`get`、`list`、`search`もqueryをserverへ送るため外部sinkです。上限内のMCP inputは全key/valueをactive source全体と比較し、比較を完了できない場合は実行前に止めます。
+
 2. **情報の由来と送信先を調べる**
 
    tool I/Oやfile operationから情報の経路を推定し、保護情報が外部送信候補へ到達したかを調べます。外部通信する可能性は既知adapter、静的解析、保守的unknown判定を組み合わせます。

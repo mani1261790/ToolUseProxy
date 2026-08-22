@@ -211,6 +211,16 @@ def run_hook(
             else None
         ),
     )
+    if phase == "pre_tool_use":
+        if event.session_id is None:
+            _emit_pre_tool_safety_stop("session_identity_missing")
+            return 0
+        if not isinstance(event.tool_name, str) or not event.tool_name.strip():
+            _emit_pre_tool_safety_stop("tool_identity_missing")
+            return 0
+        if not _runtime_policy_workspace_enabled(event):
+            _emit_pre_tool_safety_stop("workspace_identity_unavailable")
+            return 0
     early_pre_tool_adapters = _enabled_pre_tool_adapters(
         resolve_effective_runtime_settings(
             empty_workspace_runtime_settings(

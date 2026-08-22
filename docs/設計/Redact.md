@@ -16,7 +16,7 @@ Redactは、protected source由来の情報を含むtool inputから、送信し
 
 従って、最初の到達点は`redact-preview`です。previewは「このcallなら、どのfieldをどう置き換えられるか」を監査可能なplanとして出しますが、Hook stdoutへ`updatedInput`を返さず、現在のcritical findingは引き続きblockします。
 
-2026-07-15時点で、versioned exact profile registry、MCP sink coverage、pure preview planner、hash-only監査保存、dormantなenforce準備とPost confirmationまで実装済みです。valid profileはdata / controlの全present scalar pointerを個別sink化し、shape不一致とunprofiled write-like toolはarguments内の全scalar valueとJSON object keyへ保守的fallbackします。plannerはcurrent event / workspace / session / tool use / sequence、profile / registry version、全present sink coverageを閉じ、全critical findingをsource chunkとtarget pointerの直接参照で集約します。1件でも非対応ならpartial targetと候補本文を破棄し、全件でraw case-sensitive matchを確認できた場合だけdeep copy上のwhole-field候補、canonical input hash、structure hash、finding単位targetを返します。初期exact profileは実Codexで観測したlocal E2E `publish_text(content)`だけで、実schema未確認の外部serviceはpreview適格にしません。real MCP inputは32 KiB / 32 fields / depth 8のbounded preflightをartifact生成より前に受け、超過したexternal writeはdeny、read-only / unsinked callは保存せず空stdoutでbypassします。PreToolUseはcurrent callの全critical findingを検出した後だけplannerを呼び、findingが参照するworkspace-owned source chunk IDを32件以下で取得します。eligible / rejected previewと全targetはimmutableな1 transactionで保存し、source取得、planner、保存の失敗時も先に生成したdenyを返します。dormantな`prepare_redaction_enforcement()`はverified previewをstorage内で再実行し、`enforce / eligible` plan、target exact clone、全finding分のderived redact decision linkを同じtransactionで保存・再読込します。現在のruntimeはこのAPIを呼ばず、`rendered`へ進めず、Hook stdoutへ`updatedInput`を返しません。Post confirmationは記録済みPost eventの後に独立したfail-soft境界で動き、将来rendererが作る`mode = enforce AND status = rendered`の単一planだけを照合します。
+2026-08-22時点で、versioned exact profile registry、MCP sink coverage、pure preview planner、hash-only監査保存、dormantなenforce準備とPost confirmationまで実装済みです。valid profileはdata / controlの全present scalar pointerを個別sink化し、shape不一致とunprofiled MCP toolはarguments内の全scalar valueとJSON object keyへ保守的fallbackします。plannerはcurrent event / workspace / session / tool use / sequence、profile / registry version、全present sink coverageを閉じ、全critical findingをsource chunkとtarget pointerの直接参照で集約します。1件でも非対応ならpartial targetと候補本文を破棄し、全件でraw case-sensitive matchを確認できた場合だけdeep copy上のwhole-field候補、canonical input hash、structure hash、finding単位targetを返します。初期exact profileは実Codexで観測したlocal E2E `publish_text(content)`だけで、実schema未確認の外部serviceはpreview適格にしません。real MCP inputはread-only名を含め32 KiB / 32 fields / depth 8のbounded preflightをartifact生成より前に受け、超過callはdenyします。PreToolUseはcurrent callの全critical findingを検出した後だけplannerを呼び、findingが参照するworkspace-owned source chunk IDを32件以下で取得します。eligible / rejected previewと全targetはimmutableな1 transactionで保存し、source取得、planner、保存の失敗時も先に生成したdenyを返します。dormantな`prepare_redaction_enforcement()`はverified previewをstorage内で再実行し、`enforce / eligible` plan、target exact clone、全finding分のderived redact decision linkを同じtransactionで保存・再読込します。現在のruntimeはこのAPIを呼ばず、`rendered`へ進めず、Hook stdoutへ`updatedInput`を返しません。Post confirmationは記録済みPost eventの後に独立したfail-soft境界で動き、将来rendererが作る`mode = enforce AND status = rendered`の単一planだけを照合します。
 
 ## Codexの実契約
 
@@ -42,7 +42,7 @@ PreToolUseでrewriteを返す形式は次です。
 - `permissionDecision: allow`なしの`updatedInput`もinvalid
 - `permissionDecision: ask`は未サポート
 - non-emptyな`permissionDecisionReason`を伴う有効なdenyがmatching Hookに1件でもあればcall全体をblockする
-- deny reason欠落、invalid JSON、timeoutなどのinvalid / failed Hookは、そのHook単体ではblockせずfail-openする
+- Codex側でHook自体が未配送・timeoutになった場合はPluginから結果を返せない。ToolUseProxy runtimeが観測したdeny reason欠落、invalid JSON、policy例外は有効なdenyへ置き換える
 - denyがない場合、複数rewriteのうち最後に完了した1件だけを採用する
 - rewriteしたinputに対してPreToolUseを再実行しない
 
@@ -345,13 +345,13 @@ plannerは既存の`session-incremental`結果を入力にし、全DBやworkspac
 
 ## failure fallback
 
-redactはcritical external sinkに対するblockを置き換える候補です。そのため、redact固有の失敗をHook全体の一般的なfail-openへ伝播させてはいけません。
+redactはcritical external sinkに対するblockを置き換える候補です。そのため、redact固有の失敗で先に確定したdenyを弱めてはいけません。
 
 実装した境界は次です。
 
 ```text
-runtime analysis自体が失敗
-  -> 現行どおりHook boundaryのfail-open
+PreToolUse runtime analysis自体が失敗
+  -> 値を含まない安全停止deny
 
 analysis後、critical blockを得た後にsource取得またはredaction plannerが失敗
   -> 元のblock outputを返す

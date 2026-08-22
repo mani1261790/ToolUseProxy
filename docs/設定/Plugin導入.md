@@ -17,7 +17,7 @@ ToolUseProxyのCodex Pluginは、repository全体ではなく、生成時にallo
 導入、候補登録、更新、削除を始める前に、次の4点を一続きの契約として確認してください。
 
 1. [プライバシーとデータ保持](../../PRIVACY.md): raw Hook payloadやprotected source chunkがlocal SQLiteへ平文で残り得て、自動expirationやsecure eraseがない
-2. [サポート範囲と既知の制限](../../SUPPORT.md): Hook内部エラーは原則fail-openで、Windowsの登録workflowはalpha未対応
+2. [サポート範囲と既知の制限](../../SUPPORT.md): 初期化後のPreToolUse内部エラーはfail-closedで、Windowsの登録workflowはalpha未対応
 3. [Plugin upgrade / rollback rehearsal](../運用/Pluginライフサイクル.md): rollbackは新DBを旧runtimeでdowngradeせず、upgrade前backupを別data directoryへ復元する
 4. この文書の[disable / uninstall](#disable--uninstall): Plugin codeのremoveはdata削除を意味せず、exact planへの別の明示承認が必要
 
@@ -330,7 +330,7 @@ pre-release候補で実際のHook trust、agent説明、実tool invocationを検
 - 未trustのPlugin HookはCodex側でskipされます
 - 一度trustした定義でも、matcherやcommandなどが変わると`modified`になり、再reviewするまでskipされます
 - Desktopでは正常終了したHookのstderrが画面へ表示されないため、Pluginの非active診断はphase別JSON stdoutを使います。表示の有無だけでは発火を判定しません
-- Python 3.11 / 3.12が見つからない場合も、launcherは同じ非blocking JSONで理由を返してfail-openします
-- DBがない、古い、新しすぎる、不完全な場合、runtime HookはDBを変更せずfail-openします
+- Python 3.11 / 3.12が見つからない場合、launcherは値を含まないphase別JSONを返します。PreToolUseは実行前deny、PostToolUse / Stopはadvisoryです
+- DBがない場合だけsetup用advisoryです。古い、新しすぎる、不完全、読取不能なDBではruntime HookはDBを変更せず、PreToolUseを実行前denyします
 - SQLite migrationは`init`だけ、protected source manifestのv1→v2 migrationは明示承認後の`protect migrate apply`だけが行い、通常のPlugin HookはDDL、backfill、manifest migrationを実行しません
 - 壊れたmanifestや未登録workspaceは`doctor/status`でactive扱いにしません
