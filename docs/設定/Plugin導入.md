@@ -5,7 +5,7 @@ ToolUseProxyのCodex Pluginは、repository全体ではなく、生成時にallo
 ## 現在のsupport範囲
 
 - Python 3.11 / 3.12。3.13以降は現在未対応
-- macOS: local package、relocated Plugin bundle、Codex CLIのisolated marketplace install、alpha.1→alpha.8 upgrade / safe rollbackを検証。Python 3.12 package smokeはCIで継続確認
+- macOS: local package、relocated Plugin bundle、Codex CLIのisolated marketplace install、alpha.1およびstale alpha.8→alpha.9 upgrade / safe rollbackを検証。Python 3.12 package smokeはCIで継続確認
 - Linux: Ubuntu CIでPython 3.11 / 3.12のfull suite、package、relocated Plugin bundle、wheelのcheckout外実行を検証。Codex CLI marketplace installの実環境E2Eは未検証
 - Windows: `py -3.11`を使うlauncherを同梱するexperimental範囲。実機検証は未完了で、protected-source登録workflow全体は現在未対応
 - Hookは常にlocal-only。remote embeddingとtelemetryはなし。実験的なExternality Judgeを別途明示設定すると、Hookは値非保持要約をlocal queueへ保存し、初見unknown＋protected flowを保守的にdeny。選択済みproviderへの送信はHook外workerの明示実行時だけ
@@ -25,14 +25,14 @@ alphaのthreat modelは、Pluginやcoding agentの無承認manifest変更、stal
 
 ## 現在versionと更新
 
-現在の公開版は[`0.1.0-alpha.8`](https://github.com/mani1261790/ToolUseProxy/releases/tag/v0.1.0-alpha.8)です。`public-alpha`から配布し、既知adapter、bounded static analysis、protected unknownの保守的deny、値非保持queue、Hook外Codex judge、人間review済みruleからなるExternality Protectionを含みます。この機能は既定offで、LLM verdictからallow ruleを自動作成しません。
+現在の公開版は[`0.1.0-alpha.9`](https://github.com/mani1261790/ToolUseProxy/releases/tag/v0.1.0-alpha.9)です。`public-alpha`から配布し、既知adapter、bounded static analysis、安全に確認できないexternal payloadのfail-closed、値非保持queue、Hook外Codex judge、人間review済みruleからなるExternality Protectionを含みます。通常setupはlocal判定を有効化しますが、LLM providerは既定offで、LLM verdictからallow ruleを自動作成しません。
 
 Codex CLIはPluginごとの自動更新commandではなく、登録済みGit marketplaceを明示的に更新する`codex plugin marketplace upgrade`を提供します。moving refを登録している場合、更新されたmarketplace snapshotからinstall済みPluginも置き換わります。ToolUseProxyは次の2方式を分けます。
 
 | 方式 | `--ref` | 用途 | 更新 |
 | --- | --- | --- | --- |
 | public alpha更新チャンネル | `public-alpha` | 通常のdogfood / pilot | `marketplace upgrade`で明示更新 |
-| immutable version固定 | `v0.1.0-alpha.8` | 再現実験、監査、rollback | tagは動かないため自動的に別versionへ進まない |
+| immutable version固定 | `v0.1.0-alpha.9` | 再現実験、監査、rollback | tagは動かないため自動的に別versionへ進まない |
 
 `public-alpha`はreview済み・CI green・公開済みのalpha release commitだけへfast-forwardする保護branchです。開発途中の`main`を実行元にはしません。更新は自動ではなく、ユーザーがcommandを実行した時だけ行われます。
 
@@ -52,10 +52,10 @@ codex plugin add tooluseproxy@tooluseproxy
 versionを固定する場合は最初のcommandを次に置き換えます。
 
 ```bash
-codex plugin marketplace add mani1261790/ToolUseProxy --ref v0.1.0-alpha.8
+codex plugin marketplace add mani1261790/ToolUseProxy --ref v0.1.0-alpha.9
 ```
 
-install後はCodexが表示するPlugin source、version、5つのHook definition（SessionStart / SubagentStart / PreToolUse / PostToolUse / Stop）を確認してtrustします。ToolUseProxyはこのreviewを迂回しません。以前trustしたHookでも、matcher、command、sourceなどの定義が変わると`modified`になり、再reviewが必要です。release artifact、checksum、SBOM、release notesは[`v0.1.0-alpha.8`](https://github.com/mani1261790/ToolUseProxy/releases/tag/v0.1.0-alpha.8)で確認できます。
+install後はCodexが表示するPlugin source、version、5つのHook definition（SessionStart / SubagentStart / PreToolUse / PostToolUse / Stop）を確認してtrustします。ToolUseProxyはこのreviewを迂回しません。以前trustしたHookでも、matcher、command、sourceなどの定義が変わると`modified`になり、再reviewが必要です。release artifact、checksum、SBOM、release notesは[`v0.1.0-alpha.9`](https://github.com/mani1261790/ToolUseProxy/releases/tag/v0.1.0-alpha.9)で確認できます。
 
 ### CLIで更新する
 
@@ -321,7 +321,7 @@ sh "<PLUGIN_ROOT>/hooks/run_cli.sh" uninstall apply \
 
 削除対象はSQLite database / sidecar、migration backup、manifest backupだけです。管理外fileは残し、plan後に内容が変わった場合はstale tokenを拒否します。workspace manifestやprotected source本体、symlink先、package codeは削除しません。secure eraseやfilesystem snapshotの削除は保証しません。
 
-alpha.1からalpha.8へのupgrade / safe rollback手順と検証結果は[Pluginライフサイクル](../運用/Pluginライフサイクル.md)を参照してください。将来versionとcross-platformでの反復は引き続きpublic alphaの検証課題です。
+alpha.1およびstale alpha.8からalpha.9へのupgrade / safe rollback手順と検証結果は[Pluginライフサイクル](../運用/Pluginライフサイクル.md)を参照してください。将来versionとcross-platformでの反復は引き続きpublic alphaの検証課題です。
 
 pre-release候補で実際のHook trust、agent説明、実tool invocationを検証するときは、通常workspaceや実secretを使わず、[Pluginドッグフードのmanual Phase B](../運用/Pluginドッグフード.md#manual-phase-b)を実行します。prepare出力はlocal pathを含むため公開せず、raw値とpathを除外したverify結果だけをrelease evidenceとして扱います。
 

@@ -8727,6 +8727,39 @@ class InformationFlowTest(unittest.TestCase):
         )
         self.assertEqual("function", pre_tool_adapter("exec"))
         self.assertEqual("function", pre_tool_adapter("Search"))
+        self.assertIsNone(pre_tool_adapter("Read"))
+        self.assertIsNone(pre_tool_adapter("Grep"))
+        self.assertIsNone(pre_tool_adapter("Glob"))
+
+    def test_unverified_function_tool_fails_closed_under_exact_profile(self) -> None:
+        workspace = self._write_runtime_source_config()
+        event = self._record(
+            "pre_tool_use",
+            "unknown-function-public",
+            "custom_publish",
+            tool_input={"message": "PUBLIC"},
+            cwd=str(workspace),
+        )
+
+        output = evaluate_pre_tool_hook_policy(
+            self.store,
+            workspace,
+            current_event=event,
+            sink_payload_exact_enforcement_enabled=True,
+            externality_decision=conservative_function_tool_decision(
+                event.tool_name
+            ),
+            enabled_adapters=frozenset({"bash", "mcp", "function"}),
+        )
+
+        self.assertEqual(
+            "deny",
+            output["hookSpecificOutput"]["permissionDecision"],
+        )
+        self.assertIn(
+            "送信内容を安全に確認しきれなかった",
+            output["hookSpecificOutput"]["permissionDecisionReason"],
+        )
 
     def test_pre_tool_policy_only_evaluates_current_bash_sink(self) -> None:
         self._write_runtime_source_config()

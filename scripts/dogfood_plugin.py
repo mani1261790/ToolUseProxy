@@ -591,6 +591,34 @@ def _run_dogfood(installation_mode: str) -> dict[str, Any]:
         )
         _assert_denied(protected_mcp, "protected_mcp")
 
+        stage = "runtime_enforcement_verify"
+        runtime_verified = _run_plugin_json(
+            cli_launcher,
+            [
+                "setup",
+                "verify",
+                "file-payload-exact",
+                "--workspace",
+                str(workspace),
+                "--data-dir",
+                str(data_dir),
+                "--json",
+            ],
+            cwd=workspace,
+            env=plugin_environment,
+            stage=stage,
+            captured_outputs=captured_outputs,
+        )
+        runtime_evidence = runtime_verified.get("runtime_enforcement")
+        if (
+            not isinstance(runtime_evidence, dict)
+            or runtime_evidence.get("status") != "protected_block_observed"
+            or runtime_evidence.get("hook_delivery_verified") is not True
+            or runtime_evidence.get("protected_block_verified") is not True
+            or runtime_evidence.get("evidence_is_value_free") is not True
+        ):
+            raise DogfoodFailure(stage, "runtime_enforcement_not_verified")
+
         stop = _run_hook_json(
             hook_launcher,
             "stop",
@@ -713,6 +741,7 @@ def _run_dogfood(installation_mode: str) -> dict[str, Any]:
                 "negative_reviews_suppressed": True,
                 "setup_profile_applied": True,
                 "setup_profile_verified": True,
+                "runtime_enforcement_verified": True,
                 "public_file_payload_executed": True,
                 "protected_file_payload_denied_before_execution": True,
                 "public_bash_allowed": True,

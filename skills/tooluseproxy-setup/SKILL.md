@@ -266,6 +266,17 @@ do not report missing initial output as a command failure.
    end-to-end pass. Start a fresh task after Hook review and obtain separate
    Hook probe evidence before making any runtime-protection claim.
 
+   Interpret `runtime_enforcement.status` literally:
+
+   - `requires_fresh_hook_probe`: no current-detector PreToolUse delivery is
+     proven; report setup only.
+   - `hook_delivery_observed_block_not_tested`: current PreToolUse delivery is
+     proven, but a protected block is not; do not claim enforcement passed.
+   - `protected_block_observed`: current-detector delivery and at least one
+     PreToolUse block are present in the value-free local audit. This still does
+     not prove all five Hook trust states; combine it with the user's Hook review
+     before reporting an end-to-end pass.
+
    These are the normal two approval screens. Never add `--data-dir` derived
    from a guessed path. If either command reports that the installed Plugin
    identity or data directory cannot be verified, lead with the setup-failure

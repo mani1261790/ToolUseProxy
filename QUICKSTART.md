@@ -24,10 +24,12 @@ MarketplaceとPluginのインストールは、Codex環境ごとに1回だけで
 特定versionへ固定する場合は、1つ目のコマンドで`public-alpha`の代わりにimmutable tagを指定します。
 
 ```bash
-codex plugin marketplace add mani1261790/ToolUseProxy --ref v0.1.0-alpha.8
+codex plugin marketplace add mani1261790/ToolUseProxy --ref v0.1.0-alpha.9
 ```
 
 ## 3. 5つのHookを確認してTrustする
+
+`alpha.8`以前を使っていた場合は、先に`codex plugin marketplace upgrade tooluseproxy`を実行し、`codex plugin list --json`で`0.1.0-alpha.9`になったことを確認してください。同じ版番号の古い3 Hook cacheが残る問題を避けるため、alpha.8のまま使い続けないでください。
 
 Codexが表示するHookを、次の条件と照合してください。
 

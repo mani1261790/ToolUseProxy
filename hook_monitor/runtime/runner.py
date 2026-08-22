@@ -87,10 +87,7 @@ def run_hook(
                 )
             )
             return 0
-    bounded_pre_tool_input = (
-        phase == "pre_tool_use"
-        and _pre_tool_policy_enabled()
-    )
+    bounded_pre_tool_input = phase == "pre_tool_use"
     raw_payload = sys.stdin.buffer.read(
         PRE_TOOL_RAW_JSON_MAX_BYTES + 1
         if bounded_pre_tool_input
@@ -412,11 +409,6 @@ def _configured_workspace_root(cwd: str | None, db_path: Path) -> str | None:
 def _stop_policy_enabled() -> bool:
     configured = os.environ.get("TOOLUSEPROXY_STOP_POLICY", "1")
     return configured.lower() not in {"0", "false", "no", "off"}
-
-
-def _pre_tool_policy_enabled() -> bool:
-    configured = os.environ.get("TOOLUSEPROXY_PRE_TOOL_POLICY", "0")
-    return configured.lower() in {"1", "true", "yes", "on"}
 
 
 def _effective_runtime_settings(

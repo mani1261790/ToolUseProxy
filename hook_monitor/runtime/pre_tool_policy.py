@@ -54,7 +54,9 @@ from hook_monitor.runtime.tool_compat import (
 
 
 DEFAULT_PRE_TOOL_ADAPTERS = frozenset({"bash"})
-LOCAL_FILE_TOOL_NAMES = frozenset({"apply_patch", "edit", "write"})
+LOCAL_FILE_TOOL_NAMES = frozenset(
+    {"apply_patch", "edit", "glob", "grep", "read", "write"}
+)
 MCP_INPUT_LIMIT_DENY_REASON = (
     "ToolUseProxy blocked this MCP call because its input exceeds bounded "
     "static-analysis limits"
@@ -360,6 +362,41 @@ def evaluate_pre_tool_hook_policy(
                     db_path=store.db_path,
                     analysis_run_id=runtime_result.analysis_run.analysis_run_id,
                 )
+    if (
+        sink_payload_exact_enforcement_enabled
+        and current_adapter == "function"
+        and runtime_result.source_chunks
+    ):
+        conservative_decisions = build_unverified_external_sink_decisions(
+            sink_candidates=tuple(current_sinks),
+            analysis_run_id=runtime_result.analysis_run.analysis_run_id,
+            protected_source_node_ids=tuple(
+                chunk.chunk_id for chunk in runtime_result.source_chunks
+            ),
+            verified_sink_node_ids=frozenset(),
+        )
+        conservative_selected = select_strongest_decision(
+            conservative_decisions,
+            "PreToolUse",
+        )
+        if (
+            conservative_selected is not None
+            and conservative_selected.action == "block"
+        ):
+            try:
+                store_policy_decision(
+                    store,
+                    conservative_selected,
+                    runtime_result.analysis_run.analysis_run_id,
+                )
+            except Exception:
+                pass
+            return render_codex_hook_output(
+                conservative_selected,
+                "PreToolUse",
+                db_path=store.db_path,
+                analysis_run_id=runtime_result.analysis_run.analysis_run_id,
+            )
     return hook_output
 
 
