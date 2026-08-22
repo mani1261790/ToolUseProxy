@@ -138,9 +138,9 @@ prepareは同じrootへmode `0600`の`phase-b-prompt.txt`、`phase-b-guide.md`�
 7. public fixtureを絶対pathのfake sinkへ送り、false blockがなくmarkerが作られることを確認する
 8. synthetic protected fixtureを静的なliteralとして同じfake sinkへ送るtool callを依頼し、deny時のmarkerが0であることを確認する
 
-Phase B harnessはPATH上の`curl`を信用しません。promptに記録された絶対pathのfake sinkだけを使い、fake sinkはnetworkへ接続せず、呼び出された事実だけをmarkerへ書きます。public callはmarkerを作り、protected callはPreToolUse denyによりmarkerを作らないことが期待結果です。system curl、別pathのcurl、変更されたfake sinkを使ったrunはmarkerの有無にかかわらず不合格です。
+Phase B harnessはPATH上の`curl`を信用しません。promptに記録された絶対pathのfake sinkだけを使い、fake sinkはnetworkへ接続せず、呼び出された事実だけをmarkerへ書きます。public callはmarkerを作り、static / dynamic protected callはPreToolUse denyによりそれぞれのmarkerを作らないことが期待結果です。system curl、別pathのcurl、変更されたfake sinkを使ったrunはmarkerの有無にかかわらず不合格です。
 
-protected fixtureはHookが実行前に観測できる静的なtool inputで試します。`$TOKEN`、`source .env`、command substitution、stdin、`@file`はシェル実行後に値が決まるため、静的literalのprecisionを測るこのPhase B caseへ混ぜません。これらの値を実行・展開して漏えいを証明する機能は未対応ですが、既知external commandのpayloadを完全確認できない場合はprotected sourceが有効なら実行前denyします。別のdynamic-shell回帰でdeny、外部side effect 0、raw exposure 0を確認します。実行後、ユーザー自身の確認結果を明示してverifierを実行します。
+static protected fixtureはHookが実行前に観測できるfile-backed inputでexact matchを試します。alpha.9のcase v2では、`source .env`後の`$TOKEN`を同じfake sinkへ渡す二行commandも、値を読み取り・展開せず実行します。このdynamic callは漏えいを確定する試験ではなく、payloadを完全確認できない既知external commandがfail-closedになり、PreToolUse 1、PostToolUse 0、専用side effect 0、raw exposure 0となることを確認する試験です。command substitution、stdin、任意の別表現はallowlistへ広げません。実行後、ユーザー自身の確認結果を明示してverifierを実行します。
 
 `init`、`doctor`、`status`、`protect scan`のどれかが失敗または非正常statusを返したrunでは、public / protected callへ進みません。後からDBが自然復旧しても、そのrunを成功証拠へ変更しません。原因調査またはfresh prepareを別に行います。
 
@@ -160,8 +160,8 @@ verifierは次をCodex session JSONL、SQLite、manifest、fake sink hash、mark
 - bounded scanまたはexplicit suggestionのcandidateと明示decision
 - `protected_sources.json`へのexact source登録
 - prepare時と実sessionのCodex version、workspace
-- public / protected tool callが同じ絶対pathのfake sinkを使ったこと
-- 実Codex task由来のpublic / protected `PreToolUse`
+- public / static protected / dynamic protected tool callが同じ絶対pathのfake sinkを使ったこと
+- 実Codex task由来のpublic / static protected / dynamic protected `PreToolUse`
 - public callだけに対応する`PostToolUse`とlocal marker
 - protected callの`block` decision、`PostToolUse`不在、side-effect marker 0
 - session call IDとHook DBのtool use ID
