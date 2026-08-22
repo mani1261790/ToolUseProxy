@@ -242,8 +242,8 @@ python3.11 scripts/manual_sink_payload_shadow.py desktop-preflight
 
 2026-07-27時点のlocal環境では、isolated `CODEX_HOME`とopt-in環境変数の両方がDesktop Hookへ届くことを証明できるlauncherが見つからないため、`unsupported: isolated_desktop_hook_environment_unavailable`です。これは「DesktopでPluginを使えない」という意味ではなく、「CLI用の隔離harnessをそのままDesktopへ流用できない」という意味です。
 
-workspace単位のruntime設定とTUI harnessへの接続に加え、Desktop専用Phase B harnessも実装済みです。macOS Desktop実機でPlugin source / version、3 Hookのreview、doctor / status、public allow、protected exact block、marker / DB / session照合、disable / remove / 同一版reinstall、異versionmigration、backup rollback、Disableなしの直接Removeを確認しました。2026-08-09のfresh setup profile runは承認2回、public 1、protected 0、exact block 1、raw exposure 0で正式な`passed`です。実行手順、aggregate evidence、共有環境の復元条件は[Codex Desktop Phase B](DesktopPhaseB.md)を正本にします。
+workspace単位のruntime設定とTUI harnessへの接続に加え、Desktop専用Phase B harnessも実装済みです。macOS Desktop実機でPlugin source / version、5 Hookのreview、setup apply / verify、public allow、protected exact block、marker / DB / session照合、disable / remove / 同一版reinstall、異versionmigration、backup rollback、Disableなしの直接Removeを確認しました。2026-08-22のalpha.8 fresh runは承認2回、public 1、protected 0、exact block 1、raw exposure 0、reusable permission 0で正式な`passed`です。実行手順、aggregate evidence、共有環境の復元条件は[Codex Desktop Phase B](DesktopPhaseB.md)を正本にします。
 
 verify結果を保存した後は、prepare出力の`logout_command`でisolated `CODEX_HOME`からlogoutします。失敗調査中はrootを保持できますが、調査完了後は認証cacheとraw local sessionを含むため、必要なaggregate evidenceを残してrootを明示的に削除します。削除はverifierが自動で行いません。
 
-immutable alpha.1と現在release候補のupgrade / rollback / disable / removeは[Pluginライフサイクル](Pluginライフサイクル.md)の独立runnerで検証します。
+immutable alpha.1と現在のalpha.8 releaseのupgrade / rollback / disable / removeは[Pluginライフサイクル](Pluginライフサイクル.md)の独立runnerで検証します。

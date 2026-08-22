@@ -4,7 +4,7 @@ Issue [#53](https://github.com/mani1261790/ToolUseProxy/issues/53)では、CLI T
 
 ## 現在地
 
-専用harnessは実装済みです。2026-07-28以降、Codex Desktop同梱のCodexで人による実機確認を行いました。2026-08-09までの結果は次のとおりです。
+専用harnessは実装済みです。2026-07-28以降、Codex Desktop同梱のCodexで人による実機確認を行いました。2026-08-22までの結果は次のとおりです。
 
 | 段階 | 結果 |
 | --- | --- |
@@ -18,6 +18,7 @@ Issue [#53](https://github.com/mani1261790/ToolUseProxy/issues/53)では、CLI T
 | 個別commandの承認UI | 表示を確認。短いplain textで内容は理解できたが、初期設定で約10回の承認が必要 |
 | 保存済み2026-08-09 run | 最新exit-code wrapperを厳密に解析し、public 1 / protected 0 / exact block 1 / raw exposure 0で正式な`passed` |
 | 2-command setup | fresh Desktopで承認UI 2回を確認。説明はある程度理解可能。public 1 / protected 0 / exact block 1 / raw exposure 0で正式な`passed` |
+| alpha.8の5 Hook fresh run | SessionStart / SubagentStart / PreToolUse / PostToolUse / Stopをtrust。承認UI 2回、public 1 / protected 0 / exact block 1 / raw exposure 0、reusable permission 0で正式な`passed` |
 | public / protected call | publicは実行、protectedはPreToolUseが実行前block |
 | disable / remove / 同一版reinstall | 管理DBとruntime設定を保持したまま完走 |
 | final cleanup | Plugin、Marketplace、管理データ、synthetic workspaceを削除。他のPlugin / Marketplace一覧は開始時と一致 |
@@ -27,7 +28,9 @@ Issue [#53](https://github.com/mani1261790/ToolUseProxy/issues/53)では、CLI T
 
 Desktopのtask履歴で使われる`exec_command`は、Hook matcherのtool名ではありません。CodexがPreToolUse / PostToolUseへ渡すcanonical名はDesktopでも`Bash`です。したがってPluginのmatcherは`Bash`を使い、`exec_command`へ変更しません。ToolUseProxy内部の互換レイヤーはsession由来payloadなどの解析用として保持しますが、Hookを有効にする条件とは分けます。
 
-最新runでは、3 Hookの`trustStatus`と定義hashを機械確認した後、値を含まない専用markerでPreToolUse、PostToolUse、Stop各1件を確認できました。markerはrun固有nonceでhash化したsession IDとtool-use IDに結び付き、別taskのHook eventでは合格できません。UIに診断が表示されるかどうかは合格条件にしていません。
+2026-08-09のrunでは、3 Hookの`trustStatus`と定義hashを機械確認した後、値を含まない専用markerでPreToolUse、PostToolUse、Stop各1件を確認できました。markerはrun固有nonceでhash化したsession IDとtool-use IDに結び付き、別taskのHook eventでは合格できません。UIに診断が表示されるかどうかは合格条件にしていません。
+
+2026-08-22のalpha.8 fresh runでは、5 Hookをtrustした状態で同じ証拠境界を再検証しました。`true` probeは1回だけ実行され、PreToolUse / PostToolUse / Stopが各1回、SessionStart / SubagentStartも現在定義として確認されました。setup applyとread-only verifyで承認UIは合計2回、public callは実行、protected callは実行前blockでした。最終verifyは全26 checksがtrueで、public side effect 1、protected side effect 0、exact block 1、raw exposure 0、reusable permission 0です。Plugin、marketplace、managed dataは最終cleanupで削除し、無関係なPlugin状態は維持しました。
 
 以前のrunは、`workspace-write`のDesktop taskからworkspace外の`PLUGIN_DATA`へ通常権限で`init`し、OS拒否で停止しました。setup skillとPhase B promptを直した最新runでは、Plugin dataを実際に触る10コマンドすべてが`require_escalated`、空でない日本語の理由、再利用可能な`prefix_rule`なしで発行され、初期化からprotected blockまで完走しました。
 
