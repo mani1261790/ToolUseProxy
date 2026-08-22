@@ -4,7 +4,7 @@ ToolUseProxyは、AI coding agentがローカルの非公開情報を外部へ�
 
 たとえば、未公開コード、研究ノート、`.env`、設計方針などを`protected source`として登録します。ToolUseProxyはCodexのtool useをローカルで観測し、外部送信候補へ保護情報が到達していないかを確認します。
 
-本プロジェクトは[SecHack365](https://sechack365.nict.go.jp/)での研究・開発成果物です。現在の公開版は[`0.1.0-alpha.9`](https://github.com/mani1261790/ToolUseProxy/releases/tag/v0.1.0-alpha.9)です。研究用public alphaであり、完成したDLP製品ではありません。
+本プロジェクトは[SecHack365](https://sechack365.nict.go.jp/)での研究・開発成果物です。`0.1.0-alpha.9`はrelease候補の検証中です。既存の`alpha.8`には下記の問題があるため、新規installと通常利用を一時停止してください。研究用public alphaであり、完成したDLP製品ではありません。
 
 > **alpha.8以前から更新する場合:** `alpha.8`には、未対応curl optionや大きなfile payloadを安全に確認できないとき、blockせず実行を許す問題がありました。また、正式公開前の異なる3 Hook artifactが同じ`alpha.8`版番号でcacheに残る場合があります。`alpha.9`へ更新し、5 Hookを改めて確認してください。
 
@@ -94,7 +94,7 @@ adapterにない未知のcallは、raw commandやpathなどを含まない構造
 | --- | --- | --- |
 | Trace / Detect | 中核実装済み | tool I/O、file operation、内容対応から観測可能なprovenanceを再構成 |
 | Stop | alpha実装済み | 明示的に有効化したworkspaceで、既知adapterと未知のローカルToolを実行前判定。Stop再確認も提供 |
-| Plugin配布 | alpha.9公開済み | stale alpha.8からの別version upgrade、clean artifact、lifecycle、公開channelからの隔離installを検証 |
+| Plugin配布 | alpha.9 release gate中 | stale alpha.8からの別version upgrade、clean artifact、lifecycle、隔離installは検証済み。fresh Desktop確認後に公開channelを再開 |
 | 外部性判定 | local保護は通常setupで有効 | adapter、bounded static analysis、未確認external payloadのfail-closed、Codex-only background judge、人間review済みrule。LLM providerは既定off |
 | 実network観測 | 評価専用 | Codex network proxyのOTLP eventは実行後かつtool単位join不能のため、production blockには不採用 |
 | hosted tool境界 | 緩和のみ | SessionStart / SubagentStartでprotected contentをhosted toolへ渡さないdeveloper contextを注入。Hook非可視のため技術的遮断ではない |

@@ -4,7 +4,7 @@ ToolUseProxy is a local-first research implementation for tracing information fl
 
 This project is a research and development outcome of [SecHack365](https://sechack365.nict.go.jp/).
 
-The current public release is [`0.1.0-alpha.9`](https://github.com/mani1261790/ToolUseProxy/releases/tag/v0.1.0-alpha.9). It fails closed when a Hook-visible external payload cannot be inspected completely, while keeping LLM classification outside Hooks and requiring human review before any local allow rule is created. It is a research alpha, not a complete DLP system.
+`0.1.0-alpha.9` is undergoing release-candidate validation. New installation and normal use are temporarily paused because the existing alpha.8 release has the issue described below. Alpha.9 fails closed when a Hook-visible external payload cannot be inspected completely, while keeping LLM classification outside Hooks and requiring human review before any local allow rule is created. It is a research alpha, not a complete DLP system.
 
 Users upgrading from alpha.8 must upgrade to alpha.9 and review all five Hooks again. Alpha.8 could allow unsupported curl options or oversized file payloads without comparison, and an earlier three-Hook artifact reused the same alpha.8 version identifier.
 

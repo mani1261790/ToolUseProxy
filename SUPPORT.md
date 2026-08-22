@@ -1,6 +1,6 @@
 # サポート範囲と既知の制限
 
-ToolUseProxy `0.1.0-alpha.9`は研究用public alphaとして`public-alpha` channelから配布しています。本番環境向けのSLA、security certification、完全なDLP、全toolの遮断保証は提供しません。対応と未対応をsilent fallbackで同一視せず、次の範囲を現在の契約とします。
+ToolUseProxy `0.1.0-alpha.9`はrelease候補の検証中です。既存の`alpha.8`にfail-open問題があるため、fresh Desktop gateと公開昇格が完了するまで新規installと通常利用を一時停止しています。本番環境向けのSLA、security certification、完全なDLP、全toolの遮断保証は提供しません。対応と未対応をsilent fallbackで同一視せず、次の範囲を現在の契約とします。
 
 ## 実行環境
 

@@ -212,7 +212,7 @@ do not report missing initial output as a command failure.
    If an approved manual workflow supplies an exact `file-payload-exact`
    setup-profile command and expected revision, use that one command instead
    of separate `init` and four `config set` commands. The profile is fixed to
-   `pre-tool-policy`, `file-payload-shadow`, and
+   `pre-tool-policy`, `file-payload-shadow`,
    `file-payload-exact-enforcement`, and `externality-protection` all enabled;
    it accepts no arbitrary settings object. Enabling externality protection
    activates local static/cache classification and conservative handling of

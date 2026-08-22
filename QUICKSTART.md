@@ -1,6 +1,8 @@
 # ToolUseProxy 5分クイックスタート
 
-この手順では、検証済みの公開alphaを保護branch `public-alpha`からインストールします。開発中の変更を含む`main`は、通常利用のインストール元にしないでください。
+> **一時停止中:** `alpha.9`のfresh Desktop release gateが完了するまで、新規installと`public-alpha`からの通常利用を開始しないでください。既存の`alpha.8`には安全に確認できない外部payloadを許可する問題があります。
+
+release gate完了後、この手順では検証済みの公開alphaを保護branch `public-alpha`からインストールします。開発中の変更を含む`main`は、通常利用のインストール元にしないでください。
 
 ## 1. 必要なもの
 

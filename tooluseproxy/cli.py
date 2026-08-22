@@ -781,20 +781,20 @@ def _run_setup_verify(args: argparse.Namespace) -> int:
                 for key in RUNTIME_SETTING_KEYS
                 if effective.settings[key].source == "invalid_environment"
             )
-        settings_payload = {
-            "ok": not invalid_environment,
-            "detail": (
-                "workspace runtime settings valid"
-                if not invalid_environment
-                else "invalid environment overrides: "
-                + ", ".join(invalid_environment)
-            ),
-            "settings_schema_version": settings.schema_version,
-            "settings_revision": settings.revision,
-            "settings": [
-                asdict(effective.settings[key]) for key in RUNTIME_SETTING_KEYS
-            ],
-        }
+            settings_payload = {
+                "ok": not invalid_environment,
+                "detail": (
+                    "workspace runtime settings valid"
+                    if not invalid_environment
+                    else "invalid environment overrides: "
+                    + ", ".join(invalid_environment)
+                ),
+                "settings_schema_version": settings.schema_version,
+                "settings_revision": settings.revision,
+                "settings": [
+                    asdict(effective.settings[key]) for key in RUNTIME_SETTING_KEYS
+                ],
+            }
 
         plugin_artifact = _inspect_plugin_artifact()
 
@@ -928,8 +928,9 @@ def _inspect_plugin_artifact() -> dict[str, object]:
     manifest_path = plugin_root / ".codex-plugin" / "plugin.json"
     hooks_path = plugin_root / "hooks" / "hooks.json"
     try:
+        hooks_bytes = hooks_path.read_bytes()
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        hook_manifest = json.loads(hooks_path.read_text(encoding="utf-8"))
+        hook_manifest = json.loads(hooks_bytes.decode("utf-8"))
         hooks = hook_manifest.get("hooks")
         if not isinstance(manifest, dict) or not isinstance(hooks, dict):
             raise ValueError("Plugin manifests must be JSON objects")
@@ -959,7 +960,7 @@ def _inspect_plugin_artifact() -> dict[str, object]:
             "plugin_version": manifest_version,
             "hook_events": sorted(events),
             "hook_definition_count": definition_count,
-            "hooks_sha256": hashlib.sha256(hooks_path.read_bytes()).hexdigest(),
+            "hooks_sha256": hashlib.sha256(hooks_bytes).hexdigest(),
         }
     except (OSError, ValueError, json.JSONDecodeError):
         return {
@@ -981,7 +982,7 @@ def _runtime_enforcement_evidence(
     if workspace_id is None or not db_path.is_file():
         return _empty_runtime_enforcement_evidence()
     try:
-        with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as connection:
+        with sqlite3.connect(f"{db_path.as_uri()}?mode=ro", uri=True) as connection:
             latest_pre_tool = connection.execute(
                 """
                 SELECT MAX(recorded_at)

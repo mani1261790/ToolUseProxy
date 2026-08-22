@@ -202,8 +202,12 @@ def _resolve_file_backed_segment(
         if word in _KNOWN_ONE_ARGUMENT_OPTIONS:
             if index + 1 >= len(words) or not words[index + 1].is_static_literal:
                 return _unsupported(segment, "dynamic_curl_option_argument")
+            if word in {"-H", "--header"} and words[index + 1].value.startswith("@"):
+                return _unsupported(segment, "header_file_reference_unsupported")
             index += 2
             continue
+        if word.startswith("--header=@"):
+            return _unsupported(segment, "header_file_reference_unsupported")
         if word.startswith("--") and any(
             word.startswith(f"{option}=")
             for option in _KNOWN_ONE_ARGUMENT_OPTIONS
@@ -218,6 +222,8 @@ def _resolve_file_backed_segment(
             )
             and not word.startswith("--")
         ):
+            if word.startswith("-H@"):
+                return _unsupported(segment, "header_file_reference_unsupported")
             index += 1
             continue
 
