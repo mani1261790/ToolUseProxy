@@ -1,6 +1,6 @@
 # Codex Desktop Phase B
 
-Issue [#53](https://github.com/mani1261790/ToolUseProxy/issues/53)では、CLI TUIの結果を流用せず、Codex Desktop / GUI上のPlugin install、Hook review、public allow、protected block、disable / remove、同一版reinstallを人と実証します。
+Issue [#53](https://github.com/mani1261790/ToolUseProxy/issues/53)では、CLI TUIの結果を流用せず、Codex Desktop / GUI上のPlugin install、Hook review、public allow、static protected block、dynamic protected fail-closed、disable / remove、同一版reinstallを人と実証します。
 
 ## 現在地
 
@@ -31,6 +31,8 @@ Desktopのtask履歴で使われる`exec_command`は、Hook matcherのtool名で
 2026-08-09のrunでは、3 Hookの`trustStatus`と定義hashを機械確認した後、値を含まない専用markerでPreToolUse、PostToolUse、Stop各1件を確認できました。markerはrun固有nonceでhash化したsession IDとtool-use IDに結び付き、別taskのHook eventでは合格できません。UIに診断が表示されるかどうかは合格条件にしていません。
 
 2026-08-22のalpha.8 fresh runでは、5 Hookをtrustした状態で同じ証拠境界を再検証しました。`true` probeは1回だけ実行され、PreToolUse / PostToolUse / Stopが各1回、SessionStart / SubagentStartも現在定義として確認されました。setup applyとread-only verifyで承認UIは合計2回、public callは実行、protected callは実行前blockでした。最終verifyは全26 checksがtrueで、public side effect 1、protected side effect 0、exact block 1、raw exposure 0、reusable permission 0です。Plugin、marketplace、managed dataは最終cleanupで削除し、無関係なPlugin状態は維持しました。
+
+alpha.9の次回fresh runからcase IDを`desktop-file-payload-exact-dynamic-v2`へ更新します。従来のstatic protected fileに加え、同じ登録済みdotenvを`source`した次行で`$PHASE_B_TOKEN`をlocal fake sinkへ渡すdynamic protected callを第三のexact callとして固定します。値は読み取り・展開・表示せず、sessionの改行をflattenしないexact command、PreToolUse 1 / PostToolUse 0、fail-closed decision 1、専用marker 0、raw exposure 0を別々に照合します。過去のalpha.8合格はこのdynamic caseの証拠へ流用しません。
 
 以前のrunは、`workspace-write`のDesktop taskからworkspace外の`PLUGIN_DATA`へ通常権限で`init`し、OS拒否で停止しました。setup skillとPhase B promptを直した最新runでは、Plugin dataを実際に触る10コマンドすべてが`require_escalated`、空でない日本語の理由、再利用可能な`prefix_rule`なしで発行され、初期化からprotected blockまで完走しました。
 
@@ -78,7 +80,7 @@ Desktop / GUI上で今回のfile-backed exact-only保護が動くことは確認
 - workspace外のPlugin dataへ書くsetup commandは通常権限で先に試さず、exactな1コマンドだけのsandbox昇格を要求する
 - test sinkはnetworkへ接続せず、synthetic workspace内のmarkerだけを更新する
 - verifierはDesktop session、Hook定義hash、dispatch marker、Hook DB、side-effect marker、Plugin source / versionを相互照合する
-- verifierは全tool inputも確認し、指定context / setup skillのread、exactなToolUseProxy setup command、public / protected test call以外のWeb・MCP・編集・任意shellが1件でもあれば不合格にする
+- verifierは全tool inputも確認し、指定context / setup skillのread、exactなToolUseProxy setup command、public / static protected / dynamic protected test call以外のWeb・MCP・編集・任意shellが1件でもあれば不合格にする。dynamic callは改行を含む二行全体が完全一致し、`;`への置換や別sourceを拒否する
 - 本試験promptは承認文の正解を埋め込まない。通常利用と同じく、インストール済みsetup skillだけから説明を組み立てさせ、verifierは「行うこと」「変更されるもの」「外部通信」「確認が必要な理由」「利用者への直接の質問」が順番どおり揃い、操作内容と矛盾しないことを確認する
 - cleanup-planでmanaged dataの件数・file数・byte数・未管理entry数とexact uninstall tokenを固定し、apply中に別の削除planへ差し替えない
 - cleanupはPhase B専用dataとmarketplaceだけを削除し、未管理dataと無関係なPlugin / marketplaceを保持する。途中失敗時はdata削除前後・marketplace削除前後の保存済み段階から再開する
@@ -127,7 +129,7 @@ python3.11 scripts/manual_desktop_phase_b.py checkpoint-hook-probe \
   --root /Users/mani/.tooluseproxy-dogfood/desktop-phase-b-YYYYMMDD
 ```
 
-PreToolUse 1件、PostToolUse 1件、Stop 1件以上、`true` 1件が一致した場合だけ、返された本試験用taskを開きます。probeが失敗した場合はpublic / protected callへ進みません。
+PreToolUse 1件、PostToolUse 1件、Stop 1件以上、`true` 1件が一致した場合だけ、返された本試験用taskを開きます。probeが失敗した場合はpublic / static protected / dynamic protected callへ進みません。
 
 task完了後、理解度を本人の評価で記録します。
 
@@ -207,10 +209,11 @@ abortはPhase B専用のPlugin登録、marketplace、synthetic workspace、生�
 - 無害な`true`のprobeでPreToolUse 1件、PostToolUse 1件、Stop 1件以上
 - public callはPreToolUse、PostToolUse、markerが各1件
 - protected callはPreToolUseとexact blockが各1件、PostToolUseとmarkerが0件
+- dynamic protected callはPreToolUseとfail-closed blockが各1件、PostToolUseと専用markerが0件
 - file payload shadow observationがpublic / protectedの2件
 - workspace runtime設定4項目が有効で、remove / reinstall後も同じrevision
 - assistant、全tool input、tool output、shadow tableへのraw synthetic value露出が0
-- 指定したread / setup / public / protected call以外のtool callが0
+- 指定したread / setup / public / static protected / dynamic protected call以外のtool callが0
 - Plugin dataを触る全CLI callが1回限定の権限昇格、空でない理由、再利用可能なprefixなし
 - Hook review、command承認、block説明を人が理解できる
 - Phase B Plugin / marketplace / managed dataを削除し、開始前の無関係な一覧を保持する
