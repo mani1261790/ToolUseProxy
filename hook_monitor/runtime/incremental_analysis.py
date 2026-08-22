@@ -58,7 +58,7 @@ from hook_monitor.runtime.storage import EventStore
 
 _MCP_PROFILE_GRAPH_VERSION = DEFAULT_MCP_PROFILE_REGISTRY.registry_version.rsplit(":", 1)[-1][:12]
 RUNTIME_GRAPH_DETECTOR_VERSION = (
-    f"runtime-graph-v20-{SIMILARITY_PROFILE_VERSION}-{SOURCE_CHUNKER_VERSION}-"
+    f"runtime-graph-v21-{SIMILARITY_PROFILE_VERSION}-{SOURCE_CHUNKER_VERSION}-"
     f"{BASH_SUBMISSION_EXTRACTOR_VERSION}-"
     f"mcp-profiles-{_MCP_PROFILE_GRAPH_VERSION}"
 )

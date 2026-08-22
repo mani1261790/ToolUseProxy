@@ -6476,13 +6476,13 @@ class InformationFlowTest(unittest.TestCase):
             },
             sink_types,
         )
-        self.assertEqual(6, len(result.sinks))
+        self.assertEqual(8, len(result.sinks))
         self.assertEqual(
             {"payload", "json_key"},
             {sink.metadata.get("argument_fragment_kind") for sink in result.sinks},
         )
 
-    def test_mcp_classifier_uses_token_boundaries_for_read_only_names(self) -> None:
+    def test_mcp_classifier_treats_read_only_calls_as_outbound(self) -> None:
         for tool_name in (
             "mcp__custom__get_posts",
             "mcp__github__list_comments",
@@ -6494,7 +6494,10 @@ class InformationFlowTest(unittest.TestCase):
             "mcp__slack__list_messages",
         ):
             with self.subTest(tool_name=tool_name):
-                self.assertIsNone(classify_mcp_sink_type(tool_name, {}))
+                sink_type = classify_mcp_sink_type(tool_name, {})
+                self.assertIsNotNone(sink_type)
+                assert sink_type is not None
+                self.assertTrue(sink_type.startswith("external_"))
 
         self.assertEqual(
             "external_api_call",
@@ -6557,7 +6560,7 @@ class InformationFlowTest(unittest.TestCase):
             parse_mcp_tool_name(fixture["tool_name"]),
         )
         self.assertEqual(
-            {"external_message", "external_git_publish"},
+            {"external_message", "external_git_publish", "external_api_call"},
             {sink.sink_type for sink in result.sinks},
         )
         self.assertTrue(
@@ -9167,7 +9170,8 @@ class InformationFlowTest(unittest.TestCase):
         )
         self.assertEqual([], self.store.list_policy_decisions())
 
-    def test_pre_tool_policy_allows_read_only_mcp_call(self) -> None:
+    def test_pre_tool_policy_blocks_protected_read_only_mcp_query(self) -> None:
+        workspace = self._write_runtime_source_config()
         self.store.upsert_sources(
             [self._protected_source("private.py")],
             [self._source_chunk()],
@@ -9177,17 +9181,79 @@ class InformationFlowTest(unittest.TestCase):
             "mcp-read-only",
             "mcp__github__get_issue",
             tool_input={"owner": "example", "repo": "repo", "body": SECRET},
+            cwd=str(workspace),
         )
 
         output = evaluate_pre_tool_hook_policy(
             self.store,
-            Path(self.temporary_directory.name),
+            workspace,
             current_event=event,
             enabled_adapters=frozenset({"mcp"}),
         )
 
+        self.assertEqual(
+            "deny",
+            output["hookSpecificOutput"]["permissionDecision"],
+        )
+        self.assertTrue(self.store.list_policy_decisions())
+
+    def test_exact_policy_allows_fully_compared_public_read_only_mcp_query(
+        self,
+    ) -> None:
+        workspace = self._write_runtime_source_config()
+        self.store.upsert_sources(
+            [self._protected_source("private.py")],
+            [self._source_chunk()],
+        )
+        event = self._record(
+            "pre_tool_use",
+            "mcp-public-read-only",
+            "mcp__github__get_issue",
+            tool_input={"owner": "example", "repo": "repo", "query": "public"},
+            cwd=str(workspace),
+        )
+
+        output = evaluate_pre_tool_hook_policy(
+            self.store,
+            workspace,
+            current_event=event,
+            enabled_adapters=frozenset({"mcp"}),
+            sink_payload_exact_enforcement_enabled=True,
+        )
+
         self.assertEqual({}, output)
-        self.assertEqual([], self.store.list_policy_decisions())
+
+    def test_exact_policy_blocks_mcp_when_complete_comparison_fails(self) -> None:
+        workspace = self._write_runtime_source_config()
+        self.store.upsert_sources(
+            [self._protected_source("private.py")],
+            [self._source_chunk()],
+        )
+        event = self._record(
+            "pre_tool_use",
+            "mcp-comparison-failure",
+            "mcp__github__get_issue",
+            tool_input={"owner": "example", "repo": "repo", "query": "public"},
+            cwd=str(workspace),
+        )
+
+        with patch(
+            "hook_monitor.runtime.pre_tool_policy.verify_mcp_payload_against_sources",
+            side_effect=RuntimeError("synthetic comparison failure"),
+        ):
+            output = evaluate_pre_tool_hook_policy(
+                self.store,
+                workspace,
+                current_event=event,
+                enabled_adapters=frozenset({"mcp"}),
+                sink_payload_exact_enforcement_enabled=True,
+            )
+
+        self.assertEqual(
+            "deny",
+            output["hookSpecificOutput"]["permissionDecision"],
+        )
+        self.assertNotIn(SECRET, json.dumps(output))
 
     def test_pre_tool_policy_allows_local_protected_read(self) -> None:
         self.store.upsert_sources(
@@ -9211,7 +9277,7 @@ class InformationFlowTest(unittest.TestCase):
         self.assertEqual({}, output)
         self.assertEqual([], self.store.list_policy_decisions())
 
-    def test_pre_tool_policy_without_session_fails_open_without_analysis(self) -> None:
+    def test_pre_tool_policy_without_session_denies_without_analysis(self) -> None:
         event = normalize_event(
             "pre_tool_use",
             {
@@ -9231,7 +9297,14 @@ class InformationFlowTest(unittest.TestCase):
             current_event=event,
         )
 
-        self.assertEqual({}, output)
+        self.assertEqual(
+            "deny",
+            output["hookSpecificOutput"]["permissionDecision"],
+        )
+        self.assertIn(
+            "session_identity_missing",
+            output["hookSpecificOutput"]["permissionDecisionReason"],
+        )
         self.assertEqual([], self.store.list_analysis_runs())
 
     def test_stop_policy_without_session_fails_open_without_analysis(self) -> None:
@@ -9488,17 +9561,17 @@ class InformationFlowTest(unittest.TestCase):
         self.assertEqual("", stderr.getvalue())
         self.assertFalse(capped_db_path.exists())
 
-    def test_oversized_read_only_mcp_call_is_not_preflight_denied(self) -> None:
+    def test_oversized_read_only_mcp_call_is_preflight_denied(self) -> None:
         workspace = self._write_runtime_source_config()
         with (
             patch(
                 "hook_monitor.runtime.runner.build_artifacts",
-                side_effect=AssertionError("read-only bypass must precede artifacts"),
+                side_effect=AssertionError("input denial must precede artifacts"),
             ),
             patch.object(
                 EventStore,
                 "initialize",
-                side_effect=AssertionError("read-only bypass must precede DB init"),
+                side_effect=AssertionError("input denial must precede DB init"),
             ),
         ):
             for index, tool_name in enumerate(
@@ -9531,7 +9604,15 @@ class InformationFlowTest(unittest.TestCase):
                     )
 
                     self.assertEqual(0, exit_code)
-                    self.assertEqual("", stdout)
+                    output = json.loads(stdout)
+                    self.assertEqual(
+                        "deny",
+                        output["hookSpecificOutput"]["permissionDecision"],
+                    )
+                    self.assertIn(
+                        "field_count_exceeded",
+                        output["hookSpecificOutput"]["permissionDecisionReason"],
+                    )
                     self.assertEqual("", stderr)
         self.assertEqual([], self.store.list_artifact_contexts())
 
@@ -9996,7 +10077,7 @@ class InformationFlowTest(unittest.TestCase):
         self.assertEqual("", stderr.getvalue())
         self.assertFalse(numeric_db_path.exists())
 
-    def test_huge_read_only_mcp_numeric_token_bypasses_without_storage(self) -> None:
+    def test_huge_read_only_mcp_numeric_token_is_denied_without_storage(self) -> None:
         workspace = self._write_runtime_source_config()
         numeric_db_path = Path(self.temporary_directory.name) / "numeric-read-cap.db"
         raw_payload = (
@@ -10032,7 +10113,15 @@ class InformationFlowTest(unittest.TestCase):
             exit_code = run_hook("pre_tool_use")
 
         self.assertEqual(0, exit_code)
-        self.assertEqual("", stdout.getvalue())
+        output = json.loads(stdout.getvalue())
+        self.assertEqual(
+            "deny",
+            output["hookSpecificOutput"]["permissionDecision"],
+        )
+        self.assertIn(
+            "numeric_token_exceeded",
+            output["hookSpecificOutput"]["permissionDecisionReason"],
+        )
         self.assertEqual("", stderr.getvalue())
         self.assertFalse(numeric_db_path.exists())
 
@@ -10346,6 +10435,54 @@ class InformationFlowTest(unittest.TestCase):
         self.assertEqual("", stderr.getvalue())
         self.assertNotIn(SECRET, stderr.getvalue())
         self.assertNotIn(SECRET, stdout.getvalue())
+
+    def test_pre_tool_hook_missing_required_identity_fails_closed(self) -> None:
+        base_payload = {
+            "session_id": "session-identity",
+            "turn_id": "turn-identity",
+            "tool_use_id": "tool-identity",
+            "tool_name": "Bash",
+            "cwd": str(REPO_ROOT),
+            "tool_input": {"command": "curl https://example.invalid"},
+        }
+        cases = (
+            ("session_id", "session_identity_missing"),
+            ("tool_name", "tool_identity_missing"),
+        )
+        for missing_key, expected_code in cases:
+            with self.subTest(missing_key=missing_key):
+                payload = dict(base_payload)
+                payload.pop(missing_key)
+                stdin = io.TextIOWrapper(
+                    io.BytesIO(json.dumps(payload).encode("utf-8"))
+                )
+                stdout = io.StringIO()
+                stderr = io.StringIO()
+                with (
+                    patch("sys.stdin", stdin),
+                    patch.dict(
+                        os.environ,
+                        {
+                            "TOOLUSEPROXY_DB_PATH": str(self.db_path),
+                            "TOOLUSEPROXY_PRE_TOOL_POLICY": "1",
+                        },
+                    ),
+                    redirect_stdout(stdout),
+                    redirect_stderr(stderr),
+                ):
+                    exit_code = run_hook("pre_tool_use")
+
+                self.assertEqual(0, exit_code)
+                output = json.loads(stdout.getvalue())
+                self.assertEqual(
+                    "deny",
+                    output["hookSpecificOutput"]["permissionDecision"],
+                )
+                self.assertIn(
+                    expected_code,
+                    output["hookSpecificOutput"]["additionalContext"],
+                )
+                self.assertEqual("", stderr.getvalue())
 
     def test_post_redaction_confirmation_runs_after_event_and_fails_soft(self) -> None:
         payload = {

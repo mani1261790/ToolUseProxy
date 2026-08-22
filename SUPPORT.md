@@ -24,6 +24,7 @@ POSIX launcherもpackage metadataと同じPython 3.11 / 3.12だけを選びま�
 - localでCodex CLIのmarketplace add / Plugin installを検証済み
 - Gitのmoving refを使う`codex plugin marketplace upgrade`で、alpha.1および正式公開前の3 Hook alpha.8からalpha.9へ置き換わり、Plugin dataが保持されることを実Codex CLIで自動検証
 - Hook definitionのreview / trustを迂回しない
+- MCPはread-only名でもqueryをserverへ送るexternal boundaryとして扱う。上限内の全key/valueとactive source全体の比較を完了できたpublic inputだけを許可し、一致・上限超過・比較失敗は実行前deny
 - install後のcodeは`PLUGIN_ROOT`、mutable dataは`PLUGIN_DATA`へ分離
 - remote `main`を実行元にせず、通常更新は保護されたfast-forward-only `public-alpha`、再現性優先時はimmutable release tagを使う
 - isolated Codex CLIではinstall / protect / Hook payload allow-deny / trace / removeとdata保持を自動検証

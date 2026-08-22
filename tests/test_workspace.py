@@ -343,7 +343,7 @@ class WorkspaceIdentityTest(unittest.TestCase):
         self.assertEqual("configured_root", row[4])
         self.assertEqual(row[0], row[5])
 
-    def test_unresolved_configured_root_records_raw_operations_without_post_evidence(
+    def test_unresolved_configured_root_denies_pre_and_keeps_post_advisory(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -415,11 +415,23 @@ class WorkspaceIdentityTest(unittest.TestCase):
 
         self.assertEqual(0, pre.returncode, pre.stderr)
         self.assertEqual(0, post.returncode, post.stderr)
-        self.assertEqual(2, len(event_rows))
+        pre_output = json.loads(pre.stdout)
+        self.assertEqual(
+            "deny",
+            pre_output["hookSpecificOutput"]["permissionDecision"],
+        )
+        self.assertIn(
+            "workspace_identity_unavailable",
+            pre_output["hookSpecificOutput"]["additionalContext"],
+        )
+        self.assertEqual(1, len(event_rows))
         self.assertTrue(all(row[0] == "workspace_root_path_missing" for row in event_rows))
         self.assertTrue(all((row[1] or "").startswith("ws_cfg_v1_") for row in event_rows))
-        self.assertEqual(base_payload, json.loads(event_rows[0][2]))
-        self.assertEqual(("unknown", None), operation)
+        self.assertEqual(
+            {**base_payload, "tool_response": {"exit_code": 0}},
+            json.loads(event_rows[0][2]),
+        )
+        self.assertIsNone(operation)
         self.assertEqual(0, outcome_count)
         self.assertEqual(0, snapshot_count)
 

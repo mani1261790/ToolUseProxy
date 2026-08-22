@@ -60,7 +60,7 @@ sh "<PLUGIN_ROOT>/hooks/run_cli.sh" config history \
 
 有効値の優先順位は`有効な環境変数 > workspace設定 > offの既定値`です。既存の環境変数との互換性は維持しますが、不正な環境変数値はworkspace設定へ黙ってfallbackせず、その項目をoffにして`environment_value_invalid`を診断します。
 
-Hookは設定を短いread-only transactionで読みます。Hook内ではschema migration、設定変更、workspace scanを行いません。DB lock、schema不一致、設定破損では永続設定をfail-openで使わず、明示された有効な環境変数と安全な既定値だけへ戻ります。migrationが必要な場合はHook外で`init --codex`を実行します。
+Hookは設定を短いread-only transactionで読みます。Hook内ではschema migration、設定変更、workspace scanを行いません。DB lock、schema不一致、設定破損で有効設定を確定できないPreToolUseは実行前denyします。未初期化DBだけはsetupを可能にするadvisory診断です。migrationが必要な場合はHook外で`init --codex`を実行します。
 
 Externality JudgeのHook処理はnetworkを使いません。Hook外workerはworkspace設定に加えて`codex` routeを明示し、事前probe receiptが一致した場合だけ、jobごとの新しい隔離済みCodex一時セッションを使います。Codex CLIは`0.145.0`以上を必要とします。receiptは24時間以内で、現在のCodex executableのbinary SHA-256、canonical path SHA-256、version、judge contract、modelがすべて一致する必要があります。期限切れまたは不一致ならworkerは起動しません。別provider、fallback、OpenAI API直接呼出し、API key設定はありません。既存のsetup profileには含まれません。送信項目、review、failure時の扱いは[Externality Judge](../設計/ExternalityJudge.md)、保持境界は[プライバシーとデータ保持](../../PRIVACY.md)を参照してください。
 

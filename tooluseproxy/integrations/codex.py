@@ -95,7 +95,7 @@ def run_codex_hook(
         if output is not None:
             print(json.dumps(output, ensure_ascii=False))
         return result
-    except Exception:  # Hook integrations must never block Codex on local failure.
+    except Exception:  # PreToolUse fails closed; later phases stay advisory.
         output = _validated_hook_output(captured.getvalue(), runtime_phase)
         if output is None:
             output = inactive_hook_output(
