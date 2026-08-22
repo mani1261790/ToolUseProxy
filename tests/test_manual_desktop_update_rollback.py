@@ -80,7 +80,7 @@ class ManualDesktopUpdateRollbackTest(unittest.TestCase):
 
             prompt = (root / "desktop-update-rollback-prompt.txt").read_text()
             self.assertIn(
-                "ToolUseProxyの確認｜内容：...｜変更：...｜通信：",
+                "ToolUseProxyの操作確認｜行うこと：...｜変更されるもの：...｜外部通信：",
                 prompt,
             )
             self.assertIn("同じ160文字以内のplain text", prompt)
@@ -262,11 +262,13 @@ class ManualDesktopUpdateRollbackTest(unittest.TestCase):
 
         self.assertIn("通常のsandboxで先に試さない", prompt)
         self.assertIn("この1コマンドだけ、sandbox外での実行許可", prompt)
-        self.assertIn("操作:", prompt)
-        self.assertIn("目的:", prompt)
-        self.assertIn("変更:", prompt)
-        self.assertIn("通信:", prompt)
-        self.assertIn("拒否条件:", prompt)
+        self.assertIn("行うこと：", prompt)
+        self.assertIn("変更されるもの：", prompt)
+        self.assertIn("外部通信：ありません", prompt)
+        self.assertIn("確認が必要な理由：", prompt)
+        self.assertIn("この内容で実行してよいですか？", prompt)
+        self.assertIn("プロジェクト外の専用保存領域へ書き込み", prompt)
+        self.assertNotIn("拒否条件", prompt)
         self.assertIn(command, prompt)
         self.assertIn("trueを1回だけ", prompt)
 

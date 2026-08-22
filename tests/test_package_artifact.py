@@ -41,7 +41,13 @@ DIST_INFO_FILES = {
     "top_level.txt",
 }
 RUNTIME_PACKAGE_ROOTS = {"hook_monitor", "tooluseproxy"}
-HOOK_MONITOR_RUNTIME_DIRECTORIES = {"analysis", "cli", "policy", "runtime"}
+HOOK_MONITOR_RUNTIME_DIRECTORIES = {
+    "analysis",
+    "cli",
+    "externality",
+    "policy",
+    "runtime",
+}
 FORBIDDEN_PARTS = {
     ".agents",
     ".codex-plugin",

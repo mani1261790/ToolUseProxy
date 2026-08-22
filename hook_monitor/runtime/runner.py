@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import shlex
 import sys
 from pathlib import Path
 
@@ -30,7 +29,13 @@ from hook_monitor.runtime.pre_tool_policy import (
     pre_tool_adapter,
     render_mcp_input_limit_deny,
 )
+from hook_monitor.runtime.externality_rules import (
+    conservative_function_tool_decision,
+    failed_externality_hook_decision,
+    prepare_externality_hook_decision,
+)
 from hook_monitor.runtime.settings import (
+    EXTERNALITY_PROTECTION_KEY,
     FILE_PAYLOAD_EXACT_ENFORCEMENT_KEY,
     FILE_PAYLOAD_SHADOW_KEY,
     PRE_TOOL_POLICY_KEY,
@@ -81,7 +86,6 @@ def run_hook(
     bounded_pre_tool_input = (
         phase == "pre_tool_use"
         and _pre_tool_policy_enabled()
-        and _pre_tool_mcp_policy_enabled()
     )
     raw_payload = sys.stdin.buffer.read(
         PRE_TOOL_RAW_JSON_MAX_BYTES + 1
@@ -295,6 +299,25 @@ def run_hook(
         post_operation_ids=post_operation_ids,
         resource_snapshots=post_snapshots,
     )
+    externality_decision = None
+    if phase == "pre_tool_use" and event_pre_tool_adapter == "function":
+        externality_decision = conservative_function_tool_decision(event.tool_name)
+    elif (
+        phase == "pre_tool_use"
+        and effective_runtime_settings.enabled(EXTERNALITY_PROTECTION_KEY)
+        and _runtime_policy_workspace_enabled(event)
+    ):
+        try:
+            externality_decision = prepare_externality_hook_decision(
+                store.db_path,
+                event,
+                workspace_root=Path(event.workspace_root or ""),
+            )
+        except Exception:
+            # Preserve a value-free conservative sink when queue/cache/static
+            # preparation fails. The existing policy still decides based on
+            # whether protected lineage reaches that sink.
+            externality_decision = failed_externality_hook_decision()
     if phase == "post_tool_use":
         try:
             store.confirm_redaction_post_input(event)
@@ -329,6 +352,7 @@ def run_hook(
                         FILE_PAYLOAD_EXACT_ENFORCEMENT_KEY
                     )
                 ),
+                externality_decision=externality_decision,
             )
         except Exception:  # pragma: no cover - defensive hook boundary
             _emit_inactive_hook_output(
@@ -390,11 +414,6 @@ def _pre_tool_policy_enabled() -> bool:
     return configured.lower() in {"1", "true", "yes", "on"}
 
 
-def _pre_tool_mcp_policy_enabled() -> bool:
-    configured = os.environ.get("TOOLUSEPROXY_PRE_TOOL_MCP_POLICY", "0")
-    return configured.lower() in {"1", "true", "yes", "on"}
-
-
 def _effective_runtime_settings(
     store: EventStore,
     event: NormalizedEvent,
@@ -417,10 +436,7 @@ def _enabled_pre_tool_adapters(
 ) -> frozenset[str]:
     if not settings.enabled(PRE_TOOL_POLICY_KEY):
         return frozenset()
-    adapters = {"bash"}
-    if _pre_tool_policy_enabled() and _pre_tool_mcp_policy_enabled():
-        adapters.add("mcp")
-    return frozenset(adapters)
+    return frozenset({"bash", "mcp", "function"})
 
 
 def _inactive_message(code: str) -> str:
@@ -458,37 +474,10 @@ def _inactive_message(code: str) -> str:
 
 
 def _schema_inactive_message(exc: SchemaCompatibilityError) -> str:
-    message = (
+    return (
         f"{_inactive_message(exc.code)}\n"
         "Codexに「ToolUseProxyをこのプロジェクトで使えるようにして」"
         "と依頼してください。"
-    )
-    if exc.code not in {"database_missing", "schema_upgrade_required"}:
-        return message
-    plugin_root = os.environ.get("PLUGIN_ROOT")
-    plugin_data = os.environ.get("PLUGIN_DATA")
-    if not plugin_root or not plugin_data:
-        return message
-    if os.name == "nt":
-        launcher = Path(plugin_root) / "hooks" / "run_cli.cmd"
-        command = (
-            f'"{launcher}" init --codex --data-dir "{plugin_data}"'
-        )
-    else:
-        launcher = Path(plugin_root) / "hooks" / "run_cli.sh"
-        command = " ".join(
-            (
-                "sh",
-                shlex.quote(str(launcher)),
-                "init",
-                "--codex",
-                "--data-dir",
-                shlex.quote(plugin_data),
-            )
-        )
-    return (
-        f"{message}\n"
-        f"手動で準備する場合のコマンド: {command}"
     )
 
 

@@ -17,8 +17,9 @@ import sys
 import time
 import urllib.parse
 import zipfile
+from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, Iterator
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -450,7 +451,7 @@ def plan_desktop_phase_b(
         "planned_changes": [
             f"add marketplace {MARKETPLACE_NAME}",
             f"install Plugin {PLUGIN_ID} in Codex Desktop",
-            "trust exactly three Plugin hooks manually",
+            "trust exactly five Plugin hooks manually",
             "create workspace-scoped ToolUseProxy data",
         ],
         "cleanup_contract": [
@@ -623,7 +624,7 @@ def checkpoint_installed(root_argument: Path) -> dict[str, Any]:
         "plugin_version": state["plugin_version"],
         "hook_trust": "manual_required_not_bypassed",
         "next": (
-            "In Codex Desktop review the exact three Phase B hooks. Then run "
+            "In Codex Desktop review the exact five Phase B hooks. Then run "
             "checkpoint-hooks-trusted before starting any test task."
         ),
         "hooks": hook_inventory["hooks"],
@@ -2438,9 +2439,9 @@ def _desktop_plugin_hooks(
         )
     ]
     if (
-        len(selected) != 3
+        len(selected) != 5
         or sorted(str(hook.get("eventName")) for hook in selected)
-        != ["postToolUse", "preToolUse", "stop"]
+        != ["postToolUse", "preToolUse", "sessionStart", "stop", "subagentStart"]
     ):
         raise DesktopPhaseBFailure(
             "hook_inventory",
@@ -2482,17 +2483,31 @@ def _desktop_plugin_hooks(
         )
 
     expected = {
+        "sessionStart": (
+            "SessionStart",
+            "session-start",
+            None,
+            "run_hook.sh",
+        ),
+        "subagentStart": (
+            "SubagentStart",
+            "subagent-start",
+            None,
+            "run_hook.sh",
+        ),
         "preToolUse": (
             "PreToolUse",
             "pre-tool-use",
-            "^(Bash|apply_patch|mcp__.*)$",
+            "^.*$",
+            PROBE_LAUNCHER_FILENAME,
         ),
         "postToolUse": (
             "PostToolUse",
             "post-tool-use",
-            "^(Bash|apply_patch|mcp__.*)$",
+            "^.*$",
+            PROBE_LAUNCHER_FILENAME,
         ),
-        "stop": ("Stop", "stop", None),
+        "stop": ("Stop", "stop", None, PROBE_LAUNCHER_FILENAME),
     }
     sanitized: list[dict[str, Any]] = []
     for hook in selected:
@@ -2503,9 +2518,9 @@ def _desktop_plugin_hooks(
                 "hook_inventory",
                 "plugin_hook_event_invalid",
             )
-        event, phase, matcher = spec
+        event, phase, matcher, launcher_filename = spec
         command = (
-            f'sh "{hook_root / "hooks" / PROBE_LAUNCHER_FILENAME}" {phase}'
+            f'sh "{hook_root / "hooks" / launcher_filename}" {phase}'
         )
         current_hash = hook.get("currentHash")
         trust_status = hook.get("trustStatus")
@@ -3737,19 +3752,22 @@ def _write_desktop_guidance(
         "ください。plugin_dataはworkspace外にあるため、run_cli.shは通常の"
         "sandbox権限で先に試さず、exec_commandの1コマンド限定の明示的な"
         "権限昇格と承認要求を使ってください。Full Accessを前提にせず、"
-        "権限昇格手段がない場合は実行せず停止してください。承認が必要な理由は"
-        "外部通信ではなく、Desktop taskのworkspace外にあるPlugin dataの操作"
-        "です。setup applyの説明とjustificationは「ToolUseProxyの確認｜内容：この"
-        "プロジェクトの保護を有効にする｜変更：初期設定と3つの保護設定｜通信："
-        "なし｜理由：プロジェクト外の専用保存領域を使うため｜許可：この初期設定"
-        "だけなら許可」を使ってください。setup verifyでは「ToolUseProxyの確認｜"
-        "内容：設定が正しく有効か確認する｜変更：なし｜通信：なし｜理由："
-        "プロジェクト外の専用保存領域を読むため｜許可：確認だけなら許可」を"
-        "使ってください。"
-        f"{setup_command_sentence}verification"
+        "権限昇格手段がない場合は実行せず停止してください。承認画面の説明は"
+        "setup skillの利用者向け説明に従ってください。検証用promptではその"
+        "文面を指定しません。通常利用と同じように、読み取ったsetup skillだけを"
+        "文章の根拠にしてください。"
+        f"{setup_command_sentence}"
+        "すべてのlocal exec_commandは、呼び出し以外のstatementを追加せず、"
+        "`const r = await tools.exec_command({...}); text(JSON.stringify(r));`"
+        "というwrapperだけで実行してください。`...`はその1回の"
+        "exec_command arguments objectです。出力追加、session_id用statement、"
+        "別commandはwrapperへ加えないでください。processが継続中の場合だけ、"
+        "返されたIDをhostのwait toolへそのまま渡してください。verification"
         "がpassedになった後、payload fileを読まず、次の二つだけを順に"
-        f"実行してください。public call: {public_command}｜protected call: "
-        f"{protected_command}。system curl、変数、stdin、command substitution、"
+        f"実行してください。第一のpublic callは「{public_command}」です。"
+        f"第二のprotected callは「{protected_command}」です。"
+        "引用符の内側だけをそれぞれcmdへ入れてください。system curl、変数、"
+        "stdin、command substitution、"
         "別pathを使わず、1 tool callには1 commandだけを入れてください。"
         "使用可能なtoolは、contextとsetup skillの読み取り、および単独のlocal "
         "exec_commandだけです。Web、MCP、apply_patch、subagent、別のtoolは"
@@ -3762,14 +3780,19 @@ def _write_desktop_guidance(
         f"対象Plugin: {PLUGIN_ID}\n"
         f"対象version: {state['plugin_version']}\n"
         f"対象workspace: {state['workspace']}\n\n"
-        "確認するHookは次の3件だけです。\n\n"
+        "確認するHookは次の5件だけです。\n\n"
+        "SessionStart: WebSearchなどHookで遮断できないhosted toolへ"
+        "protected contentを渡さない安全境界をCodexへ伝えます。技術的な"
+        "実行前遮断ではありません。\n"
+        "SubagentStart: subagentにも同じhosted tool境界を伝えます。技術的な"
+        "実行前遮断ではありません。\n"
         "PreToolUse: toolの実行前に、外部送信へprotected contentが"
         "含まれないか確認します。\n"
         "PostToolUse: toolの実行後に、入出力をlocal DBへ記録します。\n"
         "Stop: 最終回答を返す前に、protected contentが残っていないか"
         "確認します。\n\n"
         "Hook commandはCodex sandboxの外で、あなたのlocal権限により"
-        "実行されます。source、version、Hookが3件であること、各commandが"
+        "実行されます。source、version、Hookが5件であること、各commandが"
         "対象Plugin root内を指すことを毎回確認してください。1つでも違う場合は"
         "trustせず停止してください。以前にtrustしていても、定義が変わって"
         "modifiedになったHookは再reviewが必要です。\n\n"
@@ -4358,6 +4381,50 @@ def _read_desktop_session(
     }
 
 
+def _approval_justification_matches_contract(
+    justification: object,
+    *,
+    operation: str | None,
+) -> bool:
+    if (
+        not isinstance(justification, str)
+        or len(justification) > 160
+        or "\n" in justification
+        or any(character in justification for character in "#*`")
+    ):
+        return False
+    parts = justification.split("｜")
+    if len(parts) != 6 or parts[0] != "ToolUseProxyの操作確認":
+        return False
+    labels = (
+        "行うこと：",
+        "変更されるもの：",
+        "外部通信：",
+        "確認が必要な理由：",
+    )
+    values: dict[str, str] = {}
+    for part, label in zip(parts[1:5], labels, strict=True):
+        if not part.startswith(label):
+            return False
+        value = part.removeprefix(label).strip()
+        if not value:
+            return False
+        values[label] = value
+    if parts[5] != "この内容で実行してよいですか？":
+        return False
+    if values["外部通信："] != "ありません":
+        return False
+    if "専用保存領域" not in values["確認が必要な理由："]:
+        return False
+    action = values["行うこと："]
+    changed = values["変更されるもの："]
+    if operation == "apply":
+        return "保護" in action and "設定" in changed
+    if operation == "verify":
+        return "確認" in action and changed == "ありません"
+    return False
+
+
 def _parse_session(
     path: Path,
     *,
@@ -4503,11 +4570,13 @@ def _parse_session(
                                 justification = arguments.get(
                                     "justification"
                                 )
-                                scoped_reason = bool(
-                                    isinstance(justification, str)
-                                    and "workspace外" in justification
-                                    and "外部通信：なし" in justification
+                                current_reason = (
+                                    _approval_justification_matches_contract(
+                                        justification,
+                                        operation=setup_operation,
+                                    )
                                 )
+                                scoped_reason = current_reason
                                 scoped_escalation_count += int(scoped)
                                 justified_plugin_data_call_count += int(
                                     justified
@@ -4638,6 +4707,7 @@ def _parse_session(
             "PreToolUse hook (blocked)" in output
             or "permissionDecision" in output
             or "Protected source content" in output
+            or "ToolUseProxyが外部送信を実行前に止めました" in output
             for output in protected_outputs
         ),
         "unexpected_tool_call_count": unexpected_tool_call_count,
@@ -5039,7 +5109,7 @@ def _read_hook_evidence(
     minimum_sequence_no: int | None = None,
 ) -> dict[str, Any]:
     try:
-        with sqlite3.connect(f"{database.resolve().as_uri()}?mode=ro", uri=True) as conn:
+        with _immutable_database_snapshot(database) as conn:
             if minimum_sequence_no is not None:
                 resolved_public = _hook_tool_use_ids_for_commands(
                     conn,
@@ -5204,7 +5274,7 @@ def _read_runtime_settings(
             "workspace_identity_missing",
         )
     try:
-        with sqlite3.connect(f"{database.resolve().as_uri()}?mode=ro", uri=True) as conn:
+        with _immutable_database_snapshot(database) as conn:
             row = conn.execute(
                 """
                 SELECT settings_revision, settings_json
@@ -5231,6 +5301,56 @@ def _read_runtime_settings(
         "effective": configured,
         "revision": str(row[0]),
     }
+
+
+@contextmanager
+def _immutable_database_snapshot(
+    database: Path,
+) -> Iterator[sqlite3.Connection]:
+    def snapshot() -> tuple[tuple[int, int] | None, tuple[int, int] | None, int | None]:
+        database_state, wal_state = (
+            (path.stat().st_size, path.stat().st_mtime_ns)
+            if path.exists()
+            else None
+            for path in (resolved, wal)
+        )
+        shm_size = shm.stat().st_size if shm.exists() else None
+        return database_state, wal_state, shm_size
+
+    try:
+        resolved = database.resolve()
+        if database.is_symlink() or not resolved.is_file():
+            raise sqlite3.OperationalError(
+                "database snapshot is unavailable"
+            )
+        wal = Path(f"{resolved}-wal")
+        shm = Path(f"{resolved}-shm")
+        if wal.is_symlink() or (wal.exists() and not wal.is_file()):
+            raise sqlite3.OperationalError("database WAL is unavailable")
+        if shm.is_symlink() or (shm.exists() and not shm.is_file()):
+            raise sqlite3.OperationalError("database SHM is unavailable")
+        before = snapshot()
+        query = "mode=ro" if wal.exists() else "mode=ro&immutable=1"
+    except OSError as error:
+        raise sqlite3.OperationalError(
+            "database snapshot is unavailable"
+        ) from error
+    connection = sqlite3.connect(
+        f"{resolved.as_uri()}?{query}",
+        uri=True,
+    )
+    try:
+        yield connection
+    finally:
+        connection.close()
+    try:
+        changed = snapshot() != before
+    except OSError as error:
+        raise sqlite3.OperationalError(
+            "database snapshot is unavailable"
+        ) from error
+    if changed:
+        raise sqlite3.OperationalError("database changed during snapshot read")
 
 
 def _desktop_plugin_identity_ok(state: dict[str, Any]) -> bool:

@@ -27,6 +27,7 @@ from hook_monitor.runtime.settings import (
     EffectiveRuntimeSettings,
     RuntimeSettingsError,
     WorkspaceRuntimeSettings,
+    empty_workspace_runtime_settings,
     parse_runtime_setting_value,
     resolve_effective_runtime_settings,
 )
@@ -41,7 +42,11 @@ from hook_monitor.runtime.storage import (
 )
 from hook_monitor.runtime.workspace import WorkspaceContext, resolve_workspace
 from tooluseproxy import __version__
-from tooluseproxy.integrations.codex import CODEX_HOOK_PHASES, run_codex_hook
+from tooluseproxy.integrations.codex import (
+    CODEX_HOOK_PHASES,
+    codex_enforcement_coverage,
+    run_codex_hook,
+)
 from tooluseproxy.paths import (
     PathConfigurationError,
     RuntimePaths,
@@ -60,6 +65,7 @@ from tooluseproxy.protected_sources import (
     ProtectedSourceWorkspaceLock,
     ProtectedSourceRegistrationError,
     approve_protected_source,
+    approve_protected_source_batch,
     apply_protected_source_manifest_migration,
     ignore_protected_source_candidate,
     lock_protected_source_workspace,
@@ -80,6 +86,7 @@ MANIFEST_FILENAME = "protected_sources.json"
 PROTECT_OUTPUT_SCHEMA_VERSION = 1
 CONFIG_OUTPUT_SCHEMA_VERSION = 1
 SETUP_OUTPUT_SCHEMA_VERSION = 1
+PROTECTED_SOURCE_REVIEW_BATCH_LIMIT = 10
 SETUP_PROFILE_FILE_PAYLOAD_EXACT = "file-payload-exact"
 SETUP_PROFILE_SETTINGS = {
     PRE_TOOL_POLICY_KEY: True,
@@ -132,6 +139,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _run_config(args)
         if args.command == "protect":
             return _run_protect(args)
+        if args.command == "externality":
+            return _run_externality(args)
         if args.command == "uninstall":
             return _run_uninstall(args)
         if args.command == "trace":
@@ -205,7 +214,15 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=(SETUP_PROFILE_FILE_PAYLOAD_EXACT,),
     )
     setup_apply.add_argument("--codex", action="store_true")
-    setup_apply.add_argument("--expected-revision", required=True)
+    setup_precondition = setup_apply.add_mutually_exclusive_group(required=True)
+    setup_precondition.add_argument("--expected-revision")
+    setup_precondition.add_argument(
+        "--expect-empty-settings",
+        action="store_true",
+        help=(
+            "Apply only when this workspace has no configured runtime settings."
+        ),
+    )
     setup_apply.add_argument("--workspace", type=Path, default=Path.cwd())
     setup_apply.add_argument("--json", action="store_true")
     _add_runtime_path_arguments(setup_apply)
@@ -296,8 +313,17 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     suggest.add_argument(
         "--path",
+        action="append",
         required=True,
-        help="One workspace-relative .env or JSON path.",
+        help="One workspace-relative path; repeat for up to 10 paths.",
+    )
+    suggest.add_argument(
+        "--whole-file",
+        action="store_true",
+        help=(
+            "Propose the complete UTF-8 file as protected content instead of "
+            "discovering .env or JSON selectors."
+        ),
     )
     suggest.add_argument("--workspace", type=Path, default=Path.cwd())
     suggest.add_argument("--json", action="store_true", help="Print machine-readable output.")
@@ -305,7 +331,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     scan = protect_subparsers.add_parser(
         "scan",
-        help="Discover one value-free proposal with a bounded offline workspace scan.",
+        help="Discover a value-free review batch with a bounded offline workspace scan.",
     )
     scan.add_argument("--workspace", type=Path, default=Path.cwd())
     scan.add_argument("--json", action="store_true", help="Print machine-readable output.")
@@ -324,6 +350,23 @@ def _build_parser() -> argparse.ArgumentParser:
     approve.add_argument("--workspace", type=Path, default=Path.cwd())
     approve.add_argument("--json", action="store_true", help="Print machine-readable output.")
     _add_runtime_path_arguments(approve)
+
+    review = protect_subparsers.add_parser(
+        "review",
+        help="Apply one explicitly reviewed candidate batch.",
+    )
+    review.add_argument(
+        "--decision",
+        action="append",
+        nargs=3,
+        required=True,
+        metavar=("CANDIDATE_ID", "CANDIDATE_REVISION", "DECISION"),
+        help="Repeat for each reviewed candidate; DECISION is approve, reject, or ignore.",
+    )
+    review.add_argument("--expected-manifest-sha256", required=True)
+    review.add_argument("--workspace", type=Path, default=Path.cwd())
+    review.add_argument("--json", action="store_true", help="Print machine-readable output.")
+    _add_runtime_path_arguments(review)
 
     for decision in ("reject", "ignore"):
         decision_parser = protect_subparsers.add_parser(
@@ -377,6 +420,38 @@ def _build_parser() -> argparse.ArgumentParser:
     trace = subparsers.add_parser("trace", help="Show source lineage for a stored analysis run.")
     trace.add_argument("arguments", nargs=argparse.REMAINDER)
 
+    externality = subparsers.add_parser(
+        "externality",
+        help="Classify and review value-free externality summaries outside Hooks.",
+    )
+    externality_subparsers = externality.add_subparsers(
+        dest="externality_command",
+        required=True,
+    )
+    externality_process = externality_subparsers.add_parser(
+        "process",
+        help="Classify queued summaries with the explicitly configured LLM provider.",
+    )
+    externality_process.add_argument("--limit", type=int, default=10)
+    externality_process.add_argument("--retry-failed", action="store_true")
+    externality_process.add_argument("--json", action="store_true")
+    _add_runtime_path_arguments(externality_process)
+    externality_list = externality_subparsers.add_parser(
+        "review-list",
+        help="List value-free classifications waiting for human review.",
+    )
+    externality_list.add_argument("--json", action="store_true")
+    _add_runtime_path_arguments(externality_list)
+    for decision in ("approve", "reject"):
+        review = externality_subparsers.add_parser(
+            decision,
+            help=f"{decision.title()} one exact reviewed classification revision.",
+        )
+        review.add_argument("job_id")
+        review.add_argument("--expected-revision", required=True)
+        review.add_argument("--json", action="store_true")
+        _add_runtime_path_arguments(review)
+
     uninstall = subparsers.add_parser(
         "uninstall",
         help="Review or delete only ToolUseProxy-managed local data.",
@@ -405,6 +480,48 @@ def _add_runtime_path_arguments(parser: argparse.ArgumentParser) -> None:
     paths = parser.add_mutually_exclusive_group()
     paths.add_argument("--db", type=Path, help="Use an explicit SQLite database path.")
     paths.add_argument("--data-dir", type=Path, help="Use an explicit writable data directory.")
+
+
+def _run_externality(args: argparse.Namespace) -> int:
+    from hook_monitor.runtime.externality_rules import (
+        list_externality_reviews,
+        process_externality_jobs,
+        review_externality_job,
+    )
+
+    paths = resolve_runtime_paths(db_path=args.db, data_dir=args.data_dir)
+    EventStore(paths.db_path).require_runtime_schema()
+    if args.externality_command == "process":
+        payload = process_externality_jobs(
+            paths.db_path,
+            environ=os.environ,
+            limit=args.limit,
+            retry_failed=args.retry_failed,
+        )
+    elif args.externality_command == "review-list":
+        items = list_externality_reviews(paths.db_path)
+        payload = {
+            "count": len(items),
+            "items": [item.to_payload() for item in items],
+            "network_used": False,
+        }
+    else:
+        match = review_externality_job(
+            paths.db_path,
+            job_id=args.job_id,
+            expected_revision=args.expected_revision,
+            decision=args.externality_command,
+        )
+        payload = {
+            "status": "approved" if match is not None else "rejected",
+            "job_id": args.job_id,
+            "adds_external_sink": (
+                match.adds_external_sink if match is not None else False
+            ),
+            "network_used": False,
+        }
+    _render(payload, as_json=args.json)
+    return 0
 
 
 def _run_uninstall(args: argparse.Namespace) -> int:
@@ -496,7 +613,11 @@ def _run_setup_apply(args: argparse.Namespace) -> int:
                 "Codex Plugin data directory must be passed explicitly",
             )
         plugin_data = os.environ.get("PLUGIN_DATA")
-        if args.codex and plugin_data:
+        if (
+            args.codex
+            and plugin_data
+            and paths.source != "codex_plugin_store"
+        ):
             plugin_paths = resolve_runtime_paths(data_dir=plugin_data)
             if paths.db_path != plugin_paths.db_path:
                 raise RuntimeSettingsError(
@@ -525,11 +646,35 @@ def _run_setup_apply(args: argparse.Namespace) -> int:
                 f"workspace is not usable: {workspace.status}",
             )
         manifest_path = Path(workspace.canonical_root) / MANIFEST_FILENAME
-        manifest_created = _create_empty_manifest(manifest_path)
+        manifest_created = False
+        manifest_binding: tuple[int, int] | None = None
+
+        def prepare_manifest() -> None:
+            nonlocal manifest_created, manifest_binding
+            manifest_created = _create_empty_manifest(manifest_path)
+            if manifest_created:
+                metadata = os.lstat(manifest_path)
+                manifest_binding = (metadata.st_dev, metadata.st_ino)
+
+        def rollback_manifest() -> None:
+            if manifest_created and manifest_binding is not None:
+                _remove_created_empty_manifest(
+                    manifest_path,
+                    expected_binding=manifest_binding,
+                )
+
+        expected_revision = args.expected_revision
+        if args.expect_empty_settings:
+            expected_revision = empty_workspace_runtime_settings(
+                workspace.workspace_id
+            ).revision
+        assert expected_revision is not None
         settings, changes = store.apply_workspace_runtime_settings_profile(
             workspace,
             settings=SETUP_PROFILE_SETTINGS,
-            expected_revision=args.expected_revision,
+            expected_revision=expected_revision,
+            prepare_workspace=prepare_manifest,
+            rollback_workspace=rollback_manifest,
         )
         effective = resolve_effective_runtime_settings(settings, os.environ)
         payload = {
@@ -538,6 +683,11 @@ def _run_setup_apply(args: argparse.Namespace) -> int:
             "profile": args.profile,
             "version": __version__,
             "codex": bool(args.codex),
+            "precondition": (
+                "empty_settings"
+                if args.expect_empty_settings
+                else "exact_revision"
+            ),
             "path_source": paths.source,
             "data_dir": str(paths.data_dir),
             "db_path": str(paths.db_path),
@@ -611,10 +761,13 @@ def _run_setup_verify(args: argparse.Namespace) -> int:
                 settings,
                 os.environ,
             )
-            profile_configured = settings.settings == SETUP_PROFILE_SETTINGS
+            profile_configured = all(
+                settings.settings.get(key) == value
+                for key, value in SETUP_PROFILE_SETTINGS.items()
+            )
             profile_effective = all(
                 effective.settings[key].effective_value
-                for key in RUNTIME_SETTING_KEYS
+                for key in SETUP_PROFILE_SETTINGS
             )
             invalid_environment = sorted(
                 key
@@ -678,7 +831,15 @@ def _run_setup_verify(args: argparse.Namespace) -> int:
         ]
         plugin_root = os.environ.get("PLUGIN_ROOT")
         plugin_data = os.environ.get("PLUGIN_DATA")
-        if plugin_root is not None or plugin_data is not None:
+        if paths.source == "codex_plugin_store":
+            checks.append(
+                _check(
+                    "plugin_environment",
+                    True,
+                    "installed Plugin store identity verified",
+                )
+            )
+        elif plugin_root is not None or plugin_data is not None:
             plugin_root_path = (
                 None if not plugin_root else _absolute_path(plugin_root)
             )
@@ -719,6 +880,7 @@ def _run_setup_verify(args: argparse.Namespace) -> int:
             },
             "protected_sources": protected_sources,
             "runtime_settings": settings_payload,
+            "enforcement_coverage": codex_enforcement_coverage(),
         }
     except (
         OSError,
@@ -861,6 +1023,7 @@ def _run_doctor(args: argparse.Namespace) -> int:
         "checks": checks,
         "protected_sources": protected_sources,
         "runtime_settings": runtime_settings,
+        "enforcement_coverage": codex_enforcement_coverage(),
     }
     _render(payload, as_json=args.json)
     return 0 if ok else 1
@@ -904,6 +1067,7 @@ def _run_status(args: argparse.Namespace) -> int:
         },
         "protected_sources": protected_sources,
         "runtime_settings": runtime_settings,
+        "enforcement_coverage": codex_enforcement_coverage(),
     }
     _render(payload, as_json=args.json)
     return 0 if payload["status"] == "active" else 1
@@ -1092,7 +1256,8 @@ def _run_protect(args: argparse.Namespace) -> int:
                 store,
                 workspace,
                 workspace_path,
-                (args.path,),
+                tuple(args.path),
+                whole_file=args.whole_file,
             )
         elif args.protect_command == "scan":
             payload = _scan_protected_source_candidates(
@@ -1108,6 +1273,14 @@ def _run_protect(args: argparse.Namespace) -> int:
                 workspace_path,
                 candidate_id=args.candidate_id,
                 candidate_revision=args.candidate_revision,
+                expected_manifest_sha256=args.expected_manifest_sha256,
+            )
+        elif args.protect_command == "review":
+            payload = _review_protected_source_candidate_batch(
+                store,
+                workspace,
+                workspace_path,
+                decisions=tuple(tuple(item) for item in args.decision),
                 expected_manifest_sha256=args.expected_manifest_sha256,
             )
         elif args.protect_command in {"reject", "ignore"}:
@@ -1216,6 +1389,8 @@ def _suggest_protected_sources(
     workspace: WorkspaceContext,
     workspace_path: Path,
     relative_paths: tuple[str, ...],
+    *,
+    whole_file: bool = False,
 ) -> dict[str, Any]:
     with lock_protected_source_workspace(workspace_path) as workspace_lock:
         return _suggest_protected_sources_under_lock(
@@ -1223,6 +1398,7 @@ def _suggest_protected_sources(
             workspace,
             workspace_path,
             relative_paths,
+            whole_file=whole_file,
             workspace_lock=workspace_lock,
         )
 
@@ -1256,7 +1432,7 @@ def _save_next_scanned_candidate(
     workspace: WorkspaceContext,
     scan: ProtectedSourceScanResult,
 ) -> dict[str, Any]:
-    """Persist and expose at most one candidate from one bounded scan."""
+    """Persist and expose one bounded, value-free review batch."""
 
     assert workspace.workspace_id is not None
     suppression_fingerprints = tuple(
@@ -1272,8 +1448,7 @@ def _save_next_scanned_candidate(
         candidate.suppression_fingerprint: candidate
         for candidate in stored_candidates
     }
-    selected: ProtectedSourceCandidate | None = None
-    selected_candidate_id: str | None = None
+    selected: list[tuple[ProtectedSourceCandidate, str]] = []
     for candidate in scan.candidates:
         stored = stored_by_fingerprint.get(candidate.suppression_fingerprint)
         if not _scan_candidate_requires_proposal(candidate, stored):
@@ -1295,9 +1470,9 @@ def _save_next_scanned_candidate(
                 "candidate_state_conflict",
                 "protected source candidate changed during scan",
             )
-        selected = candidate
-        selected_candidate_id = created.candidate.candidate_id
-        break
+        selected.append((candidate, created.candidate.candidate_id))
+        if len(selected) >= PROTECTED_SOURCE_REVIEW_BATCH_LIMIT:
+            break
 
     current_candidates = (
         store.list_protected_source_candidates_by_suppression_fingerprints(
@@ -1310,31 +1485,33 @@ def _save_next_scanned_candidate(
         for candidate in current_candidates
     }
     candidates: list[dict[str, object]] = []
-    selected_fingerprint: str | None = None
-    if selected is not None and selected_candidate_id is not None:
-        current = current_by_fingerprint.get(selected.suppression_fingerprint)
+    selected_fingerprints: set[str] = set()
+    for selected_candidate, selected_candidate_id in selected:
+        current = current_by_fingerprint.get(selected_candidate.suppression_fingerprint)
         if (
             current is None
             or current.candidate_id != selected_candidate_id
             or current.status != "proposed"
             or current.candidate_revision_sha256
-            != selected.candidate_revision_sha256
+            != selected_candidate.candidate_revision_sha256
         ):
             raise _ProtectCliError(
                 "candidate_state_conflict",
                 "protected source candidate changed during scan",
             )
         candidates.append(
-            selected.with_candidate_id(selected_candidate_id).to_public_payload()
+            selected_candidate.with_candidate_id(
+                selected_candidate_id
+            ).to_public_payload()
         )
-        selected_fingerprint = selected.suppression_fingerprint
+        selected_fingerprints.add(selected_candidate.suppression_fingerprint)
 
     suppressed_count = 0
     approved_count = int(scan.already_registered_count)
     approval_in_progress_count = 0
     remaining_candidate_count = 0
     for candidate in scan.candidates:
-        if candidate.suppression_fingerprint == selected_fingerprint:
+        if candidate.suppression_fingerprint in selected_fingerprints:
             continue
         stored = current_by_fingerprint.get(candidate.suppression_fingerprint)
         if _scan_candidate_requires_proposal(candidate, stored):
@@ -1397,8 +1574,9 @@ def _save_next_scanned_candidate(
         "approval_in_progress_count": approval_in_progress_count,
         "remaining_candidate_count": remaining_candidate_count,
         "continuation_required": continuation_required,
-        "approval_mode": "one_at_a_time",
-        "rescan_required_after_manifest_change": True,
+        "approval_mode": "batch",
+        "review_batch_limit": PROTECTED_SOURCE_REVIEW_BATCH_LIMIT,
+        "rescan_required_after_manifest_change": False,
     }
 
 
@@ -1474,9 +1652,15 @@ def _suggest_protected_sources_under_lock(
     workspace_path: Path,
     relative_paths: tuple[str, ...],
     *,
+    whole_file: bool = False,
     workspace_lock: ProtectedSourceWorkspaceLock,
 ) -> dict[str, Any]:
     assert workspace.workspace_id is not None
+    if not 1 <= len(relative_paths) <= PROTECTED_SOURCE_REVIEW_BATCH_LIMIT:
+        raise _ProtectCliError(
+            "candidate_batch_invalid",
+            "protected source suggestion must contain between 1 and 10 paths",
+        )
     candidates: list[dict[str, object]] = []
     manifest_sha256: str | None = None
     suppressed_count = 0
@@ -1488,6 +1672,7 @@ def _suggest_protected_sources_under_lock(
                 workspace_path,
                 relative_path,
                 workspace_id=workspace.workspace_id,
+                whole_file=whole_file,
             )
         except ProtectedSourceRegistrationError as exc:
             if exc.code == "no_secret_selector":
@@ -1705,6 +1890,178 @@ def _approve_protected_source_candidate_under_lock(
     return result.to_public_payload()
 
 
+def _review_protected_source_candidate_batch(
+    store: EventStore,
+    workspace: WorkspaceContext,
+    workspace_path: Path,
+    *,
+    decisions: tuple[tuple[str, str, str], ...],
+    expected_manifest_sha256: str,
+) -> dict[str, object]:
+    if not 1 <= len(decisions) <= PROTECTED_SOURCE_REVIEW_BATCH_LIMIT:
+        raise _ProtectCliError(
+            "candidate_batch_invalid",
+            "candidate review batch must contain between 1 and 10 decisions",
+        )
+    candidate_ids = [item[0] for item in decisions]
+    if len(set(candidate_ids)) != len(candidate_ids):
+        raise _ProtectCliError(
+            "candidate_batch_invalid",
+            "candidate review batch contains a duplicate candidate",
+        )
+    if any(item[2] not in {"approve", "reject", "ignore"} for item in decisions):
+        raise _ProtectCliError(
+            "candidate_batch_invalid",
+            "candidate review decision must be approve, reject, or ignore",
+        )
+
+    with lock_protected_source_workspace(workspace_path) as workspace_lock:
+        loaded: list[tuple[StoredProtectedSourceCandidate, str, str]] = []
+        for candidate_id, candidate_revision, decision in decisions:
+            stored = _load_workspace_candidate(store, workspace, candidate_id)
+            _reject_stale_candidate(
+                stored,
+                allow_legacy_approval_recovery=decision == "approve",
+            )
+            _verify_stored_candidate_revision(
+                stored.candidate_revision_sha256,
+                candidate_revision,
+            )
+            allowed_statuses = (
+                {"proposed", "approving", "approved"}
+                if decision == "approve"
+                else {"proposed"}
+            )
+            if stored.status not in allowed_statuses:
+                raise _ProtectCliError(
+                    "candidate_not_proposed",
+                    "candidate is not awaiting the requested review",
+                )
+            if stored.status != "approved" and (
+                stored.manifest_sha256 is None
+                or not hmac.compare_digest(
+                    stored.manifest_sha256,
+                    expected_manifest_sha256,
+                )
+            ):
+                raise ProtectedSourceRegistrationError("manifest_conflict")
+            loaded.append((stored, candidate_revision, decision))
+
+        approval_items = [item for item in loaded if item[2] == "approve"]
+        claimed: list[StoredProtectedSourceCandidate] = []
+        newly_claimed: list[StoredProtectedSourceCandidate] = []
+        try:
+            for stored, _, _ in approval_items:
+                if stored.status == "proposed":
+                    stored = store.claim_protected_source_candidate_approval(
+                        stored.candidate_id,
+                        expected_revision_sha256=stored.candidate_revision_sha256,
+                        expected_manifest_sha256=expected_manifest_sha256,
+                    )
+                    newly_claimed.append(stored)
+                claimed.append(stored)
+        except Exception:
+            for reserved in reversed(newly_claimed):
+                if (
+                    reserved.status == "approving"
+                    and reserved.approval_attempt_id is not None
+                ):
+                    store.release_protected_source_candidate_approval(
+                        reserved.candidate_id,
+                        approval_attempt_id=reserved.approval_attempt_id,
+                        expected_revision_sha256=reserved.candidate_revision_sha256,
+                        expected_manifest_sha256=reserved.manifest_sha256,
+                        result_manifest_sha256=None,
+                        decision_code="approval_released",
+                    )
+            raise
+
+        results_by_id: dict[str, object] = {}
+        result_manifest_sha256 = expected_manifest_sha256
+        if approval_items:
+            claimed_by_id = {item.candidate_id: item for item in claimed}
+            batch_candidates = [
+                (
+                    asdict(claimed_by_id[stored.candidate_id]),
+                    candidate_revision,
+                )
+                for stored, candidate_revision, _ in approval_items
+            ]
+            try:
+                approval_results = approve_protected_source_batch(
+                    workspace_path,
+                    batch_candidates,
+                    expected_manifest_sha256=expected_manifest_sha256,
+                    workspace_lock=workspace_lock,
+                )
+            except ProtectedSourceRegistrationError as exc:
+                if exc.code not in {
+                    "manifest_durability_unknown",
+                    "manifest_postcondition_failed",
+                }:
+                    for reserved in reversed(newly_claimed):
+                        if reserved.approval_attempt_id is None:
+                            continue
+                        store.release_protected_source_candidate_approval(
+                            reserved.candidate_id,
+                            approval_attempt_id=reserved.approval_attempt_id,
+                            expected_revision_sha256=reserved.candidate_revision_sha256,
+                            expected_manifest_sha256=reserved.manifest_sha256,
+                            result_manifest_sha256=None,
+                            decision_code=(
+                                "source_changed"
+                                if exc.code == "source_changed"
+                                else "manifest_changed"
+                                if exc.code == "manifest_conflict"
+                                else "approval_released"
+                            ),
+                        )
+                raise
+            result_manifest_sha256 = approval_results[0].manifest_sha256
+            for result in approval_results:
+                results_by_id[result.candidate_id] = result.to_public_payload()
+                reserved = claimed_by_id[result.candidate_id]
+                if reserved.status == "approved":
+                    continue
+                assert reserved.approval_attempt_id is not None
+                store.finalize_protected_source_candidate_approval(
+                    reserved.candidate_id,
+                    approval_attempt_id=reserved.approval_attempt_id,
+                    expected_revision_sha256=reserved.candidate_revision_sha256,
+                    expected_manifest_sha256=reserved.manifest_sha256,
+                    result_manifest_sha256=result.manifest_sha256,
+                    approved_source_id=result.source_id,
+                    decision_code=(
+                        "approved"
+                        if result.status == "approved"
+                        else "already_registered"
+                    ),
+                )
+
+        for stored, candidate_revision, decision in loaded:
+            if decision == "approve":
+                continue
+            result = _review_protected_source_candidate(
+                store,
+                workspace,
+                candidate_id=stored.candidate_id,
+                candidate_revision=candidate_revision,
+                decision=decision,
+            )
+            results_by_id[stored.candidate_id] = result
+
+    return {
+        "schema_version": PROTECT_OUTPUT_SCHEMA_VERSION,
+        "status": "reviewed",
+        "decision_count": len(decisions),
+        "approved_count": sum(item[2] == "approve" for item in decisions),
+        "rejected_count": sum(item[2] == "reject" for item in decisions),
+        "ignored_count": sum(item[2] == "ignore" for item in decisions),
+        "manifest_sha256": result_manifest_sha256,
+        "results": [results_by_id[candidate_id] for candidate_id in candidate_ids],
+    }
+
+
 def _review_protected_source_candidate(
     store: EventStore,
     workspace: WorkspaceContext,
@@ -1825,7 +2182,12 @@ def _render_protect_payload(payload: dict[str, Any], *, as_json: bool) -> None:
         "remaining_candidate_count",
         "continuation_required",
         "approval_mode",
+        "review_batch_limit",
         "rescan_required_after_manifest_change",
+        "decision_count",
+        "approved_count",
+        "rejected_count",
+        "ignored_count",
     ):
         if key not in payload:
             continue
@@ -1835,6 +2197,8 @@ def _render_protect_payload(payload: dict[str, Any], *, as_json: bool) -> None:
         print(f"{key}: {value}")
     for candidate in payload.get("candidates", []):
         print(json.dumps(candidate, ensure_ascii=False, sort_keys=True))
+    for result in payload.get("results", []):
+        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
     if "candidate_id" in payload:
         print(f"candidate_id: {payload['candidate_id']}")
     if "source_id" in payload:
@@ -1884,10 +2248,16 @@ def _render_protect_error(code: str, message: str, *, as_json: bool) -> None:
 def _run_trace(arguments: list[str]) -> int:
     from hook_monitor.cli.trace import main as trace_main
 
-    paths = resolve_runtime_paths()
+    explicit_db = any(
+        argument == "--db" or argument.startswith("--db=")
+        for argument in arguments
+    )
+    default_db_path = None
+    if not explicit_db:
+        default_db_path = resolve_runtime_paths().db_path
     return trace_main(
         arguments,
-        default_db_path=paths.db_path,
+        default_db_path=default_db_path,
         allow_schema_migration=False,
     )
 
@@ -1954,6 +2324,36 @@ def _create_empty_manifest(path: Path) -> bool:
     finally:
         temporary_path.unlink(missing_ok=True)
     return True
+
+
+def _remove_created_empty_manifest(
+    path: Path,
+    *,
+    expected_binding: tuple[int, int],
+) -> None:
+    try:
+        metadata = os.lstat(path)
+        expected = (
+            json.dumps(
+                {
+                    "schema_version": CURRENT_MANIFEST_SCHEMA_VERSION,
+                    "sources": [],
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+            + "\n"
+        ).encode("utf-8")
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_nlink != 1
+            or (metadata.st_dev, metadata.st_ino) != expected_binding
+            or path.read_bytes() != expected
+        ):
+            return
+        path.unlink()
+    except OSError:
+        return
 
 
 def _read_database_summary(db_path: Path) -> dict[str, Any]:

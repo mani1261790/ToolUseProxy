@@ -1,171 +1,137 @@
 # ToolUseProxy
 
-Codexのtool useをローカルで観測し、外部sinkへ送られるpayloadとprotected sourceの内容対応を検査し、必要に応じてprovenanceを補助証拠として流出を検知・制御する研究実装です。
+ToolUseProxyは、AI coding agentがローカルの非公開情報を外部へ送ろうとしたとき、送信前に検知・停止するためのCodex Pluginです。
 
-本プロジェクトは、[SecHack365](https://sechack365.nict.go.jp/)での研究・開発成果物です。
+たとえば、未公開コード、研究ノート、`.env`、設計方針などを`protected source`として登録します。ToolUseProxyはCodexのtool useをローカルで観測し、外部送信候補へ保護情報が到達していないかを確認します。
 
-> 現在は`0.1.0-alpha.5` public alphaです。中核機能、再現可能な配布物、Apache-2.0の配布契約、CLI TUIでのfile-backed exact-only enforcement検証は整いましたが、完全なDLPではありません。Codex DesktopではPluginの検索・install、Hook review、trusted Pre / Post / Stop probe、public allow、file-backed protected payloadの実行前blockに加え、alpha.1からalpha.3へのdata migration、backup rollback、DisableなしのRemoveまで実機確認しました。保存済み2026-08-09 runと、初期化・3保護設定・状態確認を2 commandへ集約したfresh runは、どちらも正式な`passed`です。fresh runの承認UIは2回でした。alpha.5では自然言語による導入、保護候補の分かりやすい確認、短い日本語の承認・診断案内を追加しました。adapter外のnetwork egress、hosted Web Search、Linux実Codex task、Windows実機も引き続き検証中です。
+本プロジェクトは[SecHack365](https://sechack365.nict.go.jp/)での研究・開発成果物です。現在は`0.1.0-alpha.8`のrelease candidateであり、完成したDLP製品ではありません。
 
-- [研究紹介スライド（初めて知る方向け）](https://mani1261790.github.io/ToolUseProxy/slides/tooluseproxy-research.html)
-- [Codex Pluginとして試す](docs/設定/Plugin導入.md)
 - [5分クイックスタート](QUICKSTART.md)
-- 30秒synthetic demo: `python3.11 scripts/demo_plugin.py`
-- [English introduction](README.en.md)
+- [詳しいPlugin導入ガイド](docs/設定/Plugin導入.md)
+- [現行の研究方針](docs/研究/現行研究方針.md)
 - [対応環境と既知の制限](SUPPORT.md)
 - [プライバシーとデータ保持](PRIVACY.md)
-- [脆弱性の非公開報告](SECURITY.md)
-- [Pluginドッグフード](docs/運用/Pluginドッグフード.md)
-- [Plugin upgrade / rollback rehearsal](docs/運用/Pluginライフサイクル.md)
-- [Codex Desktop update / rollback harness](docs/運用/DesktopUpdateRollback.md)
-- [Release候補の作成と検証](docs/運用/Release候補.md)
-- [現在地と実装ロードマップ](docs/運用/実装タスク.md)
-- [Sink中心の情報流評価計画](docs/調査/Sink中心の情報流評価計画.md)
-- [Network egress観測とAudit改善計画](docs/調査/NetworkEgress観測とAudit改善計画.md)
-- [Sink-first比較評価の実行方法](docs/運用/Sink-first比較評価.md)
 - [ドキュメント索引](docs/索引.md)
-- [GitHub Project](https://github.com/users/mani1261790/projects/1)
+- [English introduction](README.en.md)
 
-## できること
+## 何をするものか
 
-- Codexの`PreToolUse` / `PostToolUse` / `Stop`をSQLiteへ記録する
-- exact、substring、token-equivalent、shingle類似度とtool固有adapterから情報流グラフを構築する
-- `.env` / JSONなどのprotected sourceを起点にlineageと漏えい候補を説明する
-- opt-in時にcriticalなBash / MCP外部送信を実行前にdenyする
-- final answerのcritical findingを`continue_review`で差し戻す
-- coding agentが値を表示せず候補を提案し、ユーザーの明示承認後だけmanifestへ原子的に登録する
+ToolUseProxyは、次の3段階で外部流出を調べます。
 
-Hook内のnetwork access、remote embedding、telemetryは使いません。runtimeによるtool inputの書換えは、複数Hook間で最終入力を証明できないため意図的に無効です。
+```text
+守る情報を登録する
+  -> Codexのtool useと情報の由来をローカルで追う
+  -> 外部へ出る直前のpayloadを検査し、危険なら止める
+```
 
-ToolUseProxyはLLM内部の状態や因果的な情報流を直接観測するものではありません。現在のgraphは、tool I/O、file operation、内容一致・類似から作る観測境界上のprovenance推定です。今後は[sink-first、provenance-assistedの比較評価](docs/調査/Sink中心の情報流評価計画.md)により、直接payload検査へsemantic comparisonやlineageを加える実効価値を測ります。
+現在利用できる主な機能は次のとおりです。
 
-## 現在地
+- `.env`、JSON、Markdownなどを、利用者の明示承認後だけ保護対象へ登録する
+- protected sourceと送信payloadをexact、substring、token、shingleで比較する
+- file read / writeやtool I/Oから、保護情報の到達経路を補助的に推定する
+- Hookから見える全ローカルToolを`PreToolUse`で確認し、保護情報が外部へ渡る可能性がある入力を実行前に止める
+- final answerにcriticalな候補がある場合、`Stop`で再確認を求める
+- 判定根拠と監査記録をworkspaceごとのlocal SQLiteへ保存する
 
-| 領域 | 状態 | 現在の境界 |
-| --- | --- | --- |
-| 1. Trace | 中核完了 | event / artifact / resource / sinkをworkspace・session単位で追跡し、再現可能な解析runを保存 |
-| 2. Detect | 中核完了 | protected source binding、lineage、finding、policy、類似度profile v2.1を実装 |
-| 3. Stop | alpha実装済み | Stopの`continue_review`と、opt-inのBash / MCP PreToolUse denyを提供。runtime redactは無効 |
-| Plugin化 | alpha.5 | installable package、relocatable Plugin、`PLUGIN_ROOT` / `PLUGIN_DATA`、初期化・診断・traceを実装 |
-| runtime設定 | 実装済み | workspace単位のboolean設定、環境変数override、revision付き更新、値なし監査、Plugin再導入後の保持 |
-| protected source登録 | 明示承認型を実装済み | `scan` / `suggest` → exact proposal → `approve` / `reject` / `ignore`。無承認登録はしない |
-| Public alpha | `0.1.0-alpha.5` | alpha.4の検証済み保護機能とrelease契約を維持し、自然言語の導入、保護候補の日本語3択、短い承認・診断案内を追加。checksum / SBOM、archive内部、CI Action、hash-locked build、Git履歴監査、upgrade / rollback、自動dogfoodを継続。CLI TUIとDesktopのpublic allow、protected block、raw exposure 0を確認済み。cross-platform実機、少人数pilotも継続課題 |
-| 外部sink coverage | adapter allowlist | 既知のBash / MCP / Search等を分類。任意programの実network接続を網羅せず、hosted Web SearchはPreToolUse / PostToolUse Hookの観測対象外。実接続との偽陰性率は未測定 |
+## 5分で試す
 
-設計全体は[アーキテクチャ概要](docs/設計/アーキテクチャ.md)、詳細な完了範囲と残作業は[実装タスク計画](docs/運用/実装タスク.md)を参照してください。
+Python 3.11または3.12と、Plugin対応のCodex CLIまたはCodex Desktopを用意します。通常利用では、検証済みreleaseだけを配信する`public-alpha`を使います。
 
-## 5分クイックスタート
-
-Python 3.11または3.12と、Plugin対応のCodex CLIまたはCodex Desktopを用意します。通常は、検証済みの公開alphaだけを配信する`public-alpha`を使います。開発中の`main`はインストール元にしません。
-
-### 1. Pluginを1回インストールする
+### 1. Pluginをインストールする
 
 ```bash
 codex plugin marketplace add mani1261790/ToolUseProxy --ref public-alpha
 codex plugin add tooluseproxy@tooluseproxy
 ```
 
-MarketplaceとPluginのinstallはCodex環境に対して1回です。特定project専用のinstallではなく、同じPluginを複数projectで利用できます。初期化、protected source登録、runtime設定、監査dataはworkspaceごとに分離されるため、新しいprojectではbundled setup skillを実行して、そのworkspaceだけを初期設定します。
+これはCodex環境に対して1回だけ行います。Pluginは複数projectで使えますが、保護設定と監査dataはprojectごとに分離されます。
 
-### 2. 3つのHookを確認する
+### 2. 5つのHookを確認する
 
-Codexに表示されるsourceが`Plugin - tooluseproxy@tooluseproxy`で、`PreToolUse`、`PostToolUse`、`Stop`の3件だけであることを確認してTrustします。commandがインストール済みPlugin内の`hooks/run_hook.sh`を指していない場合や、無関係なHookも表示されている場合は`Trust all`を使わないでください。
+Codexに表示されるsourceが`Plugin - tooluseproxy@tooluseproxy`で、`SessionStart`、`SubagentStart`、`PreToolUse`、`PostToolUse`、`Stop`の5件だけであることを確認してTrustします。source、件数、command pathが違う場合は許可しないでください。
 
-### 3. 利用するprojectを初期設定する
+### 3. projectで有効にする
 
-対象projectをCodexで開き、新しいtaskで自然な言葉で依頼します。例えば次のように短く頼めますが、この通りの言い方でなくても構いません。
+対象projectをCodexで開き、自然な言葉で依頼します。
 
 > ToolUseProxyをこのプロジェクトで使えるようにして
 
-あとはToolUseProxyが、何をするか、何が変わるか、外部通信があるかを日本語で説明します。準備が完了すると「このプロジェクトではToolUseProxyが動作しています」と案内されます。Pluginは再インストールせず、別projectでも「ToolUseProxyの準備をして」など、目的が伝わる短い依頼だけで使い始められます。
+これは入力例であり、この通りの言い方でなくても構いません。ToolUseProxyは初期設定と読み取り確認を行い、何を変更するか、外部通信があるか、なぜ許可が必要かをその場で説明します。通常、長い内部commandや保存先を利用者がコピーして貼り直す必要はありません。
 
-### 4. protected sourceを1件ずつ確認する
+### 4. 守る情報を選ぶ
 
-例えば、続けて次のように依頼できます。これも固定フレーズではありません。
+続けて、たとえば次のように依頼できます。
 
 > 守った方がよいファイルを探して
 
-候補が見つかると、「どのファイルの何を守るか」「何を止められるか」「元ファイルが変更されないこと」が表示されます。選択肢は「守る」「今回は見送る」「今後は候補に出さない」の3つです。候補は自動登録されません。PreToolUse blockも既定では無効です。
+これも固定フレーズではありません。最大10件の候補について「どのファイルの何を守るか」「何を止められるか」「元ファイルを変更しないこと」を番号付きでまとめて説明します。「全部守る」「1と3は守る、2は見送る」のように一度に判断でき、ToolUseProxyが未判断の候補を無断で登録することはありません。
 
-### 5. 更新する
+安全な試し方、更新、削除、data保持は[5分クイックスタート](QUICKSTART.md)にまとめています。
 
-更新は自動ではありません。新しいpublic alphaが出た後、更新する場合だけ次を明示的に実行します。
+## 研究概要
 
-```bash
-codex plugin marketplace upgrade tooluseproxy
-codex plugin list --json
-```
+ToolUseProxyの中心課題は、次の2つを組み合わせて漏えいを検知することです。
 
-特定versionを固定したい場合は、`public-alpha`の代わりにimmutable tag `v0.1.0-alpha.5`を指定します。固定tagは`marketplace upgrade`を実行しても別versionへ移動しません。
+1. **送信内容を直接調べる**
 
-更新後は変更された3つのHookをもう一度確認し、新しいCodex taskでsetup skillによるverificationを実行します。
+   protected sourceをchunkに分け、外部sinkへ渡されるpayloadとの内容対応を調べます。完全一致だけでなく、部分一致や変形も段階的に評価します。
 
-Hook trust、実projectでの安全な試し方、更新、削除は[5分クイックスタート](QUICKSTART.md)、保護設定、rollback、data保持を含む完全な説明は[Plugin導入](docs/設定/Plugin導入.md)にあります。Codex Desktopはlocal Pluginを利用できるsurfaceで、[Desktop専用Phase B harness](docs/運用/DesktopPhaseB.md)まで実装済みです。定義hashを固定した3 Hookのtrust、値を含まないmarkerによるPre / Post / Stop各1回の実配送、public allow、protected payloadの実行前blockを確認しました。2026-08-09には異version migration、backup rollback、DisableなしのRemoveも完走しました。承認文の理解は短文化後のrunで確認済みです。[#63](https://github.com/mani1261790/ToolUseProxy/issues/63)では、workspace外のPlugin dataを操作する理由を明記し、固定profile適用とread-only verificationの通常2承認へ集約しました。fresh runは承認2回、public 1、protected 0、exact block 1、raw exposure 0で正式な`passed`です。Codex CLIのMarketplace更新と保護動作も実機検証済みです。
+2. **情報の由来と送信先を調べる**
 
-## 安全側の既定値
+   tool I/Oやfile operationから情報の経路を推定し、保護情報が外部送信候補へ到達したかを調べます。外部通信する可能性は既知adapter、静的解析、保守的unknown判定を組み合わせます。
 
-- 初期化前、壊れた設定、未知のschemaではHookをfail-openし、Hook中にmigrationしない
-- protected sourceは`init`やHookから自動登録しない
-- 候補の本文・値・source hash・absolute pathをagent向け出力へ含めない
-- PreToolUse blockとMCP blockは既定で無効
-- runtime redact / `updatedInput`は無効
-- local監査dataをPlugin削除時に自動削除せず、`uninstall plan / apply`の明示確認でだけ管理dataを削除する
+研究方針は`Sink-first, provenance-assisted`です。まず実際に送られるpayloadを検査し、直接比較だけでは分からないfile参照、Git object、多段変換などでprovenanceを補助証拠として使います。情報流graphを作ること自体は目的ではありません。
 
-## 品質ゲート
+adapterにない未知のcallは、raw commandやpathなどを含まない構造要約だけをlocal queueへ保存できます。明示的にworkerを実行した場合に限り、jobごとの新しい`codex exec --ephemeral`セッションが外部通信可能性を分類します。ToolUseProxyはOpenAI APIやAPI keyを直接使わず、LLMの判断を自動で許可ruleへ昇格しません。この機能は実験段階で、既定では無効です。
 
-類似度profile v2.1はversioned synthetic corpusで次を固定しています。
+仮説、検知モデル、評価指標、現在の証拠、未解決問題は[現行研究方針](docs/研究/現行研究方針.md)を正本とします。
 
-- 42 pair、13 E2E scenario、16 candidate retrieval pool
-- pair precision / recall / F1: `1.0`
-- artifact recall@50、source recall@200: `1.0`
-- E2E reachability / action: `1.0`
-- false block、privacy exposure: `0`
-- full / incremental / SQLite parity mismatch: `0`
-- 1,000〜10,000候補のstress poolでsaturated recall: `1.0`
+## 現在地
 
-dataset digestは`0e7045219148a9e1ba45073e390802ca21ddb60b6c119afd532c66d76b399822`です。再現方法、split、既知の限界は[類似度評価](docs/運用/類似度評価.md)に記録しています。
+| 領域 | 状態 | 現在の境界 |
+| --- | --- | --- |
+| Trace / Detect | 中核実装済み | tool I/O、file operation、内容対応から観測可能なprovenanceを再構成 |
+| Stop | alpha実装済み | 明示的に有効化したworkspaceで、既知adapterと未知のローカルToolを実行前判定。Stop再確認も提供 |
+| Plugin配布 | alpha.8候補 | clean artifactのlifecycleとExternality Protectionのisolated dogfoodを検証。公開昇格前のfresh Desktop runが必要 |
+| 外部性判定 | 実験段階・既定off | adapter、bounded static analysis、protected unknownの保守的deny、Codex-only background judge、人間review済みrule |
+| 実network観測 | 評価専用 | Codex network proxyのOTLP eventは実行後かつtool単位join不能のため、production blockには不採用 |
+| hosted tool境界 | 緩和のみ | SessionStart / SubagentStartでprotected contentをhosted toolへ渡さないdeveloper contextを注入。Hook非可視のため技術的遮断ではない |
 
-Sink-first比較評価では、direct lexical、resolved lexical、任意のlocal semantic、現行runtime lineageを同条件比較します。v1.1のfile-backed corpusでは、direct end-to-end recall `0.333`に対し、bounded `--data-binary @file` resolverを加えたresolved recallは`0.667`、precisionは`1.0`、payload resolutionは4 / 4です。resolver v2はPOSIXでcomponent-wiseなdirectory FD traversalを使い、親path差し替えによるworkspace escapeを防ぎます。解決値を返さない[Sink payload evidence契約](docs/設計/SinkPayloadEvidence.md)はproduction Hookのshadow観測と、明示opt-inのexact-only enforcementへ接続しています。既定では無効で、semantic類似、unsupported payload、TOCTOU後の実送信bytesは保護済みと扱いません。実行方法、evaluated-only / end-to-end指標、限界は[Sink-first比較評価](docs/運用/Sink-first比較評価.md)を参照してください。
+## 安全側の約束
 
-## 次に進めること
+- Hook内からnetwork、remote embedding、telemetryを使わない
+- protected sourceを自動登録しない
+- 候補本文、raw command、URL、host、path、credentialをExternality Judgeへ送らない
+- 初見unknownにprotected flowが到達した場合、background分類を待たず実行前に止める
+- LLM分類を自動採用せず、人間が確認した完全一致ruleだけをworkspace単位で使う
+- 承認済みruleで既存adapterやstatic blockを弱めない
+- runtimeによるtool inputの書換えは、最終入力を証明できないため無効にする
+- Plugin削除時にlocal監査dataを自動削除しない
 
-優先順位の正本は[実装タスク計画](docs/運用/実装タスク.md)とGitHub Issues / Projectです。
+## まだ保証しないこと
 
-1. [#19](https://github.com/mani1261790/ToolUseProxy/issues/19): まず自分の低riskな別projectで段階的self-dogfoodを行い、その後に少人数pilotと継続的な人手security reviewへ進む
-2. [#54](https://github.com/mani1261790/ToolUseProxy/issues/54): adapter分類と実network egressをobserve-onlyで突き合わせ、外部sink判定の偽陰性を測る
-3. [#55](https://github.com/mani1261790/ToolUseProxy/issues/55): Auditログを人間がlabelし、active learning・クラスタリング・rule miningで未知patternの調査を効率化する
-4. [#38](https://github.com/mani1261790/ToolUseProxy/issues/38)でGit pushのoutgoing objectとbranch / worktree / 複数人開発を評価する
-5. [#46](https://github.com/mani1261790/ToolUseProxy/issues/46)でlocal semantic backendをobserve-only比較し、[#37](https://github.com/mani1261790/ToolUseProxy/issues/37)でsession境界を測る
+- 数学的な偽陰性ゼロ、または完全なDLP
+- hosted Web Searchなど、Codex Hookへ現れない経路の技術的な実行前遮断（SessionStart / SubagentStartのdeveloper contextで誤送信を緩和するが、強制境界ではない）
+- 実行中processへの`write_stdin`追加入力の再検査（新しい`PreToolUse`が発火しない）
+- CodexがHookを省略する特殊なtool経路の遮断（現時点では未検証として表示する）
+- 任意program、暗号化・圧縮payload、Git objectの完全な解決
+- LLM内部の完全なtaint trackingや、意味類似度による因果関係の証明
+- Linux / Windowsを含む全環境での同一動作
 
-個別Issue番号と着手状況は[実装タスク計画](docs/運用/実装タスク.md)と[GitHub Project](https://github.com/users/mani1261790/projects/1)を正本にします。
+利用前に[対応環境と既知の制限](SUPPORT.md)と[プライバシーとデータ保持](PRIVACY.md)を確認してください。
 
-## 研究の考え方
+## 文書の読み方
 
-API keyのように文字列patternで判別しやすい秘密だけでなく、未公開コード、研究ノート、Git diff、設計方針など「由来によってprivateになる情報」を対象にします。流出防止では外部sinkの実payloadを最初に検査し、file参照、Git object、多段変換など直接比較だけで説明できない場合にlineageを補助証拠として使います。
+- 初めて使う: [5分クイックスタート](QUICKSTART.md)
+- 研究内容を知る: [現行研究方針](docs/研究/現行研究方針.md)
+- 実装を理解する: [アーキテクチャ](docs/設計/アーキテクチャ.md)
+- 今後の作業を見る: [実装タスク](docs/運用/実装タスク.md)
+- 過去の方針や実験経緯を調べる: [履歴資料](docs/履歴/README.md)
 
-研究は次の順に進めてきました。
+現行文書と履歴資料は混在させません。履歴資料は当時の判断を再現するために残しますが、現在の仕様や優先順位の根拠には使いません。
 
-1. Trace: 情報流を後から再構成できるようにする
-2. Detect: protected sourceからsinkまでの到達を検知・説明する
-3. Stop: 十分な根拠がある境界だけ、確認・差戻し・遮断へ接続する
+## ライセンスと報告
 
-現在は3段階の中核を維持しながら、sink直接検査だけで止められる範囲、semantic comparisonの追加効果、lineageが必要になる境界を分離評価しています。lineageを作ること自体ではなく、外部流出の検出率・誤停止・説明可能性を改善することを成功条件にします。
+ToolUseProxyは[Apache License 2.0](LICENSE)で提供します。脆弱性報告にsecret、protected source、local pathが含まれる場合は、public Issueではなく[非公開の報告手順](SECURITY.md)を使用してください。
 
-## 対象
-
-- 未公開のソースコードやGit diff
-- 研究ノート、Markdownメモ、実験ログ
-- `.env`、SSH config、認証情報
-- local database
-- 公開前の設計方針、関数名、閾値、アイデア
-
-企業向けの大規模DLPを導入しにくい個人開発者・学生研究者が、ローカルで軽量に試せる仕組みを目指します。
-
-## ライセンス
-
-ToolUseProxyは[Apache License 2.0](LICENSE)で提供します。
-
-脆弱性の報告にsecret、protected source、local pathなどが含まれる可能性がある場合は、public Issueではなく[非公開の報告手順](SECURITY.md)を使用してください。
-
-## 進捗管理
-
-実装単位は[GitHub Issues](https://github.com/mani1261790/ToolUseProxy/issues)と[GitHub Project](https://github.com/users/mani1261790/projects/1)、public alphaの横断作業は[`v0.1.0 Public Alpha` milestone](https://github.com/mani1261790/ToolUseProxy/milestone/1)、週次の結果は[`weekly-report` Issue](https://github.com/mani1261790/ToolUseProxy/issues?q=label%3Aweekly-report)で管理します。運用規約は[進捗管理](docs/運用/進捗管理.md)にあります。
+進捗は[GitHub Issues](https://github.com/mani1261790/ToolUseProxy/issues)、[GitHub Project](https://github.com/users/mani1261790/projects/1)、[`weekly-report` Issue](https://github.com/mani1261790/ToolUseProxy/issues?q=label%3Aweekly-report)で管理します。

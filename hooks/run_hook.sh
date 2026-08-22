@@ -16,6 +16,12 @@ emit_inactive() {
             ;;
     esac
     case "$phase" in
+        session-start)
+            printf '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"%s WebSearchなどのhosted toolはToolUseProxyで検査・遮断できません。保護対象やそこから得た内容をhosted toolへ入力しないでください。（技術情報: %s）"}}\n' "$message" "$code"
+            ;;
+        subagent-start)
+            printf '{"hookSpecificOutput":{"hookEventName":"SubagentStart","additionalContext":"%s WebSearchなどのhosted toolはToolUseProxyで検査・遮断できません。保護対象やそこから得た内容をhosted toolへ入力しないでください。（技術情報: %s）"}}\n' "$message" "$code"
+            ;;
         pre-tool-use)
             printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":"%s（技術情報: %s）"}}\n' "$message" "$code"
             ;;

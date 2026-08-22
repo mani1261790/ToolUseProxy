@@ -731,13 +731,20 @@ def suggest_protected_source(
     relative_path: str,
     *,
     workspace_id: str,
+    whole_file: bool = False,
 ) -> ProtectedSourceCandidate:
     """Create one value-free, explicitly reviewable protected-source candidate."""
 
     if not isinstance(workspace_id, str) or not workspace_id.strip():
         _raise("candidate_invalid")
+    if type(whole_file) is not bool:
+        _raise("candidate_invalid")
     normalized_path = _normalize_relative_path(relative_path)
-    _source_kind(normalized_path)
+    if whole_file:
+        if normalized_path == MANIFEST_FILENAME:
+            _raise("invalid_relative_path")
+    else:
+        _source_kind(normalized_path)
     root_fd, root_path, root_stat = _open_workspace(workspace_root)
     try:
         manifest_text, manifest_binding = _read_manifest_text(root_fd, root_stat.st_dev)
@@ -761,6 +768,7 @@ def suggest_protected_source(
             manifest=manifest,
             manifest_binding=manifest_binding,
             root_path=root_path,
+            whole_file=whole_file,
         )
     finally:
         os.close(root_fd)
@@ -863,13 +871,19 @@ def _build_protected_source_candidate(
     manifest: dict[str, object],
     manifest_binding: FileBinding,
     root_path: Path,
+    whole_file: bool = False,
 ) -> ProtectedSourceCandidate:
-    source_kind = _source_kind(normalized_path)
-    selector, reason_codes, confidence = _discover_selector(
-        source_kind,
-        source_text,
-        relative_path=normalized_path,
-    )
+    if whole_file:
+        selector = None
+        reason_codes = ("explicit_whole_file",)
+        confidence = 1.0
+    else:
+        source_kind = _source_kind(normalized_path)
+        selector, reason_codes, confidence = _discover_selector(
+            source_kind,
+            source_text,
+            relative_path=normalized_path,
+        )
     proposed_source = _build_proposed_source(normalized_path, selector)
     already_registered = _validate_new_source_against_manifest(
         manifest,
@@ -1220,6 +1234,188 @@ def approve_protected_source(
                 pass
 
 
+def approve_protected_source_batch(
+    workspace_root: Path,
+    candidates: Sequence[tuple[ProtectedSourceCandidate | Mapping[str, object], str]],
+    *,
+    expected_manifest_sha256: str,
+    workspace_lock: ProtectedSourceWorkspaceLock | None = None,
+) -> tuple[ApprovalResult, ...]:
+    """Revalidate and install one explicitly reviewed candidate batch.
+
+    All sources are bound to the same input manifest and the manifest is
+    replaced once.  Exact entries from an interrupted prior apply are accepted
+    only when every approved entry is already present.
+    """
+
+    if workspace_lock is None:
+        with lock_protected_source_workspace(workspace_root) as acquired_lock:
+            return approve_protected_source_batch(
+                workspace_root,
+                candidates,
+                expected_manifest_sha256=expected_manifest_sha256,
+                workspace_lock=acquired_lock,
+            )
+    if not isinstance(candidates, Sequence) or isinstance(candidates, (str, bytes)):
+        _raise("candidate_invalid")
+    if not 1 <= len(candidates) <= DEFAULT_PROTECTED_SOURCE_SCAN_LIMITS.max_candidates:
+        _raise("candidate_invalid")
+    if (
+        not isinstance(expected_manifest_sha256, str)
+        or _HEX_SHA256.fullmatch(expected_manifest_sha256) is None
+    ):
+        _raise("candidate_invalid")
+
+    saved_candidates: list[ProtectedSourceCandidate] = []
+    candidate_ids: set[str] = set()
+    workspace_ids: set[str] = set()
+    for candidate, revision in candidates:
+        saved = _coerce_candidate(candidate, allow_legacy_recovery=True)
+        _verify_candidate_revision(saved, revision)
+        if saved.candidate_id in candidate_ids:
+            _raise("candidate_invalid")
+        candidate_ids.add(saved.candidate_id)
+        workspace_ids.add(saved.workspace_id)
+        saved_candidates.append(saved)
+    if len(workspace_ids) != 1:
+        _raise("candidate_invalid")
+
+    root_fd, root_path, root_stat = _require_workspace_lock(
+        workspace_root,
+        workspace_lock,
+    )
+    temporary_name: str | None = None
+    try:
+        _verify_workspace_path(root_path, root_stat)
+        manifest_text, initial_manifest_binding = _read_manifest_text(
+            root_fd,
+            root_stat.st_dev,
+        )
+        manifest = _parse_and_validate_manifest(manifest_text, root_path)
+        existing_states = [
+            _find_existing_source(manifest, saved.proposed_source, root_path)
+            for saved in saved_candidates
+        ]
+        if all(state == "exact" for state in existing_states):
+            confirmed_sha256: str | None = None
+            results: list[ApprovalResult] = []
+            for saved in saved_candidates:
+                if saved.status in {"proposed", "approving"}:
+                    _revalidate_source(root_fd, root_stat.st_dev, saved)
+                binding = _confirm_exact_manifest_durability(
+                    root_fd,
+                    root_path,
+                    root_stat,
+                    saved,
+                )
+                if confirmed_sha256 is None:
+                    confirmed_sha256 = binding.sha256
+                elif not hmac.compare_digest(confirmed_sha256, binding.sha256):
+                    _raise("manifest_postcondition_failed")
+                results.append(
+                    ApprovalResult(
+                        status="already_registered",
+                        candidate_id=saved.candidate_id,
+                        source_id=_required_source_id(saved.proposed_source),
+                        manifest_sha256=binding.sha256,
+                    )
+                )
+            return tuple(results)
+        if any(state == "exact" for state in existing_states):
+            _raise("manifest_conflict")
+        if any(state == "id_conflict" for state in existing_states):
+            _raise("source_id_conflict")
+        if any(state == "path_conflict" for state in existing_states):
+            _raise("source_path_conflict")
+        if any(saved.status == "approved" for saved in saved_candidates):
+            _raise("manifest_conflict")
+        if not hmac.compare_digest(
+            initial_manifest_binding.sha256,
+            expected_manifest_sha256,
+        ):
+            _raise("manifest_conflict")
+        if any(
+            not hmac.compare_digest(
+                saved.manifest_sha256,
+                expected_manifest_sha256,
+            )
+            for saved in saved_candidates
+        ):
+            _raise("manifest_conflict")
+
+        _preflight_manifest_sources(root_fd, root_path, root_stat.st_dev, manifest)
+        raw_sources = manifest["sources"]
+        assert isinstance(raw_sources, list)
+        if len(raw_sources) + len(saved_candidates) > MAX_MANIFEST_SOURCES:
+            _raise("manifest_too_many_sources")
+        for saved in saved_candidates:
+            _revalidate_source(root_fd, root_stat.st_dev, saved)
+            if _find_existing_source(manifest, saved.proposed_source, root_path) != "none":
+                _raise("source_path_conflict")
+            raw_sources.append(_copy_json_object(saved.proposed_source))
+
+        encoded = _encode_manifest(manifest)
+        temporary_name = _write_temporary_manifest(root_fd, encoded)
+        temporary_path = root_path / temporary_name
+        _verify_workspace_path(root_path, root_stat)
+        try:
+            load_sources_and_chunks(
+                root_path,
+                temporary_path,
+                workspace_id=saved_candidates[0].workspace_id,
+            )
+        except Exception:
+            _raise("manifest_validation_failed")
+        _verify_temporary_file(root_fd, temporary_name, root_stat.st_dev, encoded)
+        for saved in saved_candidates:
+            _revalidate_source(root_fd, root_stat.st_dev, saved)
+        _, final_manifest_binding = _read_manifest_text(root_fd, root_stat.st_dev)
+        if (
+            not hmac.compare_digest(
+                final_manifest_binding.sha256,
+                expected_manifest_sha256,
+            )
+            or final_manifest_binding != initial_manifest_binding
+        ):
+            _raise("manifest_conflict")
+        _verify_workspace_path(root_path, root_stat)
+        try:
+            os.replace(
+                temporary_name,
+                MANIFEST_FILENAME,
+                src_dir_fd=root_fd,
+                dst_dir_fd=root_fd,
+            )
+        except OSError:
+            _raise("manifest_write_failed")
+        temporary_name = None
+        try:
+            os.fsync(root_fd)
+        except OSError:
+            _raise("manifest_durability_unknown")
+        _verify_workspace_path(root_path, root_stat)
+        _, installed_binding = _read_manifest_text(root_fd, root_stat.st_dev)
+        installed_sha256 = hashlib.sha256(encoded).hexdigest()
+        if not hmac.compare_digest(installed_binding.sha256, installed_sha256):
+            _raise("manifest_postcondition_failed")
+        return tuple(
+            ApprovalResult(
+                status="approved",
+                candidate_id=saved.candidate_id,
+                source_id=_required_source_id(saved.proposed_source),
+                manifest_sha256=installed_sha256,
+            )
+            for saved in saved_candidates
+        )
+    finally:
+        if temporary_name is not None:
+            try:
+                os.unlink(temporary_name, dir_fd=root_fd)
+            except FileNotFoundError:
+                pass
+
+
+
 def reject_protected_source_candidate(
     candidate: ProtectedSourceCandidate | Mapping[str, object],
     *,
@@ -1319,13 +1515,18 @@ def _revalidate_source(
     )
     if not _source_binding_matches(binding, candidate.source_binding):
         _raise("source_changed")
-    source_kind = _source_kind(candidate.relative_path)
-    selector, reason_codes, confidence = _discover_selector(
-        source_kind,
-        text,
-        relative_path=candidate.relative_path,
-        detector_version=candidate.detector_version,
-    )
+    if candidate.reason_codes == ("explicit_whole_file",):
+        selector = None
+        reason_codes = candidate.reason_codes
+        confidence = 1.0
+    else:
+        source_kind = _source_kind(candidate.relative_path)
+        selector, reason_codes, confidence = _discover_selector(
+            source_kind,
+            text,
+            relative_path=candidate.relative_path,
+            detector_version=candidate.detector_version,
+        )
     proposed = _build_proposed_source(candidate.relative_path, selector)
     if (
         proposed != candidate.proposed_source
@@ -1793,7 +1994,7 @@ def _escape_json_pointer_segment(value: str) -> str:
 
 def _build_proposed_source(
     relative_path: str,
-    selector: dict[str, list[str]],
+    selector: dict[str, list[str]] | None,
 ) -> dict[str, object]:
     path = PurePath(relative_path)
     slug_source = re.sub(r"[^a-z0-9]+", "_", path.name.casefold()).strip("_")
@@ -1802,14 +2003,16 @@ def _build_proposed_source(
     source_id = f"protected_{slug}_{hashlib.sha256(identity).hexdigest()[:16]}"
     if _SAFE_SOURCE_ID.fullmatch(source_id) is None:
         _raise("candidate_invalid")
-    return {
+    proposed: dict[str, object] = {
         "id": source_id,
         "path": relative_path,
         "type": "secretfile",
         "sensitivity": "high",
         "policy_tags": ["no_external", "no_search"],
-        "selector": selector,
     }
+    if selector is not None:
+        proposed["selector"] = selector
+    return proposed
 
 
 def _validate_proposed_source(
@@ -1817,8 +2020,11 @@ def _validate_proposed_source(
     *,
     expected_path: str,
 ) -> dict[str, object]:
-    expected_keys = {"id", "path", "type", "sensitivity", "policy_tags", "selector"}
-    if set(value) != expected_keys:
+    base_keys = {"id", "path", "type", "sensitivity", "policy_tags"}
+    if set(value) not in {
+        frozenset(base_keys),
+        frozenset(base_keys | {"selector"}),
+    }:
         _raise("candidate_invalid")
     source_id = value.get("id")
     path = value.get("path")
@@ -1833,9 +2039,13 @@ def _validate_proposed_source(
         or source_type != "secretfile"
         or sensitivity != "high"
         or tags != ["no_external", "no_search"]
-        or not isinstance(selector, Mapping)
-        or len(selector) != 1
     ):
+        _raise("candidate_invalid")
+    if "selector" not in value:
+        if expected_path == MANIFEST_FILENAME:
+            _raise("candidate_invalid")
+        return _copy_json_object(value)
+    if not isinstance(selector, Mapping) or len(selector) != 1:
         _raise("candidate_invalid")
     kind = next(iter(selector))
     expected_kind = "dotenv_keys" if _source_kind(expected_path) == "dotenv" else "json_pointers"

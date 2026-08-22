@@ -33,7 +33,7 @@ Desktopのtask履歴で使われる`exec_command`は、Hook matcherのtool名で
 
 ただし、承認の理由は外部通信ではありません。Desktop taskのworkspace外にある`PLUGIN_DATA`をCLIが読み書きするため、各commandに一時的な権限昇格が必要になります。2026-08-09のfresh runでは、短いplain textの説明、継続中commandのwait、public allow、protected blockまで機能上は完走しました。Hook review、command説明、block説明はいずれも理解できたという評価でしたが、初期設定で約10回の承認が必要な点は製品UXとして残っています。
 
-承認理由は160文字以内のplain textとし、区切りは`すること：`、`変わるもの：`、`外部通信：`、`許可判断：`の4つだけにします。absolute path、Markdown、過去の説明への参照を含めません。同じ文を承認直前とtool callのjustificationへ渡します。command toolがcell IDを返した場合は、CLIを再実行せず、そのIDによるwaitだけで元commandの完了まで待ちます。
+承認理由は160文字以内のplain textとし、`行うこと：`、`変更されるもの：`、`外部通信：`、`確認が必要な理由：`の順で示し、最後に`この内容で実行してよいですか？`と尋ねます。ToolUseProxy側から許可・拒否を指示しません。absolute path、Markdown、過去の説明への参照を含めません。同じ文を承認直前とtool callのjustificationへ渡します。command toolがcell IDを返した場合は、CLIを再実行せず、そのIDによるwaitだけで元commandの完了まで待ちます。
 
 Issue [#63](https://github.com/mani1261790/ToolUseProxy/issues/63)では、`init`と3つの明示設定を固定`file-payload-exact` profileの一括適用へ、`doctor` / `status` / `config show`を一つのread-only verificationへまとめました。3設定は一つのSQLite transactionと一つのrevisionで更新し、stale revisionでは変更せず停止します。新しいharnessはprofile apply 1回、verification 1回、再利用可能permission 0件を必須にします。Desktop session parserは、setupとsendではexactな`text(JSON.stringify(r));`だけを受理し、`text(r.output);`は単独probeとcontext・setup skillの固定読み取りだけに限定します。任意statement、追加command、同じoutput-only wrapperによるsetupやsendは拒否します。2026-08-09のfresh runは全checks trueで正式な`passed`です。
 
@@ -69,13 +69,14 @@ Desktop / GUI上で今回のfile-backed exact-only保護が動くことは確認
 - 検証用marketplaceは`tooluseproxy-desktop-phase-b`、Plugin IDは`tooluseproxy@tooluseproxy-desktop-phase-b`へ分離する
 - 計測用launcherを加えたbundleにはrunごとの一意なSemVer prereleaseを付け、同じrelease version名の古いDesktop cacheを再利用しない
 - 共有configとPlugin / marketplace一覧は変更直前にも比較し、plan後に変化していれば停止する
-- Hook trustは迂回せず、Desktopで人が3件をreviewする
+- Hook trustは迂回せず、Desktopで人が5件をreviewする
 - PreToolUse / PostToolUse / Stopの`trustStatus`がすべて`trusted`であることを、送信テスト前に機械確認する。`modified` / `untrusted`なら停止する
 - Desktop task履歴の`exec_command`をHook matcher名として流用せず、canonicalな`Bash`定義を確認する
 - workspace外のPlugin dataへ書くsetup commandは通常権限で先に試さず、exactな1コマンドだけのsandbox昇格を要求する
 - test sinkはnetworkへ接続せず、synthetic workspace内のmarkerだけを更新する
 - verifierはDesktop session、Hook定義hash、dispatch marker、Hook DB、side-effect marker、Plugin source / versionを相互照合する
 - verifierは全tool inputも確認し、指定context / setup skillのread、exactなToolUseProxy setup command、public / protected test call以外のWeb・MCP・編集・任意shellが1件でもあれば不合格にする
+- 本試験promptは承認文の正解を埋め込まない。通常利用と同じく、インストール済みsetup skillだけから説明を組み立てさせ、verifierは「行うこと」「変更されるもの」「外部通信」「確認が必要な理由」「利用者への直接の質問」が順番どおり揃い、操作内容と矛盾しないことを確認する
 - cleanup-planでmanaged dataの件数・file数・byte数・未管理entry数とexact uninstall tokenを固定し、apply中に別の削除planへ差し替えない
 - cleanupはPhase B専用dataとmarketplaceだけを削除し、未管理dataと無関係なPlugin / marketplaceを保持する。途中失敗時はdata削除前後・marketplace削除前後の保存済み段階から再開する
 
@@ -107,7 +108,7 @@ python3.11 scripts/manual_desktop_phase_b.py checkpoint-installed \
   --root /Users/mani/.tooluseproxy-dogfood/desktop-phase-b-YYYYMMDD
 ```
 
-checkpointが示す3件をCodex DesktopのHook review画面で確認します。ToolUseProxy由来のPreToolUse、PostToolUse、Stopだけを対象にし、source、version、command root、件数が違えばtrustせず停止します。
+checkpointが示す5件をCodex DesktopのHook review画面で確認します。ToolUseProxy由来のSessionStart、SubagentStart、PreToolUse、PostToolUse、Stopだけを対象にし、source、version、command root、件数が違えばtrustせず停止します。
 
 review後、実際のHook状態を確認します。画面で一度trustを選んだ記憶だけでは進めません。定義変更後の`modified`も未trustとして停止します。
 

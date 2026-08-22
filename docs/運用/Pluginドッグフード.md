@@ -2,6 +2,24 @@
 
 公開Plugin marketplace artifactから、public alphaのlifecycleをsynthetic dataだけで反復する手順です。CodexのHook trustはユーザーがdefinitionをreviewして行うmanual gateであり、このrunnerは承認を自動化・迂回しません。
 
+## 一括再現試験
+
+日常的な回帰確認では、個別runnerを手作業で順番に呼びません。次の1コマンドが、現在のcheckoutからfresh artifactと隔離dataを作り、再現可能な検証を一度ずつ実行します。
+
+```bash
+python3.11 scripts/dogfood_all.py
+```
+
+一括runnerはruff、全自動test、`git diff --check`、isolated Codex marketplaceでのPlugin workflow、Externality Protection、旧版からのupdate、rollback、remove、managed data cleanupを実行します。各runnerはsynthetic valueと一時directoryだけを使い、最後にvalue-freeなaggregate JSONを1件返します。途中で失敗した場合は値や長いcommand出力を表示せず、失敗stageと固定error codeだけを返します。
+
+Codex CLIを利用できないhostでは、runtime artifactだけを対象にできます。
+
+```bash
+python3.11 scripts/dogfood_all.py --installation-mode extracted
+```
+
+この一括結果の`automated.status=passed`は、繰り返せるCore／Hook／Plugin lifecycle検証の合格です。Codex Desktop自身はComputer Useによる自己操作を許可しないため、Desktopの4 Hook review、生成済みtaskを開く操作、2回の限定承認の判断は`desktop.status=human_required`として残します。task完了後の証跡回収、public allow、protected pre-execution block、raw exposure 0、report生成、cleanup planは既存Desktop verifierが自動処理します。自動試験の合格をDesktop UIや説明理解の合格へ読み替えません。
+
 ## 実projectでのself-dogfood
 
 自分の別projectで試す場合も、最初から日常利用へ全面適用しません。公開済みartifactの利用と、まだreleaseへ昇格していない最新mainの評価を区別します。
@@ -27,7 +45,7 @@ codex plugin marketplace add /absolute/path/to/ToolUseProxy
 codex plugin add tooluseproxy@tooluseproxy
 ```
 
-同名marketplaceがすでにある場合に上書きや混在を推測実行しません。既存installのremove、marketplace remove、新しいinstallをそれぞれ確認し、Plugin codeのremoveとmanaged dataの削除を分離します。install後はPreToolUse / PostToolUse / Stopの定義をreviewし、3件とも意図したsourceとhashである場合だけtrustして、新しいtaskを開始します。
+同名marketplaceがすでにある場合に上書きや混在を推測実行しません。既存installのremove、marketplace remove、新しいinstallをそれぞれ確認し、Plugin codeのremoveとmanaged dataの削除を分離します。install後はSessionStart / SubagentStart / PreToolUse / PostToolUse / Stopの定義をreviewし、5件とも意図したsourceとhashである場合だけtrustして、新しいtaskを開始します。
 
 最初のtaskではbundled setup skillだけを使います。最新buildでは、workspace外のPlugin dataへ初期化と3保護設定を一つのatomic profileとして適用し、その後に一つのread-only verificationを行います。承認理由は「外部通信」ではなく「workspace外のPlugin data操作」であり、通常の承認UIは2回程度です。広い再利用可能permission prefixは許可しません。
 
@@ -71,8 +89,8 @@ runnerは一時directoryとisolated `CODEX_HOME`を使い、次を順番に検�
 5. 提案後に内容を変更したsourceのapproveが`source_changed`で拒否されることを確認
 6. synthetic `.env`を`protect scan`し、保存されたexact proposalをapprove
 7. 再scanでreject / ignoreが抑止され、approved sourceが再提示されないことを確認
-8. public Bash / MCPがallowされることを確認
-9. protected Bash / MCPがPreToolUseでdenyされることを確認
+8. publicなHook-visible local toolがallowされることを確認
+9. protected flowを含む既知 / 未知local toolがPreToolUseでdenyされることを確認
 10. protected final answerがStopで`continue_review`になることを確認
 11. decision traceを`--no-preview`で取得
 12. Pluginとmarketplaceをremove
@@ -111,9 +129,9 @@ task launcherは起動直前にprepare時のCodex versionとfake sinkのpath、m
 
 prepareは同じrootへmode `0600`の`phase-b-prompt.txt`、`phase-b-guide.md`、`phase-b-context.json`を作ります。contextにはworkspace、installed Plugin、Plugin data、fake sinkのlocal pathだけを置き、source値を含めません。setup skillはこのcontextを使い、`ps`やworkspace外の広い検索でpathを推測しません。このpromptを新しいCodex taskへ渡し、次を人間が確認します。
 
-1. guideでPreToolUse / PostToolUse / Stopの役割、sandbox外実行、local data、networkなし、想定source / 件数 / command rootを理解する
-2. Codexが表示する3件のHook definitionをreviewし、guideと一致する場合だけtrustする
-3. 長いPlugin commandの承認ごとに、160文字以内の同じplain textが事前説明と承認理由の両方へ表示され、`内容：` `変更：` `通信：` `理由：` `許可：` で区切られている。absolute pathやMarkdownは承認理由へ含めない
+1. guideでSessionStart / SubagentStart / PreToolUse / PostToolUse / Stopの役割、sandbox外実行、local data、networkなし、想定source / 件数 / command rootを理解する
+2. Codexが表示する5件のHook definitionをreviewし、guideと一致する場合だけtrustする
+3. 長いPlugin commandの承認ごとに、160文字以内の同じplain textが事前説明と承認理由の両方へ表示され、`行うこと：` `変更されるもの：` `外部通信：` `確認が必要な理由：`の順で説明した後に`この内容で実行してよいですか？`と尋ねている。absolute pathやMarkdownは承認理由へ含めない
 4. synthetic workspaceで`init`、`doctor`、`status`を実行する
 5. 候補について、exact JSONより先に「このファイルをToolUseProxyで守りますか？」と表示され、「ファイル」「守る内容」「できること」「守るを選ぶと」の説明と「守る」「今回は見送る」「今後は候補に出さない」の選択肢を読む
 6. その説明を理解した場合だけexact proposalを明示approveする
@@ -169,7 +187,7 @@ verify出力はroot path、source hash、candidate ID、tool input、raw canary�
 
 2026-07-24のPhase B v2 human runでは、candidate approve、public allow、protected PreToolUse block、protected side effect 0、session / Hook DB / markerの相互照合はすべて成功しました。一方、最初のUX評価はHook review理解`no`、proposal説明理解`no`でした。起動前guideとcandidate review cardを追加した次のrunではcandidate説明は理解でき、同じ機能動作も成功しましたが、command承認は「起動前guideを覚えている」前提が残っていました。長い`sh ...`を理解せず、その承認直前の説明だけで判断することはできなかったため、command説明は`no`です。どちらのrunも`needs_followup`であり、機能成功を説明UX成功へ読み替えません。
 
-次のrunでは、各command承認の直前にexact command argumentsから作った自己完結型の7項目を表示します。「説明済み」「上記の操作」「先ほどの説明」のような過去参照は禁止し、「承認判断」で今回のsubcommand・scope・照合結果・拒否条件を繰り返します。このTUI再検証とは別に、Desktop / GUI専用のPhase B caseを用意します。
+現在のrunでは、各command承認の直前にexact command argumentsから作った自己完結型の説明を表示します。「説明済み」「上記の操作」「先ほどの説明」のような過去参照は禁止し、行うこと、変更されるもの、外部通信、確認が必要な理由を示したうえで「この内容で実行してよいですか？」と尋ねます。ToolUseProxy側から許可や拒否を指示しません。このTUI再検証とは別に、Desktop / GUI専用のPhase B caseを用意します。
 
 その後のhuman runでは7項目は出ましたが、`- ラベル: 長い文章`が連続し、承認時に読みづらいという評価でした。また`doctor`の一時的な`OperationalError`後もagentがscanと送信テストへ進み、protected callは遮断されませんでした。DBはrun終了後にSQLite `quick_check`とdoctorが正常へ戻り、恒久破損ではありませんでしたが、このrunは明確に不合格です。次の改修では縦型Markdown cardを採用しましたが、TUIの承認導線ではMarkdown記号がそのまま見え、改行も判断に利用できないことがhuman runで判明しました。このためMarkdown cardを廃止し、改行がすべて消えても読める全角ラベル区切りの短いplain textへ変更します。異常時に送信テストへ進まず停止する契約は維持します。
 
@@ -190,7 +208,7 @@ pre-tool-policy=on
 file-payload-shadow=on
 ```
 
-macOSではlauncherがpreflight後にsynthetic promptを`pbcopy`へ渡します。起動後はHook 3件をreviewし、clipboardのpromptを新しいtaskへ貼り付けます。prompt本文やsource値をterminal commandとして組み立て直す必要はありません。
+macOSではlauncherがpreflight後にsynthetic promptを`pbcopy`へ渡します。起動後はHook 5件をreviewし、clipboardのpromptを新しいtaskへ貼り付けます。prompt本文やsource値をterminal commandとして組み立て直す必要はありません。
 
 taskではpayload fileを読まず、fake sinkへ`--data-binary @shadow-public.txt`と`--data-binary @.env.phase-b`を1回ずつ送ります。shadowはobserve-onlyなので両方にPostToolUseとlocal side effectが必要です。protected callをblockしたrun、system curlを使ったrun、source値をassistant messageへ含めたrunは不合格です。
 

@@ -10,6 +10,7 @@ from hook_monitor.policy.sink_payload_exact import (
     EXACT_FILE_PAYLOAD_POLICY_VERSION,
     build_exact_file_payload_decisions,
 )
+from hook_monitor.policy.codex_output import render_codex_hook_output
 from hook_monitor.runtime.models import SinkCandidate
 
 
@@ -30,6 +31,16 @@ class SinkPayloadExactPolicyTest(unittest.TestCase):
         self.assertEqual("source-chunk-1", decision.source_node_id)
         self.assertEqual(1.0, decision.path_score)
         self.assertEqual("resolved_file_exact", decision.evidence_kind)
+
+        output = render_codex_hook_output(decision, "PreToolUse")
+        message = output["hookSpecificOutput"]["permissionDecisionReason"]
+        self.assertIn("ToolUseProxyが外部送信を実行前に止めました", message)
+        self.assertIn("外部操作は実行されていません", message)
+        self.assertIn("保護対象の内容も表示していません", message)
+        self.assertIn("技術情報（通常は読む必要なし）", message)
+        self.assertNotIn("Protected source content", message)
+        self.assertNotIn("Source:", message)
+        self.assertNotIn("Score:", message)
 
     def test_rejects_unsupported_or_non_file_evidence(self) -> None:
         unsupported = self._evidence(
