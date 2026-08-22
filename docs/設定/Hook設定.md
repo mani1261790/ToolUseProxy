@@ -348,7 +348,7 @@ TOOLUSEPROXY_PRE_TOOL_POLICY=1 python3 /absolute/path/to/ToolUseProxy/hooks/moni
 
 直接実行される`curl`では、`-d VALUE`、`-dVALUE`と、`--data`、`--data-ascii`、`--data-binary`、`--data-raw`、`--data-urlencode`、`--json`、`--form-string`のseparated / `=`形式をsegment単位で静的解析します。複数operandの順序は保ちますが最終bodyは合成しません。operand全体とprotected source chunkのraw valueが完全一致した場合だけscore 1.0のbindingを作ります。
 
-shell変数、command substitution、glob / brace / tilde展開、body以外のdynamic option / operand、dynamic redirection、unknown option arity、file-backedな`@file` / `@-`、空値、上限超過があれば、そのsegmentの抽出値をすべて破棄して`coarse_fallback`にします。ただし`--data-raw @literal`と`--form-string name=@literal`はcurlが`@`をliteralとして扱うためstaticです。`--data-urlencode`もfile formだけをfallbackにします。fallbackでもexternal sinkと従来のsegment-to-sink / path / pipe evidenceは残しますが、未知のruntime値を秘密値とは仮定しません。
+shell変数、command substitution、glob / brace / tilde展開、body以外のdynamic option / operand、dynamic redirection、unknown option arity、file-backedな`@file` / `@-`、空値、上限超過があれば、そのsegmentの抽出値をすべて破棄して`coarse_fallback`にします。ただし`--data-raw @literal`と`--form-string name=@literal`はcurlが`@`をliteralとして扱うためstaticです。`--data-urlencode`もfile formだけをfallbackにします。fallbackでもexternal sinkと従来のsegment-to-sink / path / pipe evidenceは残します。複数行全体を正確なplanにできない場合も既知external commandはcoarse command sinkとして保持します。未知のruntime値を秘密値と推測したり展開したりはせず、protected sourceが有効な実行時policyでは完全確認不能としてdenyします。
 
 この抽出はshell、subprocess、networkを実行せず、fileも読みません。上限は1 segmentあたり32値、1値32 KiB、合計128 KiBです。projection値を追加fragment、DB row、評価report本文へ複製しません。
 
@@ -618,7 +618,7 @@ Plugin更新でprotected-source detector versionが変わった場合も、更�
 
 候補のSQLite rowにはpath、selector、固定rule、confidence、内部再検証用hash/statだけを保持し、secret本文は保持しません。`reject` / `ignore`は同一file内容・detector versionの候補を再提示しないためのvalue-free監査です。schema省略またはschema v1のlegacy manifestはruntime互換を維持し、明示的な`protect migrate plan` / `apply`が完了するまで新しいentryを登録しません。登録済みmanifestは次のanalysisでsource digest差分として検出され、そのworkspace / sessionをfull rebuildします。
 
-直接実行される`curl`の静的body optionでは、送信operandとselected secret valueが完全一致した場合だけ、command全体の長さに影響されないcritical bindingを作ります。shell変数やcommand substitutionは展開せず、unknown option、`@file` / `@-`、上限超過を含むsegmentは値単位の証明をせず従来のsegment-level evidenceへ戻します。抽出値は追加の永続rowや評価reportへ保存しません。
+直接実行される`curl`の静的body optionでは、送信operandとselected secret valueが完全一致した場合だけ、command全体の長さに影響されないcritical bindingを作ります。shell変数やcommand substitutionは展開せず、unknown option、`@file` / `@-`、上限超過を含むsegmentは値単位の証明をせずsegment-levelまたはcoarse command evidenceへ戻します。protected sourceが有効なPreToolUseで外部payloadを完全確認できなければdenyします。抽出値は追加の永続rowや評価reportへ保存しません。
 
 JSONの例:
 

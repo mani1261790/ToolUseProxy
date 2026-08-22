@@ -28,7 +28,7 @@ class BashSubmissionResolutionTest(unittest.TestCase):
             )
 
         self.assertEqual(
-            "bash-submission-resolver-v3-fail-closed-data-binary-file",
+            "bash-submission-resolver-v4-fail-closed-multiline-data-binary-file",
             BASH_SUBMISSION_RESOLVER_VERSION,
         )
         self.assertEqual(("public",), resolved[0].submitted_values)
@@ -38,6 +38,20 @@ class BashSubmissionResolutionTest(unittest.TestCase):
             ("public",),
             extract_bash_http_submissions(command)[0].submitted_values,
         )
+
+    def test_multiline_static_submission_is_resolved_by_its_segment(self) -> None:
+        command = "printf ready\r\ncurl --data public https://example.invalid"
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            workspace = Path(temporary_directory)
+            resolved = resolve_bash_http_submissions(
+                command,
+                workspace_root=workspace,
+                execution_cwd=workspace,
+            )
+
+        self.assertEqual(1, len(resolved))
+        self.assertEqual(1, resolved[0].segment_index)
+        self.assertEqual(("public",), resolved[0].submitted_values)
 
     def test_relative_file_body_is_resolved_without_executing_curl(self) -> None:
         self._require_component_safe()
