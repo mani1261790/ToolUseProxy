@@ -211,7 +211,7 @@ abortはPhase B専用のPlugin登録、marketplace、synthetic workspace、生�
 - protected callはPreToolUseとexact blockが各1件、PostToolUseとmarkerが0件
 - dynamic protected callはPreToolUseとfail-closed blockが各1件、PostToolUseと専用markerが0件
 - file payload shadow observationがpublic / protectedの2件
-- workspace runtime設定4項目が有効で、remove / reinstall後も同じrevision
+- workspace runtime設定3項目が有効で、remove / reinstall後も同じrevision
 - assistant、全tool input、tool output、shadow tableへのraw synthetic value露出が0
 - 指定したread / setup / public / static protected / dynamic protected call以外のtool callが0
 - Plugin dataを触る全CLI callが1回限定の権限昇格、空でない理由、再利用可能なprefixなし

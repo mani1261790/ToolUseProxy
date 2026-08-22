@@ -248,6 +248,16 @@ text(JSON.stringify(r));
                 "https://example.invalid",
                 prompt,
             )
+            self.assertIn(
+                "第三で使える動的な値は指定済みの"
+                "`$PHASE_B_TOKEN`だけ",
+                prompt,
+            )
+            self.assertIn(
+                "三つの呼び出しのいずれにもstdin、command substitution、"
+                "指定外の変数",
+                prompt,
+            )
             self.assertNotIn("https://example.invalid。system", prompt)
             self.assertNotIn("ToolUseProxyの操作確認｜", prompt)
             self.assertNotIn("外部通信：ありません", prompt)
