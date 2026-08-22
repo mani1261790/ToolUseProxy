@@ -1937,10 +1937,18 @@ def _suggest_protected_sources_under_lock(
         "status": status,
         "scan_complete": True,
         "manifest_sha256": manifest_sha256,
+        "candidate_count": len(candidates),
         "candidates": candidates,
         "suppressed_count": suppressed_count,
         "already_registered_count": already_registered_count,
         "approval_in_progress_count": approval_in_progress_count,
+        "remaining_candidate_count": 0,
+        "continuation_required": bool(
+            candidates or approval_in_progress_count
+        ),
+        "approval_mode": "batch",
+        "review_batch_limit": PROTECTED_SOURCE_REVIEW_BATCH_LIMIT,
+        "rescan_required_after_manifest_change": False,
     }
 
 

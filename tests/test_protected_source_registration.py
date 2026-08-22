@@ -207,6 +207,12 @@ class ProtectedSourceRegistrationCliTest(unittest.TestCase):
         self.assertEqual(1, payload["schema_version"])
         self.assertEqual("review_required", payload["status"])
         self.assertIs(payload["scan_complete"], True)
+        self.assertEqual(1, payload["candidate_count"])
+        self.assertEqual(0, payload["remaining_candidate_count"])
+        self.assertIs(payload["continuation_required"], True)
+        self.assertEqual("batch", payload["approval_mode"])
+        self.assertEqual(10, payload["review_batch_limit"])
+        self.assertIs(payload["rescan_required_after_manifest_change"], False)
         candidates = payload["candidates"]
         self.assertIsInstance(candidates, list)
         self.assertEqual(1, len(candidates))
@@ -571,6 +577,10 @@ class ProtectedSourceRegistrationCliTest(unittest.TestCase):
                 self.assertEqual("suppressed", repeated["status"])
                 self.assertEqual([], repeated["candidates"])
                 self.assertIs(repeated["scan_complete"], True)
+                self.assertEqual(0, repeated["candidate_count"])
+                self.assertEqual(0, repeated["remaining_candidate_count"])
+                self.assertIs(repeated["continuation_required"], False)
+                self.assertEqual("batch", repeated["approval_mode"])
 
     def test_approval_rejects_wrong_revision_and_manifest_precondition(self) -> None:
         (self.workspace / ".env").write_text(
