@@ -75,6 +75,7 @@ class ManualSinkPayloadShadowTest(unittest.TestCase):
 
             self.assertEqual("prepared", result["status"])
             self.assertEqual(CASE_ID, result["case_id"])
+            self.assertIn("review the five hooks", result["next"])
             launcher = (root / "launch-codex.sh").read_text(encoding="utf-8")
             self.assertNotIn("TOOLUSEPROXY_PRE_TOOL_POLICY", launcher)
             self.assertNotIn(
@@ -132,6 +133,16 @@ class ManualSinkPayloadShadowTest(unittest.TestCase):
             )
             prompt = (root / "phase-b-prompt.txt").read_text(encoding="utf-8")
             self.assertIn("protected call should be blocked", prompt)
+            guide = (root / "phase-b-guide.md").read_text(encoding="utf-8")
+            self.assertIn("Review exactly five ToolUseProxy hooks", guide)
+            for hook_name in (
+                "SessionStart",
+                "SubagentStart",
+                "PreToolUse",
+                "PostToolUse",
+                "Stop",
+            ):
+                self.assertIn(hook_name, guide)
 
     def test_verify_requires_two_allowed_calls_and_opposite_shadow_results(
         self,

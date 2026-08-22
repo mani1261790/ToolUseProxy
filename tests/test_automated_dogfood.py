@@ -4,6 +4,7 @@ import unittest
 
 from scripts.dogfood_all import (
     AutomatedDogfoodFailure,
+    DESKTOP_REMAINING_ACTIONS,
     REPORT_SCHEMAS,
     REQUIRED_CHECKS,
     _validate_child_report,
@@ -111,6 +112,16 @@ class AutomatedDogfoodTest(unittest.TestCase):
             "side_effect_count_invalid",
         ):
             _validate_child_report("plugin", payload)
+
+    def test_desktop_follow_up_uses_current_five_hook_contract(self) -> None:
+        self.assertIn(
+            "review_and_trust_five_tooluseproxy_hooks",
+            DESKTOP_REMAINING_ACTIONS,
+        )
+        self.assertNotIn(
+            "review_and_trust_three_tooluseproxy_hooks",
+            DESKTOP_REMAINING_ACTIONS,
+        )
 
 
 if __name__ == "__main__":

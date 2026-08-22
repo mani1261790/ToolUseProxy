@@ -307,7 +307,7 @@ def prepare_shadow_dogfood(
             "context_file": str(root / CONTEXT_FILENAME),
         },
         "next": (
-            "Login if needed, launch the isolated TUI, review the three hooks, "
+            "Login if needed, launch the isolated TUI, review the five hooks, "
             "then paste the prepared prompt."
         ),
     }
@@ -463,7 +463,8 @@ def _render_guide(*, plugin_root: Path, workspace: Path, mode: str) -> str:
     return (
         "# File payload shadow dogfood\n\n"
         "This run uses synthetic files and a local fake curl that never accesses "
-        "the network. Review exactly three ToolUseProxy hooks. Their source must "
+        "the network. Review exactly five ToolUseProxy hooks: SessionStart, "
+        "SubagentStart, PreToolUse, PostToolUse, and Stop. Their source must "
         f"be below `{plugin_root}` and the task workspace must be `{workspace}`.\n\n"
         f"{expectation}\n\n"
         "Stop if the hook source, count, workspace, or fake sink differs. Do not "
