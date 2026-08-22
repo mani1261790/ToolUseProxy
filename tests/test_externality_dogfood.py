@@ -34,8 +34,16 @@ class ExternalityDogfoodTest(unittest.TestCase):
             report["metrics"]["hook_latency_ms"]["samples"],
             20,
         )
+        self.assertEqual(
+            report["metrics"]["hook_latency_ms"]["samples"],
+            report["metrics"]["hook_cpu_time_ms"]["samples"],
+        )
+        self.assertEqual(
+            "child_cpu_time",
+            report["metrics"]["hook_p95_budget_metric"],
+        )
         self.assertLessEqual(
-            report["metrics"]["hook_latency_ms"]["p95"],
+            report["metrics"]["hook_cpu_time_ms"]["p95"],
             report["metrics"]["hook_p95_budget_ms"],
         )
 
