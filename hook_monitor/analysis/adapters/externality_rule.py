@@ -58,6 +58,7 @@ def externality_policy_adapter_result(
             metadata={
                 "adapter": risk.adapter,
                 "event_id": risk.event_id,
+                "command_fragment_id": context.fragment.fragment_id,
                 "matched_pattern": matched_pattern,
                 "envelope_sha256": risk.envelope_sha256,
                 "verdict": risk.verdict,

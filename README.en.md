@@ -4,7 +4,9 @@ ToolUseProxy is a local-first research implementation for tracing information fl
 
 This project is a research and development outcome of [SecHack365](https://sechack365.nict.go.jp/).
 
-The current public release is [`0.1.0-alpha.8`](https://github.com/mani1261790/ToolUseProxy/releases/tag/v0.1.0-alpha.8). It adds conservative, opt-in externality protection while keeping LLM classification outside Hooks and requiring human review before any local allow rule is created. It is a research alpha, not a complete DLP system.
+`0.1.0-alpha.9` is undergoing release-candidate validation. New installation and normal use are temporarily paused because the existing alpha.8 release has the issue described below. Alpha.9 fails closed when a Hook-visible external payload cannot be inspected completely, while keeping LLM classification outside Hooks and requiring human review before any local allow rule is created. It is a research alpha, not a complete DLP system.
+
+Users upgrading from alpha.8 must upgrade to alpha.9 and review all five Hooks again. Alpha.8 could allow unsupported curl options or oversized file payloads without comparison, and an earlier three-Hook artifact reused the same alpha.8 version identifier.
 
 ToolUseProxy is licensed under the [Apache License 2.0](LICENSE).
 
@@ -39,7 +41,7 @@ codex plugin marketplace upgrade tooluseproxy
 codex plugin list --json
 ```
 
-Use the immutable `v0.1.0-alpha.8` tag instead of `public-alpha` when reproducible version pinning matters. A pinned tag does not move when the marketplace is upgraded. Review the exact Hook definitions after installation or an update before trusting them. A changed matcher, command, or source invalidates the earlier trust decision; a Hook with `trustStatus: modified` must be reviewed again. Then follow the [Japanese five-minute quickstart](QUICKSTART.md) to initialize ToolUseProxy and review protected-source proposals in batches of up to ten. The CLI update path is tested.
+Use the immutable `v0.1.0-alpha.9` tag instead of `public-alpha` when reproducible version pinning matters. A pinned tag does not move when the marketplace is upgraded. Review the exact Hook definitions after installation or an update before trusting them. A changed matcher, command, or source invalidates the earlier trust decision; a Hook with `trustStatus: modified` must be reviewed again. Then follow the [Japanese five-minute quickstart](QUICKSTART.md) to initialize ToolUseProxy and review protected-source proposals in batches of up to ten. The CLI update path is tested, including replacement of the stale three-Hook alpha.8 artifact while preserving Plugin data.
 
 On Codex Desktop for macOS, the current five-Hook definition (`SessionStart`, `SubagentStart`, `PreToolUse`, `PostToolUse`, and `Stop`) passed a fresh August 22 run. The run verified two command approvals, one public side effect, zero protected side effects, one exact pre-execution block, and zero raw protected-value exposures. Earlier August 9 runs also covered data migration, backup rollback, direct Remove without Disable, saved-task revalidation, and atomic setup. Desktop task history records local shell calls as `exec_command`, while the canonical Hook matcher name is `Bash`; value-free markers, the Hook database, stable definition hashes, and task records remain the evidence boundary. Linux and Windows Desktop are not established by this result.
 
@@ -56,12 +58,12 @@ The preview does not replace manual Hook review or an actual Codex task.
 ## Important boundaries
 
 - PreToolUse enforcement is off by default.
-- Internal failures and unknown schemas generally fail open.
+- PreToolUse runtime, policy, unsupported-payload, and bounded-analysis failures fail closed after setup. A missing database remains advisory so initial setup can run.
 - Local SQLite data can contain plaintext Hook payloads and protected-source chunks.
 - Removing the Plugin does not delete local audit data.
 - Protected-source onboarding and manifest migration are supported on macOS and Linux for this alpha, not Windows.
 - Hosted Web Search does not appear in the current `PreToolUse` / `PostToolUse` Hook surface, so ToolUseProxy cannot observe or technically block it before execution. `SessionStart` and `SubagentStart` Hooks add developer context instructing Codex never to send protected or derived content through hosted tools, but this is a mitigation rather than an enforcement boundary.
 - Additional input sent to a running process through `write_stdin` does not trigger another `PreToolUse`, and specialized Codex tool paths may bypass Hooks; neither boundary is claimed as protected.
-- The Externality Judge is experimental, off by default, and not part of the normal setup profile. LLM classification runs outside Hooks, never auto-promotes a rule, and cannot weaken an existing block. Its provider-specific processing and retention boundary is documented in [privacy and retention](PRIVACY.md).
+- Local externality protection is enabled by the normal setup profile. The experimental LLM judge provider remains off by default; classification runs outside Hooks, never auto-promotes a rule, and cannot weaken an existing block. Its provider-specific processing and retention boundary is documented in [privacy and retention](PRIVACY.md).
 
 Read [support and known limitations](SUPPORT.md), [privacy and retention](PRIVACY.md), [private vulnerability reporting](SECURITY.md), and the [Japanese project documentation](README.md) before using the alpha.

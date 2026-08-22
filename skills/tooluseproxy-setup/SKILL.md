@@ -29,9 +29,15 @@ When setup starts, lead with:
 
 `このプロジェクトでToolUseProxyを使えるようにします。初期設定と安全確認のため、通常は確認画面が2回出ます。どちらも外部通信は行いません。`
 
-When setup succeeds, lead with:
+When configuration verification succeeds but no fresh Hook probe has run, lead
+with:
 
-`準備できました。このプロジェクトではToolUseProxyが動作しています。保護するファイルはまだ自動登録されていません。続けて、守るファイルを探すよう自然な言葉で依頼できます（例：「守った方がよいファイルを探して」）。`
+`初期設定は完了しました。ただし、これは設定の確認までです。CodexがHookを実際に呼び、保護対象を実行前に止められることはまだ確認していません。Hookを確認済みのfresh taskで安全な動作確認を行ってから、保護が動作していると判断します。`
+
+Only after separate fresh Hook evidence proves delivery and a protected
+pre-execution denial may you lead with:
+
+`動作確認まで完了しました。このプロジェクトではToolUseProxyのHookが届き、保護対象の外部送信を実行前に止められることを確認しました。`
 
 When setup or verification fails, lead with:
 
@@ -205,12 +211,13 @@ do not report missing initial output as a command failure.
 
    If an approved manual workflow supplies an exact `file-payload-exact`
    setup-profile command and expected revision, use that one command instead
-   of separate `init` and three `config set` commands. The profile is fixed to
-   `pre-tool-policy`, `file-payload-shadow`, and
-   `file-payload-exact-enforcement` all enabled; it accepts no arbitrary
-   settings object. It does not enable the experimental
-   `externality-protection` setting or select a remote provider. Do not
-   substitute another profile or revision.
+   of separate `init` and four `config set` commands. The profile is fixed to
+   `pre-tool-policy`, `file-payload-shadow`,
+   `file-payload-exact-enforcement`, and `externality-protection` all enabled;
+   it accepts no arbitrary settings object. Enabling externality protection
+   activates local static/cache classification and conservative handling of
+   unverified external sinks. It does not select an LLM provider or send a
+   judge request. Do not substitute another profile or revision.
 
    ```text
    sh "<PLUGIN_ROOT>/hooks/run_cli.sh" setup apply file-payload-exact --codex --expected-revision <expected-revision> --workspace <workspace-root> --data-dir <PLUGIN_DATA> --json
@@ -246,11 +253,29 @@ do not report missing initial output as a command failure.
    sh "<PLUGIN_ROOT>/hooks/run_cli.sh" setup apply file-payload-exact --codex --expect-empty-settings --workspace <workspace-root> --json
    ```
 
-   Then run the one read-only verification command:
+   Then run the one read-only configuration verification command:
 
    ```text
    sh "<PLUGIN_ROOT>/hooks/run_cli.sh" setup verify file-payload-exact --workspace <workspace-root> --json
    ```
+
+   A successful result is `status: configuration_passed`. It proves the local
+   database, settings, manifest readability, and installed artifact shape. It
+   explicitly does not prove Hook trust, Hook delivery, or a protected block.
+   Never summarize it as `ToolUseProxy is active`, `protection passed`, or an
+   end-to-end pass. Start a fresh task after Hook review and obtain separate
+   Hook probe evidence before making any runtime-protection claim.
+
+   Interpret `runtime_enforcement.status` literally:
+
+   - `requires_fresh_hook_probe`: no current-detector PreToolUse delivery is
+     proven; report setup only.
+   - `hook_delivery_observed_block_not_tested`: current PreToolUse delivery is
+     proven, but a protected block is not; do not claim enforcement passed.
+   - `protected_block_observed`: current-detector delivery and at least one
+     PreToolUse block are present in the value-free local audit. This still does
+     not prove all five Hook trust states; combine it with the user's Hook review
+     before reporting an end-to-end pass.
 
    These are the normal two approval screens. Never add `--data-dir` derived
    from a guessed path. If either command reports that the installed Plugin
@@ -261,8 +286,9 @@ do not report missing initial output as a command failure.
 5. For a manual context-bound Phase B workflow, run `doctor` and `status` with
    the exact context-supplied `--workspace` and `--data-dir` values when that
    workflow requires the individual commands. For a normal marketplace setup,
-   the combined `setup verify` above is the health gate. Stop and explain every
-   failing check before protected-source review or stronger policy tests. A
+   the combined `setup verify` above is only the configuration gate. Stop and
+   explain every failing check before protected-source review or stronger
+   policy tests. Do not treat `configuration_passed` as Hook-delivery evidence. A
    legacy manifest may remain runtime-readable and active while reporting
    `registration_writable: false` and `migration_required: true`.
    In a manual Phase B run, if `init`, `doctor`, `status`, or `protect scan`

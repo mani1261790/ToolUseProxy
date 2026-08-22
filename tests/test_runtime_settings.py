@@ -5,6 +5,7 @@ import tempfile
 import unittest
 import json
 from contextlib import redirect_stderr, redirect_stdout
+from datetime import UTC, datetime
 from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
@@ -20,6 +21,7 @@ from hook_monitor.runtime.settings import (
     parse_runtime_setting_value,
     resolve_effective_runtime_settings,
 )
+from hook_monitor.runtime.incremental_analysis import RUNTIME_GRAPH_DETECTOR_VERSION
 from hook_monitor.runtime.storage import CURRENT_SCHEMA_VERSION, EventStore
 from hook_monitor.runtime.workspace import resolve_workspace
 from tooluseproxy.cli import (
@@ -502,7 +504,7 @@ class RuntimeSettingsCliTest(unittest.TestCase):
 
         self.assertEqual(0, exit_code)
         self.assertEqual("applied", applied["status"])
-        self.assertEqual(3, len(applied["changed_keys"]))
+        self.assertEqual(4, len(applied["changed_keys"]))
         retry_code, retried, _ = self._run(setup_arguments)
         self.assertEqual(0, retry_code)
         self.assertEqual("already_applied", retried["status"])
@@ -552,7 +554,17 @@ class RuntimeSettingsCliTest(unittest.TestCase):
             ).fetchall()
 
         self.assertEqual(0, verify_code)
-        self.assertEqual("passed", verified["status"])
+        self.assertEqual("configuration_passed", verified["status"])
+        self.assertEqual("configuration_only", verified["verification_scope"])
+        self.assertEqual(
+            "requires_fresh_hook_probe",
+            verified["runtime_enforcement"]["status"],
+        )
+        self.assertFalse(
+            verified["runtime_enforcement"]["protected_block_verified"]
+        )
+        self.assertTrue(verified["plugin_artifact"]["ok"])
+        self.assertEqual(5, verified["plugin_artifact"]["hook_definition_count"])
         self.assertEqual(before_settings, after_settings)
         self.assertEqual(before_history, after_history)
         self.assertEqual(before_manifest, manifest.read_bytes())
@@ -684,7 +696,170 @@ class RuntimeSettingsCliTest(unittest.TestCase):
         )
 
         self.assertEqual(0, verify_code)
-        self.assertEqual("passed", verified["status"])
+        self.assertEqual("configuration_passed", verified["status"])
+
+    def test_setup_verify_distinguishes_current_hook_and_block_evidence(self) -> None:
+        workspace = self.root / "runtime-evidence-workspace"
+        data = self.root / "runtime-evidence-data"
+        workspace.mkdir()
+        apply_code, applied, _ = self._run(
+            [
+                "setup",
+                "apply",
+                SETUP_PROFILE_FILE_PAYLOAD_EXACT,
+                "--codex",
+                "--expect-empty-settings",
+                "--workspace",
+                str(workspace),
+                "--data-dir",
+                str(data),
+                "--json",
+            ]
+        )
+        self.assertEqual(0, apply_code)
+        workspace_id = str(applied["workspace_id"])
+        observed_at = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S")
+        database = data / "events.db"
+        with sqlite3.connect(database) as connection:
+            connection.execute(
+                """
+                INSERT INTO events (
+                    event_id, phase, payload_json, recorded_at, workspace_id
+                ) VALUES (?, 'pre_tool_use', '{}', ?, ?)
+                """,
+                ("runtime-evidence-event", observed_at, workspace_id),
+            )
+            connection.execute(
+                """
+                INSERT INTO analysis_runs (
+                    analysis_run_id, detector_version, config_json,
+                    started_at, completed_at, workspace_id
+                ) VALUES (?, ?, '{}', ?, ?, ?)
+                """,
+                (
+                    "runtime-evidence-run",
+                    RUNTIME_GRAPH_DETECTOR_VERSION,
+                    observed_at,
+                    observed_at,
+                    workspace_id,
+                ),
+            )
+            connection.execute(
+                """
+                INSERT INTO policy_decisions (
+                    decision_id, finding_id, analysis_run_id, hook_event,
+                    action, severity, sink_type, source_node_kind,
+                    source_node_id, sink_node_id, path_score, reason,
+                    user_message, technical_summary, trace_command,
+                    path_summary_json
+                ) VALUES (?, ?, ?, 'PreToolUse', 'block', 'critical',
+                    'external_http_request', 'protected_source_scope', ?, ?,
+                    1.0, 'value-free test reason', '', '', '', '[]')
+                """,
+                (
+                    "runtime-evidence-decision",
+                    "runtime-evidence-finding",
+                    "runtime-evidence-run",
+                    "runtime-evidence-source",
+                    "runtime-evidence-sink",
+                ),
+            )
+
+        verify_code, verified, _ = self._run(
+            [
+                "setup",
+                "verify",
+                SETUP_PROFILE_FILE_PAYLOAD_EXACT,
+                "--workspace",
+                str(workspace),
+                "--data-dir",
+                str(data),
+                "--json",
+            ]
+        )
+
+        self.assertEqual(0, verify_code)
+        runtime = verified["runtime_enforcement"]
+        self.assertEqual("protected_block_observed", runtime["status"])
+        self.assertTrue(runtime["hook_delivery_verified"])
+        self.assertTrue(runtime["protected_block_verified"])
+        self.assertFalse(runtime["hook_trust_verified"])
+        self.assertTrue(runtime["evidence_is_value_free"])
+
+    def test_setup_verify_rejects_stale_or_mismatched_plugin_artifact(self) -> None:
+        workspace = self.root / "artifact-mismatch-workspace"
+        data = self.root / "artifact-mismatch-data"
+        workspace.mkdir()
+        apply_code, _, _ = self._run(
+            [
+                "setup",
+                "apply",
+                SETUP_PROFILE_FILE_PAYLOAD_EXACT,
+                "--codex",
+                "--expect-empty-settings",
+                "--workspace",
+                str(workspace),
+                "--data-dir",
+                str(data),
+                "--json",
+            ]
+        )
+        self.assertEqual(0, apply_code)
+        with patch(
+            "tooluseproxy.cli._inspect_plugin_artifact",
+            return_value={
+                "ok": False,
+                "detail": "local Plugin artifact identity or Hook definitions mismatch",
+                "plugin_version": "0.1.0-alpha.8",
+                "hook_events": ["PreToolUse", "PostToolUse", "Stop"],
+                "hook_definition_count": 3,
+                "hooks_sha256": "0" * 64,
+            },
+        ):
+            verify_code, verified, _ = self._run(
+                [
+                    "setup",
+                    "verify",
+                    SETUP_PROFILE_FILE_PAYLOAD_EXACT,
+                    "--workspace",
+                    str(workspace),
+                    "--data-dir",
+                    str(data),
+                    "--json",
+                ]
+            )
+
+        self.assertEqual(1, verify_code)
+        self.assertEqual("needs_attention", verified["status"])
+        plugin_check = next(
+            check for check in verified["checks"] if check["name"] == "plugin_artifact"
+        )
+        self.assertFalse(plugin_check["ok"])
+        self.assertEqual(3, verified["plugin_artifact"]["hook_definition_count"])
+
+    def test_setup_verify_reports_unprepared_workspace_without_traceback(self) -> None:
+        workspace = self.root / "unprepared-workspace"
+        data = self.root / "unprepared-data"
+        workspace.mkdir()
+
+        verify_code, verified, stderr = self._run(
+            [
+                "setup",
+                "verify",
+                SETUP_PROFILE_FILE_PAYLOAD_EXACT,
+                "--workspace",
+                str(workspace),
+                "--data-dir",
+                str(data),
+                "--json",
+            ]
+        )
+
+        self.assertEqual(1, verify_code)
+        self.assertEqual("needs_attention", verified["status"])
+        self.assertFalse(verified["runtime_settings"]["ok"])
+        self.assertEqual([], verified["runtime_settings"]["settings"])
+        self.assertEqual("", stderr)
 
     def test_setup_profile_rolls_back_manifest_when_database_write_fails(self) -> None:
         fresh_workspace = self.root / "rollback-workspace"

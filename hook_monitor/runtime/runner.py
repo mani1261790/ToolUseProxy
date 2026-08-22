@@ -78,15 +78,16 @@ def run_hook(
                     inactive_hook_output(
                         phase,
                         _schema_inactive_message(exc),
+                        deny_pre_tool=(
+                            phase == "pre_tool_use"
+                            and exc.code != "database_missing"
+                        ),
                     ),
                     ensure_ascii=False,
                 )
             )
             return 0
-    bounded_pre_tool_input = (
-        phase == "pre_tool_use"
-        and _pre_tool_policy_enabled()
-    )
+    bounded_pre_tool_input = phase == "pre_tool_use"
     raw_payload = sys.stdin.buffer.read(
         PRE_TOOL_RAW_JSON_MAX_BYTES + 1
         if bounded_pre_tool_input
@@ -152,8 +153,7 @@ def run_hook(
                 )
                 return 0
             if candidate_tool_name is None:
-                # The bounded prefix cannot prove which adapter owns the call.
-                # Preserve the Hook fail-open contract without materializing it.
+                _emit_pre_tool_safety_stop("hook_payload_too_large")
                 return 0
             # A known non-MCP call is outside this gate and keeps its prior path.
             raw_payload += sys.stdin.buffer.read()
@@ -185,11 +185,14 @@ def run_hook(
         )
         return 0
     except HookPayloadError:
-        _emit_inactive_hook_output(
-            phase,
-            "hook_payload_invalid",
-            "Codex supplied a Hook payload that ToolUseProxy could not parse",
-        )
+        if phase == "pre_tool_use":
+            _emit_pre_tool_safety_stop("hook_payload_invalid")
+        else:
+            _emit_inactive_hook_output(
+                phase,
+                "hook_payload_invalid",
+                "Codex supplied a Hook payload that ToolUseProxy could not parse",
+            )
         return 0
 
     payload_cwd = payload.get("cwd")
@@ -237,11 +240,14 @@ def run_hook(
     try:
         effective_runtime_settings = _effective_runtime_settings(store, event)
     except Exception:  # pragma: no cover - defensive hook boundary
-        _emit_inactive_hook_output(
-            phase,
-            "runtime_settings_failed",
-            "workspace runtime settings could not be loaded",
-        )
+        if phase == "pre_tool_use":
+            _emit_pre_tool_safety_stop("runtime_settings_failed")
+        else:
+            _emit_inactive_hook_output(
+                phase,
+                "runtime_settings_failed",
+                "workspace runtime settings could not be loaded",
+            )
         return 0
     enabled_pre_tool_adapters = _enabled_pre_tool_adapters(
         effective_runtime_settings
@@ -355,11 +361,7 @@ def run_hook(
                 externality_decision=externality_decision,
             )
         except Exception:  # pragma: no cover - defensive hook boundary
-            _emit_inactive_hook_output(
-                phase,
-                "pre_tool_policy_failed",
-                "pre-tool policy evaluation could not be completed",
-            )
+            _emit_pre_tool_safety_stop("pre_tool_policy_failed")
             return 0
         if hook_output:
             print(json.dumps(hook_output, ensure_ascii=False))
@@ -407,11 +409,6 @@ def _configured_workspace_root(cwd: str | None, db_path: Path) -> str | None:
 def _stop_policy_enabled() -> bool:
     configured = os.environ.get("TOOLUSEPROXY_STOP_POLICY", "1")
     return configured.lower() not in {"0", "false", "no", "off"}
-
-
-def _pre_tool_policy_enabled() -> bool:
-    configured = os.environ.get("TOOLUSEPROXY_PRE_TOOL_POLICY", "0")
-    return configured.lower() in {"1", "true", "yes", "on"}
 
 
 def _effective_runtime_settings(
@@ -484,14 +481,28 @@ def _schema_inactive_message(exc: SchemaCompatibilityError) -> str:
 def inactive_hook_output(
     phase: str,
     message: str,
+    *,
+    deny_pre_tool: bool = False,
 ) -> dict[str, object]:
     if phase == "pre_tool_use":
-        return {
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "additionalContext": message,
-            }
+        hook_output: dict[str, object] = {
+            "hookEventName": "PreToolUse",
+            "additionalContext": message,
         }
+        if deny_pre_tool:
+            hook_output.update(
+                {
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": (
+                        "ToolUseProxyが操作を実行前に止めました。保護判定を"
+                        "安全に完了できなかったため、この操作を許可できません。"
+                        "ToolUseProxyの診断を行ってからやり直してください。\n"
+                        "結果：外部操作は実行されていません。保護対象の内容も"
+                        "表示していません。"
+                    ),
+                }
+            )
+        return {"hookSpecificOutput": hook_output}
     if phase == "post_tool_use":
         return {
             "hookSpecificOutput": {
@@ -514,6 +525,19 @@ def _emit_inactive_hook_output(
     print(
         json.dumps(
             inactive_hook_output(phase, message),
+            ensure_ascii=False,
+        )
+    )
+
+
+def _emit_pre_tool_safety_stop(code: str) -> None:
+    print(
+        json.dumps(
+            inactive_hook_output(
+                "pre_tool_use",
+                _inactive_message(code),
+                deny_pre_tool=True,
+            ),
             ensure_ascii=False,
         )
     )

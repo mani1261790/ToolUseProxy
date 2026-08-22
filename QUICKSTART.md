@@ -1,6 +1,8 @@
 # ToolUseProxy 5分クイックスタート
 
-この手順では、検証済みの公開alphaを保護branch `public-alpha`からインストールします。開発中の変更を含む`main`は、通常利用のインストール元にしないでください。
+> **一時停止中:** `alpha.9`のfresh Desktop release gateが完了するまで、新規installと`public-alpha`からの通常利用を開始しないでください。既存の`alpha.8`には安全に確認できない外部payloadを許可する問題があります。
+
+release gate完了後、この手順では検証済みの公開alphaを保護branch `public-alpha`からインストールします。開発中の変更を含む`main`は、通常利用のインストール元にしないでください。
 
 ## 1. 必要なもの
 
@@ -24,10 +26,12 @@ MarketplaceとPluginのインストールは、Codex環境ごとに1回だけで
 特定versionへ固定する場合は、1つ目のコマンドで`public-alpha`の代わりにimmutable tagを指定します。
 
 ```bash
-codex plugin marketplace add mani1261790/ToolUseProxy --ref v0.1.0-alpha.8
+codex plugin marketplace add mani1261790/ToolUseProxy --ref v0.1.0-alpha.9
 ```
 
 ## 3. 5つのHookを確認してTrustする
+
+`alpha.8`以前を使っていた場合は、先に`codex plugin marketplace upgrade tooluseproxy`を実行し、`codex plugin list --json`で`0.1.0-alpha.9`になったことを確認してください。同じ版番号の古い3 Hook cacheが残る問題を避けるため、alpha.8のまま使い続けないでください。
 
 Codexが表示するHookを、次の条件と照合してください。
 
@@ -64,7 +68,7 @@ ToolUseProxyが必要な初期設定と安全確認を案内します。操作�
 
 通常インストールでは、ToolUseProxy自身が現在のPlugin identityを検証して専用保存領域を特定します。利用者が`database_missing`などの内部診断、absolute path、初期化commandをコピーして貼り直す必要はありません。承認UIがないことだけを理由にターミナル実行へ切り替えません。保存先またはaccessを安全に確認できない場合は、別pathや広い権限を推測せず未設定のまま停止します。
 
-完了時に「このプロジェクトではToolUseProxyが動作しています」と表示されれば準備完了です。すべての機密ファイルが自動登録されるわけではありません。
+完了時の`configuration_passed`は初期設定だけの合格です。Hook trust、Hook delivery、protected blockまで確認した意味ではありません。fresh taskで安全な動作確認を行い、protected操作が実行前に止まった証拠を得てから、ToolUseProxyが動作していると判断します。すべての機密ファイルが自動登録されるわけではありません。
 
 ## 5. protected source候補をまとめて確認する
 
@@ -92,9 +96,9 @@ ToolUseProxyが必要な初期設定と安全確認を案内します。操作�
 
 1. 有効なToolUseProxy Pluginが1つだけである
 2. 5つのHookを確認してTrustした
-3. 「このプロジェクトではToolUseProxyが動作しています」と表示された
+3. setupが`configuration_passed`となり、これが設定確認だけだと説明された
 4. harmlessなpublic操作が通常どおり完了した
-5. syntheticなprotected valueが外部操作の実行前にblockされた
+5. syntheticなprotected valueが外部操作の実行前にblockされ、ここで初めてruntime保護を確認できた
 6. 通常作業で予期しないblockが発生しない
 7. PluginをRemoveしても、別途data削除を承認しない限りlocal dataが保持される
 

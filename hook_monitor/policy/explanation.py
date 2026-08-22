@@ -51,6 +51,13 @@ def render_hook_message(explanation: PolicyExplanation) -> str:
 
 
 def _user_message(decision: PolicyDecision) -> str:
+    if decision.evidence_kind == "unresolved_external_payload":
+        return (
+            "ToolUseProxyが外部送信を実行前に止めました。送信内容を安全に"
+            "確認しきれなかったため、保護対象が含まれていないとは判断"
+            "できませんでした。送信する内容やcommandを単純にしてから"
+            "やり直してください。"
+        )
     if decision.evidence_kind == "resolved_file_exact":
         return (
             "ToolUseProxyが外部送信を実行前に止めました。参照ファイルに"

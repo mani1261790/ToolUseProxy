@@ -137,12 +137,12 @@ class RuntimePathsTest(unittest.TestCase):
             root = Path(temporary_directory)
             codex_home = root / "codex-home"
             plugin_root = (
-                codex_home / "plugins" / "cache" / "tooluseproxy" / "tooluseproxy" / "0.1.0-alpha.8"
+                codex_home / "plugins" / "cache" / "tooluseproxy" / "tooluseproxy" / "0.1.0-alpha.9"
             )
             manifest_dir = plugin_root / ".codex-plugin"
             manifest_dir.mkdir(parents=True)
             (manifest_dir / "plugin.json").write_text(
-                json.dumps({"name": "tooluseproxy", "version": "0.1.0-alpha.8"}),
+                json.dumps({"name": "tooluseproxy", "version": "0.1.0-alpha.9"}),
                 encoding="utf-8",
             )
 
@@ -950,7 +950,7 @@ class PluginBundleTest(unittest.TestCase):
             root = Path(temporary_directory)
             codex_home = root / "codex-home"
             plugin_root = (
-                codex_home / "plugins" / "cache" / "tooluseproxy" / "tooluseproxy" / "0.1.0-alpha.8"
+                codex_home / "plugins" / "cache" / "tooluseproxy" / "tooluseproxy" / "0.1.0-alpha.9"
             )
             plugin_root.mkdir(parents=True)
             for directory in (".codex-plugin", "hook_monitor", "hooks", "tooluseproxy"):
@@ -1030,7 +1030,15 @@ class PluginBundleTest(unittest.TestCase):
                 text=True,
                 check=True,
             )
-            self.assertEqual("passed", json.loads(verified.stdout)["status"])
+            verified_payload = json.loads(verified.stdout)
+            self.assertEqual(
+                "configuration_passed",
+                verified_payload["status"],
+            )
+            self.assertEqual(
+                "requires_fresh_hook_probe",
+                verified_payload["runtime_enforcement"]["status"],
+            )
 
             suggested = subprocess.run(
                 [

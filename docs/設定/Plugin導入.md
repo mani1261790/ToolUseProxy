@@ -5,7 +5,7 @@ ToolUseProxyのCodex Pluginは、repository全体ではなく、生成時にallo
 ## 現在のsupport範囲
 
 - Python 3.11 / 3.12。3.13以降は現在未対応
-- macOS: local package、relocated Plugin bundle、Codex CLIのisolated marketplace install、alpha.1→alpha.8 upgrade / safe rollbackを検証。Python 3.12 package smokeはCIで継続確認
+- macOS: local package、relocated Plugin bundle、Codex CLIのisolated marketplace install、alpha.1およびstale alpha.8→alpha.9 upgrade / safe rollbackを検証。Python 3.12 package smokeはCIで継続確認
 - Linux: Ubuntu CIでPython 3.11 / 3.12のfull suite、package、relocated Plugin bundle、wheelのcheckout外実行を検証。Codex CLI marketplace installの実環境E2Eは未検証
 - Windows: `py -3.11`を使うlauncherを同梱するexperimental範囲。実機検証は未完了で、protected-source登録workflow全体は現在未対応
 - Hookは常にlocal-only。remote embeddingとtelemetryはなし。実験的なExternality Judgeを別途明示設定すると、Hookは値非保持要約をlocal queueへ保存し、初見unknown＋protected flowを保守的にdeny。選択済みproviderへの送信はHook外workerの明示実行時だけ
@@ -25,14 +25,14 @@ alphaのthreat modelは、Pluginやcoding agentの無承認manifest変更、stal
 
 ## 現在versionと更新
 
-現在の公開版は[`0.1.0-alpha.8`](https://github.com/mani1261790/ToolUseProxy/releases/tag/v0.1.0-alpha.8)です。`public-alpha`から配布し、既知adapter、bounded static analysis、protected unknownの保守的deny、値非保持queue、Hook外Codex judge、人間review済みruleからなるExternality Protectionを含みます。この機能は既定offで、LLM verdictからallow ruleを自動作成しません。
+`0.1.0-alpha.9`はrelease候補の検証中です。既存の`alpha.8`にfail-open問題があるため、fresh Desktop gateと公開昇格が完了するまで新規installと通常利用を一時停止しています。alpha.9は、既知adapter、bounded static analysis、安全に確認できないexternal payloadのfail-closed、値非保持queue、Hook外Codex judge、人間review済みruleからなるExternality Protectionを含みます。通常setupはlocal判定を有効化しますが、LLM providerは既定offで、LLM verdictからallow ruleを自動作成しません。
 
 Codex CLIはPluginごとの自動更新commandではなく、登録済みGit marketplaceを明示的に更新する`codex plugin marketplace upgrade`を提供します。moving refを登録している場合、更新されたmarketplace snapshotからinstall済みPluginも置き換わります。ToolUseProxyは次の2方式を分けます。
 
 | 方式 | `--ref` | 用途 | 更新 |
 | --- | --- | --- | --- |
 | public alpha更新チャンネル | `public-alpha` | 通常のdogfood / pilot | `marketplace upgrade`で明示更新 |
-| immutable version固定 | `v0.1.0-alpha.8` | 再現実験、監査、rollback | tagは動かないため自動的に別versionへ進まない |
+| immutable version固定 | `v0.1.0-alpha.9` | 再現実験、監査、rollback | tagは動かないため自動的に別versionへ進まない |
 
 `public-alpha`はreview済み・CI green・公開済みのalpha release commitだけへfast-forwardする保護branchです。開発途中の`main`を実行元にはしません。更新は自動ではなく、ユーザーがcommandを実行した時だけ行われます。
 
@@ -42,7 +42,7 @@ SQLite schemaはalpha.8でv7です。Externality Protection用tableを追加す�
 
 ## install
 
-通常のpublic alpha利用では、保護された更新チャンネルを指定します。
+公開再開後の通常利用では、保護された更新チャンネルを指定します。release gate完了前には実行しないでください。
 
 ```bash
 codex plugin marketplace add mani1261790/ToolUseProxy --ref public-alpha
@@ -52,10 +52,10 @@ codex plugin add tooluseproxy@tooluseproxy
 versionを固定する場合は最初のcommandを次に置き換えます。
 
 ```bash
-codex plugin marketplace add mani1261790/ToolUseProxy --ref v0.1.0-alpha.8
+codex plugin marketplace add mani1261790/ToolUseProxy --ref v0.1.0-alpha.9
 ```
 
-install後はCodexが表示するPlugin source、version、5つのHook definition（SessionStart / SubagentStart / PreToolUse / PostToolUse / Stop）を確認してtrustします。ToolUseProxyはこのreviewを迂回しません。以前trustしたHookでも、matcher、command、sourceなどの定義が変わると`modified`になり、再reviewが必要です。release artifact、checksum、SBOM、release notesは[`v0.1.0-alpha.8`](https://github.com/mani1261790/ToolUseProxy/releases/tag/v0.1.0-alpha.8)で確認できます。
+install後はCodexが表示するPlugin source、version、5つのHook definition（SessionStart / SubagentStart / PreToolUse / PostToolUse / Stop）を確認してtrustします。ToolUseProxyはこのreviewを迂回しません。以前trustしたHookでも、matcher、command、sourceなどの定義が変わると`modified`になり、再reviewが必要です。release artifact、checksum、SBOM、release notesは[`v0.1.0-alpha.9`](https://github.com/mani1261790/ToolUseProxy/releases/tag/v0.1.0-alpha.9)で確認できます。
 
 ### CLIで更新する
 
@@ -118,7 +118,7 @@ installまたはHook定義の更新後は、Codexが示すHook definitionを確�
 
 通常のmarketplace installでは、setup skillがインストール済みlauncherからPlugin rootを取得し、Codex公式のPlugin store契約に従って専用data directoryを解決します。Plugin rootが`CODEX_HOME/plugins/cache/<marketplace>/<plugin>/<version>`に厳密に収まり、manifestのPlugin名が一致する場合だけ、対応する`CODEX_HOME/plugins/data/<plugin>-<marketplace>`を使用します。layout、identity、manifestのどれかが不一致なら推測せず停止します。
 
-新しいworkspaceの通常setupは次の2コマンドです。1つ目はworkspace設定が空であることを前提条件に、初期化と3つの保護設定を原子的に適用します。2つ目は変更を伴わない一括確認です。既存設定が同じなら再実行はidempotentで、異なる設定が1件でもあれば上書きしません。
+新しいworkspaceの通常setupは次の2コマンドです。1つ目はworkspace設定が空であることを前提条件に、初期化と4つの保護設定を原子的に適用します。4つ目の`externality-protection`はlocal static/cache判定と未確認external sinkの安全停止を有効にしますが、LLM providerを選択したりjudge通信を開始したりはしません。2つ目は変更を伴わない一括の設定確認です。既存設定が同じなら再実行はidempotentで、異なる設定が1件でもあれば上書きしません。
 
 ```bash
 sh "<PLUGIN_ROOT>/hooks/run_cli.sh" setup apply file-payload-exact \
@@ -134,9 +134,11 @@ sh "<PLUGIN_ROOT>/hooks/run_cli.sh" setup verify file-payload-exact \
 
 利用者へ`database_missing`診断、absolute path、初期化commandの貼り直しを要求しません。Hook診断は保護が動作していないことを知らせる安全側の補助情報であり、通常setupのpath discovery APIではありません。
 
+`setup verify`の成功statusは`configuration_passed`です。これはdatabase、workspace登録、manifest可読性、4設定、手元のPlugin artifactが整合することだけを証明します。Codex上のHook trust、実際のHook delivery、protected callの実行前blockは証明しません。これらを確認していない段階で「ToolUseProxyは動作中」「保護試験passed」と報告してはいけません。Hook review後のfresh taskと、値を表示しない専用probeを別のruntime証拠として扱います。
+
 以下はHook障害診断と手動Phase B検証のために残す低level契約であり、通常利用者がpathやcommandをコピーするための手順ではありません。
 
-Plugin Hookは未初期化DBを検出してもschema migrationやworkspace変更を行わず、fail-openで終了します。PreToolUse / PostToolUseでは`additionalContext`、Stopではadvisoryな`systemMessage`を使い、未保護であることとCodexへ準備を依頼する短い案内だけを返します。診断へ初期化command、Plugin root、Plugin data pathは含めません。Python不足、runtime起動失敗、内部policy評価失敗も同じJSON契約で通知し、例外本文やHook inputは診断へ含めません。以前のstderrだけに出す形式はDesktopで表示されないため廃止しました。ただし、案内の表示自体をdispatch証拠にはせず、Desktopでは[Desktop Phase B](../運用/DesktopPhaseB.md)のtrusted probeが記録したdata pathだけを使います。cacheやprocess環境から`PLUGIN_DATA`を推測しません。
+Plugin Hookは未初期化DBを検出してもschema migrationやworkspace変更を行わず、setupを可能にするためadvisoryで終了します。この例外は未初期化状態だけです。保護設定が読み込まれた後は、PreToolUseのschema、payload、policy、Plugin runtimeのいずれを安全に確認できなくても操作を`deny`し、fail-openしません。PostToolUseとStopの診断はadvisoryです。診断へ初期化command、Plugin root、Plugin data path、例外本文、Hook inputは含めません。以前のstderrだけに出す形式はDesktopで表示されないため廃止しました。ただし、案内の表示自体をdispatch証拠にはせず、Desktopでは[Desktop Phase B](../運用/DesktopPhaseB.md)のtrusted probeが記録したdata pathだけを使います。cacheやprocess環境から`PLUGIN_DATA`を推測しません。
 
 通常setupの固定profileは次を行います。
 
@@ -319,7 +321,7 @@ sh "<PLUGIN_ROOT>/hooks/run_cli.sh" uninstall apply \
 
 削除対象はSQLite database / sidecar、migration backup、manifest backupだけです。管理外fileは残し、plan後に内容が変わった場合はstale tokenを拒否します。workspace manifestやprotected source本体、symlink先、package codeは削除しません。secure eraseやfilesystem snapshotの削除は保証しません。
 
-alpha.1からalpha.8へのupgrade / safe rollback手順と検証結果は[Pluginライフサイクル](../運用/Pluginライフサイクル.md)を参照してください。将来versionとcross-platformでの反復は引き続きpublic alphaの検証課題です。
+alpha.1およびstale alpha.8からalpha.9へのupgrade / safe rollback手順と検証結果は[Pluginライフサイクル](../運用/Pluginライフサイクル.md)を参照してください。将来versionとcross-platformでの反復は引き続きpublic alphaの検証課題です。
 
 pre-release候補で実際のHook trust、agent説明、実tool invocationを検証するときは、通常workspaceや実secretを使わず、[Pluginドッグフードのmanual Phase B](../運用/Pluginドッグフード.md#manual-phase-b)を実行します。prepare出力はlocal pathを含むため公開せず、raw値とpathを除外したverify結果だけをrelease evidenceとして扱います。
 

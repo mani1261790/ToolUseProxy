@@ -1,6 +1,6 @@
 # サポート範囲と既知の制限
 
-ToolUseProxy `0.1.0-alpha.8`は研究用public alphaとして`public-alpha` channelから配布しています。本番環境向けのSLA、security certification、完全なDLP、全toolの遮断保証は提供しません。対応と未対応をsilent fallbackで同一視せず、次の範囲を現在の契約とします。
+ToolUseProxy `0.1.0-alpha.9`はrelease候補の検証中です。既存の`alpha.8`にfail-open問題があるため、fresh Desktop gateと公開昇格が完了するまで新規installと通常利用を一時停止しています。本番環境向けのSLA、security certification、完全なDLP、全toolの遮断保証は提供しません。対応と未対応をsilent fallbackで同一視せず、次の範囲を現在の契約とします。
 
 ## 実行環境
 
@@ -17,12 +17,12 @@ macOS Python 3.12はGitHub CI run `29672165132`でartifact build、nested venv�
 
 Windowsでは既存manifestのruntime読み取りとlauncherを将来互換のため維持しますが、`protect scan / suggest / review / approve / reject / ignore`とmanifest migration applyはalphaでは未対応です。成功したように見せず、CLIの明示エラーとして扱います。
 
-POSIX launcherもpackage metadataと同じPython 3.11 / 3.12だけを選びます。`TOOLUSEPROXY_PYTHON`や`python3`が3.13以降または3.10以前を指す場合は実行せず、別の対応runtimeを探した後に明示エラーまたはHook fail-openとします。
+POSIX launcherもpackage metadataと同じPython 3.11 / 3.12だけを選びます。`TOOLUSEPROXY_PYTHON`や`python3`が3.13以降または3.10以前を指す場合は実行せず、別の対応runtimeを探した後にPreToolUseを安全停止します。PostToolUse / Stopは診断だけを返します。
 
 ## Codex Plugin
 
 - localでCodex CLIのmarketplace add / Plugin installを検証済み
-- Gitのmoving refを使う`codex plugin marketplace upgrade`で、install済みPluginがremove / reinstallなしにalpha.1からalpha.8へ置き換わり、Plugin dataが保持されることを実Codex CLIで自動検証
+- Gitのmoving refを使う`codex plugin marketplace upgrade`で、alpha.1および正式公開前の3 Hook alpha.8からalpha.9へ置き換わり、Plugin dataが保持されることを実Codex CLIで自動検証
 - Hook definitionのreview / trustを迂回しない
 - install後のcodeは`PLUGIN_ROOT`、mutable dataは`PLUGIN_DATA`へ分離
 - remote `main`を実行元にせず、通常更新は保護されたfast-forward-only `public-alpha`、再現性優先時はimmutable release tagを使う
@@ -43,30 +43,30 @@ Codex Plugin APIやHook payloadはToolUseProxyとは別に変更され得ます�
 
 | 機能 | 状態 | 境界 |
 | --- | --- | --- |
-| SessionStart / SubagentStart / PreToolUse / PostToolUse / Stop | alpha対応 | SessionStartとSubagentStartはhosted tool境界をdeveloper contextで伝える。Pre/Postはmatcherに一致するlocal function toolが対象。未初期化、Python / runtime起動失敗、内部policy例外の診断は入力や例外本文を含めないphase別JSONで返し、Codexを壊さないようfail-open |
+| SessionStart / SubagentStart / PreToolUse / PostToolUse / Stop | alpha対応 | SessionStartとSubagentStartはhosted tool境界をdeveloper contextで伝える。Pre/Postはmatcherに一致するlocal function toolが対象。未初期化DBだけはsetupを可能にするadvisory。Python / runtime起動失敗、未知schema、内部policy例外、解析不能payloadはPreToolUseでdenyし、入力や例外本文を表示しない |
 | `init / doctor / status / trace` | alpha対応 | migrationは通常Hook内では行わない |
 | protected source候補scan | POSIX対応 | bounded offline scan。上限到達時は完全探索と主張しない |
 | candidate batch review | POSIX対応 | 最大10件のvalue-free proposalをまとめて提示し、候補ごとの明示判断を一度に反映。1件用commandも互換維持 |
-| Hook-visible local toolのPreToolUse deny | opt-in | 既定off。既知adapterを精密判定し、未知toolは保護情報が入力へ到達した場合だけ保守的にdeny |
+| Hook-visible local toolのPreToolUse deny | 通常setupで有効 | 既知adapterを精密判定し、外部payloadを安全に確認できない場合は保護sourceがあるworkspaceで保守的にdeny。package既定値自体はoff |
 | Stop final-answer review | alpha対応 | critical findingを`continue_review`で差し戻す |
 | runtime redact / `updatedInput` | 未対応 | 複数Hook後の最終採用inputを証明できないため無効 |
-| Externality Judge | experimental / 既定off | runtime解析、DB、schemaが正常に利用できる場合、Hookは値非保持要約をlocal queueへ保存し、初見unknown＋protected flowを保守的にdeny。初期化・解析・DB・schema failureでは既存のfail-open境界が残る。Hook外worker、人間review、workspace単位の完全一致cacheを使い、LLM分類を自動昇格しない |
+| Externality Protection | local判定は通常setupで有効 | Hookはlocal static/cache判定を行い、未確認external payloadを保守的にdeny。LLM providerは既定offで、明示的なHook外worker、人間review、workspace単位の完全一致cacheを使い、LLM分類を自動昇格しない |
 | remote embedding / telemetry | 非搭載 | Hook内network serviceなし。telemetryは送信しない |
 | explicit managed-data uninstall | macOS / Linux alpha対応 | Plugin removeは保持。`uninstall plan`のexact tokenを`apply`へ渡した場合だけ管理dataを削除 |
 
 ## 既知の制限
 
-- Hookの解析失敗、DB lock、未知schema、未初期化では原則fail-openする
+- 未初期化DBだけは初回setupを可能にするためadvisory。保護設定後のPreToolUse解析失敗、DB / runtime失敗、未知schema、payload上限超過はfail-closedでdenyする
 - hosted Web Searchは現在のPreToolUse / PostToolUse Hookへ現れず、技術的な実行前遮断の対象外。SessionStart / SubagentStartのdeveloper contextでprotected contentを渡さないよう指示するが、これは強制境界ではない
 - 実行中processへ`write_stdin`で追加する入力は、新しいPreToolUseが発火しないため再検査できない
 - Codexの特殊なtool経路がHookを省略する可能性は未検証であり、coverage statusでも`unverified`として扱う
-- Bashのshell変数、command substitution、未知option、複雑なpipelineを一般shellとして完全評価しない
+- Bashのshell変数、command substitution、未知option、複雑なpipelineを一般shellとして完全評価しない。外部payloadを完全に評価できない場合はallowせずdenyするため、false blockが発生し得る
 - Codex Hook payloadに信頼できる終了statusがない操作は、write成功を推測せず`unknown`として扱う
 - lexical similarityは意味的な言い換えを一般には検知しない
 - candidate retrievalはartifact 50 / source 200の有限上限を持つ
 - local SQLiteにはraw Hook payloadやprotected source由来textが平文で残り得る
 - database、backup、trace exportの自動retention / secure eraseはない
-- moving marketplace refによるalpha.1からalpha.8へのnative upgrade、immutable baselineからalpha.8へのlifecycle upgrade、backupを使うsafe rollback、Plugin / marketplace remove、data保持 / 明示uninstallはisolated Codex CLIで検証済み。Linux実Codex CLI、Windows実機、将来version間の反復は未完了
+- moving marketplace refによるalpha.1およびstale alpha.8からalpha.9へのnative upgrade、immutable baselineからalpha.9へのlifecycle upgrade、backupを使うsafe rollback、Plugin / marketplace remove、data保持 / 明示uninstallはisolated Codex CLIで検証済み。Linux実Codex CLI、Windows実機、将来version間の反復は未完了
 - runtime policyは他のHookやtool自体をexclusiveに制御できず、ToolUseProxy単独で完全な外部送信防止を保証しない
 - Externality JudgeのCodex routeは事前probe合格と24時間以内のreceiptを要求する。実測latencyは約3.4〜6.3秒だが、この待ち時間はHook外workerに限定され、PreToolUseには入らない
 

@@ -10,6 +10,7 @@ import stat
 import sys
 import tempfile
 from dataclasses import asdict
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -20,6 +21,7 @@ from hook_monitor.runtime.source_config import (
     SourceConfigError,
 )
 from hook_monitor.runtime.settings import (
+    EXTERNALITY_PROTECTION_KEY,
     FILE_PAYLOAD_EXACT_ENFORCEMENT_KEY,
     FILE_PAYLOAD_SHADOW_KEY,
     PRE_TOOL_POLICY_KEY,
@@ -34,6 +36,7 @@ from hook_monitor.runtime.settings import (
 from hook_monitor.runtime.models import (
     ProtectedSourceCandidate as StoredProtectedSourceCandidate,
 )
+from hook_monitor.runtime.incremental_analysis import RUNTIME_GRAPH_DETECTOR_VERSION
 from hook_monitor.runtime.storage import (
     CURRENT_SCHEMA_VERSION,
     EventStore,
@@ -92,7 +95,11 @@ SETUP_PROFILE_SETTINGS = {
     PRE_TOOL_POLICY_KEY: True,
     FILE_PAYLOAD_SHADOW_KEY: True,
     FILE_PAYLOAD_EXACT_ENFORCEMENT_KEY: True,
+    EXTERNALITY_PROTECTION_KEY: True,
 }
+EXPECTED_CODEX_HOOK_EVENTS = frozenset(
+    {"SessionStart", "SubagentStart", "PreToolUse", "PostToolUse", "Stop"}
+)
 
 
 class _ProtectCliError(ValueError):
@@ -785,10 +792,11 @@ def _run_setup_verify(args: argparse.Namespace) -> int:
                 "settings_schema_version": settings.schema_version,
                 "settings_revision": settings.revision,
                 "settings": [
-                    asdict(effective.settings[key])
-                    for key in RUNTIME_SETTING_KEYS
+                    asdict(effective.settings[key]) for key in RUNTIME_SETTING_KEYS
                 ],
             }
+
+        plugin_artifact = _inspect_plugin_artifact()
 
         checks = [
             _check("workspace", workspace.ready, str(workspace_path)),
@@ -828,6 +836,11 @@ def _run_setup_verify(args: argparse.Namespace) -> int:
                 profile_effective,
                 args.profile,
             ),
+            _check(
+                "plugin_artifact",
+                bool(plugin_artifact["ok"]),
+                str(plugin_artifact["detail"]),
+            ),
         ]
         plugin_root = os.environ.get("PLUGIN_ROOT")
         plugin_data = os.environ.get("PLUGIN_DATA")
@@ -863,9 +876,15 @@ def _run_setup_verify(args: argparse.Namespace) -> int:
                 )
             )
         ok = all(bool(item["ok"]) for item in checks)
+        runtime_enforcement = _runtime_enforcement_evidence(
+            paths.db_path,
+            workspace.workspace_id,
+        )
         payload = {
             "schema_version": SETUP_OUTPUT_SCHEMA_VERSION,
-            "status": "passed" if ok else "needs_attention",
+            "status": "configuration_passed" if ok else "needs_attention",
+            "verification_scope": "configuration_only",
+            "runtime_enforcement": runtime_enforcement,
             "profile": args.profile,
             "version": __version__,
             "path_source": paths.source,
@@ -881,6 +900,7 @@ def _run_setup_verify(args: argparse.Namespace) -> int:
             "protected_sources": protected_sources,
             "runtime_settings": settings_payload,
             "enforcement_coverage": codex_enforcement_coverage(),
+            "plugin_artifact": plugin_artifact,
         }
     except (
         OSError,
@@ -899,6 +919,166 @@ def _run_setup_verify(args: argparse.Namespace) -> int:
         return 1
     _render(payload, as_json=args.json)
     return 0 if ok else 1
+
+
+def _inspect_plugin_artifact() -> dict[str, object]:
+    """Validate the local Plugin files without claiming Codex loaded them."""
+
+    plugin_root = Path(__file__).resolve().parents[1]
+    manifest_path = plugin_root / ".codex-plugin" / "plugin.json"
+    hooks_path = plugin_root / "hooks" / "hooks.json"
+    try:
+        hooks_bytes = hooks_path.read_bytes()
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        hook_manifest = json.loads(hooks_bytes.decode("utf-8"))
+        hooks = hook_manifest.get("hooks")
+        if not isinstance(manifest, dict) or not isinstance(hooks, dict):
+            raise ValueError("Plugin manifests must be JSON objects")
+        events = frozenset(str(key) for key in hooks)
+        definition_count = sum(
+            len(definitions) if isinstance(definitions, list) else 0
+            for definitions in hooks.values()
+        )
+        manifest_version = manifest.get("version")
+        version_matches = bool(
+            isinstance(manifest_version, str)
+            and manifest_version.replace("-alpha.", "a") == __version__
+        )
+        ok = bool(
+            manifest.get("name") == "tooluseproxy"
+            and version_matches
+            and events == EXPECTED_CODEX_HOOK_EVENTS
+            and definition_count == len(EXPECTED_CODEX_HOOK_EVENTS)
+        )
+        return {
+            "ok": ok,
+            "detail": (
+                "local Plugin artifact identity and five Hook definitions match"
+                if ok
+                else "local Plugin artifact identity or Hook definitions mismatch"
+            ),
+            "plugin_version": manifest_version,
+            "hook_events": sorted(events),
+            "hook_definition_count": definition_count,
+            "hooks_sha256": hashlib.sha256(hooks_bytes).hexdigest(),
+        }
+    except (OSError, ValueError, json.JSONDecodeError):
+        return {
+            "ok": False,
+            "detail": "local Plugin artifact could not be validated",
+            "plugin_version": None,
+            "hook_events": [],
+            "hook_definition_count": 0,
+            "hooks_sha256": None,
+        }
+
+
+def _runtime_enforcement_evidence(
+    db_path: Path,
+    workspace_id: str | None,
+) -> dict[str, object]:
+    """Report value-free Hook evidence without inferring unobserved trust."""
+
+    if workspace_id is None or not db_path.is_file():
+        return _empty_runtime_enforcement_evidence()
+    try:
+        with sqlite3.connect(f"{db_path.as_uri()}?mode=ro", uri=True) as connection:
+            latest_pre_tool = connection.execute(
+                """
+                SELECT MAX(recorded_at)
+                FROM events
+                WHERE workspace_id = ? AND phase = 'pre_tool_use'
+                """,
+                (workspace_id,),
+            ).fetchone()[0]
+            matching_detector_runs = int(
+                connection.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM analysis_runs
+                    WHERE workspace_id = ? AND detector_version = ?
+                    """,
+                    (workspace_id, RUNTIME_GRAPH_DETECTOR_VERSION),
+                ).fetchone()[0]
+            )
+            current_detector_blocks = int(
+                connection.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM policy_decisions AS decisions
+                    JOIN analysis_runs AS runs
+                      ON runs.analysis_run_id = decisions.analysis_run_id
+                    WHERE runs.workspace_id = ?
+                      AND runs.detector_version = ?
+                      AND decisions.hook_event = 'PreToolUse'
+                      AND decisions.action = 'block'
+                    """,
+                    (workspace_id, RUNTIME_GRAPH_DETECTOR_VERSION),
+                ).fetchone()[0]
+            )
+    except (sqlite3.Error, TypeError, ValueError):
+        return _empty_runtime_enforcement_evidence(
+            status="runtime_evidence_unavailable"
+        )
+    recent_pre_tool = _timestamp_is_recent(latest_pre_tool)
+    hook_delivery_verified = recent_pre_tool and matching_detector_runs > 0
+    protected_block_verified = current_detector_blocks > 0
+    if hook_delivery_verified and protected_block_verified:
+        status = "protected_block_observed"
+        detail = (
+            "current detector PreToolUse delivery and a pre-execution block "
+            "are present in value-free local audit evidence"
+        )
+    elif hook_delivery_verified:
+        status = "hook_delivery_observed_block_not_tested"
+        detail = (
+            "current detector PreToolUse delivery is present, but no current "
+            "detector block has been observed"
+        )
+    else:
+        status = "requires_fresh_hook_probe"
+        detail = (
+            "setup configuration is valid, but fresh current-detector Hook "
+            "delivery has not been observed"
+        )
+    return {
+        "hook_delivery_verified": hook_delivery_verified,
+        "hook_trust_verified": False,
+        "protected_block_verified": protected_block_verified,
+        "status": status,
+        "detail": detail,
+        "evidence_is_value_free": True,
+        "detector_version": RUNTIME_GRAPH_DETECTOR_VERSION,
+    }
+
+
+def _empty_runtime_enforcement_evidence(
+    *,
+    status: str = "requires_fresh_hook_probe",
+) -> dict[str, object]:
+    return {
+        "hook_delivery_verified": False,
+        "hook_trust_verified": False,
+        "protected_block_verified": False,
+        "status": status,
+        "detail": (
+            "setup configuration does not prove Codex Hook trust, delivery, "
+            "or a pre-execution block"
+        ),
+        "evidence_is_value_free": True,
+        "detector_version": RUNTIME_GRAPH_DETECTOR_VERSION,
+    }
+
+
+def _timestamp_is_recent(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        observed = datetime.strptime(value, "%Y-%m-%d %H:%M:%S").replace(tzinfo=UTC)
+    except ValueError:
+        return False
+    now = datetime.now(UTC)
+    return now - timedelta(minutes=5) <= observed <= now + timedelta(seconds=5)
 
 
 def _render_setup_error(code: str, message: str, *, as_json: bool) -> None:

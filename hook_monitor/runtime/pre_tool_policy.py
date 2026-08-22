@@ -23,8 +23,11 @@ from hook_monitor.policy.codex_output import (
     select_strongest_decision,
 )
 from hook_monitor.policy.engine import evaluate_policy, make_policy_decision_id
+from hook_monitor.policy.models import PolicyDecision
 from hook_monitor.policy.sink_payload_exact import (
     build_exact_file_payload_decisions,
+    build_unresolved_external_payload_decisions,
+    build_unverified_external_sink_decisions,
 )
 from hook_monitor.policy.redaction_preview import (
     DEFAULT_REDACTION_PREVIEW_LIMITS,
@@ -51,7 +54,9 @@ from hook_monitor.runtime.tool_compat import (
 
 
 DEFAULT_PRE_TOOL_ADAPTERS = frozenset({"bash"})
-LOCAL_FILE_TOOL_NAMES = frozenset({"apply_patch", "edit", "write"})
+LOCAL_FILE_TOOL_NAMES = frozenset(
+    {"apply_patch", "edit", "glob", "grep", "read", "write"}
+)
 MCP_INPUT_LIMIT_DENY_REASON = (
     "ToolUseProxy blocked this MCP call because its input exceeds bounded "
     "static-analysis limits"
@@ -269,6 +274,7 @@ def evaluate_pre_tool_hook_policy(
     if current_adapter == "bash" and (
         sink_payload_shadow_enabled or sink_payload_exact_enforcement_enabled
     ):
+        inspection_failed = False
         try:
             payload_evidence = _inspect_bash_sink_payload(
                 current_event=current_event,
@@ -276,8 +282,10 @@ def evaluate_pre_tool_hook_policy(
                 current_sinks=tuple(current_sinks),
             )
         except Exception:
-            # Resolution failure must preserve the existing lineage policy.
+            # Exact enforcement must fail closed below. Shadow-only mode keeps
+            # its observation semantics and never changes the baseline action.
             payload_evidence = ()
+            inspection_failed = True
         if sink_payload_shadow_enabled:
             try:
                 _store_bash_sink_payload_shadow(
@@ -292,11 +300,46 @@ def evaluate_pre_tool_hook_policy(
             except Exception:
                 # Observation must never change the already-rendered policy output.
                 pass
-        if sink_payload_exact_enforcement_enabled and payload_evidence:
-            exact_decisions = build_exact_file_payload_decisions(
-                payload_evidence,
-                sink_candidates=tuple(current_sinks),
-                analysis_run_id=runtime_result.analysis_run.analysis_run_id,
+        if sink_payload_exact_enforcement_enabled:
+            protected_source_node_ids = tuple(
+                chunk.chunk_id for chunk in runtime_result.source_chunks
+            )
+            if inspection_failed or (
+                not payload_evidence
+                and any(
+                    sink.sink_type == "external_http_request"
+                    and sink.metadata.get("matched_program") == "curl"
+                    for sink in current_sinks
+                )
+            ):
+                exact_decisions = build_unresolved_external_payload_decisions(
+                    sink_candidates=tuple(current_sinks),
+                    analysis_run_id=runtime_result.analysis_run.analysis_run_id,
+                    protected_source_node_ids=protected_source_node_ids,
+                    reason=(
+                        "payload_inspection_error"
+                        if inspection_failed
+                        else "payload_evidence_missing"
+                    ),
+                )
+            else:
+                exact_decisions = build_exact_file_payload_decisions(
+                    payload_evidence,
+                    sink_candidates=tuple(current_sinks),
+                    analysis_run_id=runtime_result.analysis_run.analysis_run_id,
+                    protected_source_node_ids=protected_source_node_ids,
+                )
+            exact_decisions.extend(
+                build_unverified_external_sink_decisions(
+                    sink_candidates=tuple(current_sinks),
+                    analysis_run_id=runtime_result.analysis_run.analysis_run_id,
+                    protected_source_node_ids=protected_source_node_ids,
+                    verified_sink_node_ids=_verified_external_sink_ids(
+                        payload_evidence,
+                        tuple(current_sinks),
+                        tuple(exact_decisions),
+                    ),
+                )
             )
             exact_selected = select_strongest_decision(
                 exact_decisions,
@@ -319,7 +362,68 @@ def evaluate_pre_tool_hook_policy(
                     db_path=store.db_path,
                     analysis_run_id=runtime_result.analysis_run.analysis_run_id,
                 )
+    if (
+        sink_payload_exact_enforcement_enabled
+        and current_adapter == "function"
+        and runtime_result.source_chunks
+    ):
+        conservative_decisions = build_unverified_external_sink_decisions(
+            sink_candidates=tuple(current_sinks),
+            analysis_run_id=runtime_result.analysis_run.analysis_run_id,
+            protected_source_node_ids=tuple(
+                chunk.chunk_id for chunk in runtime_result.source_chunks
+            ),
+            verified_sink_node_ids=frozenset(),
+        )
+        conservative_selected = select_strongest_decision(
+            conservative_decisions,
+            "PreToolUse",
+        )
+        if (
+            conservative_selected is not None
+            and conservative_selected.action == "block"
+        ):
+            try:
+                store_policy_decision(
+                    store,
+                    conservative_selected,
+                    runtime_result.analysis_run.analysis_run_id,
+                )
+            except Exception:
+                pass
+            return render_codex_hook_output(
+                conservative_selected,
+                "PreToolUse",
+                db_path=store.db_path,
+                analysis_run_id=runtime_result.analysis_run.analysis_run_id,
+            )
     return hook_output
+
+
+def _verified_external_sink_ids(
+    payload_evidence: tuple[BashSinkPayloadEvidence, ...],
+    current_sinks: tuple[SinkCandidate, ...],
+    exact_decisions: tuple[PolicyDecision, ...],
+) -> frozenset[str]:
+    direct_ids = {item.sink_node_id for item in payload_evidence}
+    direct_ids.update(
+        decision.sink_node_id for decision in exact_decisions
+    )
+    verified_fragment_ids = {
+        sink.metadata.get("command_fragment_id")
+        for sink in current_sinks
+        if sink.node_id in direct_ids
+        and isinstance(sink.metadata.get("command_fragment_id"), str)
+    }
+    return frozenset(
+        sink.node_id
+        for sink in current_sinks
+        if sink.node_id in direct_ids
+        or (
+            sink.metadata.get("basis") == "static_external"
+            and sink.metadata.get("command_fragment_id") in verified_fragment_ids
+        )
+    )
 
 
 def _externality_policy_risk(
