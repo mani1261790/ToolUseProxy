@@ -69,7 +69,7 @@ Desktop / GUI上で今回のfile-backed exact-only保護が動くことは確認
 - 検証用marketplaceは`tooluseproxy-desktop-phase-b`、Plugin IDは`tooluseproxy@tooluseproxy-desktop-phase-b`へ分離する
 - 計測用launcherを加えたbundleにはrunごとの一意なSemVer prereleaseを付け、同じrelease version名の古いDesktop cacheを再利用しない
 - 共有configとPlugin / marketplace一覧は変更直前にも比較し、plan後に変化していれば停止する
-- Hook trustは迂回せず、Desktopで人が3件をreviewする
+- Hook trustは迂回せず、Desktopで人が5件をreviewする
 - PreToolUse / PostToolUse / Stopの`trustStatus`がすべて`trusted`であることを、送信テスト前に機械確認する。`modified` / `untrusted`なら停止する
 - Desktop task履歴の`exec_command`をHook matcher名として流用せず、canonicalな`Bash`定義を確認する
 - workspace外のPlugin dataへ書くsetup commandは通常権限で先に試さず、exactな1コマンドだけのsandbox昇格を要求する
@@ -108,7 +108,7 @@ python3.11 scripts/manual_desktop_phase_b.py checkpoint-installed \
   --root /Users/mani/.tooluseproxy-dogfood/desktop-phase-b-YYYYMMDD
 ```
 
-checkpointが示す3件をCodex DesktopのHook review画面で確認します。ToolUseProxy由来のPreToolUse、PostToolUse、Stopだけを対象にし、source、version、command root、件数が違えばtrustせず停止します。
+checkpointが示す5件をCodex DesktopのHook review画面で確認します。ToolUseProxy由来のSessionStart、SubagentStart、PreToolUse、PostToolUse、Stopだけを対象にし、source、version、command root、件数が違えばtrustせず停止します。
 
 review後、実際のHook状態を確認します。画面で一度trustを選んだ記憶だけでは進めません。定義変更後の`modified`も未trustとして停止します。
 

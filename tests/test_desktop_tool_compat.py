@@ -32,7 +32,7 @@ class DesktopToolCompatibilityTest(unittest.TestCase):
 
         for phase in ("PreToolUse", "PostToolUse"):
             matcher = manifest["hooks"][phase][0]["matcher"]
-            self.assertEqual("^(Bash|apply_patch|mcp__.*)$", matcher)
+            self.assertEqual("^.*$", matcher)
             self.assertNotIn("exec_command", matcher)
 
     def test_exec_command_uses_cmd_without_rewriting_raw_payload(self) -> None:
@@ -48,6 +48,11 @@ class DesktopToolCompatibilityTest(unittest.TestCase):
         )
         self.assertEqual("bash", pre_tool_adapter("exec_command"))
         self.assertNotIn("command", tool_input)
+
+    def test_other_local_function_tools_use_conservative_adapter(self) -> None:
+        self.assertEqual("function", pre_tool_adapter("update_plan"))
+        self.assertEqual("function", pre_tool_adapter("spawn_agent"))
+        self.assertIsNone(pre_tool_adapter("apply_patch"))
 
     def test_canonical_bash_hook_payload_uses_command_field(self) -> None:
         self.assertEqual(

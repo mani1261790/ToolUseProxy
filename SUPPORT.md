@@ -15,7 +15,7 @@ ToolUseProxy `0.1.0-alpha.8`は研究用public alpha候補です。公開channel
 
 macOS Python 3.12はGitHub CI run `29672165132`でartifact build、nested venv、wheel install、CLI / relocated Plugin smokeを検証しました。localのuv-managed Python 3.12では`venv`内`ensurepip`が`SIGABRT`する環境事例があり、ToolUseProxy codeより前のPython配布環境問題として区別します。
 
-Windowsでは既存manifestのruntime読み取りとlauncherを将来互換のため維持しますが、`protect scan / suggest / approve / reject / ignore`とmanifest migration applyはalphaでは未対応です。成功したように見せず、CLIの明示エラーとして扱います。
+Windowsでは既存manifestのruntime読み取りとlauncherを将来互換のため維持しますが、`protect scan / suggest / review / approve / reject / ignore`とmanifest migration applyはalphaでは未対応です。成功したように見せず、CLIの明示エラーとして扱います。
 
 POSIX launcherもpackage metadataと同じPython 3.11 / 3.12だけを選びます。`TOOLUSEPROXY_PYTHON`や`python3`が3.13以降または3.10以前を指す場合は実行せず、別の対応runtimeを探した後に明示エラーまたはHook fail-openとします。
 
@@ -43,11 +43,11 @@ Codex Plugin APIやHook payloadはToolUseProxyとは別に変更され得ます�
 
 | 機能 | 状態 | 境界 |
 | --- | --- | --- |
-| PreToolUse / PostToolUse / Stop記録 | alpha対応 | trust済みでmatcherに一致するHookが対象。未初期化、Python / runtime起動失敗、内部policy例外の診断は入力や例外本文を含めないphase別JSONで返し、Codexを壊さないようfail-open |
+| SessionStart / SubagentStart / PreToolUse / PostToolUse / Stop | alpha対応 | SessionStartとSubagentStartはhosted tool境界をdeveloper contextで伝える。Pre/Postはmatcherに一致するlocal function toolが対象。未初期化、Python / runtime起動失敗、内部policy例外の診断は入力や例外本文を含めないphase別JSONで返し、Codexを壊さないようfail-open |
 | `init / doctor / status / trace` | alpha対応 | migrationは通常Hook内では行わない |
 | protected source候補scan | POSIX対応 | bounded offline scan。上限到達時は完全探索と主張しない |
-| candidate approve / reject / ignore | POSIX対応 | 1件ずつのexact proposalと明示承認が必要 |
-| Bash / MCP PreToolUse deny | opt-in | 既定off。static evidenceと現在eventのcritical findingに限定 |
+| candidate batch review | POSIX対応 | 最大10件のvalue-free proposalをまとめて提示し、候補ごとの明示判断を一度に反映。1件用commandも互換維持 |
+| Hook-visible local toolのPreToolUse deny | opt-in | 既定off。既知adapterを精密判定し、未知toolは保護情報が入力へ到達した場合だけ保守的にdeny |
 | Stop final-answer review | alpha対応 | critical findingを`continue_review`で差し戻す |
 | runtime redact / `updatedInput` | 未対応 | 複数Hook後の最終採用inputを証明できないため無効 |
 | Externality Judge | experimental / 既定off | runtime解析、DB、schemaが正常に利用できる場合、Hookは値非保持要約をlocal queueへ保存し、初見unknown＋protected flowを保守的にdeny。初期化・解析・DB・schema failureでは既存のfail-open境界が残る。Hook外worker、人間review、workspace単位の完全一致cacheを使い、LLM分類を自動昇格しない |
@@ -57,7 +57,9 @@ Codex Plugin APIやHook payloadはToolUseProxyとは別に変更され得ます�
 ## 既知の制限
 
 - Hookの解析失敗、DB lock、未知schema、未初期化では原則fail-openする
-- hosted Web Searchは現在のPreToolUse / PostToolUse Hookへ現れず、実行前遮断の対象外
+- hosted Web Searchは現在のPreToolUse / PostToolUse Hookへ現れず、技術的な実行前遮断の対象外。SessionStart / SubagentStartのdeveloper contextでprotected contentを渡さないよう指示するが、これは強制境界ではない
+- 実行中processへ`write_stdin`で追加する入力は、新しいPreToolUseが発火しないため再検査できない
+- Codexの特殊なtool経路がHookを省略する可能性は未検証であり、coverage statusでも`unverified`として扱う
 - Bashのshell変数、command substitution、未知option、複雑なpipelineを一般shellとして完全評価しない
 - Codex Hook payloadに信頼できる終了statusがない操作は、write成功を推測せず`unknown`として扱う
 - lexical similarityは意味的な言い換えを一般には検知しない

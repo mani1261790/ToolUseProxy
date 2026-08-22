@@ -1,6 +1,6 @@
 # Hook Setup
 
-このリポジトリには、Codex の `PreToolUse` / `PostToolUse` / `Stop` に接続するための最小スクリプトを置いています。
+このリポジトリには、Codex の `SessionStart` / `SubagentStart` / `PreToolUse` / `PostToolUse` / `Stop` に接続するための最小スクリプトを置いています。
 
 新規導入では、ユーザー固有の絶対pathをHook定義へ書かないCodex Plugin方式を推奨します。Pluginはrepository rootの`.codex-plugin/plugin.json`から読み込まれ、既定の`hooks/hooks.json`を使います。Hook commandは`PLUGIN_ROOT`、SQLiteは`PLUGIN_DATA`を参照します。install、trust、初期化の手順は[Plugin導入](Plugin導入.md)を参照してください。
 
@@ -8,7 +8,7 @@
 
 ## 参考
 
-- 公式仕様: [Codex Hooks](https://learn.chatgpt.com/docs/hooks.md)
+- 公式仕様: [Codex Hooks](https://learn.chatgpt.com/docs/hooks)
 - Hooks の全体像をつかむための補助動画: [YouTube](https://www.youtube.com/watch?v=03CfGf9iw_U)
 
 ## Hooks の構造
@@ -22,6 +22,8 @@ Codex の Hooks は、Codex 本体に組み込まれた拡張機構です。
 Codex 本体
   └─ Codex Hooks
        └─ Hook event
+            ├─ SessionStart
+            ├─ SubagentStart
             ├─ UserPromptSubmit
             ├─ PreToolUse
             ├─ PostToolUse
@@ -40,23 +42,25 @@ Codex Hooks の設定と、そこから呼び出される監視プログラム�
 
 ## この研究での役割分担
 
+- `SessionStart` は、Hookへ現れないhosted toolへprotected contentを渡さないdeveloper contextをCodexへ追加する。これは技術的遮断ではない
+- `SubagentStart` は、subagentへ同じdeveloper contextを追加する。これは技術的遮断ではない
 - `PreToolUse` は、tool 実行前の入力を観測する
 - `PostToolUse` は、tool 実行後の出力とoperation outcomeを記録し、成功を確認できた変更だけをsnapshot候補にする
 - `UserPromptSubmit` は、最初のユーザー入力に秘密情報が混ざっていないかを見る候補
 - `Stop` は、最終応答に漏えいがないかを見る候補
 
-この4つの観測点を使って、秘密情報源から tool input / tool output / 最終応答までの流れを追跡します。
+local function toolと最終応答の観測点を使って、秘密情報源から tool input / tool output / 最終応答までの流れを追跡します。hosted toolはこの観測経路へ現れないため、SessionStartのdeveloper contextは緩和策であり、完全なenforcementとして数えません。
 
 ## 設定イメージ
 
-project単位では、trustedなrepositoryの`.codex/hooks.json`へ次のように設定します。operation抽出とsnapshot captureの対象である`Bash`と`apply_patch`を同じmatcherで観測します。
+project単位では、trustedなrepositoryの`.codex/hooks.json`へ次のように設定します。漏えい判定の入口をtool名の個別列挙に依存させないため、Hookから見えるlocal function toolをすべて観測します。
 
 ```json
 {
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "^(Bash|apply_patch)$",
+        "matcher": "^.*$",
         "hooks": [
           {
             "type": "command",
@@ -68,7 +72,7 @@ project単位では、trustedなrepositoryの`.codex/hooks.json`へ次のよう�
     ],
     "PostToolUse": [
       {
-        "matcher": "^(Bash|apply_patch)$",
+        "matcher": "^.*$",
         "hooks": [
           {
             "type": "command",
@@ -96,7 +100,9 @@ project単位では、trustedなrepositoryの`.codex/hooks.json`へ次のよう�
 `PreToolUse`、`PostToolUse`、`Stop` は Codex が用意している既存イベントです。
 このリポジトリで実装するのは、そこから呼び出される `monitor_pre_tool.py`、`monitor_post_tool.py`、`monitor_stop.py` の中身です。
 
-`matcher`は正規表現です。`PreToolUse`と`PostToolUse`ではHook APIのcanonical tool名に適用されますが、`Stop`ではmatcherがサポートされないため省略します。MCPも観測する場合は、対象serverを絞った`^mcp__<server>__.*$`などのmatcher groupを追加します。Codexはtimeoutを省略すると600秒を使用するため、この軽量Hookでは明示的に5秒へ制限します。commandはsessionの`cwd`で実行され、複数のmatching command hookは並行起動されます。project-local Hookは実行前に定義内容をtrustする必要があります。matcherやcommandなどを変更すると、以前のtrustはその新定義へ引き継がれず`modified`になります。再reviewして`trusted`になるまで実行対象として扱いません。
+`matcher`は正規表現です。`PreToolUse`と`PostToolUse`ではHook APIのcanonical tool名に適用されますが、`Stop`ではmatcherがサポートされないため省略します。配布Pluginは`^.*$`を使い、Hook APIへ届くlocal function toolを個別列挙なしで購読します。既知のBash / MCPは専用adapterで判定し、未知のlocal function toolはprotected flowが入力へ到達した場合だけ潜在的な外部sinkとして保守的にdenyします。`apply_patch`、`Edit`、`Write`のようなlocal file mutationは観測・記録しますが、それ自体を外部sinkとは扱いません。
+
+ただし、これはCodexの全操作を捕捉するという意味ではありません。hosted Web SearchはHookへ届かず、実行中processへ入力を追加する`write_stdin`では新しい`PreToolUse`が発火しません。特殊な実行経路がHookを省略する可能性もあるため、coverage statusではそれぞれ`not_interceptable`、`not_rechecked`、`unverified`と表示します。Codexはtimeoutを省略すると600秒を使用するため、この軽量Hookでは明示的に5秒へ制限します。commandはsessionの`cwd`で実行され、複数のmatching command hookは並行起動されます。project-local Hookは実行前に定義内容をtrustする必要があります。matcherやcommandなどを変更すると、以前のtrustはその新定義へ引き継がれず`modified`になります。再reviewして`trusted`になるまで実行対象として扱いません。
 
 tool名は表示面ごとに同じとは限りません。Codex Desktopのtask履歴ではlocal shell実行が`exec_command`として記録されますが、PreToolUse / PostToolUseのmatcherとHook payloadではcanonical名`Bash`を使います。Pluginのmatcherへtask履歴上の`exec_command`をそのまま追加する必要はありません。ToolUseProxyの`exec_command + tool_input.cmd`互換レイヤーは、session由来payloadや互換fixtureの解析用としてraw payloadを変えずに保持します。
 
@@ -110,7 +116,7 @@ tool名は表示面ごとに同じとは限りません。Codex Desktopのtask�
 
 いずれも stdin のHook payloadを受け取り、event、artifact、artifact fragmentをローカルSQLiteへ記録します。`PreToolUse`では静的なfile operationも抽出し、`PostToolUse`ではoperation outcomeとbounded resource snapshotを記録します。
 
-`PostToolUse`はtool responseを三値のoutcomeへ分類し、成功を確認できた`apply_patch`またはBash writeだけをsnapshot候補にします。`Stop`は最終応答の`final_answer` sinkを評価します。`PreToolUse`は既定では記録だけですが、`TOOLUSEPROXY_PRE_TOOL_POLICY=1`を設定すると、実payloadを確認済みの`Bash`を実行前に評価します。MCPはさらに`TOOLUSEPROXY_PRE_TOOL_MCP_POLICY=1`を設定した場合だけ評価します。
+`PostToolUse`はtool responseを三値のoutcomeへ分類し、成功を確認できた`apply_patch`またはBash writeだけをsnapshot候補にします。`Stop`は最終応答の`final_answer` sinkを評価します。`PreToolUse`は既定では記録だけですが、`TOOLUSEPROXY_PRE_TOOL_POLICY=1`または同等のworkspace設定を有効にすると、Hook-visibleなlocal function toolを実行前に評価します。既知adapterはtool固有の判定を行い、未知toolはprotected flowが入力へ到達した場合だけ保守的に止めます。
 
 file-backedな`curl --data-binary @relative-file`には、POSIXでcomponent-safeに実行前snapshotを読むresolverと、解決値を返さないpayload evidence契約があります。opt-inのshadow modeではallow / denyを変えずに観測し、別の明示opt-inではevaluated exact / exact-substringだけを実行前denyへ接続します。file-backed operandは既存graph上では引き続き`coarse_fallback`であり、no-matchやunsupportedを保護済みとは扱いません。resolver内部のpath race、Hook後にtarget toolがfileを再読込するTOCTOU、値非保持契約は[Sink payload evidenceの設計](../設計/SinkPayloadEvidence.md)を参照してください。
 
@@ -336,11 +342,7 @@ PreToolUse policyはopt-inです。Hook commandに次の環境変数を追加し
 TOOLUSEPROXY_PRE_TOOL_POLICY=1 python3 /absolute/path/to/ToolUseProxy/hooks/monitor_pre_tool.py
 ```
 
-この設定で対象になるのは、実payloadを確認済みの`Bash`です。MCPも対象にする場合は、影響範囲を明示するために二つ目のopt-inを追加します。
-
-```text
-TOOLUSEPROXY_PRE_TOOL_POLICY=1 TOOLUSEPROXY_PRE_TOOL_MCP_POLICY=1 python3 /absolute/path/to/ToolUseProxy/hooks/monitor_pre_tool.py
-```
+この設定で対象になるのは、Hookから見えるlocal function tool全体です。通常サイズのMCP入力も同じ設定で漏えい判定され、MCP保護だけを有効にする二つ目のopt-inはありません。環境変数でHookを直接運用する開発環境では、`TOOLUSEPROXY_PRE_TOOL_MCP_POLICY=1`を追加するとraw JSONのmaterialize前上限も適用できます。
 
 ### Bash curl送信値の静的抽出
 
@@ -429,7 +431,7 @@ source manifestの基準directoryはeventのcanonical workspace rootです。`pr
 
 - `hooks/monitor_pre_tool.py`
   - `PreToolUse` 用の薄い entrypoint です
-  - `run_hook("pre_tool_use")`を呼び、opt-in時はBashとMCPのexternal sinkを評価します
+  - `run_hook("pre_tool_use")`を呼び、opt-in時はHook-visibleなlocal function toolを既知adapterまたは保守的unknownとして評価します
 - `hooks/monitor_post_tool.py`
   - `PostToolUse` 用の薄い entrypoint です
   - `run_hook("post_tool_use")`を呼び、runner側でoutcome分類と成功時snapshot captureを実行します
@@ -486,7 +488,7 @@ source manifestの基準directoryはeventのcanonical workspace rootです。`pr
   - `.env` や `private.py` を「守るべき source」として定義する入口です
 - `hook_monitor/runtime/runner.py`
   - 全体の実行順序をまとめる orchestrator です
-  - MCP policy有効時は`bounded prefix read -> top-level tool/workspace scope -> real MCP raw gate -> parse -> normalize -> bounded input preflight`を先に行います。ready workspaceのreal MCPだけをraw JSON 1 MiB / depth 64 / numeric token 128 charsで制限し、超過したwriteはdeny、read-only / unsinked / workspace未確定は空stdoutで早期bypassします。既知の非MCP toolは従来経路を維持し、Hook JSONはUTF-8・BOMなしだけを受理します
+  - direct Hook環境でMCP raw gateも有効な場合は`bounded prefix read -> top-level tool/workspace scope -> real MCP raw gate -> parse -> normalize -> bounded input preflight`を先に行います。ready workspaceのreal MCPだけをraw JSON 1 MiB / depth 64 / numeric token 128 charsで制限し、超過したwriteはdeny、read-only / unsinked / workspace未確定は空stdoutで早期bypassします。既知の非MCP toolは従来経路を維持し、Hook JSONはUTF-8・BOMなしだけを受理します
 - `hook_monitor/analysis/chunking.py`
   - 保護対象 source を chunk に分割します
   - `.py` は関数や class 単位、テキストは段落単位で分割します
@@ -605,7 +607,7 @@ migration plan後にmanifestが変わればapplyせず、agentは新しいplan�
 
 coding agentがmanifestを直接編集する代わりに、schema v2へ明示移行した後のPluginでは`sh "<PLUGIN_ROOT>/hooks/run_cli.sh" protect scan --workspace <workspace-root> --data-dir <PLUGIN_DATA> --json`を明示的に実行できます。`scan`はVCS、依存関係、virtual environment、build / cache、runtime dataなどを除外し、深さ、entry数、file数、総read bytes、candidate数の固定上限内でworkspaceをoffline探索します。`.env` / `.env.*` / JSONのsecretらしいfield名に一致した非空stringだけをdotenv key / JSON Pointerとして候補化し、stableな相対path順で次の1件だけを提示します。sourceとmanifestは変更しませんが、local runtime DBにはvalue-freeな候補・review監査と内部再検証用のsource hash/statを保存します。raw valueと本文previewはstdout、stderr、候補row、review rowのいずれにも残さず、source hashとabsolute pathは外向きoutputやreviewには出しません。
 
-`scan_complete: false`は固定上限で探索が部分結果になったことを表すため、agentは候補なしと言い切らず、到達した上限reasonと未探索範囲が残ることを説明します。候補は1件ずつ明示承認し、approveによってmanifest hashが変わった後は残りの旧revision / hashを使わず、必ずscanを再実行して次の提案へ新しい承認を得ます。ユーザーまたはagentが既にpathを特定した場合は、従来の`protect suggest --path <relative-path> --json`をfallbackとして使えます。`init`、PreToolUse、PostToolUse、Stopはこのworkspace scanを暗黙実行しません。
+`scan_complete: false`は固定上限で探索が部分結果になったことを表すため、agentは候補なしと言い切らず、到達した上限reasonと未探索範囲が残ることを説明します。候補は最大10件を番号付きでまとめて提示し、候補ごとの明示判断を`protect review`で一度に反映します。batch適用は全candidate revisionと共有manifest hashを再確認し、manifestを1回だけ更新します。ユーザーまたはagentが既にpathを特定した場合は、`protect suggest --path <relative-path> --json`を使い、`--path`を繰り返して最大10件を同じreview batchにできます。`init`、PreToolUse、PostToolUse、Stopはこのworkspace scanを暗黙実行しません。
 
 Plugin更新でprotected-source detector versionが変わった場合も、更新前の`proposed`候補のID / opaque revisionは再利用しません。旧proposalへのapprove、reject、ignoreはcandidateやreviewを変更する前にvalue-freeな`candidate_detector_stale`で終了します。agentは`protect scan`を再実行し、現在versionが作った新しいcandidate IDとrevisionを提示して改めて承認を得ます。旧versionのreject / ignoreは新versionの候補を抑止しません。すでにmanifestへ登録されたapproved sourceは更新後も維持し、detector変更だけを理由にentryやselectorを自動変更しません。更新前に開始した`approving`または完了した`approved`へのexact approve再試行だけは、途中停止のdurability recoveryとして扱います。Hookはこの候補互換処理やscanを暗黙実行しません。
 

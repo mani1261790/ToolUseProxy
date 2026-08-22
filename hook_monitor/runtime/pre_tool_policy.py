@@ -51,6 +51,7 @@ from hook_monitor.runtime.tool_compat import (
 
 
 DEFAULT_PRE_TOOL_ADAPTERS = frozenset({"bash"})
+LOCAL_FILE_TOOL_NAMES = frozenset({"apply_patch", "edit", "write"})
 MCP_INPUT_LIMIT_DENY_REASON = (
     "ToolUseProxy blocked this MCP call because its input exceeds bounded "
     "static-analysis limits"
@@ -105,6 +106,12 @@ def pre_tool_adapter(tool_name: str | None) -> str | None:
         return "bash"
     if parse_mcp_tool_name(tool_name) is not None:
         return "mcp"
+    if (
+        isinstance(tool_name, str)
+        and tool_name.strip()
+        and tool_name.casefold() not in LOCAL_FILE_TOOL_NAMES
+    ):
+        return "function"
     return None
 
 

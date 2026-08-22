@@ -451,7 +451,7 @@ def plan_desktop_phase_b(
         "planned_changes": [
             f"add marketplace {MARKETPLACE_NAME}",
             f"install Plugin {PLUGIN_ID} in Codex Desktop",
-            "trust exactly three Plugin hooks manually",
+            "trust exactly five Plugin hooks manually",
             "create workspace-scoped ToolUseProxy data",
         ],
         "cleanup_contract": [
@@ -624,7 +624,7 @@ def checkpoint_installed(root_argument: Path) -> dict[str, Any]:
         "plugin_version": state["plugin_version"],
         "hook_trust": "manual_required_not_bypassed",
         "next": (
-            "In Codex Desktop review the exact three Phase B hooks. Then run "
+            "In Codex Desktop review the exact five Phase B hooks. Then run "
             "checkpoint-hooks-trusted before starting any test task."
         ),
         "hooks": hook_inventory["hooks"],
@@ -2439,9 +2439,9 @@ def _desktop_plugin_hooks(
         )
     ]
     if (
-        len(selected) != 3
+        len(selected) != 5
         or sorted(str(hook.get("eventName")) for hook in selected)
-        != ["postToolUse", "preToolUse", "stop"]
+        != ["postToolUse", "preToolUse", "sessionStart", "stop", "subagentStart"]
     ):
         raise DesktopPhaseBFailure(
             "hook_inventory",
@@ -2483,17 +2483,31 @@ def _desktop_plugin_hooks(
         )
 
     expected = {
+        "sessionStart": (
+            "SessionStart",
+            "session-start",
+            None,
+            "run_hook.sh",
+        ),
+        "subagentStart": (
+            "SubagentStart",
+            "subagent-start",
+            None,
+            "run_hook.sh",
+        ),
         "preToolUse": (
             "PreToolUse",
             "pre-tool-use",
-            "^(Bash|apply_patch|mcp__.*)$",
+            "^.*$",
+            PROBE_LAUNCHER_FILENAME,
         ),
         "postToolUse": (
             "PostToolUse",
             "post-tool-use",
-            "^(Bash|apply_patch|mcp__.*)$",
+            "^.*$",
+            PROBE_LAUNCHER_FILENAME,
         ),
-        "stop": ("Stop", "stop", None),
+        "stop": ("Stop", "stop", None, PROBE_LAUNCHER_FILENAME),
     }
     sanitized: list[dict[str, Any]] = []
     for hook in selected:
@@ -2504,9 +2518,9 @@ def _desktop_plugin_hooks(
                 "hook_inventory",
                 "plugin_hook_event_invalid",
             )
-        event, phase, matcher = spec
+        event, phase, matcher, launcher_filename = spec
         command = (
-            f'sh "{hook_root / "hooks" / PROBE_LAUNCHER_FILENAME}" {phase}'
+            f'sh "{hook_root / "hooks" / launcher_filename}" {phase}'
         )
         current_hash = hook.get("currentHash")
         trust_status = hook.get("trustStatus")
@@ -3742,10 +3756,18 @@ def _write_desktop_guidance(
         "setup skillの利用者向け説明に従ってください。検証用promptではその"
         "文面を指定しません。通常利用と同じように、読み取ったsetup skillだけを"
         "文章の根拠にしてください。"
-        f"{setup_command_sentence}verification"
+        f"{setup_command_sentence}"
+        "すべてのlocal exec_commandは、呼び出し以外のstatementを追加せず、"
+        "`const r = await tools.exec_command({...}); text(JSON.stringify(r));`"
+        "というwrapperだけで実行してください。`...`はその1回の"
+        "exec_command arguments objectです。出力追加、session_id用statement、"
+        "別commandはwrapperへ加えないでください。processが継続中の場合だけ、"
+        "返されたIDをhostのwait toolへそのまま渡してください。verification"
         "がpassedになった後、payload fileを読まず、次の二つだけを順に"
-        f"実行してください。public call: {public_command}｜protected call: "
-        f"{protected_command}。system curl、変数、stdin、command substitution、"
+        f"実行してください。第一のpublic callは「{public_command}」です。"
+        f"第二のprotected callは「{protected_command}」です。"
+        "引用符の内側だけをそれぞれcmdへ入れてください。system curl、変数、"
+        "stdin、command substitution、"
         "別pathを使わず、1 tool callには1 commandだけを入れてください。"
         "使用可能なtoolは、contextとsetup skillの読み取り、および単独のlocal "
         "exec_commandだけです。Web、MCP、apply_patch、subagent、別のtoolは"
@@ -3758,14 +3780,19 @@ def _write_desktop_guidance(
         f"対象Plugin: {PLUGIN_ID}\n"
         f"対象version: {state['plugin_version']}\n"
         f"対象workspace: {state['workspace']}\n\n"
-        "確認するHookは次の3件だけです。\n\n"
+        "確認するHookは次の5件だけです。\n\n"
+        "SessionStart: WebSearchなどHookで遮断できないhosted toolへ"
+        "protected contentを渡さない安全境界をCodexへ伝えます。技術的な"
+        "実行前遮断ではありません。\n"
+        "SubagentStart: subagentにも同じhosted tool境界を伝えます。技術的な"
+        "実行前遮断ではありません。\n"
         "PreToolUse: toolの実行前に、外部送信へprotected contentが"
         "含まれないか確認します。\n"
         "PostToolUse: toolの実行後に、入出力をlocal DBへ記録します。\n"
         "Stop: 最終回答を返す前に、protected contentが残っていないか"
         "確認します。\n\n"
         "Hook commandはCodex sandboxの外で、あなたのlocal権限により"
-        "実行されます。source、version、Hookが3件であること、各commandが"
+        "実行されます。source、version、Hookが5件であること、各commandが"
         "対象Plugin root内を指すことを毎回確認してください。1つでも違う場合は"
         "trustせず停止してください。以前にtrustしていても、定義が変わって"
         "modifiedになったHookは再reviewが必要です。\n\n"

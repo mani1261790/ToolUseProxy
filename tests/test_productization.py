@@ -137,12 +137,7 @@ class RuntimePathsTest(unittest.TestCase):
             root = Path(temporary_directory)
             codex_home = root / "codex-home"
             plugin_root = (
-                codex_home
-                / "plugins"
-                / "cache"
-                / "tooluseproxy"
-                / "tooluseproxy"
-                / "0.1.0-alpha.8"
+                codex_home / "plugins" / "cache" / "tooluseproxy" / "tooluseproxy" / "0.1.0-alpha.8"
             )
             manifest_dir = plugin_root / ".codex-plugin"
             manifest_dir.mkdir(parents=True)
@@ -205,9 +200,7 @@ class RuntimePathsTest(unittest.TestCase):
                     }
                 )
 
-            installed = (
-                codex_home / "plugins" / "cache" / "market" / "plugin" / "1.0"
-            )
+            installed = codex_home / "plugins" / "cache" / "market" / "plugin" / "1.0"
             installed_manifest = installed / ".codex-plugin"
             installed_manifest.mkdir(parents=True)
             (installed_manifest / "plugin.json").write_text(
@@ -240,9 +233,7 @@ class ProductCliTest(unittest.TestCase):
                 redirect_stdout(stdout),
                 redirect_stderr(stderr),
             ):
-                exit_code = cli_main(
-                    ["trace", "--db", str(database), "--no-preview"]
-                )
+                exit_code = cli_main(["trace", "--db", str(database), "--no-preview"])
 
             self.assertEqual(1, exit_code)
             self.assertEqual("", stdout.getvalue())
@@ -262,11 +253,14 @@ class ProductCliTest(unittest.TestCase):
             workspace = root / "workspace"
             workspace.mkdir()
             stderr = io.StringIO()
-            with patch.dict(
-                os.environ,
-                {"PLUGIN_DATA": str(root / "plugin-data")},
-                clear=True,
-            ), redirect_stderr(stderr):
+            with (
+                patch.dict(
+                    os.environ,
+                    {"PLUGIN_DATA": str(root / "plugin-data")},
+                    clear=True,
+                ),
+                redirect_stderr(stderr),
+            ):
                 exit_code = cli_main(
                     [
                         "init",
@@ -320,9 +314,7 @@ class ProductCliTest(unittest.TestCase):
                 )
                 self.assertEqual(
                     0o600,
-                    stat.S_IMODE(
-                        (workspace / "protected_sources.json").stat().st_mode
-                    ),
+                    stat.S_IMODE((workspace / "protected_sources.json").stat().st_mode),
                 )
 
             for command in ("doctor", "status"):
@@ -343,9 +335,7 @@ class ProductCliTest(unittest.TestCase):
                 self.assertEqual(str(data_dir / "events.db"), payload["db_path"])
 
             with sqlite3.connect(data_dir / "events.db") as conn:
-                registered = conn.execute(
-                    "SELECT canonical_root FROM workspaces"
-                ).fetchall()
+                registered = conn.execute("SELECT canonical_root FROM workspaces").fetchall()
                 schema_version = conn.execute("PRAGMA user_version").fetchone()[0]
             self.assertEqual([(str(workspace.resolve()),)], registered)
             self.assertEqual(CURRENT_SCHEMA_VERSION, schema_version)
@@ -429,9 +419,7 @@ class ProductCliTest(unittest.TestCase):
                                 "type": "secretfile",
                                 "sensitivity": "high",
                                 "policy_tags": ["no_external"],
-                                "selector": {
-                                    "dotenv_keys": ["MISSING_TOKEN"]
-                                },
+                                "selector": {"dotenv_keys": ["MISSING_TOKEN"]},
                             }
                         ],
                     }
@@ -454,9 +442,7 @@ class ProductCliTest(unittest.TestCase):
 
             report = json.loads(stdout.getvalue())
             protected = next(
-                check
-                for check in report["checks"]
-                if check["name"] == "protected_sources"
+                check for check in report["checks"] if check["name"] == "protected_sources"
             )
             self.assertEqual(1, exit_code)
             self.assertEqual("needs_attention", report["status"])
@@ -478,10 +464,13 @@ class ProductCliTest(unittest.TestCase):
                 real_link(source, destination)
 
             stdout = io.StringIO()
-            with patch(
-                "tooluseproxy.cli.os.link",
-                side_effect=create_competing_manifest,
-            ), redirect_stdout(stdout):
+            with (
+                patch(
+                    "tooluseproxy.cli.os.link",
+                    side_effect=create_competing_manifest,
+                ),
+                redirect_stdout(stdout),
+            ):
                 exit_code = cli_main(
                     [
                         "init",
@@ -931,9 +920,7 @@ class PluginBundleTest(unittest.TestCase):
         manifest = json.loads(
             (REPO_ROOT / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8")
         )
-        hooks = json.loads(
-            (REPO_ROOT / "hooks" / "hooks.json").read_text(encoding="utf-8")
-        )
+        hooks = json.loads((REPO_ROOT / "hooks" / "hooks.json").read_text(encoding="utf-8"))
 
         self.assertEqual("tooluseproxy", manifest["name"])
         self.assertEqual(__version__, manifest["version"].replace("-alpha.", "a"))
@@ -941,11 +928,15 @@ class PluginBundleTest(unittest.TestCase):
         self.assertNotIn("hooks", manifest)
         self.assertEqual(
             (
-                "ToolUseProxy checks tool inputs before execution, records tool "
-                "results locally, and reviews final responses for protected content. "
-                "It stays local by default. The experimental Externality Judge sends "
-                "only a value-free structural summary to the model provider you "
-                "explicitly select."
+                "ToolUseProxy checks every Hook-visible local function-tool input "
+                "before execution, records tool results locally, and reviews final "
+                "responses for protected content. Unknown local function tools are "
+                "treated conservatively when protected information reaches their "
+                "input. Hosted tools cannot be intercepted, so "
+                "SessionStart and SubagentStart add a developer-context safety boundary "
+                "instead. It stays local by default. The experimental Externality Judge sends only "
+                "a value-free structural summary to the model provider you explicitly "
+                "select."
             ),
             hooks["description"],
         )
@@ -959,12 +950,7 @@ class PluginBundleTest(unittest.TestCase):
             root = Path(temporary_directory)
             codex_home = root / "codex-home"
             plugin_root = (
-                codex_home
-                / "plugins"
-                / "cache"
-                / "tooluseproxy"
-                / "tooluseproxy"
-                / "0.1.0-alpha.8"
+                codex_home / "plugins" / "cache" / "tooluseproxy" / "tooluseproxy" / "0.1.0-alpha.8"
             )
             plugin_root.mkdir(parents=True)
             for directory in (".codex-plugin", "hook_monitor", "hooks", "tooluseproxy"):
@@ -1024,12 +1010,7 @@ class PluginBundleTest(unittest.TestCase):
             applied_payload = json.loads(applied.stdout)
             self.assertEqual("applied", applied_payload["status"])
             self.assertEqual("codex_plugin_store", applied_payload["path_source"])
-            data_dir = (
-                codex_home
-                / "plugins"
-                / "data"
-                / "tooluseproxy-tooluseproxy"
-            )
+            data_dir = codex_home / "plugins" / "data" / "tooluseproxy-tooluseproxy"
             self.assertEqual(str(data_dir.resolve()), applied_payload["data_dir"])
 
             verified = subprocess.run(
@@ -1159,9 +1140,7 @@ class PluginBundleTest(unittest.TestCase):
                 check=True,
             )
             inactive_output = json.loads(inactive.stdout)
-            inactive_context = inactive_output["hookSpecificOutput"][
-                "additionalContext"
-            ]
+            inactive_context = inactive_output["hookSpecificOutput"]["additionalContext"]
             self.assertEqual(
                 "PreToolUse",
                 inactive_output["hookSpecificOutput"]["hookEventName"],
@@ -1214,15 +1193,9 @@ class PluginBundleTest(unittest.TestCase):
             )
             legacy_status_payload = json.loads(legacy_status.stdout)
             self.assertEqual("active", legacy_status_payload["status"])
-            self.assertTrue(
-                legacy_status_payload["protected_sources"]["runtime_readable"]
-            )
-            self.assertFalse(
-                legacy_status_payload["protected_sources"]["registration_writable"]
-            )
-            self.assertTrue(
-                legacy_status_payload["protected_sources"]["migration_required"]
-            )
+            self.assertTrue(legacy_status_payload["protected_sources"]["runtime_readable"])
+            self.assertFalse(legacy_status_payload["protected_sources"]["registration_writable"])
+            self.assertTrue(legacy_status_payload["protected_sources"]["migration_required"])
 
             registration_secret = "RELOCATED.PLUGIN.SECRET.9d31"
             decoy_secret = "RELOCATED.EXCLUDED.SECRET.61b7"
@@ -1281,9 +1254,7 @@ class PluginBundleTest(unittest.TestCase):
             with sqlite3.connect(data_dir / "events.db") as conn:
                 self.assertEqual(
                     0,
-                    conn.execute(
-                        "SELECT COUNT(*) FROM protected_source_candidates"
-                    ).fetchone()[0],
+                    conn.execute("SELECT COUNT(*) FROM protected_source_candidates").fetchone()[0],
                 )
 
             migration_plan = subprocess.run(
@@ -1309,9 +1280,7 @@ class PluginBundleTest(unittest.TestCase):
             self.assertEqual("review_required", migration_plan_payload["status"])
             self.assertEqual(1, migration_plan_payload["source_count"])
             self.assertTrue(migration_plan_payload["schema_version_was_omitted"])
-            self.assertFalse(
-                migration_plan_payload["sources_field_will_be_added"]
-            )
+            self.assertFalse(migration_plan_payload["sources_field_will_be_added"])
             self.assertEqual(0, migration_plan_payload["selector_changes"])
             self.assertEqual(
                 hashlib.sha256(legacy_manifest_before).hexdigest(),
@@ -1326,9 +1295,7 @@ class PluginBundleTest(unittest.TestCase):
                 legacy_metadata,
                 migration_plan.stdout + migration_plan.stderr,
             )
-            migration_backup = (
-                data_dir / migration_plan_payload["backup_relative_path"]
-            )
+            migration_backup = data_dir / migration_plan_payload["backup_relative_path"]
             self.assertFalse(migration_backup.exists())
 
             migration_apply = subprocess.run(
@@ -1373,9 +1340,7 @@ class PluginBundleTest(unittest.TestCase):
                 0o600,
                 stat.S_IMODE(migration_backup.stat().st_mode),
             )
-            migrated_manifest = json.loads(
-                legacy_manifest.read_text(encoding="utf-8")
-            )
+            migrated_manifest = json.loads(legacy_manifest.read_text(encoding="utf-8"))
             self.assertEqual(2, migrated_manifest["schema_version"])
             self.assertEqual([legacy_source], migrated_manifest["sources"])
             self.assertEqual(
@@ -1405,10 +1370,9 @@ class PluginBundleTest(unittest.TestCase):
             suggestion_payload = json.loads(suggestion.stdout)
             self.assertEqual("review_required", suggestion_payload["status"])
             self.assertTrue(suggestion_payload["scan_complete"])
-            self.assertEqual("one_at_a_time", suggestion_payload["approval_mode"])
-            self.assertTrue(
-                suggestion_payload["rescan_required_after_manifest_change"]
-            )
+            self.assertEqual("batch", suggestion_payload["approval_mode"])
+            self.assertEqual(10, suggestion_payload["review_batch_limit"])
+            self.assertFalse(suggestion_payload["rescan_required_after_manifest_change"])
             self.assertEqual(0, suggestion_payload["remaining_candidate_count"])
             self.assertTrue(suggestion_payload["continuation_required"])
             self.assertEqual(1, len(suggestion_payload["candidates"]))
@@ -1661,9 +1625,7 @@ class PluginBundleTest(unittest.TestCase):
                     "SELECT workspace_root, workspace_source FROM events"
                     " WHERE phase = 'pre_tool_use'"
                 ).fetchone()
-                phases = conn.execute(
-                    "SELECT phase FROM events ORDER BY sequence_no"
-                ).fetchall()
+                phases = conn.execute("SELECT phase FROM events ORDER BY sequence_no").fetchall()
                 runtime_source = conn.execute(
                     """
                     SELECT source_id, selector_json
@@ -1816,8 +1778,7 @@ class PluginBundleTest(unittest.TestCase):
                 )
 
     @unittest.skipUnless(
-        shutil.which("codex")
-        and os.environ.get("TOOLUSEPROXY_RUN_CODEX_PLUGIN_TEST") == "1",
+        shutil.which("codex") and os.environ.get("TOOLUSEPROXY_RUN_CODEX_PLUGIN_TEST") == "1",
         "set TOOLUSEPROXY_RUN_CODEX_PLUGIN_TEST=1 for local Codex installation",
     )
     def test_codex_cli_installs_the_plugin_from_an_isolated_marketplace(self) -> None:
@@ -1861,9 +1822,7 @@ class PluginBundleTest(unittest.TestCase):
             self.assertTrue((installed_path / ".codex-plugin" / "plugin.json").is_file())
             self.assertTrue((installed_path / "hooks" / "hooks.json").is_file())
             marketplace = json.loads(
-                (REPO_ROOT / ".agents" / "plugins" / "marketplace.json").read_text(
-                    encoding="utf-8"
-                )
+                (REPO_ROOT / ".agents" / "plugins" / "marketplace.json").read_text(encoding="utf-8")
             )
             source = marketplace["plugins"][0]["source"]
             self.assertEqual({"source": "local", "path": "./"}, source)
@@ -2028,11 +1987,9 @@ class WheelInstallationTest(unittest.TestCase):
                                 "type": "secretfile",
                                 "sensitivity": "high",
                                 "policy_tags": ["no_external"],
-                                "selector": {
-                                    "dotenv_keys": ["PRIVATE_TOKEN"]
-                                },
+                                "selector": {"dotenv_keys": ["PRIVATE_TOKEN"]},
                             }
-                        ]
+                        ],
                     }
                 ),
                 encoding="utf-8",
@@ -2170,9 +2127,7 @@ class WheelInstallationTest(unittest.TestCase):
             with sqlite3.connect(db_path) as conn:
                 self.assertEqual(
                     0,
-                    conn.execute(
-                        "SELECT COUNT(*) FROM protected_source_candidates"
-                    ).fetchone()[0],
+                    conn.execute("SELECT COUNT(*) FROM protected_source_candidates").fetchone()[0],
                 )
 
             migration_plan = subprocess.run(
@@ -2199,9 +2154,7 @@ class WheelInstallationTest(unittest.TestCase):
             self.assertEqual("review_required", migration_plan_payload["status"])
             self.assertEqual(1, migration_plan_payload["source_count"])
             self.assertTrue(migration_plan_payload["schema_version_was_omitted"])
-            self.assertFalse(
-                migration_plan_payload["sources_field_will_be_added"]
-            )
+            self.assertFalse(migration_plan_payload["sources_field_will_be_added"])
             self.assertEqual(0, migration_plan_payload["selector_changes"])
             self.assertEqual(
                 hashlib.sha256(legacy_manifest_before).hexdigest(),
@@ -2216,9 +2169,7 @@ class WheelInstallationTest(unittest.TestCase):
                 legacy_metadata,
                 migration_plan.stdout + migration_plan.stderr,
             )
-            migration_backup = (
-                data_dir / migration_plan_payload["backup_relative_path"]
-            )
+            migration_backup = data_dir / migration_plan_payload["backup_relative_path"]
             self.assertFalse(migration_backup.exists())
 
             migration_apply = subprocess.run(
@@ -2264,9 +2215,7 @@ class WheelInstallationTest(unittest.TestCase):
                 0o600,
                 stat.S_IMODE(migration_backup.stat().st_mode),
             )
-            migrated_manifest = json.loads(
-                legacy_manifest.read_text(encoding="utf-8")
-            )
+            migrated_manifest = json.loads(legacy_manifest.read_text(encoding="utf-8"))
             self.assertEqual(2, migrated_manifest["schema_version"])
             self.assertEqual([legacy_source], migrated_manifest["sources"])
             self.assertEqual(
@@ -2297,7 +2246,8 @@ class WheelInstallationTest(unittest.TestCase):
             suggestion_payload = json.loads(suggestion.stdout)
             self.assertEqual("review_required", suggestion_payload["status"])
             self.assertTrue(suggestion_payload["scan_complete"])
-            self.assertEqual("one_at_a_time", suggestion_payload["approval_mode"])
+            self.assertEqual("batch", suggestion_payload["approval_mode"])
+            self.assertEqual(10, suggestion_payload["review_batch_limit"])
             self.assertEqual(0, suggestion_payload["remaining_candidate_count"])
             self.assertTrue(suggestion_payload["continuation_required"])
             self.assertNotIn(installed_secret, suggestion.stdout + suggestion.stderr)
@@ -2339,9 +2289,7 @@ class WheelInstallationTest(unittest.TestCase):
             )
             self.assertEqual("approved", json.loads(approval.stdout)["status"])
             self.assertNotIn(installed_secret, approval.stdout + approval.stderr)
-            registered_manifest = json.loads(
-                legacy_manifest.read_text(encoding="utf-8")
-            )
+            registered_manifest = json.loads(legacy_manifest.read_text(encoding="utf-8"))
             self.assertEqual(legacy_source, registered_manifest["sources"][0])
             self.assertEqual(
                 {"value": legacy_metadata},
@@ -2493,8 +2441,7 @@ class WheelInstallationTest(unittest.TestCase):
                 [path for path, _, _ in runtime_sources],
             )
             selectors = {
-                path: json.loads(selector_json)
-                for path, _, selector_json in runtime_sources
+                path: json.loads(selector_json) for path, _, selector_json in runtime_sources
             }
             self.assertEqual(
                 {"json_pointers": ["/private_token"]},

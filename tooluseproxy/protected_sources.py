@@ -1234,6 +1234,188 @@ def approve_protected_source(
                 pass
 
 
+def approve_protected_source_batch(
+    workspace_root: Path,
+    candidates: Sequence[tuple[ProtectedSourceCandidate | Mapping[str, object], str]],
+    *,
+    expected_manifest_sha256: str,
+    workspace_lock: ProtectedSourceWorkspaceLock | None = None,
+) -> tuple[ApprovalResult, ...]:
+    """Revalidate and install one explicitly reviewed candidate batch.
+
+    All sources are bound to the same input manifest and the manifest is
+    replaced once.  Exact entries from an interrupted prior apply are accepted
+    only when every approved entry is already present.
+    """
+
+    if workspace_lock is None:
+        with lock_protected_source_workspace(workspace_root) as acquired_lock:
+            return approve_protected_source_batch(
+                workspace_root,
+                candidates,
+                expected_manifest_sha256=expected_manifest_sha256,
+                workspace_lock=acquired_lock,
+            )
+    if not isinstance(candidates, Sequence) or isinstance(candidates, (str, bytes)):
+        _raise("candidate_invalid")
+    if not 1 <= len(candidates) <= DEFAULT_PROTECTED_SOURCE_SCAN_LIMITS.max_candidates:
+        _raise("candidate_invalid")
+    if (
+        not isinstance(expected_manifest_sha256, str)
+        or _HEX_SHA256.fullmatch(expected_manifest_sha256) is None
+    ):
+        _raise("candidate_invalid")
+
+    saved_candidates: list[ProtectedSourceCandidate] = []
+    candidate_ids: set[str] = set()
+    workspace_ids: set[str] = set()
+    for candidate, revision in candidates:
+        saved = _coerce_candidate(candidate, allow_legacy_recovery=True)
+        _verify_candidate_revision(saved, revision)
+        if saved.candidate_id in candidate_ids:
+            _raise("candidate_invalid")
+        candidate_ids.add(saved.candidate_id)
+        workspace_ids.add(saved.workspace_id)
+        saved_candidates.append(saved)
+    if len(workspace_ids) != 1:
+        _raise("candidate_invalid")
+
+    root_fd, root_path, root_stat = _require_workspace_lock(
+        workspace_root,
+        workspace_lock,
+    )
+    temporary_name: str | None = None
+    try:
+        _verify_workspace_path(root_path, root_stat)
+        manifest_text, initial_manifest_binding = _read_manifest_text(
+            root_fd,
+            root_stat.st_dev,
+        )
+        manifest = _parse_and_validate_manifest(manifest_text, root_path)
+        existing_states = [
+            _find_existing_source(manifest, saved.proposed_source, root_path)
+            for saved in saved_candidates
+        ]
+        if all(state == "exact" for state in existing_states):
+            confirmed_sha256: str | None = None
+            results: list[ApprovalResult] = []
+            for saved in saved_candidates:
+                if saved.status in {"proposed", "approving"}:
+                    _revalidate_source(root_fd, root_stat.st_dev, saved)
+                binding = _confirm_exact_manifest_durability(
+                    root_fd,
+                    root_path,
+                    root_stat,
+                    saved,
+                )
+                if confirmed_sha256 is None:
+                    confirmed_sha256 = binding.sha256
+                elif not hmac.compare_digest(confirmed_sha256, binding.sha256):
+                    _raise("manifest_postcondition_failed")
+                results.append(
+                    ApprovalResult(
+                        status="already_registered",
+                        candidate_id=saved.candidate_id,
+                        source_id=_required_source_id(saved.proposed_source),
+                        manifest_sha256=binding.sha256,
+                    )
+                )
+            return tuple(results)
+        if any(state == "exact" for state in existing_states):
+            _raise("manifest_conflict")
+        if any(state == "id_conflict" for state in existing_states):
+            _raise("source_id_conflict")
+        if any(state == "path_conflict" for state in existing_states):
+            _raise("source_path_conflict")
+        if any(saved.status == "approved" for saved in saved_candidates):
+            _raise("manifest_conflict")
+        if not hmac.compare_digest(
+            initial_manifest_binding.sha256,
+            expected_manifest_sha256,
+        ):
+            _raise("manifest_conflict")
+        if any(
+            not hmac.compare_digest(
+                saved.manifest_sha256,
+                expected_manifest_sha256,
+            )
+            for saved in saved_candidates
+        ):
+            _raise("manifest_conflict")
+
+        _preflight_manifest_sources(root_fd, root_path, root_stat.st_dev, manifest)
+        raw_sources = manifest["sources"]
+        assert isinstance(raw_sources, list)
+        if len(raw_sources) + len(saved_candidates) > MAX_MANIFEST_SOURCES:
+            _raise("manifest_too_many_sources")
+        for saved in saved_candidates:
+            _revalidate_source(root_fd, root_stat.st_dev, saved)
+            if _find_existing_source(manifest, saved.proposed_source, root_path) != "none":
+                _raise("source_path_conflict")
+            raw_sources.append(_copy_json_object(saved.proposed_source))
+
+        encoded = _encode_manifest(manifest)
+        temporary_name = _write_temporary_manifest(root_fd, encoded)
+        temporary_path = root_path / temporary_name
+        _verify_workspace_path(root_path, root_stat)
+        try:
+            load_sources_and_chunks(
+                root_path,
+                temporary_path,
+                workspace_id=saved_candidates[0].workspace_id,
+            )
+        except Exception:
+            _raise("manifest_validation_failed")
+        _verify_temporary_file(root_fd, temporary_name, root_stat.st_dev, encoded)
+        for saved in saved_candidates:
+            _revalidate_source(root_fd, root_stat.st_dev, saved)
+        _, final_manifest_binding = _read_manifest_text(root_fd, root_stat.st_dev)
+        if (
+            not hmac.compare_digest(
+                final_manifest_binding.sha256,
+                expected_manifest_sha256,
+            )
+            or final_manifest_binding != initial_manifest_binding
+        ):
+            _raise("manifest_conflict")
+        _verify_workspace_path(root_path, root_stat)
+        try:
+            os.replace(
+                temporary_name,
+                MANIFEST_FILENAME,
+                src_dir_fd=root_fd,
+                dst_dir_fd=root_fd,
+            )
+        except OSError:
+            _raise("manifest_write_failed")
+        temporary_name = None
+        try:
+            os.fsync(root_fd)
+        except OSError:
+            _raise("manifest_durability_unknown")
+        _verify_workspace_path(root_path, root_stat)
+        _, installed_binding = _read_manifest_text(root_fd, root_stat.st_dev)
+        installed_sha256 = hashlib.sha256(encoded).hexdigest()
+        if not hmac.compare_digest(installed_binding.sha256, installed_sha256):
+            _raise("manifest_postcondition_failed")
+        return tuple(
+            ApprovalResult(
+                status="approved",
+                candidate_id=saved.candidate_id,
+                source_id=_required_source_id(saved.proposed_source),
+                manifest_sha256=installed_sha256,
+            )
+            for saved in saved_candidates
+        )
+    finally:
+        if temporary_name is not None:
+            try:
+                os.unlink(temporary_name, dir_fd=root_fd)
+            except FileNotFoundError:
+                pass
+
+
+
 def reject_protected_source_candidate(
     candidate: ProtectedSourceCandidate | Mapping[str, object],
     *,
