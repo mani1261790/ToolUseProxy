@@ -9,6 +9,8 @@ from hook_monitor.analysis.sink_payload_evidence import (
 from hook_monitor.policy.sink_payload_exact import (
     EXACT_FILE_PAYLOAD_POLICY_VERSION,
     build_exact_file_payload_decisions,
+    build_unresolved_external_payload_decisions,
+    build_unverified_external_sink_decisions,
 )
 from hook_monitor.policy.codex_output import render_codex_hook_output
 from hook_monitor.runtime.models import SinkCandidate
@@ -42,23 +44,112 @@ class SinkPayloadExactPolicyTest(unittest.TestCase):
         self.assertNotIn("Source:", message)
         self.assertNotIn("Score:", message)
 
-    def test_rejects_unsupported_or_non_file_evidence(self) -> None:
+    def test_fail_closed_blocks_unsupported_evidence_with_protected_sources(
+        self,
+    ) -> None:
         unsupported = self._evidence(
             resolution_status="unsupported",
             comparison_status="not_run",
             extraction="coarse_fallback",
             snapshot_semantics="unresolved",
             matches=(),
-        )
-        static = self._evidence(
-            extraction="static_values",
-            snapshot_semantics="tool_input_literal",
+            resolution_reason="unsupported_curl_option",
         )
 
         decisions = build_exact_file_payload_decisions(
-            (unsupported, static),
+            (unsupported,),
             sink_candidates=(self._sink(),),
             analysis_run_id="analysis-1",
+            protected_source_node_ids=("source-chunk-1",),
+        )
+
+        self.assertEqual(1, len(decisions))
+        decision = decisions[0]
+        self.assertEqual("block", decision.action)
+        self.assertEqual("unresolved_external_payload", decision.evidence_kind)
+        self.assertEqual("protected_source_scope", decision.source_node_kind)
+        self.assertIn("unsupported_curl_option", decision.reason)
+
+        output = render_codex_hook_output(decision, "PreToolUse")
+        message = output["hookSpecificOutput"]["permissionDecisionReason"]
+        self.assertIn("送信内容を安全に確認しきれなかった", message)
+        self.assertNotIn("unsupported_curl_option", message)
+
+    def test_unresolved_evidence_without_protected_sources_does_not_block(self) -> None:
+        unsupported = self._evidence(
+            resolution_status="unsupported",
+            comparison_status="not_run",
+            extraction="coarse_fallback",
+            snapshot_semantics="unresolved",
+            matches=(),
+            resolution_reason="unsupported_curl_option",
+        )
+
+        decisions = build_exact_file_payload_decisions(
+            (unsupported,),
+            sink_candidates=(self._sink(),),
+            analysis_run_id="analysis-1",
+        )
+
+        self.assertEqual([], decisions)
+
+    def test_evaluated_non_file_payload_does_not_block_without_a_match(self) -> None:
+        static = self._evidence(
+            extraction="static_values",
+            snapshot_semantics="tool_input_literal",
+            matches=(),
+        )
+
+        decisions = build_exact_file_payload_decisions(
+            (static,),
+            sink_candidates=(self._sink(),),
+            analysis_run_id="analysis-1",
+            protected_source_node_ids=("source-chunk-1",),
+        )
+
+        self.assertEqual([], decisions)
+
+    def test_inspection_error_blocks_each_current_curl_sink(self) -> None:
+        sink = self._sink(metadata={"matched_program": "curl", "segment_index": 3})
+
+        decisions = build_unresolved_external_payload_decisions(
+            sink_candidates=(sink,),
+            analysis_run_id="analysis-1",
+            protected_source_node_ids=("source-chunk-1",),
+            reason="payload_inspection_error",
+        )
+
+        self.assertEqual(1, len(decisions))
+        self.assertEqual("block", decisions[0].action)
+        self.assertIn("payload_inspection_error", decisions[0].reason)
+
+    def test_unverified_non_curl_external_sink_fails_closed(self) -> None:
+        sink = self._sink(
+            metadata={"matched_program": "python", "segment_index": 0}
+        )
+
+        decisions = build_unverified_external_sink_decisions(
+            sink_candidates=(sink,),
+            analysis_run_id="analysis-1",
+            protected_source_node_ids=("source-chunk-1",),
+            verified_sink_node_ids=frozenset(),
+        )
+
+        self.assertEqual(1, len(decisions))
+        self.assertEqual("block", decisions[0].action)
+        self.assertIn(
+            "external_payload_verification_unavailable",
+            decisions[0].reason,
+        )
+
+    def test_verified_external_sink_is_not_blocked_as_unresolved(self) -> None:
+        sink = self._sink(metadata={"matched_program": "curl"})
+
+        decisions = build_unverified_external_sink_decisions(
+            sink_candidates=(sink,),
+            analysis_run_id="analysis-1",
+            protected_source_node_ids=("source-chunk-1",),
+            verified_sink_node_ids=frozenset({"sink-1"}),
         )
 
         self.assertEqual([], decisions)
@@ -87,7 +178,7 @@ class SinkPayloadExactPolicyTest(unittest.TestCase):
         )[0]
 
         self.assertEqual(first, second)
-        self.assertIn("v1", EXACT_FILE_PAYLOAD_POLICY_VERSION)
+        self.assertIn("v2", EXACT_FILE_PAYLOAD_POLICY_VERSION)
 
     @staticmethod
     def _evidence(
@@ -97,6 +188,8 @@ class SinkPayloadExactPolicyTest(unittest.TestCase):
         extraction: str = "resolved_file",
         snapshot_semantics: str = "pre_execution_file_snapshot",
         matches: tuple[SinkPayloadSourceMatch, ...] | None = None,
+        resolution_reason: str | None = None,
+        comparison_reason: str | None = None,
     ) -> BashSinkPayloadEvidence:
         if matches is None:
             matches = (
@@ -121,8 +214,8 @@ class SinkPayloadExactPolicyTest(unittest.TestCase):
             submitted_value_count=1,
             submitted_bytes=32,
             matches=matches,
-            resolution_reason=None,
-            comparison_reason=None,
+            resolution_reason=resolution_reason,
+            comparison_reason=comparison_reason,
             inspection_duration_ms=1.0,
         )
 
@@ -130,6 +223,7 @@ class SinkPayloadExactPolicyTest(unittest.TestCase):
     def _sink(
         *,
         sink_type: str = "external_http_request",
+        metadata: dict[str, object] | None = None,
     ) -> SinkCandidate:
         return SinkCandidate(
             node_id="sink-1",
@@ -139,7 +233,7 @@ class SinkPayloadExactPolicyTest(unittest.TestCase):
             tool_use_id="tool-1",
             session_id="session-1",
             sequence_no=1,
-            metadata={},
+            metadata={} if metadata is None else metadata,
             workspace_id="workspace-1",
         )
 

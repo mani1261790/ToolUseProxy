@@ -118,7 +118,7 @@ installまたはHook定義の更新後は、Codexが示すHook definitionを確�
 
 通常のmarketplace installでは、setup skillがインストール済みlauncherからPlugin rootを取得し、Codex公式のPlugin store契約に従って専用data directoryを解決します。Plugin rootが`CODEX_HOME/plugins/cache/<marketplace>/<plugin>/<version>`に厳密に収まり、manifestのPlugin名が一致する場合だけ、対応する`CODEX_HOME/plugins/data/<plugin>-<marketplace>`を使用します。layout、identity、manifestのどれかが不一致なら推測せず停止します。
 
-新しいworkspaceの通常setupは次の2コマンドです。1つ目はworkspace設定が空であることを前提条件に、初期化と3つの保護設定を原子的に適用します。2つ目は変更を伴わない一括確認です。既存設定が同じなら再実行はidempotentで、異なる設定が1件でもあれば上書きしません。
+新しいworkspaceの通常setupは次の2コマンドです。1つ目はworkspace設定が空であることを前提条件に、初期化と4つの保護設定を原子的に適用します。4つ目の`externality-protection`はlocal static/cache判定と未確認external sinkの安全停止を有効にしますが、LLM providerを選択したりjudge通信を開始したりはしません。2つ目は変更を伴わない一括の設定確認です。既存設定が同じなら再実行はidempotentで、異なる設定が1件でもあれば上書きしません。
 
 ```bash
 sh "<PLUGIN_ROOT>/hooks/run_cli.sh" setup apply file-payload-exact \
@@ -134,9 +134,11 @@ sh "<PLUGIN_ROOT>/hooks/run_cli.sh" setup verify file-payload-exact \
 
 利用者へ`database_missing`診断、absolute path、初期化commandの貼り直しを要求しません。Hook診断は保護が動作していないことを知らせる安全側の補助情報であり、通常setupのpath discovery APIではありません。
 
+`setup verify`の成功statusは`configuration_passed`です。これはdatabase、workspace登録、manifest可読性、4設定、手元のPlugin artifactが整合することだけを証明します。Codex上のHook trust、実際のHook delivery、protected callの実行前blockは証明しません。これらを確認していない段階で「ToolUseProxyは動作中」「保護試験passed」と報告してはいけません。Hook review後のfresh taskと、値を表示しない専用probeを別のruntime証拠として扱います。
+
 以下はHook障害診断と手動Phase B検証のために残す低level契約であり、通常利用者がpathやcommandをコピーするための手順ではありません。
 
-Plugin Hookは未初期化DBを検出してもschema migrationやworkspace変更を行わず、fail-openで終了します。PreToolUse / PostToolUseでは`additionalContext`、Stopではadvisoryな`systemMessage`を使い、未保護であることとCodexへ準備を依頼する短い案内だけを返します。診断へ初期化command、Plugin root、Plugin data pathは含めません。Python不足、runtime起動失敗、内部policy評価失敗も同じJSON契約で通知し、例外本文やHook inputは診断へ含めません。以前のstderrだけに出す形式はDesktopで表示されないため廃止しました。ただし、案内の表示自体をdispatch証拠にはせず、Desktopでは[Desktop Phase B](../運用/DesktopPhaseB.md)のtrusted probeが記録したdata pathだけを使います。cacheやprocess環境から`PLUGIN_DATA`を推測しません。
+Plugin Hookは未初期化DBを検出してもschema migrationやworkspace変更を行わず、setupを可能にするためadvisoryで終了します。保護設定が読み込まれた後にPreToolUseのpolicy評価やPlugin runtime自体が失敗した場合は、安全性を確認できない操作を`deny`し、fail-openしません。PostToolUseとStopの診断はadvisoryです。診断へ初期化command、Plugin root、Plugin data path、例外本文、Hook inputは含めません。以前のstderrだけに出す形式はDesktopで表示されないため廃止しました。ただし、案内の表示自体をdispatch証拠にはせず、Desktopでは[Desktop Phase B](../運用/DesktopPhaseB.md)のtrusted probeが記録したdata pathだけを使います。cacheやprocess環境から`PLUGIN_DATA`を推測しません。
 
 通常setupの固定profileは次を行います。
 

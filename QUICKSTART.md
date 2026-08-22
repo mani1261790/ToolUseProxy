@@ -64,7 +64,7 @@ ToolUseProxyが必要な初期設定と安全確認を案内します。操作�
 
 通常インストールでは、ToolUseProxy自身が現在のPlugin identityを検証して専用保存領域を特定します。利用者が`database_missing`などの内部診断、absolute path、初期化commandをコピーして貼り直す必要はありません。承認UIがないことだけを理由にターミナル実行へ切り替えません。保存先またはaccessを安全に確認できない場合は、別pathや広い権限を推測せず未設定のまま停止します。
 
-完了時に「このプロジェクトではToolUseProxyが動作しています」と表示されれば準備完了です。すべての機密ファイルが自動登録されるわけではありません。
+完了時の`configuration_passed`は初期設定だけの合格です。Hook trust、Hook delivery、protected blockまで確認した意味ではありません。fresh taskで安全な動作確認を行い、protected操作が実行前に止まった証拠を得てから、ToolUseProxyが動作していると判断します。すべての機密ファイルが自動登録されるわけではありません。
 
 ## 5. protected source候補をまとめて確認する
 
@@ -92,9 +92,9 @@ ToolUseProxyが必要な初期設定と安全確認を案内します。操作�
 
 1. 有効なToolUseProxy Pluginが1つだけである
 2. 5つのHookを確認してTrustした
-3. 「このプロジェクトではToolUseProxyが動作しています」と表示された
+3. setupが`configuration_passed`となり、これが設定確認だけだと説明された
 4. harmlessなpublic操作が通常どおり完了した
-5. syntheticなprotected valueが外部操作の実行前にblockされた
+5. syntheticなprotected valueが外部操作の実行前にblockされ、ここで初めてruntime保護を確認できた
 6. 通常作業で予期しないblockが発生しない
 7. PluginをRemoveしても、別途data削除を承認しない限りlocal dataが保持される
 

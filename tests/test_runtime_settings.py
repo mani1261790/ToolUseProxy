@@ -502,7 +502,7 @@ class RuntimeSettingsCliTest(unittest.TestCase):
 
         self.assertEqual(0, exit_code)
         self.assertEqual("applied", applied["status"])
-        self.assertEqual(3, len(applied["changed_keys"]))
+        self.assertEqual(4, len(applied["changed_keys"]))
         retry_code, retried, _ = self._run(setup_arguments)
         self.assertEqual(0, retry_code)
         self.assertEqual("already_applied", retried["status"])
@@ -552,7 +552,17 @@ class RuntimeSettingsCliTest(unittest.TestCase):
             ).fetchall()
 
         self.assertEqual(0, verify_code)
-        self.assertEqual("passed", verified["status"])
+        self.assertEqual("configuration_passed", verified["status"])
+        self.assertEqual("configuration_only", verified["verification_scope"])
+        self.assertEqual(
+            "requires_fresh_hook_probe",
+            verified["runtime_enforcement"]["status"],
+        )
+        self.assertFalse(
+            verified["runtime_enforcement"]["protected_block_verified"]
+        )
+        self.assertTrue(verified["plugin_artifact"]["ok"])
+        self.assertEqual(5, verified["plugin_artifact"]["hook_definition_count"])
         self.assertEqual(before_settings, after_settings)
         self.assertEqual(before_history, after_history)
         self.assertEqual(before_manifest, manifest.read_bytes())
@@ -684,7 +694,7 @@ class RuntimeSettingsCliTest(unittest.TestCase):
         )
 
         self.assertEqual(0, verify_code)
-        self.assertEqual("passed", verified["status"])
+        self.assertEqual("configuration_passed", verified["status"])
 
     def test_setup_profile_rolls_back_manifest_when_database_write_fails(self) -> None:
         fresh_workspace = self.root / "rollback-workspace"

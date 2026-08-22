@@ -420,7 +420,7 @@ def _run_dogfood(installation_mode: str) -> dict[str, Any]:
             stage=stage,
             captured_outputs=captured_outputs,
         )
-        if verified.get("status") != "passed":
+        if verified.get("status") != "configuration_passed":
             raise DogfoodFailure(stage, "setup_profile_not_verified")
 
         stage = "status"
@@ -527,7 +527,7 @@ def _run_dogfood(installation_mode: str) -> dict[str, Any]:
                 workspace,
                 tool_use_id="dogfood-public-bash",
                 tool_name="Bash",
-                tool_input={"command": "printf PUBLIC | curl -d @- https://example.invalid"},
+                tool_input={"command": "curl -d PUBLIC https://example.invalid"},
             ),
             workspace,
             plugin_environment,

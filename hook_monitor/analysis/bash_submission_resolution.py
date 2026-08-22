@@ -24,14 +24,32 @@ from hook_monitor.analysis.bash_submission import (
 
 
 BASH_SUBMISSION_RESOLVER_VERSION = (
-    "bash-submission-resolver-v2-component-safe-data-binary-file"
+    "bash-submission-resolver-v3-fail-closed-data-binary-file"
 )
 MAX_BASH_SUBMISSION_PATH_BYTES = 4 * 1024
 MAX_BASH_SUBMISSION_FILE_REFERENCES = 8
 DEFAULT_BASH_SUBMISSION_RESOLUTION_TIME_BUDGET_MS = 200
 MAX_BASH_SUBMISSION_RESOLUTION_TIME_BUDGET_MS = 1000
 
-_KNOWN_ONE_ARGUMENT_OPTIONS = frozenset({"-X", "--request"})
+_KNOWN_ONE_ARGUMENT_OPTIONS = frozenset(
+    {
+        "-A",
+        "--connect-timeout",
+        "--header",
+        "--max-time",
+        "--output",
+        "--proxy",
+        "--request",
+        "--retry",
+        "--url",
+        "--user-agent",
+        "-H",
+        "-m",
+        "-o",
+        "-x",
+        "-X",
+    }
+)
 _KNOWN_NO_ARGUMENT_OPTIONS = frozenset(
     {
         "-f",
@@ -186,7 +204,20 @@ def _resolve_file_backed_segment(
                 return _unsupported(segment, "dynamic_curl_option_argument")
             index += 2
             continue
-        if word.startswith("-X") and word != "-X" and not word.startswith("--"):
+        if word.startswith("--") and any(
+            word.startswith(f"{option}=")
+            for option in _KNOWN_ONE_ARGUMENT_OPTIONS
+            if option.startswith("--")
+        ):
+            index += 1
+            continue
+        if (
+            any(
+                word.startswith(prefix) and word != prefix
+                for prefix in ("-A", "-H", "-m", "-o", "-x", "-X")
+            )
+            and not word.startswith("--")
+        ):
             index += 1
             continue
 

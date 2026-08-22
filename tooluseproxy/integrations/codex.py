@@ -104,6 +104,7 @@ def run_codex_hook(
                     "ToolUseProxy inactive (runtime_error): "
                     "the local Hook runtime could not start"
                 ),
+                deny_pre_tool=runtime_phase == "pre_tool_use",
             )
         print(
             json.dumps(output, ensure_ascii=False)

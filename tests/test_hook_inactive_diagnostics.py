@@ -108,6 +108,7 @@ class HookInactiveDiagnosticTest(unittest.TestCase):
             "runtime_error",
             self._diagnostic_message(output, "PreToolUse"),
         )
+        self._assert_pre_tool_denied(output)
         self.assertEqual(1, stdout.getvalue().count("\n"))
         self.assertNotIn(PROTECTED_SENTINEL, stdout.getvalue())
         self.assertEqual("", stderr.getvalue())
@@ -133,7 +134,13 @@ class HookInactiveDiagnosticTest(unittest.TestCase):
             self.assertIn("runtime_error", message)
             self.assertNotIn(PROTECTED_SENTINEL, stdout.getvalue())
             self.assertEqual("", stderr.getvalue())
-            self._assert_nonblocking(output, hook_event)
+            if hook_event == "PreToolUse":
+                self._assert_pre_tool_denied(output)
+            else:
+                if hook_event == "PreToolUse":
+                    self._assert_pre_tool_denied(output)
+                else:
+                    self._assert_nonblocking(output, hook_event)
 
     def test_missing_database_uses_phase_specific_json_without_stdin(
         self,
@@ -197,7 +204,10 @@ class HookInactiveDiagnosticTest(unittest.TestCase):
                 self.assertIn("hook_payload_invalid", message)
                 self.assertNotIn(PROTECTED_SENTINEL, result.stdout)
                 self.assertEqual("", result.stderr)
-                self._assert_nonblocking(output, hook_event)
+                if hook_event == "PreToolUse":
+                    self._assert_pre_tool_denied(output)
+                else:
+                    self._assert_nonblocking(output, hook_event)
 
     @unittest.skipIf(os.name == "nt", "POSIX launcher test")
     def test_missing_plugin_environment_uses_phase_specific_json(
@@ -229,7 +239,10 @@ class HookInactiveDiagnosticTest(unittest.TestCase):
             )
             self.assertNotIn(PROTECTED_SENTINEL, result.stdout)
             self.assertEqual("", result.stderr)
-            self._assert_nonblocking(output, hook_event)
+            if hook_event == "PreToolUse":
+                self._assert_pre_tool_denied(output)
+            else:
+                self._assert_nonblocking(output, hook_event)
 
     @unittest.skipIf(os.name == "nt", "POSIX launcher test")
     def test_missing_python_uses_phase_specific_json_without_stdin(
@@ -265,7 +278,10 @@ class HookInactiveDiagnosticTest(unittest.TestCase):
                 )
                 self.assertNotIn(PROTECTED_SENTINEL, result.stdout)
                 self.assertEqual("", result.stderr)
-                self._assert_nonblocking(output, hook_event)
+                if hook_event == "PreToolUse":
+                    self._assert_pre_tool_denied(output)
+                else:
+                    self._assert_nonblocking(output, hook_event)
 
             self.assertFalse((data_dir / "events.db").exists())
 
@@ -306,7 +322,10 @@ class HookInactiveDiagnosticTest(unittest.TestCase):
                 self.assertIn("runtime_start_failed", message)
                 self.assertNotIn(PROTECTED_SENTINEL, result.stdout)
                 self.assertEqual("", result.stderr)
-                self._assert_nonblocking(output, hook_event)
+                if hook_event == "PreToolUse":
+                    self._assert_pre_tool_denied(output)
+                else:
+                    self._assert_nonblocking(output, hook_event)
 
     @staticmethod
     def _payload(hook_event: str) -> str:
@@ -359,6 +378,19 @@ class HookInactiveDiagnosticTest(unittest.TestCase):
         }
         if forbidden.intersection(hook_output):
             raise AssertionError("inactive diagnostic must not block or rewrite")
+
+    @staticmethod
+    def _assert_pre_tool_denied(output: dict[str, object]) -> None:
+        hook_output = output.get("hookSpecificOutput")
+        if not isinstance(hook_output, dict):
+            raise AssertionError("hookSpecificOutput must be an object")
+        if hook_output.get("hookEventName") != "PreToolUse":
+            raise AssertionError("hookEventName must be PreToolUse")
+        if hook_output.get("permissionDecision") != "deny":
+            raise AssertionError("PreToolUse runtime failure must deny")
+        reason = hook_output.get("permissionDecisionReason")
+        if not isinstance(reason, str) or "実行前に止めました" not in reason:
+            raise AssertionError("PreToolUse denial reason must be user-facing")
 
 
 if __name__ == "__main__":

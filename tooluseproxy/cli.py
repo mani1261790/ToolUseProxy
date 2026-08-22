@@ -20,6 +20,7 @@ from hook_monitor.runtime.source_config import (
     SourceConfigError,
 )
 from hook_monitor.runtime.settings import (
+    EXTERNALITY_PROTECTION_KEY,
     FILE_PAYLOAD_EXACT_ENFORCEMENT_KEY,
     FILE_PAYLOAD_SHADOW_KEY,
     PRE_TOOL_POLICY_KEY,
@@ -92,7 +93,11 @@ SETUP_PROFILE_SETTINGS = {
     PRE_TOOL_POLICY_KEY: True,
     FILE_PAYLOAD_SHADOW_KEY: True,
     FILE_PAYLOAD_EXACT_ENFORCEMENT_KEY: True,
+    EXTERNALITY_PROTECTION_KEY: True,
 }
+EXPECTED_CODEX_HOOK_EVENTS = frozenset(
+    {"SessionStart", "SubagentStart", "PreToolUse", "PostToolUse", "Stop"}
+)
 
 
 class _ProtectCliError(ValueError):
@@ -774,21 +779,22 @@ def _run_setup_verify(args: argparse.Namespace) -> int:
                 for key in RUNTIME_SETTING_KEYS
                 if effective.settings[key].source == "invalid_environment"
             )
-            settings_payload = {
-                "ok": not invalid_environment,
-                "detail": (
-                    "workspace runtime settings valid"
-                    if not invalid_environment
-                    else "invalid environment overrides: "
-                    + ", ".join(invalid_environment)
-                ),
-                "settings_schema_version": settings.schema_version,
-                "settings_revision": settings.revision,
-                "settings": [
-                    asdict(effective.settings[key])
-                    for key in RUNTIME_SETTING_KEYS
-                ],
-            }
+        settings_payload = {
+            "ok": not invalid_environment,
+            "detail": (
+                "workspace runtime settings valid"
+                if not invalid_environment
+                else "invalid environment overrides: "
+                + ", ".join(invalid_environment)
+            ),
+            "settings_schema_version": settings.schema_version,
+            "settings_revision": settings.revision,
+            "settings": [
+                asdict(effective.settings[key]) for key in RUNTIME_SETTING_KEYS
+            ],
+        }
+
+        plugin_artifact = _inspect_plugin_artifact()
 
         checks = [
             _check("workspace", workspace.ready, str(workspace_path)),
@@ -828,6 +834,11 @@ def _run_setup_verify(args: argparse.Namespace) -> int:
                 profile_effective,
                 args.profile,
             ),
+            _check(
+                "plugin_artifact",
+                bool(plugin_artifact["ok"]),
+                str(plugin_artifact["detail"]),
+            ),
         ]
         plugin_root = os.environ.get("PLUGIN_ROOT")
         plugin_data = os.environ.get("PLUGIN_DATA")
@@ -865,7 +876,18 @@ def _run_setup_verify(args: argparse.Namespace) -> int:
         ok = all(bool(item["ok"]) for item in checks)
         payload = {
             "schema_version": SETUP_OUTPUT_SCHEMA_VERSION,
-            "status": "passed" if ok else "needs_attention",
+            "status": "configuration_passed" if ok else "needs_attention",
+            "verification_scope": "configuration_only",
+            "runtime_enforcement": {
+                "hook_delivery_verified": False,
+                "hook_trust_verified": False,
+                "protected_block_verified": False,
+                "status": "requires_fresh_hook_probe",
+                "detail": (
+                    "setup verify does not prove Codex Hook trust, delivery, "
+                    "or a pre-execution block"
+                ),
+            },
             "profile": args.profile,
             "version": __version__,
             "path_source": paths.source,
@@ -881,6 +903,7 @@ def _run_setup_verify(args: argparse.Namespace) -> int:
             "protected_sources": protected_sources,
             "runtime_settings": settings_payload,
             "enforcement_coverage": codex_enforcement_coverage(),
+            "plugin_artifact": plugin_artifact,
         }
     except (
         OSError,
@@ -899,6 +922,57 @@ def _run_setup_verify(args: argparse.Namespace) -> int:
         return 1
     _render(payload, as_json=args.json)
     return 0 if ok else 1
+
+
+def _inspect_plugin_artifact() -> dict[str, object]:
+    """Validate the local Plugin files without claiming Codex loaded them."""
+
+    plugin_root = Path(__file__).resolve().parents[1]
+    manifest_path = plugin_root / ".codex-plugin" / "plugin.json"
+    hooks_path = plugin_root / "hooks" / "hooks.json"
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        hook_manifest = json.loads(hooks_path.read_text(encoding="utf-8"))
+        hooks = hook_manifest.get("hooks")
+        if not isinstance(manifest, dict) or not isinstance(hooks, dict):
+            raise ValueError("Plugin manifests must be JSON objects")
+        events = frozenset(str(key) for key in hooks)
+        definition_count = sum(
+            len(definitions) if isinstance(definitions, list) else 0
+            for definitions in hooks.values()
+        )
+        manifest_version = manifest.get("version")
+        version_matches = bool(
+            isinstance(manifest_version, str)
+            and manifest_version.replace("-alpha.", "a") == __version__
+        )
+        ok = bool(
+            manifest.get("name") == "tooluseproxy"
+            and version_matches
+            and events == EXPECTED_CODEX_HOOK_EVENTS
+            and definition_count == len(EXPECTED_CODEX_HOOK_EVENTS)
+        )
+        return {
+            "ok": ok,
+            "detail": (
+                "local Plugin artifact identity and five Hook definitions match"
+                if ok
+                else "local Plugin artifact identity or Hook definitions mismatch"
+            ),
+            "plugin_version": manifest_version,
+            "hook_events": sorted(events),
+            "hook_definition_count": definition_count,
+            "hooks_sha256": hashlib.sha256(hooks_path.read_bytes()).hexdigest(),
+        }
+    except (OSError, ValueError, json.JSONDecodeError):
+        return {
+            "ok": False,
+            "detail": "local Plugin artifact could not be validated",
+            "plugin_version": None,
+            "hook_events": [],
+            "hook_definition_count": 0,
+            "hooks_sha256": None,
+        }
 
 
 def _render_setup_error(code: str, message: str, *, as_json: bool) -> None:
