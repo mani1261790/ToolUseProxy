@@ -14,6 +14,11 @@ from typing import Any
 REPO_ROOT = Path(__file__).resolve().parents[1]
 STAGE_TIMEOUT_SECONDS = 900
 REPORT_SCHEMAS = {"plugin": 2, "externality": 1, "lifecycle": 1}
+DESKTOP_REMAINING_ACTIONS = (
+    "review_and_trust_five_tooluseproxy_hooks",
+    "open_the_generated_desktop_task",
+    "decide_two_scoped_approval_requests",
+)
 REQUIRED_CHECKS = {
     "plugin": frozenset(
         {
@@ -237,11 +242,7 @@ def run_all(*, installation_mode: str, include_quality: bool) -> dict[str, Any]:
         "desktop": {
             "status": "human_required",
             "reason": "codex_desktop_self_control_is_blocked",
-            "remaining_actions": [
-                "review_and_trust_three_tooluseproxy_hooks",
-                "open_the_generated_desktop_task",
-                "decide_two_scoped_approval_requests",
-            ],
+            "remaining_actions": list(DESKTOP_REMAINING_ACTIONS),
             "automated_after_task": [
                 "collect_value_free_evidence",
                 "verify_public_allow_and_protected_pre_execution_block",
