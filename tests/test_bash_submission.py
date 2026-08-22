@@ -67,6 +67,13 @@ class BashSubmissionExtractionTests(unittest.TestCase):
             with self.subTest(command=command):
                 self.assert_static(command, expected)
 
+    def test_multiline_sequence_preserves_curl_segment_identity(self) -> None:
+        self.assert_static(
+            f"printf ready\ncurl --data public {_URL}",
+            "public",
+            segment_index=1,
+        )
+
     def test_data_urlencode_distinguishes_literal_and_file_forms(self) -> None:
         static_cases = {
             f"curl --data-urlencode SECRET {_URL}": "SECRET",

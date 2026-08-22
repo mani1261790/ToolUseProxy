@@ -24,7 +24,7 @@ from hook_monitor.analysis.bash_submission import (
 
 
 BASH_SUBMISSION_RESOLVER_VERSION = (
-    "bash-submission-resolver-v3-fail-closed-data-binary-file"
+    "bash-submission-resolver-v4-fail-closed-multiline-data-binary-file"
 )
 MAX_BASH_SUBMISSION_PATH_BYTES = 4 * 1024
 MAX_BASH_SUBMISSION_FILE_REFERENCES = 8

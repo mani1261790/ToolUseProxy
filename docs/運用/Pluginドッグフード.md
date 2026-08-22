@@ -140,7 +140,7 @@ prepareは同じrootへmode `0600`の`phase-b-prompt.txt`、`phase-b-guide.md`�
 
 Phase B harnessはPATH上の`curl`を信用しません。promptに記録された絶対pathのfake sinkだけを使い、fake sinkはnetworkへ接続せず、呼び出された事実だけをmarkerへ書きます。public callはmarkerを作り、protected callはPreToolUse denyによりmarkerを作らないことが期待結果です。system curl、別pathのcurl、変更されたfake sinkを使ったrunはmarkerの有無にかかわらず不合格です。
 
-protected fixtureはHookが実行前に観測できる静的なtool inputで試します。`$TOKEN`、`source .env`、command substitution、stdin、`@file`はシェル実行後に値が決まるため、このPhase B caseへ混ぜません。これらは保護済みと誤認せず、dynamic shell valueの既知の未対応境界として別に評価します。実行後、ユーザー自身の確認結果を明示してverifierを実行します。
+protected fixtureはHookが実行前に観測できる静的なtool inputで試します。`$TOKEN`、`source .env`、command substitution、stdin、`@file`はシェル実行後に値が決まるため、静的literalのprecisionを測るこのPhase B caseへ混ぜません。これらの値を実行・展開して漏えいを証明する機能は未対応ですが、既知external commandのpayloadを完全確認できない場合はprotected sourceが有効なら実行前denyします。別のdynamic-shell回帰でdeny、外部side effect 0、raw exposure 0を確認します。実行後、ユーザー自身の確認結果を明示してverifierを実行します。
 
 `init`、`doctor`、`status`、`protect scan`のどれかが失敗または非正常statusを返したrunでは、public / protected callへ進みません。後からDBが自然復旧しても、そのrunを成功証拠へ変更しません。原因調査またはfresh prepareを別に行います。
 

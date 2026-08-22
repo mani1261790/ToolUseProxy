@@ -40,6 +40,7 @@ class BashCommandPlan:
 _CONNECTORS = {
     "|": "pipe",
     ";": "sequence",
+    "\n": "sequence",
     "&&": "and_then",
     "||": "or_else",
 }
@@ -156,9 +157,6 @@ def bash_segment_redirection_tokens(segment: BashSegment) -> tuple[ShellToken, .
 
 
 def _shell_tokens(command: str) -> list[ShellToken] | None:
-    if "\n" in command or "\r" in command:
-        return None
-
     tokens: list[ShellToken] = []
     value: list[str] = []
     token_start: int | None = None
@@ -190,6 +188,12 @@ def _shell_tokens(command: str) -> list[ShellToken] | None:
     while index < len(command):
         char = command[index]
         if escaped:
+            if char in {"\n", "\r"}:
+                if char == "\r" and index + 1 < len(command) and command[index + 1] == "\n":
+                    index += 1
+                escaped = False
+                index += 1
+                continue
             value.append(char)
             escaped = False
             index += 1
@@ -201,6 +205,15 @@ def _shell_tokens(command: str) -> list[ShellToken] | None:
                 if index + 1 >= len(command):
                     return None
                 following = command[index + 1]
+                if following in {"\n", "\r"}:
+                    index += 2
+                    if (
+                        following == "\r"
+                        and index < len(command)
+                        and command[index] == "\n"
+                    ):
+                        index += 1
+                    continue
                 if following in {'$', '`', '"', "\\"}:
                     value.append(following)
                     index += 2
@@ -225,10 +238,34 @@ def _shell_tokens(command: str) -> list[ShellToken] | None:
             quote = char
             index += 1
             continue
-        if char == "#":
-            # shell commentの残りを静的operationと誤認しないよう、
-            # allowlistではunquoted commentをcommand全体ごと拒否する。
-            return None
+        if char == "#" and token_start is None:
+            # An unquoted ``#`` begins a comment only at a token boundary.
+            # Skip the comment body but keep the following newline as a real
+            # command boundary.
+            while index < len(command) and command[index] not in {"\n", "\r"}:
+                index += 1
+            continue
+        if char in {"\n", "\r"}:
+            finish(index)
+            newline_end = index + 1
+            if char == "\r" and newline_end < len(command) and command[newline_end] == "\n":
+                newline_end += 1
+            if tokens and not (
+                tokens[-1].is_operator
+                and tokens[-1].value in {"|", "||", "&&", ";", "\n"}
+            ):
+                tokens.append(
+                    ShellToken(
+                        value="\n",
+                        is_operator=True,
+                        start=index,
+                        end=newline_end,
+                        is_static_literal=True,
+                        is_assignment_word=False,
+                    )
+                )
+            index = newline_end
+            continue
         if char.isspace():
             finish(index)
             index += 1
@@ -265,6 +302,19 @@ def _shell_tokens(command: str) -> list[ShellToken] | None:
         return None
     finish(len(command))
     return tokens
+
+
+def tokenize_bash_command(command: str) -> tuple[ShellToken, ...] | None:
+    """Tokenize shell syntax without executing or expanding any value.
+
+    This lower-level API intentionally returns tokens even when the complete
+    command plan later rejects a CWD mutator or unsupported control operator.
+    Security classifiers can therefore retain known sink visibility without
+    pretending the whole shell program was understood.
+    """
+
+    tokens = _shell_tokens(command)
+    return None if tokens is None else tuple(tokens)
 
 
 def _operator_at(command: str, index: int) -> str | None:

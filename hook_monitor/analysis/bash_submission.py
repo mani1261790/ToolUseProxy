@@ -13,7 +13,9 @@ from hook_monitor.analysis.bash_file_parser import (
 )
 
 
-BASH_SUBMISSION_EXTRACTOR_VERSION = "bash-submission-v1-static-curl-data"
+BASH_SUBMISSION_EXTRACTOR_VERSION = (
+    "bash-submission-v2-static-curl-data-multiline"
+)
 MAX_BASH_SUBMISSION_VALUES = 32
 MAX_BASH_SUBMISSION_VALUE_BYTES = 32 * 1024
 MAX_BASH_SUBMISSION_TOTAL_BYTES = 128 * 1024
