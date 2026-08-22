@@ -30,6 +30,10 @@ class ExternalityDogfoodTest(unittest.TestCase):
         self.assertTrue(all(report["checks"].values()))
         self.assertEqual(0, report["metrics"]["external_side_effect_count"])
         self.assertEqual(0, report["metrics"]["automatic_rule_promotion_count"])
+        self.assertGreaterEqual(
+            report["metrics"]["hook_latency_ms"]["samples"],
+            20,
+        )
         self.assertLessEqual(
             report["metrics"]["hook_latency_ms"]["p95"],
             report["metrics"]["hook_p95_budget_ms"],

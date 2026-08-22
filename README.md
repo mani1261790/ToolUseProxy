@@ -4,7 +4,7 @@ ToolUseProxyは、AI coding agentがローカルの非公開情報を外部へ�
 
 たとえば、未公開コード、研究ノート、`.env`、設計方針などを`protected source`として登録します。ToolUseProxyはCodexのtool useをローカルで観測し、外部送信候補へ保護情報が到達していないかを確認します。
 
-本プロジェクトは[SecHack365](https://sechack365.nict.go.jp/)での研究・開発成果物です。現在は`0.1.0-alpha.8`のrelease candidateであり、完成したDLP製品ではありません。
+本プロジェクトは[SecHack365](https://sechack365.nict.go.jp/)での研究・開発成果物です。現在の公開版は[`0.1.0-alpha.8`](https://github.com/mani1261790/ToolUseProxy/releases/tag/v0.1.0-alpha.8)です。研究用public alphaであり、完成したDLP製品ではありません。
 
 - [5分クイックスタート](QUICKSTART.md)
 - [詳しいPlugin導入ガイド](docs/設定/Plugin導入.md)
@@ -92,7 +92,7 @@ adapterにない未知のcallは、raw commandやpathなどを含まない構造
 | --- | --- | --- |
 | Trace / Detect | 中核実装済み | tool I/O、file operation、内容対応から観測可能なprovenanceを再構成 |
 | Stop | alpha実装済み | 明示的に有効化したworkspaceで、既知adapterと未知のローカルToolを実行前判定。Stop再確認も提供 |
-| Plugin配布 | alpha.8候補 | clean artifactのlifecycleとExternality Protectionのisolated dogfoodを検証。公開昇格前のfresh Desktop runが必要 |
+| Plugin配布 | alpha.8公開済み | clean artifact、lifecycle、Externality Protection、fresh Desktop、公開channelからの隔離installを検証済み |
 | 外部性判定 | 実験段階・既定off | adapter、bounded static analysis、protected unknownの保守的deny、Codex-only background judge、人間review済みrule |
 | 実network観測 | 評価専用 | Codex network proxyのOTLP eventは実行後かつtool単位join不能のため、production blockには不採用 |
 | hosted tool境界 | 緩和のみ | SessionStart / SubagentStartでprotected contentをhosted toolへ渡さないdeveloper contextを注入。Hook非可視のため技術的遮断ではない |

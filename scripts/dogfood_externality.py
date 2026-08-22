@@ -24,6 +24,7 @@ JUDGE_PROBE = REPO_ROOT / "scripts" / "probe_externality_judge.py"
 SYNTHETIC_CANARY = "EXTERNALITY.DOGFOOD.CANARY.5F2A8C1D"
 PUBLIC_VALUE = "EXTERNALITY.DOGFOOD.PUBLIC.8B7E3A4C"
 HOOK_P95_BUDGET_MS = 500.0
+HOOK_P95_MIN_SAMPLES = 20
 
 
 class DogfoodFailure(RuntimeError):
@@ -484,6 +485,27 @@ def run_externality_dogfood(*, hook_p95_budget_ms: float) -> dict[str, Any]:
             approved=1,
             rules=1,
         )
+
+        # A nearest-rank p95 needs at least 20 observations; with only the ten
+        # functional calls above, p95 is just the single slowest observation
+        # and is too sensitive to shared-runner scheduling pauses.  Repeat the
+        # safety-critical protected-unknown path with distinct call identities
+        # until one slow outlier can no longer determine the percentile.
+        while len(hook_latencies) < HOOK_P95_MIN_SAMPLES:
+            sample_index = len(hook_latencies) + 1
+            _assert_denied(
+                _timed_hook(
+                    hook,
+                    other_workspace,
+                    data_dir,
+                    environment,
+                    protected_unknown,
+                    f"protected-unknown-latency-{sample_index}",
+                    captured_outputs,
+                    hook_latencies,
+                ),
+                "protected_unknown_latency",
+            )
 
         if not fake_log.is_file():
             raise DogfoodFailure("privacy", "judge_call_missing")
