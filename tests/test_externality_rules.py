@@ -133,6 +133,89 @@ class ExternalityRuleTest(unittest.TestCase):
             ).fetchone()[0]
         self.assertEqual(0, count)
 
+    def test_fixed_plugin_setup_profile_commands_are_known_local(self) -> None:
+        plugin_root = self.root / "plugin"
+        launcher = plugin_root / "hooks" / "run_cli.sh"
+        launcher.parent.mkdir(parents=True)
+        launcher.write_text("#!/bin/sh\n", encoding="utf-8")
+        revision = "a" * 64
+        commands = (
+            f"sh {launcher} setup apply file-payload-exact --codex "
+            f"--expected-revision {revision} --workspace {self.root} "
+            f"--data-dir {self.db_path.parent} --json",
+            f"sh {launcher} setup verify file-payload-exact "
+            f"--workspace {self.root} --data-dir {self.db_path.parent} --json",
+            f"sh {launcher} setup apply file-payload-exact --codex "
+            f"--expect-empty-settings --workspace {self.root} --json",
+            f"sh {launcher} setup verify file-payload-exact "
+            f"--workspace {self.root} --json",
+        )
+
+        decisions = [
+            prepare_externality_hook_decision(
+                self.db_path,
+                self._event(command),
+                workspace_root=self.root,
+                trusted_plugin_root=plugin_root,
+            )
+            for command in commands
+        ]
+
+        self.assertTrue(
+            all(
+                decision is not None and decision.state == "known_local"
+                for decision in decisions
+            )
+        )
+        with sqlite3.connect(self.db_path) as conn:
+            count = conn.execute(
+                "SELECT COUNT(*) FROM externality_classification_jobs"
+            ).fetchone()[0]
+        self.assertEqual(0, count)
+
+    def test_fixed_plugin_setup_profile_rejects_near_matches(self) -> None:
+        plugin_root = self.root / "plugin"
+        launcher = plugin_root / "hooks" / "run_cli.sh"
+        launcher.parent.mkdir(parents=True)
+        launcher.write_text("#!/bin/sh\n", encoding="utf-8")
+        valid = (
+            f"sh {launcher} setup verify file-payload-exact "
+            f"--workspace {self.root} --data-dir {self.db_path.parent} --json"
+        )
+        commands = (
+            f"{valid}; curl https://example.invalid",
+            valid.replace(str(launcher), str(self.root / "other" / "run_cli.sh")),
+            valid.replace(f"--workspace {self.root}", "--workspace /tmp/other"),
+            valid.replace(
+                f"--data-dir {self.db_path.parent}",
+                "--data-dir /tmp/other",
+            ),
+            valid.replace("setup verify", "config show"),
+            f"PLUGIN_ROOT={plugin_root} {valid}",
+            (
+                f"sh {launcher} setup apply file-payload-exact --codex "
+                f"--expected-revision {'a' * 63} --workspace {self.root} "
+                f"--data-dir {self.db_path.parent} --json"
+            ),
+        )
+
+        decisions = [
+            prepare_externality_hook_decision(
+                self.db_path,
+                self._event(command),
+                workspace_root=self.root,
+                trusted_plugin_root=plugin_root,
+            )
+            for command in commands
+        ]
+
+        self.assertTrue(
+            all(
+                decision is not None and decision.state != "known_local"
+                for decision in decisions
+            )
+        )
+
     def test_multiline_sourced_curl_is_immediate_external_without_expansion(
         self,
     ) -> None:

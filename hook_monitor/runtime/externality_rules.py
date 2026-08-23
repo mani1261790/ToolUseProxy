@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
+import shlex
 import sqlite3
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -30,6 +32,8 @@ EXTERNALITY_RULE_CONTRACT_SHA256 = hashlib.sha256(
 ).hexdigest()
 EXTERNALITY_RULE_BUSY_TIMEOUT_MS = 10
 GENERIC_FUNCTION_EXTERNALITY_CONTRACT = b"generic-function-externality-v1"
+TRUSTED_SETUP_PROFILE_CONTRACT = b"trusted-tooluseproxy-setup-profile-v1"
+_REVISION_PATTERN = re.compile(r"[0-9a-f]{64}")
 
 
 @dataclass(frozen=True)
@@ -102,6 +106,7 @@ def prepare_externality_hook_decision(
     event: NormalizedEvent,
     *,
     workspace_root: Path,
+    trusted_plugin_root: Path | None = None,
 ) -> ExternalityHookDecision | None:
     """Perform only bounded static analysis and local SQLite work in the Hook."""
     if event.phase != "pre_tool_use" or event.workspace_status != "ready":
@@ -111,6 +116,19 @@ def prepare_externality_hook_decision(
         command = shell_command_from_input(event.tool_name, tool_input)
         if command is None:
             return None
+        trusted_setup_operation = _trusted_setup_profile_operation(
+            command,
+            plugin_root=trusted_plugin_root,
+            workspace_root=workspace_root,
+            plugin_data=db_path.parent,
+        )
+        if trusted_setup_operation is not None:
+            digest = hashlib.sha256(
+                TRUSTED_SETUP_PROFILE_CONTRACT
+                + b"\0"
+                + trusted_setup_operation.encode("ascii")
+            ).hexdigest()
+            return ExternalityHookDecision(digest, "known_local")
         static = analyze_bash_externality(
             command,
             workspace_root=workspace_root,
@@ -138,6 +156,81 @@ def prepare_externality_hook_decision(
         return ExternalityHookDecision(digest, "cache_hit", rule)
     queue_externality_envelope(db_path, event.workspace_id, static.envelope)
     return ExternalityHookDecision(digest, "queued")
+
+
+def _trusted_setup_profile_operation(
+    command: str,
+    *,
+    plugin_root: Path | None,
+    workspace_root: Path,
+    plugin_data: Path,
+) -> Literal["apply", "verify"] | None:
+    """Recognize only the Plugin's fixed, value-free setup profile commands."""
+
+    if plugin_root is None:
+        return None
+    try:
+        tokens = shlex.split(command, posix=True)
+    except ValueError:
+        return None
+    launcher = str(plugin_root / "hooks" / "run_cli.sh")
+    common = ["sh", launcher, "setup"]
+    workspace = str(workspace_root)
+    data_dir = str(plugin_data)
+    if tokens in (
+        [
+            *common,
+            "verify",
+            "file-payload-exact",
+            "--workspace",
+            workspace,
+            "--data-dir",
+            data_dir,
+            "--json",
+        ],
+        [
+            *common,
+            "verify",
+            "file-payload-exact",
+            "--workspace",
+            workspace,
+            "--json",
+        ],
+    ):
+        return "verify"
+    if tokens == [
+        *common,
+        "apply",
+        "file-payload-exact",
+        "--codex",
+        "--expect-empty-settings",
+        "--workspace",
+        workspace,
+        "--json",
+    ]:
+        return "apply"
+    prefix = [
+        *common,
+        "apply",
+        "file-payload-exact",
+        "--codex",
+        "--expected-revision",
+    ]
+    suffix = [
+        "--workspace",
+        workspace,
+        "--data-dir",
+        data_dir,
+        "--json",
+    ]
+    if (
+        len(tokens) == len(prefix) + 1 + len(suffix)
+        and tokens[: len(prefix)] == prefix
+        and _REVISION_PATTERN.fullmatch(tokens[len(prefix)])
+        and tokens[-len(suffix) :] == suffix
+    ):
+        return "apply"
+    return None
 
 
 def initialize_externality_rule_schema(conn: sqlite3.Connection) -> None:
