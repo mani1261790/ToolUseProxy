@@ -328,6 +328,11 @@ def run_hook(
                 store.db_path,
                 event,
                 workspace_root=Path(event.workspace_root or ""),
+                trusted_plugin_root=(
+                    Path(os.environ["PLUGIN_ROOT"])
+                    if os.environ.get("PLUGIN_ROOT")
+                    else None
+                ),
             )
         except Exception:
             # Preserve a value-free conservative sink when queue/cache/static

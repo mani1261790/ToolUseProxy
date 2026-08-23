@@ -8946,6 +8946,47 @@ class InformationFlowTest(unittest.TestCase):
         )
         self.assertNotIn(SECRET, stdout)
 
+    def test_runner_allows_exact_trusted_setup_verify_as_local(self) -> None:
+        workspace = self._write_runtime_source_config().resolve()
+        plugin_root = Path(self.temporary_directory.name) / "plugin"
+        launcher = plugin_root / "hooks" / "run_cli.sh"
+        launcher.parent.mkdir(parents=True)
+        launcher.write_text("#!/bin/sh\n", encoding="utf-8")
+        payload = {
+            "session_id": "session-trusted-setup-verify",
+            "turn_id": "turn-trusted-setup-verify",
+            "tool_use_id": "tool-trusted-setup-verify",
+            "tool_name": "Bash",
+            "cwd": str(workspace),
+            "tool_input": {
+                "command": (
+                    f"sh {launcher} setup verify file-payload-exact "
+                    f"--workspace {workspace} --data-dir {self.db_path.parent} "
+                    "--json"
+                )
+            },
+        }
+
+        exit_code, stdout, stderr = self._run_hook_in_process(
+            "pre_tool_use",
+            payload,
+            {
+                "PLUGIN_ROOT": str(plugin_root),
+                "TOOLUSEPROXY_DB_PATH": str(self.db_path),
+                "TOOLUSEPROXY_PRE_TOOL_POLICY": "1",
+                "TOOLUSEPROXY_EXTERNALITY_PROTECTION": "1",
+            },
+        )
+
+        self.assertEqual(0, exit_code)
+        self.assertEqual("", stderr)
+        self.assertEqual("", stdout)
+        with sqlite3.connect(self.db_path) as conn:
+            count = conn.execute(
+                "SELECT COUNT(*) FROM externality_classification_jobs"
+            ).fetchone()[0]
+        self.assertEqual(0, count)
+
     def test_pre_tool_policy_maps_only_confirmed_runtime_tool_names(self) -> None:
         self.assertEqual("bash", pre_tool_adapter("Bash"))
         self.assertEqual("bash", pre_tool_adapter("exec_command"))
