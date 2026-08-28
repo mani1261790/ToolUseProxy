@@ -36,6 +36,7 @@ from scripts.manual_desktop_phase_b import (
     _approval_justification_matches_contract,
     _abort_plugin_tree_matches,
     _assert_no_tooluseproxy_collision,
+    _capture_shared_state,
     _desktop_plugin_hooks,
     _desktop_phase_b_test_version,
     _dynamic_protected_command,
@@ -393,10 +394,22 @@ text(JSON.stringify(r));
             prompt = (root / "desktop-phase-b-prompt.txt").read_text(
                 encoding="utf-8"
             )
+            context = json.loads(
+                (root / "desktop-phase-b-context.json").read_text(
+                    encoding="utf-8"
+                )
+            )
 
             self.assertIn(
                 "SessionStart Hookがcontextへ記録したplugin_data",
                 prompt,
+            )
+            self.assertIn("contextのexpected_setup_revision", prompt)
+            self.assertEqual(
+                empty_workspace_runtime_settings(
+                    "desktop-phase-b"
+                ).revision,
+                context["expected_setup_revision"],
             )
             self.assertNotIn("setup apply: None", prompt)
             self.assertNotIn("setup verify: None", prompt)
@@ -1014,7 +1027,7 @@ text(JSON.stringify(r));
                 "task_data_path_content_invalid", raised.exception.code
             )
 
-    def test_single_task_dispatch_rejects_another_session(self) -> None:
+    def test_single_task_dispatch_requires_expected_session(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory).resolve()
             nonce = "0123456789abcdef0123456789abcdef"
@@ -1035,8 +1048,44 @@ text(JSON.stringify(r));
                 )
 
             self.assertEqual(
-                "task_marker_content_invalid", raised.exception.code
+                "task_marker_expected_session_missing",
+                raised.exception.code,
             )
+
+    def test_single_task_dispatch_ignores_other_session(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory).resolve()
+            nonce = "0123456789abcdef0123456789abcdef"
+            marker = root / PROBE_MARKER_FILENAME
+            expected = _probe_id_hash(
+                nonce,
+                kind="session",
+                value="expected",
+            )
+            other = _probe_id_hash(nonce, kind="session", value="other")
+            marker.write_text(
+                (
+                    f"session-start\t{other}\t-\n"
+                    f"pre-tool-use\t{other}\t{'a' * 64}\n"
+                    f"session-start\t{expected}\t-\n"
+                    f"pre-tool-use\t{expected}\t{'b' * 64}\n"
+                    f"post-tool-use\t{expected}\t{'b' * 64}\n"
+                    f"stop\t{expected}\t-\n"
+                ),
+                encoding="utf-8",
+            )
+            marker.chmod(0o600)
+
+            counts = _read_task_event_counts(
+                marker,
+                probe_nonce=nonce,
+                session_id="expected",
+            )
+
+            self.assertEqual(1, counts["session-start"])
+            self.assertEqual(1, counts["pre-tool-use"])
+            self.assertEqual(1, counts["post-tool-use"])
+            self.assertEqual(1, counts["stop"])
 
     def test_checkpoint_hooks_trusted_returns_single_test_task(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -2002,6 +2051,30 @@ text(JSON.stringify(r));
 
         self.assertEqual("tooluseproxy_collision", raised.exception.code)
 
+    def test_collision_check_refuses_existing_phase_b_plugin_data(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            codex_home = Path(temporary_directory).resolve()
+            data = (
+                codex_home
+                / "plugins"
+                / "data"
+                / "tooluseproxy-tooluseproxy-desktop-phase-b"
+            )
+            data.mkdir(parents=True)
+            state = {
+                "plugins": [],
+                "marketplace_names": ["openai-bundled"],
+            }
+
+            with self.assertRaises(DesktopPhaseBFailure) as raised:
+                _assert_no_tooluseproxy_collision(
+                    state,
+                    stage="plan",
+                    codex_home=codex_home,
+                )
+
+            self.assertEqual("tooluseproxy_collision", raised.exception.code)
+
     def test_shared_state_cas_uses_inventory_config_and_versions(self) -> None:
         before = self._shared_state()
         after = self._shared_state()
@@ -2105,6 +2178,78 @@ text(JSON.stringify(r));
                 marketplace_expected=True,
             )
         )
+
+    def test_phase_b_delta_uses_desktop_bundled_codex_version(self) -> None:
+        before = self._shared_state()
+        before["desktop_codex_version"] = "codex-cli desktop-1"
+        current = self._shared_state()
+        current["desktop_codex_version"] = "codex-cli desktop-1"
+        current["codex_cli_version"] = "codex-cli standalone-2"
+
+        self.assertTrue(
+            _phase_b_delta_matches(
+                before,
+                current,
+                plugin_expected=False,
+                marketplace_expected=False,
+            )
+        )
+        current["desktop_codex_version"] = "codex-cli desktop-2"
+        self.assertFalse(
+            _phase_b_delta_matches(
+                before,
+                current,
+                plugin_expected=False,
+                marketplace_expected=False,
+            )
+        )
+
+    def test_shared_state_uses_desktop_bundled_codex_version(self) -> None:
+        expected = self._shared_state()
+        expected["desktop_codex_version"] = "codex-cli desktop-1"
+        actual = self._shared_state()
+        actual["desktop_codex_version"] = "codex-cli desktop-1"
+        actual["codex_cli_version"] = "codex-cli standalone-2"
+
+        self.assertTrue(_shared_state_matches(expected, actual))
+        actual["desktop_codex_version"] = "codex-cli desktop-2"
+        self.assertFalse(_shared_state_matches(expected, actual))
+
+    def test_shared_state_does_not_require_standalone_codex(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            codex_home = Path(temporary_directory)
+            with (
+                patch("scripts.manual_desktop_phase_b.shutil.which", return_value=None),
+                patch(
+                    "scripts.manual_desktop_phase_b._desktop_codex_binary",
+                    return_value=Path("/Applications/Codex.app/Contents/Resources/codex"),
+                ),
+                patch(
+                    "scripts.manual_desktop_phase_b._desktop_codex_version",
+                    return_value="codex-cli desktop-1",
+                ),
+                patch(
+                    "scripts.manual_desktop_phase_b._desktop_version",
+                    return_value="desktop 1",
+                ),
+                patch(
+                    "scripts.manual_desktop_phase_b._run_json",
+                    side_effect=(
+                        {"installed": []},
+                        {"marketplaces": []},
+                    ),
+                ),
+                patch(
+                    "scripts.manual_desktop_phase_b._codex_version"
+                ) as codex_version,
+            ):
+                captured = _capture_shared_state(codex_home, stage="test")
+
+        self.assertIsNone(captured["codex_cli_version"])
+        self.assertEqual(
+            "codex-cli desktop-1", captured["desktop_codex_version"]
+        )
+        codex_version.assert_not_called()
 
     def test_prepare_stops_before_mutation_when_shared_state_changed(
         self,
@@ -3080,6 +3225,50 @@ text(JSON.stringify(r));
             )
 
             self.assertEqual(["matching.jsonl"], parsed["relative_paths"])
+
+    def test_verify_reader_reports_when_test_calls_were_not_reached(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory).resolve()
+            codex_home = root / "codex-home"
+            session_root = codex_home / "sessions"
+            workspace = root / "workspace"
+            fake_sink = root / "bin" / "curl"
+            plugin_root = root / "plugin"
+            plugin_data = root / "data"
+            context = root / "context.json"
+            skill = plugin_root / "skills" / "tooluseproxy-setup" / "SKILL.md"
+            session_root.mkdir(parents=True)
+            workspace.mkdir()
+            session = session_root / "stopped.jsonl"
+            session.write_text(
+                json.dumps(
+                    {
+                        "type": "session_meta",
+                        "payload": {"cwd": str(workspace)},
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaises(DesktopPhaseBFailure) as raised:
+                _read_desktop_session(
+                    codex_home,
+                    before={},
+                    workspace=workspace,
+                    fake_sink=fake_sink,
+                    context_path=context,
+                    setup_skill=skill,
+                    plugin_root=plugin_root,
+                    plugin_data=plugin_data,
+                )
+
+            self.assertEqual(
+                "desktop_test_calls_not_reached",
+                raised.exception.code,
+            )
 
     def test_hook_evidence_joins_decision_by_analysis_run(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

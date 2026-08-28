@@ -247,7 +247,11 @@ def plan_desktop_phase_b(
     root = _prepare_new_root(root_argument)
     shared_codex_home = _resolve_codex_home(codex_home)
     before = _capture_shared_state(shared_codex_home, stage=stage)
-    _assert_no_tooluseproxy_collision(before, stage=stage)
+    _assert_no_tooluseproxy_collision(
+        before,
+        stage=stage,
+        codex_home=shared_codex_home,
+    )
 
     candidate = root / "candidate"
     _run_command(
@@ -452,7 +456,11 @@ def prepare_desktop_phase_b(
     )
     if not _shared_state_matches(state["before"], current):
         raise DesktopPhaseBFailure("prepare", "shared_state_changed")
-    _assert_no_tooluseproxy_collision(current, stage="prepare")
+    _assert_no_tooluseproxy_collision(
+        current,
+        stage="prepare",
+        codex_home=Path(str(state["codex_home"])),
+    )
 
     added = _run_json(
         [
@@ -851,7 +859,7 @@ def verify_desktop_phase_b(
         "dynamic_fail_closed_block_one": (
             hook["dynamic_fail_closed_block_count"] == 1
         ),
-        "shadow_observation_one": hook["shadow_observation_count"] == 1,
+        "shadow_observations_two": hook["shadow_observation_count"] == 2,
         "public_side_effect_one": public_marker_count == 1,
         "protected_side_effect_zero": protected_marker_count == 0,
         "dynamic_protected_side_effect_zero": (
@@ -1981,6 +1989,12 @@ def _capture_shared_state(
     *,
     stage: str,
 ) -> dict[str, Any]:
+    standalone_codex = shutil.which("codex")
+    codex_cli_version = (
+        _codex_version(codex_home, executable=standalone_codex)
+        if standalone_codex is not None
+        else None
+    )
     plugins = _run_json(
         [
             str(_desktop_codex_binary()),
@@ -2021,7 +2035,7 @@ def _capture_shared_state(
     ]
     config = codex_home / "config.toml"
     return {
-        "codex_cli_version": _codex_version(codex_home),
+        "codex_cli_version": codex_cli_version,
         "desktop_version": _desktop_version(),
         "desktop_codex_version": _desktop_codex_version(codex_home),
         "config_sha256": _sha256(config) if config.is_file() else None,
@@ -2071,9 +2085,9 @@ def _normalized_marketplace(item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _codex_version(codex_home: Path) -> str:
+def _codex_version(codex_home: Path, *, executable: str = "codex") -> str:
     result = _run_command(
-        ["codex", "--version"],
+        [executable, "--version"],
         stage="codex_version",
         env={**os.environ, "CODEX_HOME": str(codex_home)},
     )
@@ -2458,6 +2472,7 @@ def _assert_no_tooluseproxy_collision(
     state: dict[str, Any],
     *,
     stage: str,
+    codex_home: Path | None = None,
 ) -> None:
     plugin_collisions = [
         item
@@ -2470,7 +2485,16 @@ def _assert_no_tooluseproxy_collision(
         for name in state["marketplace_names"]
         if str(name).startswith("tooluseproxy")
     ]
-    if plugin_collisions or marketplace_collisions:
+    data_collision = False
+    if codex_home is not None:
+        data_path = (
+            codex_home.expanduser().resolve()
+            / "plugins"
+            / "data"
+            / f"{PLUGIN_NAME}-{MARKETPLACE_NAME}"
+        )
+        data_collision = data_path.exists() or data_path.is_symlink()
+    if plugin_collisions or marketplace_collisions or data_collision:
         raise DesktopPhaseBFailure(stage, "tooluseproxy_collision")
 
 
@@ -2481,7 +2505,6 @@ def _shared_state_matches(
     if not isinstance(expected, dict):
         return False
     keys = [
-        "codex_cli_version",
         "desktop_version",
         "config_sha256",
         "marketplaces",
@@ -2490,6 +2513,8 @@ def _shared_state_matches(
     ]
     if "desktop_codex_version" in expected:
         keys.append("desktop_codex_version")
+    else:
+        keys.append("codex_cli_version")
     return all(
         expected.get(key) == actual.get(key) for key in keys
     ) and _plugin_inventories_compatible(
@@ -2615,13 +2640,11 @@ def _abort_state_matches(
     before = state.get("before")
     if not isinstance(planned, dict) or not isinstance(before, dict):
         return False
-    version_keys = [
-        "codex_cli_version",
-        "desktop_version",
-        "config_sha256",
-    ]
+    version_keys = ["desktop_version", "config_sha256"]
     if "desktop_codex_version" in planned:
         version_keys.append("desktop_codex_version")
+    else:
+        version_keys.append("codex_cli_version")
     if any(planned.get(key) != current.get(key) for key in version_keys):
         return False
 
@@ -2679,12 +2702,11 @@ def _cleanup_state_matches(
     before = state.get("before")
     if not isinstance(planned, dict) or not isinstance(before, dict):
         return False
-    version_keys = [
-        "codex_cli_version",
-        "desktop_version",
-    ]
+    version_keys = ["desktop_version"]
     if "desktop_codex_version" in planned:
         version_keys.append("desktop_codex_version")
+    else:
+        version_keys.append("codex_cli_version")
     if any(planned.get(key) != current.get(key) for key in version_keys):
         return False
     stage = state.get("stage")
@@ -2951,9 +2973,11 @@ def _phase_b_delta_matches(
 ) -> bool:
     if not isinstance(before, dict):
         return False
-    version_keys = ["codex_cli_version", "desktop_version"]
+    version_keys = ["desktop_version"]
     if "desktop_codex_version" in before:
         version_keys.append("desktop_codex_version")
+    else:
+        version_keys.append("codex_cli_version")
     if any(before.get(key) != current.get(key) for key in version_keys):
         return False
     expected_plugins = set(before.get("installed_plugin_ids", []))
@@ -3573,6 +3597,9 @@ def _write_desktop_guidance(
         if isinstance(plugin_root, str)
         else None
     )
+    expected_setup_revision = empty_workspace_runtime_settings(
+        "desktop-phase-b"
+    ).revision
     context = {
         "schema_version": 1,
         "case_id": CASE_ID,
@@ -3598,6 +3625,7 @@ def _write_desktop_guidance(
         "test_sink": state["fake_sink"],
         "expected_plugin_id": PLUGIN_ID,
         "expected_plugin_version": state["plugin_version"],
+        "expected_setup_revision": expected_setup_revision,
     }
     _write_private_json(root / CONTEXT_FILENAME, context)
     public_command = shlex.join(
@@ -3626,9 +3654,6 @@ def _write_desktop_guidance(
         setup_verify_command = None
     else:
         launcher = str(Path(plugin_root) / "hooks" / "run_cli.sh")
-        initial_revision = empty_workspace_runtime_settings(
-            "desktop-phase-b"
-        ).revision
         setup_apply_command = shlex.join(
             [
                 "sh",
@@ -3638,7 +3663,7 @@ def _write_desktop_guidance(
                 "file-payload-exact",
                 "--codex",
                 "--expected-revision",
-                initial_revision,
+                expected_setup_revision,
                 "--workspace",
                 str(state["workspace"]),
                 "--data-dir",
@@ -3663,7 +3688,8 @@ def _write_desktop_guidance(
     if setup_apply_command is None or setup_verify_command is None:
         setup_command_sentence = (
             "setup commandは、task開始時にSessionStart Hookがcontextへ記録した"
-            "plugin_dataとsetup skillの固定profileから組み立ててください。"
+            "plugin_data、contextのexpected_setup_revision、setup skillの"
+            "固定profileから組み立ててください。"
         )
     else:
         setup_command_sentence = (
@@ -4346,7 +4372,7 @@ def _read_task_event_counts(
         phase, session_hash, tool_hash = parts
         if (
             phase not in allowed
-            or session_hash != expected_session_hash
+            or re.fullmatch(r"[0-9a-f]{64}", session_hash) is None
             or (
                 tool_hash != "-"
                 if phase in {"session-start", "subagent-start", "stop"}
@@ -4354,7 +4380,14 @@ def _read_task_event_counts(
             )
         ):
             raise DesktopPhaseBFailure("verify", "task_marker_content_invalid")
+        if session_hash != expected_session_hash:
+            continue
         counts[phase] += 1
+    if counts["session-start"] == 0:
+        raise DesktopPhaseBFailure(
+            "verify",
+            "task_marker_expected_session_missing",
+        )
     if counts["subagent-start"] != 0:
         raise DesktopPhaseBFailure("verify", "unexpected_subagent_seen")
     return counts
@@ -4396,9 +4429,11 @@ def _read_desktop_session(
         )
 
     matches: list[dict[str, Any]] = []
+    workspace_candidate_count = 0
     for path in changed:
         if not _session_meta_matches_workspace(path, workspace=workspace):
             continue
+        workspace_candidate_count += 1
         if path.stat().st_size > MAX_SESSION_BYTES:
             raise DesktopPhaseBFailure("verify", "session_size_exceeded")
         parsed = _parse_session(
@@ -4414,6 +4449,11 @@ def _read_desktop_session(
             parsed["relative_path"] = str(path.relative_to(session_root))
             matches.append(parsed)
     if len(matches) != 1:
+        if workspace_candidate_count == 1 and not matches:
+            raise DesktopPhaseBFailure(
+                "verify",
+                "desktop_test_calls_not_reached",
+            )
         raise DesktopPhaseBFailure(
             "verify",
             "desktop_session_not_unique",

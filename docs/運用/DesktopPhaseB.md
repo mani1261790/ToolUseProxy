@@ -4,7 +4,7 @@ Issue [#53](https://github.com/mani1261790/ToolUseProxy/issues/53)では、CLI T
 
 ## 現在地
 
-専用harnessは実装済みです。2026-07-28以降、Codex Desktop同梱のCodexで人による実機確認を行いました。2026-08-22までの結果は次のとおりです。
+専用harnessは実装済みです。2026-07-28以降、Codex Desktop同梱のCodexで人による実機確認を行いました。2026-08-28までの結果は次のとおりです。
 
 | 段階 | 結果 |
 | --- | --- |
@@ -19,7 +19,7 @@ Issue [#53](https://github.com/mani1261790/ToolUseProxy/issues/53)では、CLI T
 | 保存済み2026-08-09 run | 最新exit-code wrapperを厳密に解析し、public 1 / protected 0 / exact block 1 / raw exposure 0で正式な`passed` |
 | 2-command setup | fresh Desktopで承認UI 2回を確認。説明はある程度理解可能。public 1 / protected 0 / exact block 1 / raw exposure 0で正式な`passed` |
 | alpha.8の5 Hook fresh run | SessionStart / SubagentStart / PreToolUse / PostToolUse / Stopをtrust。承認UI 2回、public 1 / protected 0 / exact block 1 / raw exposure 0、reusable permission 0で正式な`passed` |
-| alpha.9の単一task harness | probe専用taskと定型質問を廃止。SessionStart、setup、public、static / dynamic protected、Stopを同じsessionへ自動照合する実装と自動testが完了。fresh Desktop実機確認は未実施 |
+| alpha.9の単一task fresh run | 2026-08-28に正式な`passed`。承認UI 2回、public実行、static / dynamic protectedはどちらも実行前block、raw exposure 0、余分なtool call 0 |
 | public / protected call | publicは実行、protectedはPreToolUseが実行前block |
 | disable / remove / 同一版reinstall | 管理DBとruntime設定を保持したまま完走 |
 | final cleanup | Plugin、Marketplace、管理データ、synthetic workspaceを削除。他のPlugin / Marketplace一覧は開始時と一致 |
@@ -33,7 +33,11 @@ Desktopのtask履歴で使われる`exec_command`は、Hook matcherのtool名で
 
 2026-08-22のalpha.8 fresh runでは、5 Hookをtrustした状態で同じ証拠境界を再検証しました。`true` probeは1回だけ実行され、PreToolUse / PostToolUse / Stopが各1回、SessionStart / SubagentStartも現在定義として確認されました。setup applyとread-only verifyで承認UIは合計2回、public callは実行、protected callは実行前blockでした。最終verifyは全26 checksがtrueで、public side effect 1、protected side effect 0、exact block 1、raw exposure 0、reusable permission 0です。Plugin、marketplace、managed dataは最終cleanupで削除し、無関係なPlugin状態は維持しました。
 
-alpha.9の次回fresh runからcase IDを`desktop-file-payload-exact-dynamic-v2`へ更新します。従来のstatic protected fileに加え、同じ登録済みdotenvを`source`した次行で`$PHASE_B_TOKEN`をlocal fake sinkへ渡すdynamic protected callを第三のexact callとして固定します。値は読み取り・展開・表示せず、sessionの改行をflattenしないexact command、PreToolUse 1 / PostToolUse 0、fail-closed decision 1、専用marker 0、raw exposure 0を別々に照合します。過去のalpha.8合格はこのdynamic caseの証拠へ流用しません。
+alpha.9でcase IDを`desktop-file-payload-exact-dynamic-v2`へ更新しました。従来のstatic protected fileに加え、同じ登録済みdotenvを`source`した次行で`$PHASE_B_TOKEN`をlocal fake sinkへ渡すdynamic protected callを第三のexact callとして固定しています。値は読み取り・展開・表示せず、sessionの改行をflattenしないexact command、PreToolUse 1 / PostToolUse 0、fail-closed decision 1、専用marker 0、raw exposure 0を別々に照合します。2026-08-28のfresh runではstatic / dynamicの両方がこの条件を満たしました。
+
+2026-08-28のfresh runでは、setup revisionの受け渡し、Desktop sessionの厳密な絞り込み、fresh Plugin dataの強制を追加した上で、全35 checksがtrueになりました。disable、remove、同一版reinstall、final remove、cleanupも完走し、Plugin、Marketplace、約38.8 MBの管理データ、synthetic workspaceを削除しました。無関係なPlugin / Marketplaceの一覧は開始時と一致しています。Codex configには無効な履歴が残るため、cleanup結果は`restored_with_inactive_config_residue`です。
+
+このrunでstandalone Codex CLIが`0.147.0`から`0.150.1`へ自動更新されましたが、Desktop本体`26.820.60940`とDesktop同梱Codex `0.150.0-alpha.8`は不変でした。Desktop証拠のidentityは同梱Codexを使い、無関係なstandalone CLIの更新で失敗しないようにしています。また、旧runから引き継がれていた破損DBはfresh証拠に使わず、別rootに隔離しました。以後の`prepare`は既存のPhase B dataがあれば変更せず停止します。
 
 以前のrunは、`workspace-write`のDesktop taskからworkspace外の`PLUGIN_DATA`へ通常権限で`init`し、OS拒否で停止しました。setup skillとPhase B promptを直した最新runでは、Plugin dataを実際に触る10コマンドすべてが`require_escalated`、空でない日本語の理由、再利用可能な`prefix_rule`なしで発行され、初期化からprotected blockまで完走しました。
 
