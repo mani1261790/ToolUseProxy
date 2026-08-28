@@ -186,6 +186,12 @@ text(JSON.stringify(r));
             valid + ' notify("unexpected");',
             valid.replace('chars:""', 'chars:"continue"'),
             valid.replace("session_id: 1", "session_id: 0"),
+            valid.replace("session_id: 1", "session_id: true"),
+            valid.replace("yield_time_ms:30000", "yield_time_ms:true"),
+            valid.replace(
+                "max_output_tokens:12000",
+                "max_output_tokens:true",
+            ),
             valid.replace(
                 "max_output_tokens:12000",
                 "max_output_tokens:12000,terminate:true",

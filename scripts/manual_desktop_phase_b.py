@@ -5126,9 +5126,9 @@ def _phase_b_wait_call_allowed(
         return (
             isinstance(arguments.get("cell_id"), str)
             and bool(arguments["cell_id"])
-            and isinstance(arguments.get("max_tokens"), int)
+            and type(arguments.get("max_tokens")) is int
             and 0 < arguments["max_tokens"] <= 100_000
-            and isinstance(arguments.get("yield_time_ms"), int)
+            and type(arguments.get("yield_time_ms")) is int
             and 0 < arguments["yield_time_ms"] <= 120_000
         )
     if tool_name == "write_stdin":
@@ -5140,12 +5140,12 @@ def _phase_b_wait_call_allowed(
         }:
             return False
         return (
-            isinstance(arguments.get("session_id"), int)
+            type(arguments.get("session_id")) is int
             and arguments["session_id"] > 0
             and arguments.get("chars") == ""
-            and isinstance(arguments.get("max_output_tokens"), int)
+            and type(arguments.get("max_output_tokens")) is int
             and 0 < arguments["max_output_tokens"] <= 100_000
-            and isinstance(arguments.get("yield_time_ms"), int)
+            and type(arguments.get("yield_time_ms")) is int
             and 0 < arguments["yield_time_ms"] <= 300_000
         )
     return False
