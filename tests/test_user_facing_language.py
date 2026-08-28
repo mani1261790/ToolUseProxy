@@ -45,7 +45,10 @@ def test_normal_onboarding_does_not_require_internal_path_diagnostics() -> None:
     plugin_guide = (REPO_ROOT / "docs" / "設定" / "Plugin導入.md").read_text(encoding="utf-8")
     skill = (REPO_ROOT / "skills" / "tooluseproxy-setup" / "SKILL.md").read_text(encoding="utf-8")
 
-    assert "--expect-empty-settings" in skill
+    assert "--expect-compatible-settings" in skill
+    assert "Before the exact setup command, do not run `pwd`" in skill
+    assert "A denial returned by ToolUseProxy's `PreToolUse` Hook" in skill
+    assert "setup itself was not attempted" in skill
     assert "--whole-file" in skill
     assert "do not ask the user to paste `database_missing`" in skill
     assert "do not depend on a Hook diagnostic" in skill

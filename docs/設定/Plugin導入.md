@@ -118,12 +118,12 @@ installまたはHook定義の更新後は、Codexが示すHook definitionを確�
 
 通常のmarketplace installでは、setup skillがインストール済みlauncherからPlugin rootを取得し、Codex公式のPlugin store契約に従って専用data directoryを解決します。Plugin rootが`CODEX_HOME/plugins/cache/<marketplace>/<plugin>/<version>`に厳密に収まり、manifestのPlugin名が一致する場合だけ、対応する`CODEX_HOME/plugins/data/<plugin>-<marketplace>`を使用します。layout、identity、manifestのどれかが不一致なら推測せず停止します。
 
-新しいworkspaceの通常setupは次の2コマンドです。1つ目はworkspace設定が空であることを前提条件に、初期化と4つの保護設定を原子的に適用します。4つ目の`externality-protection`はlocal static/cache判定と未確認external sinkの安全停止を有効にしますが、LLM providerを選択したりjudge通信を開始したりはしません。2つ目は変更を伴わない一括の設定確認です。既存設定が同じなら再実行はidempotentで、異なる設定が1件でもあれば上書きしません。
+通常setupは次の2コマンドです。1つ目は初期化と4つの保護設定を原子的に適用します。新しいworkspaceだけでなく、固定profileと矛盾しない旧設定にも使え、不足している設定だけを追加します。既存値が1件でも固定profileと異なれば、全体を変更せず停止します。適用時にはrevisionも照合するため、確認後に設定が変わった場合も停止します。4つ目の`externality-protection`はlocal static/cache判定と未確認external sinkの安全停止を有効にしますが、LLM providerを選択したりjudge通信を開始したりはしません。2つ目は変更を伴わない一括の設定確認です。同じprofileへの再実行はidempotentです。
 
 ```bash
 sh "<PLUGIN_ROOT>/hooks/run_cli.sh" setup apply file-payload-exact \
   --codex \
-  --expect-empty-settings \
+  --expect-compatible-settings \
   --workspace "$PWD" \
   --json
 

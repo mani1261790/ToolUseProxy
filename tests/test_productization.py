@@ -996,7 +996,7 @@ class PluginBundleTest(unittest.TestCase):
                     "apply",
                     "file-payload-exact",
                     "--codex",
-                    "--expect-empty-settings",
+                    "--expect-compatible-settings",
                     "--workspace",
                     str(workspace),
                     "--json",

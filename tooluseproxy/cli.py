@@ -231,6 +231,14 @@ def _build_parser() -> argparse.ArgumentParser:
             "Apply only when this workspace has no configured runtime settings."
         ),
     )
+    setup_precondition.add_argument(
+        "--expect-compatible-settings",
+        action="store_true",
+        help=(
+            "Apply only when every configured runtime setting already matches "
+            "the fixed profile."
+        ),
+    )
     setup_apply.add_argument("--workspace", type=Path, default=Path.cwd())
     setup_apply.add_argument("--json", action="store_true")
     _add_runtime_path_arguments(setup_apply)
@@ -676,6 +684,22 @@ def _run_setup_apply(args: argparse.Namespace) -> int:
             expected_revision = empty_workspace_runtime_settings(
                 workspace.workspace_id
             ).revision
+        elif args.expect_compatible_settings:
+            current_settings = store.get_workspace_runtime_settings(
+                workspace.workspace_id
+            )
+            conflicting_keys = sorted(
+                key
+                for key, value in current_settings.settings.items()
+                if SETUP_PROFILE_SETTINGS.get(key) is not value
+            )
+            if conflicting_keys:
+                raise RuntimeSettingsError(
+                    "settings_profile_conflict",
+                    "existing runtime settings differ from the fixed setup "
+                    "profile; no settings were changed",
+                )
+            expected_revision = current_settings.revision
         assert expected_revision is not None
         settings, changes = store.apply_workspace_runtime_settings_profile(
             workspace,
@@ -694,7 +718,11 @@ def _run_setup_apply(args: argparse.Namespace) -> int:
             "precondition": (
                 "empty_settings"
                 if args.expect_empty_settings
-                else "exact_revision"
+                else (
+                    "compatible_settings"
+                    if args.expect_compatible_settings
+                    else "exact_revision"
+                )
             ),
             "path_source": paths.source,
             "data_dir": str(paths.data_dir),

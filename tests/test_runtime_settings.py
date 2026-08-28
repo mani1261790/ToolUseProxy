@@ -675,6 +675,151 @@ class RuntimeSettingsCliTest(unittest.TestCase):
         self.assertEqual("settings_revision_stale", stale["error"]["code"])
         self.assertFalse(manifest.exists())
 
+    def test_setup_profile_adds_only_missing_compatible_settings(self) -> None:
+        workspace = self.root / "compatible-settings-workspace"
+        data = self.root / "compatible-settings-data"
+        workspace.mkdir()
+        initial_code, initial, _ = self._run(
+            [
+                "setup",
+                "apply",
+                SETUP_PROFILE_FILE_PAYLOAD_EXACT,
+                "--codex",
+                "--expect-empty-settings",
+                "--workspace",
+                str(workspace),
+                "--data-dir",
+                str(data),
+                "--json",
+            ]
+        )
+        self.assertEqual(0, initial_code)
+        unset_code, partial, _ = self._run(
+            [
+                "config",
+                "unset",
+                EXTERNALITY_PROTECTION_KEY,
+                "--expected-revision",
+                str(initial["settings_revision"]),
+                "--workspace",
+                str(workspace),
+                "--data-dir",
+                str(data),
+                "--json",
+            ]
+        )
+        self.assertEqual(0, unset_code)
+
+        arguments = [
+            "setup",
+            "apply",
+            SETUP_PROFILE_FILE_PAYLOAD_EXACT,
+            "--codex",
+            "--expect-compatible-settings",
+            "--workspace",
+            str(workspace),
+            "--data-dir",
+            str(data),
+            "--json",
+        ]
+        apply_code, applied, _ = self._run(arguments)
+
+        self.assertEqual(0, apply_code)
+        self.assertEqual("applied", applied["status"])
+        self.assertEqual("compatible_settings", applied["precondition"])
+        self.assertEqual(
+            [EXTERNALITY_PROTECTION_KEY],
+            applied["changed_keys"],
+        )
+        self.assertNotEqual(
+            partial["settings_revision"],
+            applied["settings_revision"],
+        )
+        retry_code, retried, _ = self._run(arguments)
+        self.assertEqual(0, retry_code)
+        self.assertEqual("already_applied", retried["status"])
+
+    def test_setup_profile_refuses_conflicting_existing_settings(self) -> None:
+        workspace = self.root / "conflicting-settings-workspace"
+        data = self.root / "conflicting-settings-data"
+        workspace.mkdir()
+        initial_code, initial, _ = self._run(
+            [
+                "setup",
+                "apply",
+                SETUP_PROFILE_FILE_PAYLOAD_EXACT,
+                "--codex",
+                "--expect-empty-settings",
+                "--workspace",
+                str(workspace),
+                "--data-dir",
+                str(data),
+                "--json",
+            ]
+        )
+        self.assertEqual(0, initial_code)
+        set_code, conflicting, _ = self._run(
+            [
+                "config",
+                "set",
+                EXTERNALITY_PROTECTION_KEY,
+                "off",
+                "--expected-revision",
+                str(initial["settings_revision"]),
+                "--workspace",
+                str(workspace),
+                "--data-dir",
+                str(data),
+                "--json",
+            ]
+        )
+        self.assertEqual(0, set_code)
+        manifest = workspace / "protected_sources.json"
+        before_manifest = manifest.read_bytes()
+
+        apply_code, refused, _ = self._run(
+            [
+                "setup",
+                "apply",
+                SETUP_PROFILE_FILE_PAYLOAD_EXACT,
+                "--codex",
+                "--expect-compatible-settings",
+                "--workspace",
+                str(workspace),
+                "--data-dir",
+                str(data),
+                "--json",
+            ]
+        )
+        _, shown, _ = self._run(
+            [
+                "config",
+                "show",
+                "--workspace",
+                str(workspace),
+                "--data-dir",
+                str(data),
+                "--json",
+            ]
+        )
+
+        externality = next(
+            setting
+            for setting in shown["settings"]
+            if setting["key"] == EXTERNALITY_PROTECTION_KEY
+        )
+        self.assertEqual(1, apply_code)
+        self.assertEqual(
+            "settings_profile_conflict",
+            refused["error"]["code"],
+        )
+        self.assertEqual(
+            conflicting["settings_revision"],
+            shown["settings_revision"],
+        )
+        self.assertFalse(externality["configured_value"])
+        self.assertEqual(before_manifest, manifest.read_bytes())
+
     def test_setup_verify_allows_additive_externality_shadow_setting(self) -> None:
         fresh_workspace = self.root / "setup-additive-workspace"
         fresh_data = self.root / "setup-additive-data"
