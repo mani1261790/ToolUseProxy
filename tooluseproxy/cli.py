@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import sqlite3
 import stat
 import sys
@@ -942,7 +943,10 @@ def _inspect_plugin_artifact() -> dict[str, object]:
         manifest_version = manifest.get("version")
         version_matches = bool(
             isinstance(manifest_version, str)
-            and manifest_version.replace("-alpha.", "a") == __version__
+            and _plugin_manifest_version_matches_runtime(
+                manifest_version,
+                __version__,
+            )
         )
         ok = bool(
             manifest.get("name") == "tooluseproxy"
@@ -971,6 +975,42 @@ def _inspect_plugin_artifact() -> dict[str, object]:
             "hook_definition_count": 0,
             "hooks_sha256": None,
         }
+
+
+def _plugin_manifest_version_matches_runtime(
+    manifest_version: str,
+    runtime_version: str,
+) -> bool:
+    release_version = manifest_version
+    prerelease_marker = ".desktop-phase-b."
+    stable_marker = "-desktop-phase-b."
+    stable_release = (
+        r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\."
+        r"(?:0|[1-9][0-9]*)"
+    )
+    release = stable_release + r"(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?"
+    if prerelease_marker in manifest_version:
+        release_version, nonce = manifest_version.rsplit(
+            prerelease_marker,
+            maxsplit=1,
+        )
+        if (
+            "-" not in release_version
+            or re.fullmatch(release, release_version) is None
+            or re.fullmatch(r"[0-9a-f]{12}", nonce) is None
+        ):
+            return False
+    elif stable_marker in manifest_version:
+        release_version, nonce = manifest_version.rsplit(
+            stable_marker,
+            maxsplit=1,
+        )
+        if (
+            re.fullmatch(stable_release, release_version) is None
+            or re.fullmatch(r"[0-9a-f]{12}", nonce) is None
+        ):
+            return False
+    return release_version.replace("-alpha.", "a") == runtime_version
 
 
 def _runtime_enforcement_evidence(
