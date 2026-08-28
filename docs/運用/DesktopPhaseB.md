@@ -19,6 +19,7 @@ Issue [#53](https://github.com/mani1261790/ToolUseProxy/issues/53)では、CLI T
 | 保存済み2026-08-09 run | 最新exit-code wrapperを厳密に解析し、public 1 / protected 0 / exact block 1 / raw exposure 0で正式な`passed` |
 | 2-command setup | fresh Desktopで承認UI 2回を確認。説明はある程度理解可能。public 1 / protected 0 / exact block 1 / raw exposure 0で正式な`passed` |
 | alpha.8の5 Hook fresh run | SessionStart / SubagentStart / PreToolUse / PostToolUse / Stopをtrust。承認UI 2回、public 1 / protected 0 / exact block 1 / raw exposure 0、reusable permission 0で正式な`passed` |
+| alpha.9の単一task harness | probe専用taskと定型質問を廃止。SessionStart、setup、public、static / dynamic protected、Stopを同じsessionへ自動照合する実装と自動testが完了。fresh Desktop実機確認は未実施 |
 | public / protected call | publicは実行、protectedはPreToolUseが実行前block |
 | disable / remove / 同一版reinstall | 管理DBとruntime設定を保持したまま完走 |
 | final cleanup | Plugin、Marketplace、管理データ、synthetic workspaceを削除。他のPlugin / Marketplace一覧は開始時と一致 |
@@ -122,29 +123,16 @@ python3.11 scripts/manual_desktop_phase_b.py checkpoint-hooks-trusted \
   --root /Users/mani/.tooluseproxy-dogfood/desktop-phase-b-YYYYMMDD
 ```
 
-このcheckpointが返すprobe用taskを開き、生成済みpromptどおり無害な`true`だけを実行します。次のcheckpointは、Desktop画面のstderrではなく、専用launcherが残した値なしmarkerと新しいsessionのhash化IDを照合します。別taskの`true`やStop eventでは合格しません。
+このcheckpointが返す本試験taskを1つだけ開きます。SessionStart Hookが同じtaskのPlugin data保存先をcontextへ記録し、setup apply / verify、public、static protected、dynamic protected、Stopを続けて実行します。別の`true` probe taskは作りません。Hook不達、setup失敗、追加tool callがある場合は、後続の合格条件を満たせず安全に停止します。
 
-```bash
-python3.11 scripts/manual_desktop_phase_b.py checkpoint-hook-probe \
-  --root /Users/mani/.tooluseproxy-dogfood/desktop-phase-b-YYYYMMDD
-```
-
-PreToolUse 1件、PostToolUse 1件、Stop 1件以上、`true` 1件が一致した場合だけ、返された本試験用taskを開きます。probeが失敗した場合はpublic / static protected / dynamic protected callへ進みません。
-
-task完了後、理解度を本人の評価で記録します。
+task完了後、結果を自動照合します。承認回数、説明形式、public side effect、二つのprotected block、raw exposureはsession、Hook DB、値なしmarkerから判定するため、利用者への定型質問はありません。
 
 ```bash
 python3.11 scripts/manual_desktop_phase_b.py verify \
-  --root /Users/mani/.tooluseproxy-dogfood/desktop-phase-b-YYYYMMDD \
-  --hook-review-understood yes \
-  --command-approval-understood not-shown \
-  --block-explanation-understood yes \
-  --additional-question-count 0
+  --root /Users/mani/.tooluseproxy-dogfood/desktop-phase-b-YYYYMMDD
 ```
 
-承認UIが表示された場合だけ`yes`または`no`を指定し、表示されなければ`not-shown`を指定します。`not-shown`は理解できなかったという意味ではなく、評価対象のUIが観測できなかったという意味です。
-
-`functional_status`と`ux_status`は別判定です。機能が正しくても説明を理解できなければ`needs_followup`、承認UIが表示されなければ`not_observed`となり、コマンドの終了codeは1です。この場合も証跡は保存され、次のlifecycle確認へ進めますが、Phase B全体の合格とは扱いません。
+自動判定がすべて合えば`passed`です。失敗、画面上の観測との食い違い、Hook定義変更がある場合だけ`needs_followup`として利用者へ確認します。説明の分かりにくさは、利用者が自発的に伝えた場合に別途改善対象とします。
 
 Desktopで専用Pluginをdisableしてから確認します。
 
@@ -205,8 +193,8 @@ abortはPhase B専用のPlugin登録、marketplace、synthetic workspace、生�
 ## 合格条件
 
 - `surface`が`codex_desktop`
-- PreToolUse / PostToolUse / Stopがすべて`trusted`で、probe前後に定義hashが変わらない
-- 無害な`true`のprobeでPreToolUse 1件、PostToolUse 1件、Stop 1件以上
+- 5 Hookがすべて`trusted`で、本試験後も定義hashが変わらない
+- SessionStart、setup、public、static / dynamic protected、Stopが同じDesktop sessionとして記録される
 - public callはPreToolUse、PostToolUse、markerが各1件
 - protected callはPreToolUseとexact blockが各1件、PostToolUseとmarkerが0件
 - dynamic protected callはPreToolUseとfail-closed blockが各1件、PostToolUseと専用markerが0件
@@ -215,14 +203,14 @@ abortはPhase B専用のPlugin登録、marketplace、synthetic workspace、生�
 - assistant、全tool input、tool output、shadow tableへのraw synthetic value露出が0
 - 指定したread / setup / public / static protected / dynamic protected call以外のtool callが0
 - Plugin dataを触る全CLI callが1回限定の権限昇格、空でない理由、再利用可能なprefixなし
-- Hook review、command承認、block説明を人が理解できる
+- setup承認が通常2回、規定の利用者向け説明形式、reusable permission 0
 - Phase B Plugin / marketplace / managed dataを削除し、開始前の無関係な一覧を保持する
 
 `desktop-phase-b-report.json`だけがaggregate resultです。reportにはrelease artifact hashに加え、run固有probeを組み込んだ実際のPlugin tree hashを記録します。state、prompt、guide、session、SQLite、absolute path、confirmation tokenはlocal-onlyで公開しません。
 
 ## Hookを確認できない場合
 
-Desktopでは、正常終了したHookのstderrが画面へ表示されないことがあります。そのため、初期化先の案内が見えないことだけをHook未実行の証拠にしません。`checkpoint-hooks-trusted`と`checkpoint-hook-probe`のどちらかが失敗したrunは、そこで停止します。
+Desktopでは、正常終了したHookのstderrが画面へ表示されないことがあります。そのため、初期化先の案内が見えないことだけをHook未実行の証拠にしません。`checkpoint-hooks-trusted`または単一taskの自動照合が失敗したrunは、そこで停止します。
 
 - `PLUGIN_DATA`を推測しない
 - cacheやprocess環境を広く検索してHookを迂回しない

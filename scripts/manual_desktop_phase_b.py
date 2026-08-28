@@ -43,7 +43,6 @@ REPORT_FILENAME = "desktop-phase-b-report.json"
 PROMPT_FILENAME = "desktop-phase-b-prompt.txt"
 CONTEXT_FILENAME = "desktop-phase-b-context.json"
 GUIDE_FILENAME = "desktop-phase-b-guide.txt"
-PROBE_PROMPT_FILENAME = "desktop-hook-probe-prompt.txt"
 PROBE_MARKER_FILENAME = "desktop-hook-probe-events.txt"
 PROBE_DATA_PATH_FILENAME = "desktop-hook-probe-data-path.txt"
 PROBE_GATE_FILENAME = "desktop-hook-probe-mode"
@@ -73,7 +72,6 @@ ALLOWED_STAGES = {
     "marketplace_added",
     "plugin_installed",
     "hooks_trusted",
-    "hook_probe_passed",
     "verified",
     "plugin_disabled",
     "plugin_removed",
@@ -94,7 +92,6 @@ ABORTABLE_STAGES = {
     "marketplace_added",
     "plugin_installed",
     "hooks_trusted",
-    "hook_probe_passed",
 }
 CLEANUP_APPLY_STAGES = {
     "cleanup_planned",
@@ -140,31 +137,8 @@ def main() -> int:
     hooks_trusted = subparsers.add_parser("checkpoint-hooks-trusted")
     hooks_trusted.add_argument("--root", type=Path, required=True)
 
-    hook_probe = subparsers.add_parser("checkpoint-hook-probe")
-    hook_probe.add_argument("--root", type=Path, required=True)
-
     verify = subparsers.add_parser("verify")
     verify.add_argument("--root", type=Path, required=True)
-    verify.add_argument(
-        "--hook-review-understood",
-        choices=("yes", "no"),
-        required=True,
-    )
-    verify.add_argument(
-        "--command-approval-understood",
-        choices=("yes", "no", "not-shown"),
-        required=True,
-    )
-    verify.add_argument(
-        "--block-explanation-understood",
-        choices=("yes", "no"),
-        required=True,
-    )
-    verify.add_argument(
-        "--additional-question-count",
-        type=int,
-        required=True,
-    )
 
     disabled = subparsers.add_parser("checkpoint-disabled")
     disabled.add_argument("--root", type=Path, required=True)
@@ -208,20 +182,8 @@ def main() -> int:
             payload = checkpoint_installed(args.root)
         elif args.command == "checkpoint-hooks-trusted":
             payload = checkpoint_hooks_trusted(args.root)
-        elif args.command == "checkpoint-hook-probe":
-            payload = checkpoint_hook_probe(args.root)
         elif args.command == "verify":
-            payload = verify_desktop_phase_b(
-                args.root,
-                hook_review_understood=args.hook_review_understood,
-                command_approval_understood=(
-                    args.command_approval_understood
-                ),
-                block_explanation_understood=(
-                    args.block_explanation_understood
-                ),
-                additional_question_count=args.additional_question_count,
-            )
+            payload = verify_desktop_phase_b(args.root)
         elif args.command == "checkpoint-disabled":
             payload = checkpoint_disabled(args.root)
         elif args.command == "checkpoint-removed":
@@ -369,8 +331,7 @@ def plan_desktop_phase_b(
         plugin_root / ".codex-plugin" / "plugin.json",
         plugin_manifest,
     )
-    _write_private(root / PROBE_GATE_FILENAME, b"probe-only\n")
-    _instrument_desktop_phase_b_plugin(
+    _instrument_desktop_phase_b_single_task_plugin(
         plugin_root,
         root=root,
         workspace=workspace,
@@ -669,181 +630,18 @@ def checkpoint_hooks_trusted(root_argument: Path) -> dict[str, Any]:
     hooks = hook_inventory["hooks"]
     marker = root / PROBE_MARKER_FILENAME
     data_path = root / PROBE_DATA_PATH_FILENAME
-    probe_gate = root / PROBE_GATE_FILENAME
-    if (
-        marker.exists()
-        or data_path.exists()
-        or not _probe_gate_valid(probe_gate)
-    ):
+    if marker.exists() or data_path.exists():
         raise DesktopPhaseBFailure(
             "checkpoint_hooks_trusted",
-            "probe_evidence_preexisting",
+            "task_evidence_preexisting",
         )
     state["stage"] = "hooks_trusted"
     state["hook_plugin_root"] = hook_inventory["plugin_root"]
-    state["probe_session_snapshot"] = _session_snapshot(codex_home)
+    state["session_snapshot"] = _session_snapshot(codex_home)
     state["trusted_hook_hashes"] = {
         item["event"]: item["current_hash"] for item in hooks
     }
     _write_state(root, state)
-    probe_prompt = (root / PROBE_PROMPT_FILENAME).read_text(
-        encoding="utf-8"
-    ).rstrip()
-    task_url = "codex://new?" + urllib.parse.urlencode(
-        {
-            "path": str(workspace),
-            "prompt": probe_prompt,
-        }
-    )
-    return {
-        "schema_version": REPORT_SCHEMA_VERSION,
-        "status": "hooks_trusted",
-        "case_id": CASE_ID,
-        "surface": SURFACE,
-        "hooks": hooks,
-        "probe": {
-            "network": "none",
-            "reads_protected_source": False,
-            "command": "true",
-            "expected_pre_count": 1,
-            "expected_post_count": 1,
-            "expected_stop_minimum": 1,
-        },
-        "next": (
-            "Open the generated Desktop task and run only the prepared true "
-            "probe. Then run checkpoint-hook-probe."
-        ),
-        "local_only": {
-            "task_url": task_url,
-            "prompt_file": str(root / PROBE_PROMPT_FILENAME),
-        },
-    }
-
-
-def checkpoint_hook_probe(root_argument: Path) -> dict[str, Any]:
-    root, state = _load_state(
-        root_argument,
-        expected_stage="hooks_trusted",
-    )
-    codex_home = Path(str(state["codex_home"])).resolve()
-    workspace = Path(str(state["workspace"])).resolve()
-    installed_root = Path(str(state["installed_plugin_root"])).resolve()
-    current = _capture_shared_state(
-        codex_home,
-        stage="checkpoint_hook_probe",
-    )
-    if not _phase_b_delta_matches(
-        state["before"],
-        current,
-        plugin_expected=True,
-        marketplace_expected=True,
-    ):
-        raise DesktopPhaseBFailure(
-            "checkpoint_hook_probe",
-            "shared_state_delta_unexpected",
-        )
-    hook_inventory = _desktop_plugin_hooks(
-        codex_home,
-        workspace=workspace,
-        installed_plugin_root=installed_root,
-        expected_tree_sha256=str(state["plugin_tree_sha256"]),
-        require_trusted=True,
-    )
-    hooks = hook_inventory["hooks"]
-    if hook_inventory["plugin_root"] != state.get("hook_plugin_root"):
-        raise DesktopPhaseBFailure(
-            "checkpoint_hook_probe",
-            "active_hook_plugin_root_changed",
-        )
-    expected_hashes = state.get("trusted_hook_hashes")
-    if not isinstance(expected_hashes, dict) or any(
-        expected_hashes.get(item["event"]) != item["current_hash"]
-        for item in hooks
-    ):
-        raise DesktopPhaseBFailure(
-            "checkpoint_hook_probe",
-            "trusted_hook_definition_changed",
-        )
-    session = _read_desktop_probe_session(
-        codex_home,
-        before=state.get("probe_session_snapshot"),
-        workspace=workspace,
-    )
-    probe_nonce = state.get("probe_nonce")
-    session_id = session.get("session_id")
-    true_call_id = session.get("true_call_id")
-    if (
-        not isinstance(probe_nonce, str)
-        or not isinstance(session_id, str)
-        or not isinstance(true_call_id, str)
-    ):
-        raise DesktopPhaseBFailure(
-            "checkpoint_hook_probe",
-            "probe_identity_missing",
-        )
-    counts = _read_probe_event_counts(
-        root / PROBE_MARKER_FILENAME,
-        expected_session_hash=_probe_id_hash(
-            probe_nonce,
-            kind="session",
-            value=session_id,
-        ),
-        expected_tool_hash=(
-            _probe_id_hash(
-                probe_nonce,
-                kind="tool",
-                value=true_call_id,
-            )
-            if session.get("tool_id_linkable", True)
-            else None
-        ),
-    )
-    if counts.get("pre-tool-use", 0) != 1:
-        raise DesktopPhaseBFailure(
-            "checkpoint_hook_probe",
-            "pre_tool_probe_count_invalid",
-        )
-    if counts.get("post-tool-use", 0) != 1:
-        raise DesktopPhaseBFailure(
-            "checkpoint_hook_probe",
-            "post_tool_probe_count_invalid",
-        )
-    if counts.get("stop", 0) < 1:
-        raise DesktopPhaseBFailure(
-            "checkpoint_hook_probe",
-            "stop_probe_missing",
-        )
-    plugin_data = _read_probe_plugin_data(
-        root / PROBE_DATA_PATH_FILENAME,
-        codex_home=codex_home,
-        expected_counts=counts,
-    )
-    probe_gate = root / PROBE_GATE_FILENAME
-    if not _probe_gate_valid(probe_gate):
-        raise DesktopPhaseBFailure(
-            "checkpoint_hook_probe",
-            "probe_gate_invalid",
-        )
-    _remove_phase_b_file(
-        probe_gate,
-        root=root,
-        stage="checkpoint_hook_probe",
-    )
-    state["stage"] = "hook_probe_passed"
-    state["plugin_data"] = str(plugin_data)
-    state["session_snapshot"] = _session_snapshot(codex_home)
-    state["probe_session_candidates"] = session["relative_paths"]
-    state["hook_probe_evidence"] = {
-        "pre_tool_use_count": counts["pre-tool-use"],
-        "post_tool_use_count": counts["post-tool-use"],
-        "stop_count": counts["stop"],
-        "exact_true_call_count": session["true_call_count"],
-        "unexpected_tool_call_count": session[
-            "unexpected_tool_call_count"
-        ],
-    }
-    _write_state(root, state)
-    _write_desktop_guidance(root, state)
     prompt = (root / PROMPT_FILENAME).read_text(encoding="utf-8").rstrip()
     task_url = "codex://new?" + urllib.parse.urlencode(
         {
@@ -853,60 +651,41 @@ def checkpoint_hook_probe(root_argument: Path) -> dict[str, Any]:
     )
     return {
         "schema_version": REPORT_SCHEMA_VERSION,
-        "status": "hook_probe_passed",
+        "status": "hooks_trusted",
         "case_id": CASE_ID,
         "surface": SURFACE,
-        "dispatch": {
-            "pre_tool_use_count": counts["pre-tool-use"],
-            "post_tool_use_count": counts["post-tool-use"],
-            "stop_count": counts["stop"],
-            "exact_true_call_count": session["true_call_count"],
-            "unexpected_tool_call_count": session[
-                "unexpected_tool_call_count"
-            ],
-            "ui_diagnostic_required": False,
+        "hooks": hooks,
+        "test_task": {
+            "network": "synthetic_sink_only",
+            "task_count": 1,
+            "result_source": "automatic_verifier",
         },
-        "plugin_data_discovered_by": "trusted_plugin_hook",
         "next": (
-            "Open the generated Desktop task and run the complete synthetic "
-            "Phase B workflow."
+            "Open the generated Desktop task and complete the synthetic "
+            "Phase B workflow. Then run verify; no separate probe or "
+            "result questionnaire is required."
         ),
         "local_only": {
             "task_url": task_url,
             "prompt_file": str(root / PROMPT_FILENAME),
-            "guide_file": str(root / GUIDE_FILENAME),
         },
     }
 
 
 def verify_desktop_phase_b(
     root_argument: Path,
-    *,
-    hook_review_understood: str,
-    command_approval_understood: str,
-    block_explanation_understood: str,
-    additional_question_count: int,
 ) -> dict[str, Any]:
     root, state = _load_state_for_stages(
         root_argument,
-        expected_stages={"hook_probe_passed", "verified"},
+        expected_stages={"hooks_trusted", "verified"},
         operation="verify",
     )
-    if (
-        type(additional_question_count) is not int
-        or not 0 <= additional_question_count <= 100
-    ):
-        raise DesktopPhaseBFailure(
-            "verify",
-            "additional_question_count_invalid",
-        )
     codex_home = Path(str(state["codex_home"]))
     workspace = Path(str(state["workspace"]))
     fake_sink = Path(str(state["fake_sink"]))
     if (
         _sha256(fake_sink) != state["fake_sink_sha256"]
         or _sha256(workspace / PROTECTED_FILE) != state["source_sha256"]
-        or (root / PROBE_GATE_FILENAME).exists()
     ):
         raise DesktopPhaseBFailure("verify", "synthetic_fixture_changed")
     hook_inventory = _desktop_plugin_hooks(
@@ -923,8 +702,7 @@ def verify_desktop_phase_b(
         hook_inventory["plugin_root"] != state.get("hook_plugin_root")
         or not isinstance(expected_hook_hashes, dict)
         or any(
-            expected_hook_hashes.get(item["event"])
-            != item["current_hash"]
+            expected_hook_hashes.get(item["event"]) != item["current_hash"]
             for item in hook_inventory["hooks"]
         )
     ):
@@ -933,6 +711,10 @@ def verify_desktop_phase_b(
             "trusted_hook_definition_changed",
         )
 
+    plugin_data = _read_task_plugin_data(
+        root / PROBE_DATA_PATH_FILENAME,
+        codex_home=codex_home,
+    )
     session = _read_desktop_session(
         codex_home,
         before=state.get("session_snapshot"),
@@ -946,19 +728,24 @@ def verify_desktop_phase_b(
             / "SKILL.md"
         ),
         plugin_root=Path(str(state["hook_plugin_root"])),
-        plugin_data=Path(str(state["plugin_data"])),
+        plugin_data=plugin_data,
     )
-    plugin_data = _plugin_data_from_session(
+    session_plugin_data = _plugin_data_from_session(
         session["commands"],
         session["outputs"],
         codex_home=codex_home,
         plugin_root=Path(str(state["hook_plugin_root"])),
     )
-    if plugin_data != Path(str(state["plugin_data"])).resolve():
+    if session_plugin_data != plugin_data:
         raise DesktopPhaseBFailure(
             "verify",
-            "plugin_data_changed_after_probe",
+            "plugin_data_provenance_mismatch",
         )
+    dispatch = _read_task_event_counts(
+        root / PROBE_MARKER_FILENAME,
+        probe_nonce=str(state.get("probe_nonce")),
+        session_id=str(session.get("session_id")),
+    )
     database = plugin_data / "events.db"
     if not database.is_file() or database.is_symlink():
         raise DesktopPhaseBFailure("verify", "database_missing")
@@ -983,9 +770,7 @@ def verify_desktop_phase_b(
         database,
         public_tool_use_ids=session["public_call_ids"],
         protected_tool_use_ids=session["protected_call_ids"],
-        dynamic_protected_tool_use_ids=session[
-            "dynamic_protected_call_ids"
-        ],
+        dynamic_protected_tool_use_ids=session["dynamic_protected_call_ids"],
         public_commands={public_command},
         protected_commands={protected_command},
         dynamic_protected_commands={dynamic_protected_command},
@@ -1001,6 +786,12 @@ def verify_desktop_phase_b(
 
     checks = {
         "surface_desktop_session_seen": session["session_count"] == 1,
+        "single_task_hook_dispatch_seen": (
+            dispatch["session-start"] >= 1
+            and dispatch["pre-tool-use"] >= 5
+            and dispatch["post-tool-use"] >= 3
+            and dispatch["stop"] >= 1
+        ),
         "plugin_identity_exact": _desktop_plugin_identity_ok(state),
         "public_exact_call_seen": len(session["public_call_ids"]) == 1,
         "protected_exact_call_seen": len(session["protected_call_ids"]) == 1,
@@ -1070,23 +861,11 @@ def verify_desktop_phase_b(
         "runtime_settings_effective": settings["effective"],
         "assistant_raw_value_absent": session["assistant_raw_value_absent"],
         "tool_outputs_raw_value_absent": session["output_raw_value_absent"],
-        "shadow_table_raw_value_absent": hook[
-            "shadow_table_raw_value_absent"
-        ],
+        "shadow_table_raw_value_absent": hook["shadow_table_raw_value_absent"],
     }
     failed = sorted(name for name, passed in checks.items() if not passed)
     functional_passed = not failed
-    comprehension, ux_status, ux_passed = _desktop_ux_result(
-        hook_review_understood=hook_review_understood,
-        command_approval_understood=command_approval_understood,
-        block_explanation_understood=block_explanation_understood,
-        additional_question_count=additional_question_count,
-    )
-    status = (
-        "passed"
-        if functional_passed and ux_passed
-        else "needs_followup"
-    )
+    status = "passed" if functional_passed else "needs_followup"
     report = {
         "schema_version": REPORT_SCHEMA_VERSION,
         "status": status,
@@ -1106,15 +885,15 @@ def verify_desktop_phase_b(
             ),
             "canonical_shell_hook_name": "Bash",
             "hook_definition_hashes": state.get("trusted_hook_hashes"),
-            "hook_probe": state.get("hook_probe_evidence"),
+            "single_task_hook_dispatch": dispatch,
         },
         "functional_status": (
             "passed" if functional_passed else "needs_followup"
         ),
-        "ux_status": ux_status,
+        "ux_status": "not_questioned",
         "checks": checks,
         "failed_checks": failed,
-        "comprehension": comprehension,
+        "user_followup_required": not functional_passed,
         "metrics": {
             "public_side_effect_count": public_marker_count,
             "protected_side_effect_count": protected_marker_count,
@@ -1128,9 +907,7 @@ def verify_desktop_phase_b(
             "plugin_data_cli_call_count": session[
                 "plugin_data_cli_call_count"
             ],
-            "scoped_escalation_count": session[
-                "scoped_escalation_count"
-            ],
+            "scoped_escalation_count": session["scoped_escalation_count"],
             "justified_plugin_data_call_count": session[
                 "justified_plugin_data_call_count"
             ],
@@ -1140,23 +917,23 @@ def verify_desktop_phase_b(
             "unscoped_plugin_data_call_count": session[
                 "unscoped_plugin_data_call_count"
             ],
-            "setup_profile_apply_count": session[
-                "setup_profile_apply_count"
-            ],
+            "setup_profile_apply_count": session["setup_profile_apply_count"],
             "setup_profile_verify_count": session[
                 "setup_profile_verify_count"
             ],
             "plugin_data_scope_reason_count": session[
                 "plugin_data_scope_reason_count"
             ],
-            "raw_protected_value_exposure_count": 0
-            if (
-                checks["assistant_raw_value_absent"]
-                and checks["tool_inputs_raw_value_absent"]
-                and checks["tool_outputs_raw_value_absent"]
-                and checks["shadow_table_raw_value_absent"]
-            )
-            else 1,
+            "raw_protected_value_exposure_count": (
+                0
+                if (
+                    checks["assistant_raw_value_absent"]
+                    and checks["tool_inputs_raw_value_absent"]
+                    and checks["tool_outputs_raw_value_absent"]
+                    and checks["shadow_table_raw_value_absent"]
+                )
+                else 1
+            ),
         },
         "lifecycle": {
             "install_verified": True,
@@ -1174,43 +951,6 @@ def verify_desktop_phase_b(
     state["settings_revision"] = settings["revision"]
     _write_state(root, state)
     return report
-
-
-def _desktop_ux_result(
-    *,
-    hook_review_understood: str,
-    command_approval_understood: str,
-    block_explanation_understood: str,
-    additional_question_count: int,
-) -> tuple[dict[str, bool | int | None], str, bool]:
-    command_approval_shown = command_approval_understood != "not-shown"
-    comprehension: dict[str, bool | int | None] = {
-        "hook_review_understood": hook_review_understood == "yes",
-        "command_approval_understood": (
-            command_approval_understood == "yes"
-            if command_approval_shown
-            else None
-        ),
-        "command_approval_shown": command_approval_shown,
-        "block_explanation_understood": (
-            block_explanation_understood == "yes"
-        ),
-        "additional_question_count": additional_question_count,
-    }
-    ux_passed = all(
-        value is True
-        for value in (
-            comprehension["hook_review_understood"],
-            comprehension["command_approval_understood"],
-            comprehension["block_explanation_understood"],
-        )
-    )
-    ux_status = (
-        "not_observed"
-        if not command_approval_shown
-        else ("passed" if ux_passed else "needs_followup")
-    )
-    return comprehension, ux_status, ux_passed
 
 
 def checkpoint_disabled(root_argument: Path) -> dict[str, Any]:
@@ -1284,14 +1024,11 @@ def checkpoint_removed(root_argument: Path) -> dict[str, Any]:
             "checkpoint_removed",
             "plugin_cache_not_removed",
         )
-    if (
-        storage_kind == "local_marketplace"
-        and (
-            not installed_root.is_dir()
-            or not _plugin_tree_matches_expected(
-                installed_root,
-                expected_sha256=state["plugin_tree_sha256"],
-            )
+    if storage_kind == "local_marketplace" and (
+        not installed_root.is_dir()
+        or not _plugin_tree_matches_expected(
+            installed_root,
+            expected_sha256=state["plugin_tree_sha256"],
         )
     ):
         raise DesktopPhaseBFailure(
@@ -1307,9 +1044,8 @@ def checkpoint_removed(root_argument: Path) -> dict[str, Any]:
         database,
         Path(str(state["workspace"])),
     )
-    if (
-        not settings["configured"]
-        or settings["revision"] != state.get("settings_revision")
+    if not settings["configured"] or settings["revision"] != state.get(
+        "settings_revision"
     ):
         raise DesktopPhaseBFailure(
             "checkpoint_removed",
@@ -1330,8 +1066,7 @@ def checkpoint_removed(root_argument: Path) -> dict[str, Any]:
         "managed_data_present": True,
         "runtime_settings_revision_retained": True,
         "next": (
-            "Reinstall the same Phase B plugin in Desktop, then run "
-            "checkpoint-reinstalled."
+            "Reinstall the same Phase B plugin in Desktop, then run checkpoint-reinstalled."
         ),
     }
 
@@ -1412,9 +1147,8 @@ def checkpoint_reinstalled(root_argument: Path) -> dict[str, Any]:
         database,
         Path(str(state["workspace"])),
     )
-    if (
-        not settings["configured"]
-        or settings["revision"] != state.get("settings_revision")
+    if not settings["configured"] or settings["revision"] != state.get(
+        "settings_revision"
     ):
         raise DesktopPhaseBFailure(
             "checkpoint_reinstalled",
@@ -1437,8 +1171,7 @@ def checkpoint_reinstalled(root_argument: Path) -> dict[str, Any]:
         "runtime_settings_revision_retained": True,
         "real_version_update_verified": False,
         "next": (
-            "Disable and remove the Phase B plugin again, then run "
-            "checkpoint-final-removed."
+            "Disable and remove the Phase B plugin again, then run checkpoint-final-removed."
         ),
     }
 
@@ -1474,14 +1207,11 @@ def checkpoint_final_removed(root_argument: Path) -> dict[str, Any]:
             "checkpoint_final_removed",
             "plugin_cache_not_removed",
         )
-    if (
-        storage_kind == "local_marketplace"
-        and (
-            not installed_root.is_dir()
-            or not _plugin_tree_matches_expected(
-                installed_root,
-                expected_sha256=state["plugin_tree_sha256"],
-            )
+    if storage_kind == "local_marketplace" and (
+        not installed_root.is_dir()
+        or not _plugin_tree_matches_expected(
+            installed_root,
+            expected_sha256=state["plugin_tree_sha256"],
         )
     ):
         raise DesktopPhaseBFailure(
@@ -1662,9 +1392,7 @@ def _store_cleanup_review(
 ) -> dict[str, Any]:
     confirmation_token = secrets.token_hex(24)
     state["stage"] = review_stage
-    state["cleanup_confirmation_sha256"] = _text_sha256(
-        confirmation_token
-    )
+    state["cleanup_confirmation_sha256"] = _text_sha256(confirmation_token)
     state["cleanup_uninstall_plan"] = reviewed_plan
     _write_state(root, state)
     return _cleanup_review_payload(
@@ -1720,11 +1448,9 @@ def _reissue_cleanup_review(
         stage="managed_data_cleanup_replan",
     )
     previous = state.get("cleanup_uninstall_plan")
-    if (
-        not isinstance(previous, dict)
-        or candidate["unmanaged_entry_count"]
-        != previous.get("unmanaged_entry_count")
-    ):
+    if not isinstance(previous, dict) or candidate[
+        "unmanaged_entry_count"
+    ] != previous.get("unmanaged_entry_count"):
         raise DesktopPhaseBFailure(
             "managed_data_cleanup_replan",
             "unmanaged_inventory_changed",
@@ -1825,9 +1551,8 @@ def apply_cleanup(
             require_review=require_review,
             stage="managed_data_cleanup_reconcile",
         )
-        if (
-            candidate["unmanaged_entry_count"]
-            != reviewed_plan.get("unmanaged_entry_count")
+        if candidate["unmanaged_entry_count"] != reviewed_plan.get(
+            "unmanaged_entry_count"
         ):
             raise DesktopPhaseBFailure(
                 "managed_data_cleanup_reconcile",
@@ -1984,15 +1709,13 @@ def apply_cleanup(
         == set(after["installed_plugin_ids"]),
         "managed_data_deleted": True,
     }
-    config_hash_restored = (
-        state["before"].get("config_sha256")
-        == after.get("config_sha256")
+    config_hash_restored = state["before"].get("config_sha256") == after.get(
+        "config_sha256"
     )
     expected_after = dict(state["before"])
     expected_after["config_sha256"] = after.get("config_sha256")
-    if (
-        not all(restoration_checks.values())
-        or not _shared_state_matches(expected_after, after)
+    if not all(restoration_checks.values()) or not _shared_state_matches(
+        expected_after, after
     ):
         raise DesktopPhaseBFailure(
             "cleanup_verify",
@@ -2086,11 +1809,7 @@ def plan_abort(root_argument: Path) -> dict[str, Any]:
         "surface": SURFACE,
         "from_stage": previous_stage,
         "deletions": [
-            *(
-                [f"Plugin registration {PLUGIN_ID}"]
-                if plugin_expected
-                else []
-            ),
+            *([f"Plugin registration {PLUGIN_ID}"] if plugin_expected else []),
             *(
                 [f"marketplace {MARKETPLACE_NAME}"]
                 if marketplace_expected
@@ -2199,10 +1918,8 @@ def apply_abort(
         CONTEXT_FILENAME,
         GUIDE_FILENAME,
         PROMPT_FILENAME,
-        PROBE_PROMPT_FILENAME,
         PROBE_MARKER_FILENAME,
         PROBE_DATA_PATH_FILENAME,
-        PROBE_GATE_FILENAME,
     ):
         _remove_phase_b_file(root / filename, root=root)
 
@@ -2473,11 +2190,15 @@ def _desktop_plugin_hooks(
             and hook.get("pluginId") == expected_plugin_id
         )
     ]
-    if (
-        len(selected) != 5
-        or sorted(str(hook.get("eventName")) for hook in selected)
-        != ["postToolUse", "preToolUse", "sessionStart", "stop", "subagentStart"]
-    ):
+    if len(selected) != 5 or sorted(
+        str(hook.get("eventName")) for hook in selected
+    ) != [
+        "postToolUse",
+        "preToolUse",
+        "sessionStart",
+        "stop",
+        "subagentStart",
+    ]:
         raise DesktopPhaseBFailure(
             "hook_inventory",
             "plugin_hook_count_invalid",
@@ -2488,8 +2209,7 @@ def _desktop_plugin_hooks(
         if isinstance(hook.get("sourcePath"), str)
     }
     if len(source_paths) != 1 or any(
-        not isinstance(hook.get("sourcePath"), str)
-        for hook in selected
+        not isinstance(hook.get("sourcePath"), str) for hook in selected
     ):
         raise DesktopPhaseBFailure(
             "hook_inventory",
@@ -2522,13 +2242,13 @@ def _desktop_plugin_hooks(
             "SessionStart",
             "session-start",
             None,
-            "run_hook.sh",
+            PROBE_LAUNCHER_FILENAME,
         ),
         "subagentStart": (
             "SubagentStart",
             "subagent-start",
             None,
-            "run_hook.sh",
+            PROBE_LAUNCHER_FILENAME,
         ),
         "preToolUse": (
             "PreToolUse",
@@ -2554,9 +2274,12 @@ def _desktop_plugin_hooks(
                 "plugin_hook_event_invalid",
             )
         event, phase, matcher, launcher_filename = spec
-        command = (
-            f'sh "{hook_root / "hooks" / launcher_filename}" {phase}'
-        )
+        command = f'sh "{hook_root / "hooks" / launcher_filename}" {phase}'
+        valid_commands = {command}
+        if event in {"SessionStart", "SubagentStart"}:
+            valid_commands.add(
+                f'sh "{hook_root / "hooks" / "run_hook.sh"}" {phase}'
+            )
         current_hash = hook.get("currentHash")
         trust_status = hook.get("trustStatus")
         if (
@@ -2565,7 +2288,7 @@ def _desktop_plugin_hooks(
             or hook.get("isManaged") is not False
             or hook.get("handlerType") != "command"
             or hook.get("matcher") != matcher
-            or hook.get("command") != command
+            or hook.get("command") not in valid_commands
             or hook.get("timeoutSec") != 10
             or not isinstance(current_hash, str)
             or not current_hash.startswith("sha256:")
@@ -2768,8 +2491,7 @@ def _shared_state_matches(
     if "desktop_codex_version" in expected:
         keys.append("desktop_codex_version")
     return all(
-        expected.get(key) == actual.get(key)
-        for key in keys
+        expected.get(key) == actual.get(key) for key in keys
     ) and _plugin_inventories_compatible(
         expected.get("plugins"),
         actual.get("plugins"),
@@ -2840,9 +2562,7 @@ def _assert_abort_phase_b_identity(
     if marketplace_expected:
         expected_marketplace = state.get("marketplace")
         marketplace_root = (
-            marketplaces[0].get("root")
-            if len(marketplaces) == 1
-            else None
+            marketplaces[0].get("root") if len(marketplaces) == 1 else None
         )
         if (
             not isinstance(expected_marketplace, str)
@@ -2904,6 +2624,7 @@ def _abort_state_matches(
         version_keys.append("desktop_codex_version")
     if any(planned.get(key) != current.get(key) for key in version_keys):
         return False
+
     def without_phase_plugin(payload: dict[str, Any]) -> list[dict[str, Any]]:
         return [
             item
@@ -2920,13 +2641,11 @@ def _abort_state_matches(
             if isinstance(item, dict) and item.get("name") != MARKETPLACE_NAME
         ]
 
-    if (
-        not _plugin_inventories_compatible(
-            without_phase_plugin(planned),
-            without_phase_plugin(current),
-        )
-        or without_phase_marketplace(planned)
-        != without_phase_marketplace(current)
+    if not _plugin_inventories_compatible(
+        without_phase_plugin(planned),
+        without_phase_plugin(current),
+    ) or without_phase_marketplace(planned) != without_phase_marketplace(
+        current
     ):
         return False
     planned_plugin = _find_plugin(planned, PLUGIN_ID)
@@ -2945,11 +2664,10 @@ def _abort_state_matches(
     ]
     if current_marketplaces and current_marketplaces != planned_marketplaces:
         return False
-    return (
-        set(before.get("installed_plugin_ids", []))
-        <= set(current.get("installed_plugin_ids", []))
-        and set(before.get("marketplace_names", []))
-        <= set(current.get("marketplace_names", []))
+    return set(before.get("installed_plugin_ids", [])) <= set(
+        current.get("installed_plugin_ids", [])
+    ) and set(before.get("marketplace_names", [])) <= set(
+        current.get("marketplace_names", [])
     )
 
 
@@ -3004,14 +2722,10 @@ def _cleanup_state_matches(
             if isinstance(item, dict) and item.get("name") != MARKETPLACE_NAME
         ]
 
-    if (
-        not _plugin_inventories_compatible(
-            unrelated_plugins(planned),
-            unrelated_plugins(current),
-        )
-        or unrelated_marketplaces(planned)
-        != unrelated_marketplaces(current)
-    ):
+    if not _plugin_inventories_compatible(
+        unrelated_plugins(planned),
+        unrelated_plugins(current),
+    ) or unrelated_marketplaces(planned) != unrelated_marketplaces(current):
         return False
     planned_phase = [
         item
@@ -3104,13 +2818,11 @@ def _assert_cleanup_launcher_unchanged(
     state: dict[str, Any],
     stage: str,
 ) -> Path:
-    if (
-        not _plugin_tree_matches_expected(
-            plugin_root,
-            expected_sha256=state.get("plugin_tree_sha256"),
-        )
-        or _strict_tree_sha256(plugin_root, stage=stage)
-        != state.get("cleanup_tree_sha256")
+    if not _plugin_tree_matches_expected(
+        plugin_root,
+        expected_sha256=state.get("plugin_tree_sha256"),
+    ) or _strict_tree_sha256(plugin_root, stage=stage) != state.get(
+        "cleanup_tree_sha256"
     ):
         raise DesktopPhaseBFailure(
             stage,
@@ -3132,7 +2844,9 @@ def _validated_cleanup_data_plan(
     require_review: bool,
     stage: str,
 ) -> dict[str, Any]:
-    expected_status = "review_required" if require_review else "nothing_to_delete"
+    expected_status = (
+        "review_required" if require_review else "nothing_to_delete"
+    )
     token = payload.get("confirmation_token")
     count_fields = (
         "managed_entry_count",
@@ -3150,8 +2864,7 @@ def _validated_cleanup_data_plan(
             else token is not None
         )
         or any(
-            type(payload.get(field)) is not int
-            or int(payload[field]) < 0
+            type(payload.get(field)) is not int or int(payload[field]) < 0
             for field in count_fields
         )
         or (
@@ -3183,8 +2896,7 @@ def _validate_cleanup_apply_result(
         payload.get("status") != "deleted"
         or payload.get("data_dir") != reviewed_plan["data_dir"]
         or any(
-            type(payload.get(key)) is not int
-            or payload.get(key) != value
+            type(payload.get(key)) is not int or payload.get(key) != value
             for key, value in expected.items()
         )
     ):
@@ -3280,14 +2992,10 @@ def _baseline_plugin_compatible(
     if not isinstance(current, dict):
         return False
     expected_without_version = {
-        key: value
-        for key, value in expected.items()
-        if key != "version"
+        key: value for key, value in expected.items() if key != "version"
     }
     current_without_version = {
-        key: value
-        for key, value in current.items()
-        if key != "version"
+        key: value for key, value in current.items() if key != "version"
     }
     return expected_without_version == current_without_version
 
@@ -3301,14 +3009,12 @@ def _plugin_inventories_compatible(
     expected_plugins = {
         item.get("pluginId"): item
         for item in expected
-        if isinstance(item, dict)
-        and isinstance(item.get("pluginId"), str)
+        if isinstance(item, dict) and isinstance(item.get("pluginId"), str)
     }
     current_plugins = {
         item.get("pluginId"): item
         for item in current
-        if isinstance(item, dict)
-        and isinstance(item.get("pluginId"), str)
+        if isinstance(item, dict) and isinstance(item.get("pluginId"), str)
     }
     return (
         len(expected_plugins) == len(expected)
@@ -3329,9 +3035,7 @@ def _find_plugin(
     plugin_id: str,
 ) -> dict[str, Any] | None:
     matches = [
-        item
-        for item in state["plugins"]
-        if item.get("pluginId") == plugin_id
+        item for item in state["plugins"] if item.get("pluginId") == plugin_id
     ]
     if len(matches) > 1:
         raise DesktopPhaseBFailure("plugin_inventory", "plugin_duplicate")
@@ -3349,9 +3053,7 @@ def _installed_plugin_storage_kind(
             "plugin_inventory",
             "installed_root_unavailable",
         )
-    local_root = (
-        Path(str(state["marketplace"])) / PLUGIN_NAME
-    ).resolve()
+    local_root = (Path(str(state["marketplace"])) / PLUGIN_NAME).resolve()
     if installed_root == local_root:
         return "local_marketplace"
     codex_home = Path(str(state["codex_home"])).resolve()
@@ -3397,9 +3099,7 @@ def _extract_plugin_artifact(artifact: Path, destination: Path) -> None:
                         "artifact_member_size_exceeded",
                     )
                 target.write_bytes(data)
-                target.chmod(
-                    0o700 if relative.suffix == ".sh" else 0o600
-                )
+                target.chmod(0o700 if relative.suffix == ".sh" else 0o600)
     except (OSError, zipfile.BadZipFile) as error:
         raise DesktopPhaseBFailure(
             "marketplace_prepare",
@@ -3426,9 +3126,7 @@ def _desktop_phase_b_test_version(
             "plugin_version_invalid",
         )
     separator = "." if "-" in release_version else "-"
-    return (
-        f"{release_version}{separator}desktop-phase-b.{nonce}"
-    )
+    return f"{release_version}{separator}desktop-phase-b.{nonce}"
 
 
 def _instrument_desktop_phase_b_plugin(
@@ -3482,43 +3180,132 @@ def _instrument_desktop_phase_b_plugin(
     _write_private_json(hooks_path, hooks)
 
     probe_gate = shlex.quote(str(root / PROBE_GATE_FILENAME))
-    dispatch = (
-        plugin_root / "hooks" / PROBE_DISPATCH_FILENAME
-    )
+    dispatch = plugin_root / "hooks" / PROBE_DISPATCH_FILENAME
     launcher = plugin_root / "hooks" / PROBE_LAUNCHER_FILENAME
     script = (
         "#!/bin/sh\n"
         "set -eu\n"
         "phase=${1:-}\n"
-        "case \"$phase\" in\n"
+        'case "$phase" in\n'
         "  pre-tool-use|post-tool-use|stop) ;;\n"
         "  *) exit 64 ;;\n"
         "esac\n"
         "umask 077\n"
         f"probe_gate={probe_gate}\n"
-        "if [ -f \"$probe_gate\" ]; then\n"
-        "  for python in \"${TOOLUSEPROXY_PYTHON:-}\" python3.12 "
+        'if [ -f "$probe_gate" ]; then\n'
+        '  for python in "${TOOLUSEPROXY_PYTHON:-}" python3.12 '
         "python3.11 python3; do\n"
-        "    if [ -z \"$python\" ] || "
-        "! command -v \"$python\" >/dev/null 2>&1; then\n"
+        '    if [ -z "$python" ] || '
+        '! command -v "$python" >/dev/null 2>&1; then\n'
         "      continue\n"
         "    fi\n"
-        "    if ! \"$python\" -c 'import sys; "
+        '    if ! "$python" -c \'import sys; '
         "raise SystemExit(sys.version_info < (3, 11) or "
         "sys.version_info >= (3, 13))' >/dev/null 2>&1; then\n"
         "      continue\n"
         "    fi\n"
-        f"    exec \"$python\" \"${{PLUGIN_ROOT}}/hooks/"
-        f"{PROBE_DISPATCH_FILENAME}\" \"$phase\"\n"
+        f'    exec "$python" "${{PLUGIN_ROOT}}/hooks/'
+        f'{PROBE_DISPATCH_FILENAME}" "$phase"\n'
         "  done\n"
         "fi\n"
-        "exec sh \"${PLUGIN_ROOT}/hooks/run_hook.sh\" \"$phase\"\n"
+        'exec sh "${PLUGIN_ROOT}/hooks/run_hook.sh" "$phase"\n'
     )
     _write_private(launcher, script.encode())
     launcher.chmod(0o700)
     _write_private(
         dispatch,
         _probe_dispatch_script(
+            root=root,
+            workspace=workspace,
+            probe_nonce=probe_nonce,
+        ).encode(),
+    )
+
+
+def _instrument_desktop_phase_b_single_task_plugin(
+    plugin_root: Path,
+    *,
+    root: Path,
+    workspace: Path,
+    probe_nonce: str,
+) -> None:
+    if re.fullmatch(r"[0-9a-f]{32}", probe_nonce) is None:
+        raise DesktopPhaseBFailure(
+            "desktop_probe_instrument",
+            "probe_nonce_invalid",
+        )
+    hooks_path = plugin_root / "hooks" / "hooks.json"
+    hooks = _read_json(hooks_path, "desktop_probe_instrument")
+    events = hooks.get("hooks")
+    if not isinstance(events, dict):
+        raise DesktopPhaseBFailure(
+            "desktop_probe_instrument",
+            "hooks_object_missing",
+        )
+    expected = {
+        "SessionStart": "session-start",
+        "SubagentStart": "subagent-start",
+        "PreToolUse": "pre-tool-use",
+        "PostToolUse": "post-tool-use",
+        "Stop": "stop",
+    }
+    for event, phase in expected.items():
+        groups = events.get(event)
+        if not isinstance(groups, list) or len(groups) != 1:
+            raise DesktopPhaseBFailure(
+                "desktop_probe_instrument",
+                "hook_group_count_invalid",
+            )
+        group = groups[0]
+        handlers = group.get("hooks") if isinstance(group, dict) else None
+        if not isinstance(handlers, list) or len(handlers) != 1:
+            raise DesktopPhaseBFailure(
+                "desktop_probe_instrument",
+                "hook_handler_count_invalid",
+            )
+        handler = handlers[0]
+        if not isinstance(handler, dict) or handler.get("type") != "command":
+            raise DesktopPhaseBFailure(
+                "desktop_probe_instrument",
+                "hook_handler_invalid",
+            )
+        handler["command"] = (
+            f'sh "${{PLUGIN_ROOT}}/hooks/{PROBE_LAUNCHER_FILENAME}" {phase}'
+        )
+    _write_private_json(hooks_path, hooks)
+
+    dispatch = plugin_root / "hooks" / PROBE_DISPATCH_FILENAME
+    launcher = plugin_root / "hooks" / PROBE_LAUNCHER_FILENAME
+    script = (
+        "#!/bin/sh\n"
+        "set -eu\n"
+        "phase=${1:-}\n"
+        'case "$phase" in\n'
+        "  session-start|subagent-start|pre-tool-use|post-tool-use|stop) ;;\n"
+        "  *) exit 64 ;;\n"
+        "esac\n"
+        "umask 077\n"
+        'for python in "${TOOLUSEPROXY_PYTHON:-}" python3.12 '
+        "python3.11 python3; do\n"
+        '  if [ -z "$python" ] || '
+        '! command -v "$python" >/dev/null 2>&1; then\n'
+        "    continue\n"
+        "  fi\n"
+        '  if ! "$python" -c \'import sys; '
+        "raise SystemExit(sys.version_info < (3, 11) or "
+        "sys.version_info >= (3, 13))' >/dev/null 2>&1; then\n"
+        "    continue\n"
+        "  fi\n"
+        f'  exec "$python" "${{PLUGIN_ROOT}}/hooks/'
+        f'{PROBE_DISPATCH_FILENAME}" "$phase"\n'
+        "done\n"
+        "exit 70\n"
+    )
+    _write_private(launcher, script.encode())
+    launcher.chmod(0o700)
+    _write_private(
+        dispatch,
+        _single_task_dispatch_script(
             root=root,
             workspace=workspace,
             probe_nonce=probe_nonce,
@@ -3536,7 +3323,7 @@ def _probe_dispatch_script(
     data_path = str(root / PROBE_DATA_PATH_FILENAME)
     gate = str(root / PROBE_GATE_FILENAME)
     real_hook = "${PLUGIN_ROOT}/hooks/run_hook.sh"
-    return f"""from __future__ import annotations
+    return f'''from __future__ import annotations
 
 import hashlib
 import json
@@ -3595,10 +3382,7 @@ def exact_probe(phase: str, payload: object) -> bool:
         ):
             return False
         tool_hash = identity_hash("tool", tool_use_id)
-        append_private(
-            MARKER,
-            f"{{phase}}\\t{{session_hash}}\\t{{tool_hash}}\\n",
-        )
+        append_private(MARKER, f"{{phase}}\\t{{session_hash}}\\t{{tool_hash}}\\n")
         append_private(DATA_PATH, f"{{phase}}\\t{{plugin_data}}\\n")
         return True
     if phase != "stop":
@@ -3611,11 +3395,9 @@ def exact_probe(phase: str, payload: object) -> bool:
         return False
     prefix = f"{{session_hash}}\\t"
     if not any(
-        record.startswith(f"pre-tool-use\\t{{prefix}}")
-        for record in records
+        record.startswith(f"pre-tool-use\\t{{prefix}}") for record in records
     ) or not any(
-        record.startswith(f"post-tool-use\\t{{prefix}}")
-        for record in records
+        record.startswith(f"post-tool-use\\t{{prefix}}") for record in records
     ):
         return False
     append_private(MARKER, f"stop\\t{{session_hash}}\\t-\\n")
@@ -3633,6 +3415,108 @@ def main() -> int:
     if GATE.is_file() and exact_probe(phase, payload):
         return 0
     real_hook = REAL_HOOK.replace("${{PLUGIN_ROOT}}", os.environ["PLUGIN_ROOT"])
+    completed = subprocess.run(["sh", real_hook, phase], input=raw, check=False)
+    return completed.returncode
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+'''
+
+
+def _single_task_dispatch_script(
+    *,
+    root: Path,
+    workspace: Path,
+    probe_nonce: str,
+) -> str:
+    marker = str(root / PROBE_MARKER_FILENAME)
+    data_path = str(root / PROBE_DATA_PATH_FILENAME)
+    context = str(root / CONTEXT_FILENAME)
+    real_hook = "${PLUGIN_ROOT}/hooks/run_hook.sh"
+    return f"""from __future__ import annotations
+
+import hashlib
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+EXPECTED_WORKSPACE = {str(workspace)!r}
+PROBE_NONCE = {probe_nonce!r}
+MARKER = Path({marker!r})
+DATA_PATH = Path({data_path!r})
+CONTEXT = Path({context!r})
+REAL_HOOK = {real_hook!r}
+MAX_MARKER_BYTES = 4096
+
+
+def identity_hash(kind: str, value: str) -> str:
+    material = "\\0".join((PROBE_NONCE, kind, value)).encode()
+    return hashlib.sha256(material).hexdigest()
+
+
+def append_private(path: Path, line: str) -> None:
+    flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags, 0o600)
+    try:
+        os.fchmod(descriptor, 0o600)
+        os.write(descriptor, line.encode())
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def record_event(phase: str, payload: object) -> None:
+    if not isinstance(payload, dict):
+        return
+    session_id = payload.get("session_id")
+    if (
+        payload.get("cwd") != EXPECTED_WORKSPACE
+        or not isinstance(session_id, str)
+        or not session_id
+    ):
+        return
+    session_hash = identity_hash("session", session_id)
+    plugin_data = os.environ.get("PLUGIN_DATA", "")
+    if phase in {{"pre-tool-use", "post-tool-use"}}:
+        tool_use_id = payload.get("tool_use_id")
+        if not isinstance(tool_use_id, str) or not tool_use_id:
+            return
+        tool_hash = identity_hash("tool", tool_use_id)
+    else:
+        tool_hash = "-"
+    append_private(MARKER, f"{{phase}}\\t{{session_hash}}\\t{{tool_hash}}\\n")
+    append_private(DATA_PATH, f"{{phase}}\\t{{plugin_data}}\\n")
+    if phase == "session-start" and plugin_data:
+        try:
+            current = json.loads(CONTEXT.read_text(encoding="utf-8"))
+            current["plugin_data"] = plugin_data
+            current["plugin_data_discovery"] = (
+                "Recorded by this task's trusted SessionStart Hook."
+            )
+            temporary = CONTEXT.with_suffix(".tmp")
+            temporary.write_text(
+                json.dumps(current, ensure_ascii=False, indent=2) + "\\n",
+                encoding="utf-8",
+            )
+            os.chmod(temporary, 0o600)
+            os.replace(temporary, CONTEXT)
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            pass
+
+
+def main() -> int:
+    phase = sys.argv[1] if len(sys.argv) == 2 else ""
+    raw = sys.stdin.buffer.read()
+    try:
+        payload = json.loads(raw)
+    except (UnicodeError, json.JSONDecodeError):
+        payload = None
+    record_event(phase, payload)
+    real_hook = REAL_HOOK.replace("${{PLUGIN_ROOT}}", os.environ["PLUGIN_ROOT"])
     completed = subprocess.run(
         ["sh", real_hook, phase],
         input=raw,
@@ -3649,16 +3533,14 @@ if __name__ == "__main__":
 def _fake_sink_script(workspace: Path) -> str:
     public_marker = shlex.quote(str(workspace / PUBLIC_MARKER))
     protected_marker = shlex.quote(str(workspace / PROTECTED_MARKER))
-    dynamic_marker = shlex.quote(
-        str(workspace / DYNAMIC_PROTECTED_MARKER)
-    )
+    dynamic_marker = shlex.quote(str(workspace / DYNAMIC_PROTECTED_MARKER))
     return (
         "#!/bin/sh\n"
         "set -eu\n"
-        "case \" $* \" in\n"
-        f"  *\" @{PUBLIC_FILE} \"*) marker={public_marker} ;;\n"
-        f"  *\" @{PROTECTED_FILE} \"*) marker={protected_marker} ;;\n"
-        f"  *\" --data \"*) marker={dynamic_marker} ;;\n"
+        'case " $* " in\n'
+        f'  *" @{PUBLIC_FILE} "*) marker={public_marker} ;;\n'
+        f'  *" @{PROTECTED_FILE} "*) marker={protected_marker} ;;\n'
+        f'  *" --data "*) marker={dynamic_marker} ;;\n'
         "  *) exit 64 ;;\n"
         "esac\n"
         "printf 'invoked\\n' >> \"$marker\"\n"
@@ -3668,7 +3550,7 @@ def _fake_sink_script(workspace: Path) -> str:
 def _dynamic_protected_command(fake_sink: Path) -> str:
     return (
         f". ./{PROTECTED_FILE}\n"
-        f"{shlex.quote(str(fake_sink))} --data \"$PHASE_B_TOKEN\" "
+        f'{shlex.quote(str(fake_sink))} --data "$PHASE_B_TOKEN" '
         f"{shlex.quote(TEST_URL)}"
     )
 
@@ -3698,8 +3580,7 @@ def _write_desktop_guidance(
         "workspace": state["workspace"],
         "plugin_root": plugin_root,
         "marketplace_plugin_root": str(
-            Path(str(state.get("marketplace", root)))
-            / PLUGIN_NAME
+            Path(str(state.get("marketplace", root))) / PLUGIN_NAME
         ),
         "installed_plugin_root": state.get("installed_plugin_root"),
         "runtime_hook_plugin_root": state.get("hook_plugin_root"),
@@ -3711,8 +3592,8 @@ def _write_desktop_guidance(
         "setup_skill": setup_skill,
         "plugin_data": state.get("plugin_data"),
         "plugin_data_discovery": (
-            "Use only the value recorded by the trusted Plugin probe. "
-            "Do not guess or search broadly."
+            "The trusted SessionStart Hook records this value before the "
+            "task reads the context. Do not guess or search broadly."
         ),
         "test_sink": state["fake_sink"],
         "expected_plugin_id": PLUGIN_ID,
@@ -3781,7 +3662,8 @@ def _write_desktop_guidance(
         )
     if setup_apply_command is None or setup_verify_command is None:
         setup_command_sentence = (
-            "実行するexact commandはcheckpoint-hook-probe後に確定します。"
+            "setup commandは、task開始時にSessionStart Hookがcontextへ記録した"
+            "plugin_dataとsetup skillの固定profileから組み立ててください。"
         )
     else:
         setup_command_sentence = (
@@ -3853,20 +3735,7 @@ def _write_desktop_guidance(
         "このガイド自体は、Hookやshell commandの実行を承認するものでは"
         "ありません。\n"
     )
-    probe_prompt = (
-        "Codex DesktopのToolUseProxy Hook dispatchだけを確認します。"
-        "このtaskではファイルを読まず、計画や探索を行わず、現在のworkspaceで"
-        "ローカルshell command `true`を正確に1回だけ実行してください。"
-        "public file、protected file、curl、network、apply_patch、MCP、その他の"
-        "toolは使わないでください。実行後は「hook probe task completed」とだけ"
-        "答えて終了してください。Hookの出力が画面に表示されるかどうかで成功を"
-        "判断せず、markerはtask外のcheckpointが確認します。"
-    )
     _write_private(root / PROMPT_FILENAME, f"{prompt}\n".encode())
-    _write_private(
-        root / PROBE_PROMPT_FILENAME,
-        f"{probe_prompt}\n".encode(),
-    )
     _write_private(root / GUIDE_FILENAME, guide.encode())
 
 
@@ -3977,9 +3846,8 @@ def _session_meta_matches_workspace(
                 if record.get("type") != "session_meta":
                     continue
                 payload = record.get("payload")
-                return (
-                    isinstance(payload, dict)
-                    and payload.get("cwd") == str(workspace)
+                return isinstance(payload, dict) and payload.get("cwd") == str(
+                    workspace
                 )
     except OSError as error:
         raise DesktopPhaseBFailure(
@@ -4117,8 +3985,7 @@ def _parse_probe_session(
         "true_call_id": true_call_id,
         "true_call_count": len(true_ids),
         "tool_id_linkable": (
-            true_call_id is not None
-            and true_call_id not in unlinked_tool_ids
+            true_call_id is not None and true_call_id not in unlinked_tool_ids
         ),
         "unexpected_tool_call_count": (
             len(calls) - len(true_ids) + unexpected_response_item_count
@@ -4291,11 +4158,7 @@ def _read_probe_event_counts(
             for phase, session_hash, tool_hash in records
         )
         or len(
-            {
-                tool_hash
-                for phase, _, tool_hash in records
-                if phase != "stop"
-            }
+            {tool_hash for phase, _, tool_hash in records if phase != "stop"}
         )
         != 1
     ):
@@ -4389,6 +4252,112 @@ def _read_probe_plugin_data(
             "plugin_data_outside_codex_home",
         )
     return selected
+
+
+def _read_task_plugin_data(path: Path, *, codex_home: Path) -> Path:
+    if (
+        not path.is_file()
+        or path.is_symlink()
+        or stat.S_IMODE(path.stat().st_mode) != 0o600
+        or path.stat().st_size > 64 * 1024
+    ):
+        raise DesktopPhaseBFailure("verify", "task_data_path_invalid")
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError) as error:
+        raise DesktopPhaseBFailure(
+            "verify", "task_data_path_unreadable"
+        ) from error
+    allowed = {
+        "session-start",
+        "subagent-start",
+        "pre-tool-use",
+        "post-tool-use",
+        "stop",
+    }
+    records: list[tuple[str, str]] = []
+    for line in lines:
+        parts = line.split("\t", 1)
+        if len(parts) != 2 or parts[0] not in allowed or not parts[1]:
+            raise DesktopPhaseBFailure(
+                "verify", "task_data_path_content_invalid"
+            )
+        records.append((parts[0], parts[1]))
+    if (
+        not records
+        or len(records) > 512
+        or not any(phase == "session-start" for phase, _ in records)
+    ):
+        raise DesktopPhaseBFailure("verify", "task_data_path_content_invalid")
+    data_paths = {value for _, value in records}
+    if len(data_paths) != 1:
+        raise DesktopPhaseBFailure(
+            "verify", "task_data_path_changed_between_hooks"
+        )
+    selected = Path(next(iter(data_paths))).expanduser().resolve()
+    data_root = (codex_home.resolve() / "plugins" / "data").resolve()
+    if (
+        selected.parent != data_root
+        or selected.is_symlink()
+        or (selected.exists() and not selected.is_dir())
+    ):
+        raise DesktopPhaseBFailure("verify", "plugin_data_outside_codex_home")
+    return selected
+
+
+def _read_task_event_counts(
+    path: Path,
+    *,
+    probe_nonce: str,
+    session_id: str,
+) -> dict[str, int]:
+    if (
+        not path.is_file()
+        or path.is_symlink()
+        or stat.S_IMODE(path.stat().st_mode) != 0o600
+        or path.stat().st_size > 64 * 1024
+    ):
+        raise DesktopPhaseBFailure("verify", "task_marker_invalid")
+    expected_session_hash = _probe_id_hash(
+        probe_nonce,
+        kind="session",
+        value=session_id,
+    )
+    allowed = {
+        "session-start",
+        "subagent-start",
+        "pre-tool-use",
+        "post-tool-use",
+        "stop",
+    }
+    counts = {phase: 0 for phase in sorted(allowed)}
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError) as error:
+        raise DesktopPhaseBFailure(
+            "verify", "task_marker_unreadable"
+        ) from error
+    if not lines or len(lines) > 512:
+        raise DesktopPhaseBFailure("verify", "task_marker_content_invalid")
+    for line in lines:
+        parts = line.split("\t")
+        if len(parts) != 3:
+            raise DesktopPhaseBFailure("verify", "task_marker_content_invalid")
+        phase, session_hash, tool_hash = parts
+        if (
+            phase not in allowed
+            or session_hash != expected_session_hash
+            or (
+                tool_hash != "-"
+                if phase in {"session-start", "subagent-start", "stop"}
+                else re.fullmatch(r"[0-9a-f]{64}", tool_hash) is None
+            )
+        ):
+            raise DesktopPhaseBFailure("verify", "task_marker_content_invalid")
+        counts[phase] += 1
+    if counts["subagent-start"] != 0:
+        raise DesktopPhaseBFailure("verify", "unexpected_subagent_seen")
+    return counts
 
 
 def _read_desktop_session(
@@ -4512,6 +4481,7 @@ def _parse_session(
     plugin_data: Path | None = None,
 ) -> dict[str, Any] | None:
     workspace_seen = False
+    session_id: str | None = None
     commands: dict[str, str] = {}
     outputs: dict[str, str] = {}
     seen_call_ids: set[str] = set()
@@ -4541,6 +4511,9 @@ def _parse_session(
                     continue
                 if record.get("type") == "session_meta":
                     workspace_seen = payload.get("cwd") == str(workspace)
+                    candidate_session_id = payload.get("id")
+                    if isinstance(candidate_session_id, str):
+                        session_id = candidate_session_id
                     continue
                 if record.get("type") != "response_item":
                     continue
@@ -4649,12 +4622,8 @@ def _parse_session(
                                     )
                                     and arguments["justification"].strip()
                                 )
-                                reusable = bool(
-                                    arguments.get("prefix_rule")
-                                )
-                                justification = arguments.get(
-                                    "justification"
-                                )
+                                reusable = bool(arguments.get("prefix_rule"))
+                                justification = arguments.get("justification")
                                 current_reason = (
                                     _approval_justification_matches_contract(
                                         justification,
@@ -4701,10 +4670,7 @@ def _parse_session(
                         output_raw_value_absent
                         and SYNTHETIC_CANARY not in serialized_output
                     )
-                    if (
-                        isinstance(call_id, str)
-                        and call_id in seen_call_ids
-                    ):
+                    if isinstance(call_id, str) and call_id in seen_call_ids:
                         outputs[call_id] = serialized_output
                     else:
                         unexpected_tool_call_count += 1
@@ -4727,9 +4693,8 @@ def _parse_session(
                         payload,
                         ensure_ascii=False,
                     )
-                    if (
-                        isinstance(payload_type, str)
-                        and payload_type.endswith("_output")
+                    if isinstance(payload_type, str) and payload_type.endswith(
+                        "_output"
                     ):
                         output_raw_value_absent = (
                             output_raw_value_absent
@@ -4782,9 +4747,7 @@ def _parse_session(
     if not public_ids and not protected_ids and not dynamic_protected_ids:
         return None
     protected_outputs = [
-        outputs[call_id]
-        for call_id in protected_ids
-        if call_id in outputs
+        outputs[call_id] for call_id in protected_ids if call_id in outputs
     ]
     dynamic_protected_outputs = [
         outputs[call_id]
@@ -4792,6 +4755,7 @@ def _parse_session(
         if call_id in outputs
     ]
     return {
+        "session_id": session_id,
         "commands": tuple(commands.values()),
         "outputs": tuple(outputs.values()),
         "public_call_ids": public_ids,
@@ -4817,18 +4781,12 @@ def _parse_session(
         "unexpected_tool_call_count": unexpected_tool_call_count,
         "plugin_data_cli_call_count": plugin_data_cli_call_count,
         "scoped_escalation_count": scoped_escalation_count,
-        "justified_plugin_data_call_count": (
-            justified_plugin_data_call_count
-        ),
+        "justified_plugin_data_call_count": (justified_plugin_data_call_count),
         "reusable_prefix_rule_count": reusable_prefix_rule_count,
-        "unscoped_plugin_data_call_count": (
-            unscoped_plugin_data_call_count
-        ),
+        "unscoped_plugin_data_call_count": (unscoped_plugin_data_call_count),
         "setup_profile_apply_count": setup_profile_apply_count,
         "setup_profile_verify_count": setup_profile_verify_count,
-        "plugin_data_scope_reason_count": (
-            plugin_data_scope_reason_count
-        ),
+        "plugin_data_scope_reason_count": (plugin_data_scope_reason_count),
         "input_raw_value_absent": input_raw_value_absent,
         "assistant_raw_value_absent": assistant_raw_value_absent,
         "output_raw_value_absent": output_raw_value_absent,
@@ -4986,9 +4944,7 @@ def _phase_b_cli_arguments_allowed(
     if operation in {"doctor", "status"}:
         return (
             len(arguments) in {5, 6}
-            and required_flags
-            <= set(arguments[1:])
-            <= allowed_flags
+            and required_flags <= set(arguments[1:]) <= allowed_flags
         )
     if operation == "init":
         return (
@@ -5001,9 +4957,7 @@ def _phase_b_cli_arguments_allowed(
     if len(arguments) >= 2 and arguments[:2] == ["config", "show"]:
         return (
             len(arguments) in {6, 7}
-            and required_flags
-            <= set(arguments[2:])
-            <= allowed_flags
+            and required_flags <= set(arguments[2:]) <= allowed_flags
         )
     if len(arguments) < 6 or arguments[:2] != ["config", "set"]:
         return False
@@ -5024,10 +4978,12 @@ def _phase_b_cli_arguments_allowed(
     if revision_index + 1 >= len(arguments):
         return False
     revision = arguments[revision_index + 1]
-    if (
-        re.fullmatch(r"[0-9a-f]{64}", revision) is None
-        or len(arguments) not in {10, 11}
-    ):
+    if re.fullmatch(r"[0-9a-f]{64}", revision) is None or len(
+        arguments
+    ) not in {
+        10,
+        11,
+    }:
         return False
     option_flags = set(arguments[4:])
     return (
@@ -5154,9 +5110,8 @@ def _phase_b_wait_call_allowed(
 def _normalize_command(command: object) -> str | None:
     if isinstance(command, str):
         return command.strip()
-    if (
-        isinstance(command, list)
-        and all(isinstance(item, str) for item in command)
+    if isinstance(command, list) and all(
+        isinstance(item, str) for item in command
     ):
         values = list(command)
         if len(values) >= 3 and values[:2] == ["bash", "-lc"]:
@@ -5269,9 +5224,7 @@ def _read_hook_evidence(
                 if resolved_protected:
                     protected_tool_use_ids = resolved_protected
                 if resolved_dynamic_protected:
-                    dynamic_protected_tool_use_ids = (
-                        resolved_dynamic_protected
-                    )
+                    dynamic_protected_tool_use_ids = resolved_dynamic_protected
             if (
                 len(public_tool_use_ids) != 1
                 or len(protected_tool_use_ids) != 1
@@ -5300,7 +5253,9 @@ def _read_hook_evidence(
                     FROM events
                     WHERE tool_use_id IN ({placeholders})
                     GROUP BY tool_use_id, phase
-                    """.format(placeholders=placeholders),
+                    """.format(
+                        placeholders=placeholders
+                    ),
                     tuple(selected_ids),
                 )
             }
@@ -5384,13 +5339,9 @@ def _read_hook_evidence(
             0,
         ),
         "exact_block_count": exact_block_count,
-        "dynamic_fail_closed_block_count": (
-            dynamic_fail_closed_block_count
-        ),
+        "dynamic_fail_closed_block_count": (dynamic_fail_closed_block_count),
         "shadow_observation_count": shadow_count,
-        "shadow_table_raw_value_absent": (
-            SYNTHETIC_CANARY not in shadow_text
-        ),
+        "shadow_table_raw_value_absent": (SYNTHETIC_CANARY not in shadow_text),
     }
 
 
@@ -5498,11 +5449,15 @@ def _read_runtime_settings(
 def _immutable_database_snapshot(
     database: Path,
 ) -> Iterator[sqlite3.Connection]:
-    def snapshot() -> tuple[tuple[int, int] | None, tuple[int, int] | None, int | None]:
+    def snapshot() -> (
+        tuple[tuple[int, int] | None, tuple[int, int] | None, int | None]
+    ):
         database_state, wal_state = (
-            (path.stat().st_size, path.stat().st_mtime_ns)
-            if path.exists()
-            else None
+            (
+                (path.stat().st_size, path.stat().st_mtime_ns)
+                if path.exists()
+                else None
+            )
             for path in (resolved, wal)
         )
         shm_size = shm.stat().st_size if shm.exists() else None
@@ -5511,9 +5466,7 @@ def _immutable_database_snapshot(
     try:
         resolved = database.resolve()
         if database.is_symlink() or not resolved.is_file():
-            raise sqlite3.OperationalError(
-                "database snapshot is unavailable"
-            )
+            raise sqlite3.OperationalError("database snapshot is unavailable")
         wal = Path(f"{resolved}-wal")
         shm = Path(f"{resolved}-shm")
         if wal.is_symlink() or (wal.exists() and not wal.is_file()):
