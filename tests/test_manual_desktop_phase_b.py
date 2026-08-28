@@ -2178,6 +2178,42 @@ text(JSON.stringify(r));
             )
         )
 
+    def test_phase_b_delta_uses_desktop_bundled_codex_version(self) -> None:
+        before = self._shared_state()
+        before["desktop_codex_version"] = "codex-cli desktop-1"
+        current = self._shared_state()
+        current["desktop_codex_version"] = "codex-cli desktop-1"
+        current["codex_cli_version"] = "codex-cli standalone-2"
+
+        self.assertTrue(
+            _phase_b_delta_matches(
+                before,
+                current,
+                plugin_expected=False,
+                marketplace_expected=False,
+            )
+        )
+        current["desktop_codex_version"] = "codex-cli desktop-2"
+        self.assertFalse(
+            _phase_b_delta_matches(
+                before,
+                current,
+                plugin_expected=False,
+                marketplace_expected=False,
+            )
+        )
+
+    def test_shared_state_uses_desktop_bundled_codex_version(self) -> None:
+        expected = self._shared_state()
+        expected["desktop_codex_version"] = "codex-cli desktop-1"
+        actual = self._shared_state()
+        actual["desktop_codex_version"] = "codex-cli desktop-1"
+        actual["codex_cli_version"] = "codex-cli standalone-2"
+
+        self.assertTrue(_shared_state_matches(expected, actual))
+        actual["desktop_codex_version"] = "codex-cli desktop-2"
+        self.assertFalse(_shared_state_matches(expected, actual))
+
     def test_prepare_stops_before_mutation_when_shared_state_changed(
         self,
     ) -> None:

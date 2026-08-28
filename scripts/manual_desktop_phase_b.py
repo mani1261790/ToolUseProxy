@@ -859,7 +859,7 @@ def verify_desktop_phase_b(
         "dynamic_fail_closed_block_one": (
             hook["dynamic_fail_closed_block_count"] == 1
         ),
-        "shadow_observation_one": hook["shadow_observation_count"] == 1,
+        "shadow_observations_two": hook["shadow_observation_count"] == 2,
         "public_side_effect_one": public_marker_count == 1,
         "protected_side_effect_zero": protected_marker_count == 0,
         "dynamic_protected_side_effect_zero": (
@@ -2499,7 +2499,6 @@ def _shared_state_matches(
     if not isinstance(expected, dict):
         return False
     keys = [
-        "codex_cli_version",
         "desktop_version",
         "config_sha256",
         "marketplaces",
@@ -2508,6 +2507,8 @@ def _shared_state_matches(
     ]
     if "desktop_codex_version" in expected:
         keys.append("desktop_codex_version")
+    else:
+        keys.append("codex_cli_version")
     return all(
         expected.get(key) == actual.get(key) for key in keys
     ) and _plugin_inventories_compatible(
@@ -2633,13 +2634,11 @@ def _abort_state_matches(
     before = state.get("before")
     if not isinstance(planned, dict) or not isinstance(before, dict):
         return False
-    version_keys = [
-        "codex_cli_version",
-        "desktop_version",
-        "config_sha256",
-    ]
+    version_keys = ["desktop_version", "config_sha256"]
     if "desktop_codex_version" in planned:
         version_keys.append("desktop_codex_version")
+    else:
+        version_keys.append("codex_cli_version")
     if any(planned.get(key) != current.get(key) for key in version_keys):
         return False
 
@@ -2697,12 +2696,11 @@ def _cleanup_state_matches(
     before = state.get("before")
     if not isinstance(planned, dict) or not isinstance(before, dict):
         return False
-    version_keys = [
-        "codex_cli_version",
-        "desktop_version",
-    ]
+    version_keys = ["desktop_version"]
     if "desktop_codex_version" in planned:
         version_keys.append("desktop_codex_version")
+    else:
+        version_keys.append("codex_cli_version")
     if any(planned.get(key) != current.get(key) for key in version_keys):
         return False
     stage = state.get("stage")
@@ -2969,9 +2967,11 @@ def _phase_b_delta_matches(
 ) -> bool:
     if not isinstance(before, dict):
         return False
-    version_keys = ["codex_cli_version", "desktop_version"]
+    version_keys = ["desktop_version"]
     if "desktop_codex_version" in before:
         version_keys.append("desktop_codex_version")
+    else:
+        version_keys.append("codex_cli_version")
     if any(before.get(key) != current.get(key) for key in version_keys):
         return False
     expected_plugins = set(before.get("installed_plugin_ids", []))
