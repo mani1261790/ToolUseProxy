@@ -1989,6 +1989,12 @@ def _capture_shared_state(
     *,
     stage: str,
 ) -> dict[str, Any]:
+    standalone_codex = shutil.which("codex")
+    codex_cli_version = (
+        _codex_version(codex_home, executable=standalone_codex)
+        if standalone_codex is not None
+        else None
+    )
     plugins = _run_json(
         [
             str(_desktop_codex_binary()),
@@ -2029,7 +2035,7 @@ def _capture_shared_state(
     ]
     config = codex_home / "config.toml"
     return {
-        "codex_cli_version": _codex_version(codex_home),
+        "codex_cli_version": codex_cli_version,
         "desktop_version": _desktop_version(),
         "desktop_codex_version": _desktop_codex_version(codex_home),
         "config_sha256": _sha256(config) if config.is_file() else None,
@@ -2079,9 +2085,9 @@ def _normalized_marketplace(item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _codex_version(codex_home: Path) -> str:
+def _codex_version(codex_home: Path, *, executable: str = "codex") -> str:
     result = _run_command(
-        ["codex", "--version"],
+        [executable, "--version"],
         stage="codex_version",
         env={**os.environ, "CODEX_HOME": str(codex_home)},
     )

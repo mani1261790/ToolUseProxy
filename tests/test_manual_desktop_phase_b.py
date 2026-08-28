@@ -36,6 +36,7 @@ from scripts.manual_desktop_phase_b import (
     _approval_justification_matches_contract,
     _abort_plugin_tree_matches,
     _assert_no_tooluseproxy_collision,
+    _capture_shared_state,
     _desktop_plugin_hooks,
     _desktop_phase_b_test_version,
     _dynamic_protected_command,
@@ -2213,6 +2214,42 @@ text(JSON.stringify(r));
         self.assertTrue(_shared_state_matches(expected, actual))
         actual["desktop_codex_version"] = "codex-cli desktop-2"
         self.assertFalse(_shared_state_matches(expected, actual))
+
+    def test_shared_state_does_not_require_standalone_codex(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            codex_home = Path(temporary_directory)
+            with (
+                patch("scripts.manual_desktop_phase_b.shutil.which", return_value=None),
+                patch(
+                    "scripts.manual_desktop_phase_b._desktop_codex_binary",
+                    return_value=Path("/Applications/Codex.app/Contents/Resources/codex"),
+                ),
+                patch(
+                    "scripts.manual_desktop_phase_b._desktop_codex_version",
+                    return_value="codex-cli desktop-1",
+                ),
+                patch(
+                    "scripts.manual_desktop_phase_b._desktop_version",
+                    return_value="desktop 1",
+                ),
+                patch(
+                    "scripts.manual_desktop_phase_b._run_json",
+                    side_effect=(
+                        {"installed": []},
+                        {"marketplaces": []},
+                    ),
+                ),
+                patch(
+                    "scripts.manual_desktop_phase_b._codex_version"
+                ) as codex_version,
+            ):
+                captured = _capture_shared_state(codex_home, stage="test")
+
+        self.assertIsNone(captured["codex_cli_version"])
+        self.assertEqual(
+            "codex-cli desktop-1", captured["desktop_codex_version"]
+        )
+        codex_version.assert_not_called()
 
     def test_prepare_stops_before_mutation_when_shared_state_changed(
         self,
