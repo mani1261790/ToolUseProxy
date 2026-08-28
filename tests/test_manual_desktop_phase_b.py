@@ -11,6 +11,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from hook_monitor.runtime.settings import (
+    EXTERNALITY_PROTECTION_KEY,
     FILE_PAYLOAD_EXACT_ENFORCEMENT_KEY,
     FILE_PAYLOAD_SHADOW_KEY,
     PRE_TOOL_POLICY_KEY,
@@ -48,6 +49,7 @@ from scripts.manual_desktop_phase_b import (
     _marker_count,
     _parse_probe_session,
     _parse_exec_custom_tool_input,
+    _parse_write_stdin_custom_tool_input,
     _parse_session,
     _phase_b_command_allowed,
     _phase_b_delta_matches,
@@ -162,6 +164,46 @@ yield-time_ms: 10000});
 text(JSON.stringify(r));
 """
             )
+        )
+
+    def test_write_stdin_custom_tool_input_accepts_only_empty_poll(self) -> None:
+        valid = (
+            "const r = await tools.write_stdin({session_id: 1,chars:\"\","
+            "yield_time_ms:30000,max_output_tokens:12000}); "
+            "text(JSON.stringify(r));"
+        )
+
+        self.assertEqual(
+            {
+                "session_id": 1,
+                "chars": "",
+                "yield_time_ms": 30000,
+                "max_output_tokens": 12000,
+            },
+            _parse_write_stdin_custom_tool_input(valid),
+        )
+        rejected = (
+            valid + ' notify("unexpected");',
+            valid.replace('chars:""', 'chars:"continue"'),
+            valid.replace("session_id: 1", "session_id: 0"),
+            valid.replace(
+                "max_output_tokens:12000",
+                "max_output_tokens:12000,terminate:true",
+            ),
+            valid.replace("tools.write_stdin", "tools.exec_command"),
+        )
+        for wrapper in rejected:
+            with self.subTest(wrapper=wrapper):
+                self.assertIsNone(
+                    _parse_write_stdin_custom_tool_input(wrapper)
+                )
+
+    def test_expected_runtime_settings_include_externality_protection(
+        self,
+    ) -> None:
+        self.assertIs(
+            EXPECTED_RUNTIME_SETTINGS[EXTERNALITY_PROTECTION_KEY],
+            True,
         )
 
     def setUp(self) -> None:
@@ -3417,6 +3459,7 @@ text(JSON.stringify(r));
                 PRE_TOOL_POLICY_KEY,
                 FILE_PAYLOAD_SHADOW_KEY,
                 FILE_PAYLOAD_EXACT_ENFORCEMENT_KEY,
+                EXTERNALITY_PROTECTION_KEY,
             ):
                 state, _ = store.update_workspace_runtime_setting(
                     context.workspace_id,

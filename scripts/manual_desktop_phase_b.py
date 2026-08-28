@@ -27,6 +27,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from hook_monitor.runtime.settings import (  # noqa: E402
+    EXTERNALITY_PROTECTION_KEY,
     empty_workspace_runtime_settings,
 )
 
@@ -65,6 +66,7 @@ EXPECTED_RUNTIME_SETTINGS = {
     "pre-tool-policy": True,
     "file-payload-shadow": True,
     "file-payload-exact-enforcement": True,
+    EXTERNALITY_PROTECTION_KEY: True,
 }
 ALLOWED_STAGES = {
     "planned",
@@ -1058,7 +1060,7 @@ def verify_desktop_phase_b(
         "dynamic_fail_closed_block_one": (
             hook["dynamic_fail_closed_block_count"] == 1
         ),
-        "shadow_observations_two": hook["shadow_observation_count"] == 2,
+        "shadow_observation_one": hook["shadow_observation_count"] == 1,
         "public_side_effect_one": public_marker_count == 1,
         "protected_side_effect_zero": protected_marker_count == 0,
         "dynamic_protected_side_effect_zero": (
@@ -4155,6 +4157,28 @@ def _parse_exec_custom_tool_input(
     return arguments
 
 
+def _parse_write_stdin_custom_tool_input(
+    value: object,
+) -> dict[str, Any] | None:
+    if not isinstance(value, str) or len(value) > 16_384:
+        return None
+    match = re.fullmatch(
+        r"\s*const\s+r\s*=\s*await\s+tools\.write_stdin\((\{.*\})\);"
+        r"\s*text\(JSON\.stringify\(r\)\);\s*",
+        value,
+        flags=re.DOTALL,
+    )
+    if match is None:
+        return None
+    arguments = _parse_exec_arguments_object(match.group(1))
+    if not isinstance(arguments, dict) or not _phase_b_wait_call_allowed(
+        "write_stdin",
+        arguments,
+    ):
+        return None
+    return arguments
+
+
 def _parse_exec_arguments_object(value: str) -> dict[str, Any] | None:
     def unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
         result: dict[str, Any] = {}
@@ -4534,8 +4558,17 @@ def _parse_session(
                                 output_wrapper="output_only",
                             )
                             output_only_wrapper = arguments is not None
-                        if tool_name == "exec" and arguments is not None:
-                            tool_name = "exec_command"
+                        if tool_name == "exec":
+                            if arguments is not None:
+                                tool_name = "exec_command"
+                            else:
+                                arguments = (
+                                    _parse_write_stdin_custom_tool_input(
+                                        raw_input
+                                    )
+                                )
+                                if arguments is not None:
+                                    tool_name = "write_stdin"
                         serialized_arguments = (
                             raw_input
                             if isinstance(raw_input, str)
@@ -5083,20 +5116,39 @@ def _phase_b_wait_call_allowed(
     tool_name: str,
     arguments: dict[str, Any],
 ) -> bool:
-    if tool_name != "wait" or set(arguments) != {
-        "cell_id",
-        "max_tokens",
-        "yield_time_ms",
-    }:
-        return False
-    return (
-        isinstance(arguments.get("cell_id"), str)
-        and bool(arguments["cell_id"])
-        and isinstance(arguments.get("max_tokens"), int)
-        and 0 < arguments["max_tokens"] <= 100_000
-        and isinstance(arguments.get("yield_time_ms"), int)
-        and 0 < arguments["yield_time_ms"] <= 120_000
-    )
+    if tool_name == "wait":
+        if set(arguments) != {
+            "cell_id",
+            "max_tokens",
+            "yield_time_ms",
+        }:
+            return False
+        return (
+            isinstance(arguments.get("cell_id"), str)
+            and bool(arguments["cell_id"])
+            and isinstance(arguments.get("max_tokens"), int)
+            and 0 < arguments["max_tokens"] <= 100_000
+            and isinstance(arguments.get("yield_time_ms"), int)
+            and 0 < arguments["yield_time_ms"] <= 120_000
+        )
+    if tool_name == "write_stdin":
+        if set(arguments) != {
+            "session_id",
+            "chars",
+            "max_output_tokens",
+            "yield_time_ms",
+        }:
+            return False
+        return (
+            isinstance(arguments.get("session_id"), int)
+            and arguments["session_id"] > 0
+            and arguments.get("chars") == ""
+            and isinstance(arguments.get("max_output_tokens"), int)
+            and 0 < arguments["max_output_tokens"] <= 100_000
+            and isinstance(arguments.get("yield_time_ms"), int)
+            and 0 < arguments["yield_time_ms"] <= 300_000
+        )
+    return False
 
 
 def _normalize_command(command: object) -> str | None:
