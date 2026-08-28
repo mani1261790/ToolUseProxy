@@ -99,6 +99,11 @@ definitions currently shown and changed definitions require review again. If
 any ToolUseProxy source, count, or path differs, tell the user not to trust and
 stop setup.
 
+A denial returned by ToolUseProxy's `PreToolUse` Hook is evidence that this Hook
+was delivered for that command. Never reinterpret that denial as evidence that
+the Hooks are untrusted, and never ask the user to repeat Hook review solely
+because ToolUseProxy denied a command.
+
 Before requesting permission to run any `run_cli.sh` or `run_cli.cmd` command,
 explain the operation in plain language. The explanation must let a person
 decide without parsing the installed Plugin path or the raw shell command, and
@@ -245,12 +250,19 @@ do not report missing initial output as a command failure.
    corresponding Codex Plugin data directory using Codex's Plugin-store
    contract. It fails closed if any identity or layout check differs.
 
-   Apply the fixed profile with the explicit empty-settings precondition. This
-   is safe for a new workspace, idempotent when the same profile is already
-   applied, and refuses to overwrite a partial or different existing setup:
+   After reading this skill, treat the task's current working directory as the
+   intended workspace root. Before the exact setup command, do not run `pwd`,
+   `git`, memory searches, repository scans, or a compound diagnostic command.
+   The setup command performs its own strict workspace and Plugin-store checks.
+
+   Apply the fixed profile with the compatible-settings precondition. This is
+   safe for a new workspace, idempotent when the same profile is already
+   applied, and atomically adds settings that are missing from an older
+   compatible setup. If any configured value differs from the fixed profile,
+   it refuses the entire change:
 
    ```text
-   sh "<PLUGIN_ROOT>/hooks/run_cli.sh" setup apply file-payload-exact --codex --expect-empty-settings --workspace <workspace-root> --json
+   sh "<PLUGIN_ROOT>/hooks/run_cli.sh" setup apply file-payload-exact --codex --expect-compatible-settings --workspace <workspace-root> --json
    ```
 
    Then run the one read-only configuration verification command:
@@ -282,6 +294,10 @@ do not report missing initial output as a command failure.
    identity or data directory cannot be verified, lead with the setup-failure
    wording and stop. Do not fall back to asking the user for internal
    diagnostics.
+
+   If an earlier exploratory command was denied before setup, say explicitly
+   that setup itself was not attempted. Do not call that command the initial
+   setup or claim that no Hook was delivered.
 
 5. For a manual context-bound Phase B workflow, run `doctor` and `status` with
    the exact context-supplied `--workspace` and `--data-dir` values when that

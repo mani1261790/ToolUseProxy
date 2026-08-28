@@ -198,16 +198,28 @@ def _trusted_setup_profile_operation(
         ],
     ):
         return "verify"
-    if tokens == [
-        *common,
-        "apply",
-        "file-payload-exact",
-        "--codex",
-        "--expect-empty-settings",
-        "--workspace",
-        workspace,
-        "--json",
-    ]:
+    if tokens in (
+        [
+            *common,
+            "apply",
+            "file-payload-exact",
+            "--codex",
+            "--expect-empty-settings",
+            "--workspace",
+            workspace,
+            "--json",
+        ],
+        [
+            *common,
+            "apply",
+            "file-payload-exact",
+            "--codex",
+            "--expect-compatible-settings",
+            "--workspace",
+            workspace,
+            "--json",
+        ],
+    ):
         return "apply"
     prefix = [
         *common,

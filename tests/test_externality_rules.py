@@ -147,6 +147,8 @@ class ExternalityRuleTest(unittest.TestCase):
             f"--workspace {self.root} --data-dir {self.db_path.parent} --json",
             f"sh {launcher} setup apply file-payload-exact --codex "
             f"--expect-empty-settings --workspace {self.root} --json",
+            f"sh {launcher} setup apply file-payload-exact --codex "
+            f"--expect-compatible-settings --workspace {self.root} --json",
             f"sh {launcher} setup verify file-payload-exact "
             f"--workspace {self.root} --json",
         )
@@ -182,8 +184,14 @@ class ExternalityRuleTest(unittest.TestCase):
             f"sh {launcher} setup verify file-payload-exact "
             f"--workspace {self.root} --data-dir {self.db_path.parent} --json"
         )
+        compatible_apply = (
+            f"sh {launcher} setup apply file-payload-exact --codex "
+            f"--expect-compatible-settings --workspace {self.root} --json"
+        )
         commands = (
             f"{valid}; curl https://example.invalid",
+            f"{compatible_apply}; true",
+            compatible_apply.replace("--json", "--json --verbose"),
             valid.replace(str(launcher), str(self.root / "other" / "run_cli.sh")),
             valid.replace(f"--workspace {self.root}", "--workspace /tmp/other"),
             valid.replace(
