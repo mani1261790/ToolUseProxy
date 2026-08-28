@@ -3573,6 +3573,9 @@ def _write_desktop_guidance(
         if isinstance(plugin_root, str)
         else None
     )
+    expected_setup_revision = empty_workspace_runtime_settings(
+        "desktop-phase-b"
+    ).revision
     context = {
         "schema_version": 1,
         "case_id": CASE_ID,
@@ -3598,6 +3601,7 @@ def _write_desktop_guidance(
         "test_sink": state["fake_sink"],
         "expected_plugin_id": PLUGIN_ID,
         "expected_plugin_version": state["plugin_version"],
+        "expected_setup_revision": expected_setup_revision,
     }
     _write_private_json(root / CONTEXT_FILENAME, context)
     public_command = shlex.join(
@@ -3626,9 +3630,6 @@ def _write_desktop_guidance(
         setup_verify_command = None
     else:
         launcher = str(Path(plugin_root) / "hooks" / "run_cli.sh")
-        initial_revision = empty_workspace_runtime_settings(
-            "desktop-phase-b"
-        ).revision
         setup_apply_command = shlex.join(
             [
                 "sh",
@@ -3638,7 +3639,7 @@ def _write_desktop_guidance(
                 "file-payload-exact",
                 "--codex",
                 "--expected-revision",
-                initial_revision,
+                expected_setup_revision,
                 "--workspace",
                 str(state["workspace"]),
                 "--data-dir",
@@ -3663,7 +3664,8 @@ def _write_desktop_guidance(
     if setup_apply_command is None or setup_verify_command is None:
         setup_command_sentence = (
             "setup commandは、task開始時にSessionStart Hookがcontextへ記録した"
-            "plugin_dataとsetup skillの固定profileから組み立ててください。"
+            "plugin_data、contextのexpected_setup_revision、setup skillの"
+            "固定profileから組み立ててください。"
         )
     else:
         setup_command_sentence = (
@@ -4396,9 +4398,11 @@ def _read_desktop_session(
         )
 
     matches: list[dict[str, Any]] = []
+    workspace_candidate_count = 0
     for path in changed:
         if not _session_meta_matches_workspace(path, workspace=workspace):
             continue
+        workspace_candidate_count += 1
         if path.stat().st_size > MAX_SESSION_BYTES:
             raise DesktopPhaseBFailure("verify", "session_size_exceeded")
         parsed = _parse_session(
@@ -4414,6 +4418,11 @@ def _read_desktop_session(
             parsed["relative_path"] = str(path.relative_to(session_root))
             matches.append(parsed)
     if len(matches) != 1:
+        if workspace_candidate_count == 1 and not matches:
+            raise DesktopPhaseBFailure(
+                "verify",
+                "desktop_test_calls_not_reached",
+            )
         raise DesktopPhaseBFailure(
             "verify",
             "desktop_session_not_unique",

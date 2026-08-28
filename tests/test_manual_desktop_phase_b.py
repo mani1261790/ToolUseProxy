@@ -393,10 +393,22 @@ text(JSON.stringify(r));
             prompt = (root / "desktop-phase-b-prompt.txt").read_text(
                 encoding="utf-8"
             )
+            context = json.loads(
+                (root / "desktop-phase-b-context.json").read_text(
+                    encoding="utf-8"
+                )
+            )
 
             self.assertIn(
                 "SessionStart Hookがcontextへ記録したplugin_data",
                 prompt,
+            )
+            self.assertIn("contextのexpected_setup_revision", prompt)
+            self.assertEqual(
+                empty_workspace_runtime_settings(
+                    "desktop-phase-b"
+                ).revision,
+                context["expected_setup_revision"],
             )
             self.assertNotIn("setup apply: None", prompt)
             self.assertNotIn("setup verify: None", prompt)
@@ -3080,6 +3092,50 @@ text(JSON.stringify(r));
             )
 
             self.assertEqual(["matching.jsonl"], parsed["relative_paths"])
+
+    def test_verify_reader_reports_when_test_calls_were_not_reached(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory).resolve()
+            codex_home = root / "codex-home"
+            session_root = codex_home / "sessions"
+            workspace = root / "workspace"
+            fake_sink = root / "bin" / "curl"
+            plugin_root = root / "plugin"
+            plugin_data = root / "data"
+            context = root / "context.json"
+            skill = plugin_root / "skills" / "tooluseproxy-setup" / "SKILL.md"
+            session_root.mkdir(parents=True)
+            workspace.mkdir()
+            session = session_root / "stopped.jsonl"
+            session.write_text(
+                json.dumps(
+                    {
+                        "type": "session_meta",
+                        "payload": {"cwd": str(workspace)},
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaises(DesktopPhaseBFailure) as raised:
+                _read_desktop_session(
+                    codex_home,
+                    before={},
+                    workspace=workspace,
+                    fake_sink=fake_sink,
+                    context_path=context,
+                    setup_skill=skill,
+                    plugin_root=plugin_root,
+                    plugin_data=plugin_data,
+                )
+
+            self.assertEqual(
+                "desktop_test_calls_not_reached",
+                raised.exception.code,
+            )
 
     def test_hook_evidence_joins_decision_by_analysis_run(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
