@@ -247,7 +247,11 @@ def plan_desktop_phase_b(
     root = _prepare_new_root(root_argument)
     shared_codex_home = _resolve_codex_home(codex_home)
     before = _capture_shared_state(shared_codex_home, stage=stage)
-    _assert_no_tooluseproxy_collision(before, stage=stage)
+    _assert_no_tooluseproxy_collision(
+        before,
+        stage=stage,
+        codex_home=shared_codex_home,
+    )
 
     candidate = root / "candidate"
     _run_command(
@@ -452,7 +456,11 @@ def prepare_desktop_phase_b(
     )
     if not _shared_state_matches(state["before"], current):
         raise DesktopPhaseBFailure("prepare", "shared_state_changed")
-    _assert_no_tooluseproxy_collision(current, stage="prepare")
+    _assert_no_tooluseproxy_collision(
+        current,
+        stage="prepare",
+        codex_home=Path(str(state["codex_home"])),
+    )
 
     added = _run_json(
         [
@@ -2458,6 +2466,7 @@ def _assert_no_tooluseproxy_collision(
     state: dict[str, Any],
     *,
     stage: str,
+    codex_home: Path | None = None,
 ) -> None:
     plugin_collisions = [
         item
@@ -2470,7 +2479,16 @@ def _assert_no_tooluseproxy_collision(
         for name in state["marketplace_names"]
         if str(name).startswith("tooluseproxy")
     ]
-    if plugin_collisions or marketplace_collisions:
+    data_collision = False
+    if codex_home is not None:
+        data_path = (
+            codex_home.expanduser().resolve()
+            / "plugins"
+            / "data"
+            / f"{PLUGIN_NAME}-{MARKETPLACE_NAME}"
+        )
+        data_collision = data_path.exists() or data_path.is_symlink()
+    if plugin_collisions or marketplace_collisions or data_collision:
         raise DesktopPhaseBFailure(stage, "tooluseproxy_collision")
 
 
@@ -4348,7 +4366,7 @@ def _read_task_event_counts(
         phase, session_hash, tool_hash = parts
         if (
             phase not in allowed
-            or session_hash != expected_session_hash
+            or re.fullmatch(r"[0-9a-f]{64}", session_hash) is None
             or (
                 tool_hash != "-"
                 if phase in {"session-start", "subagent-start", "stop"}
@@ -4356,7 +4374,14 @@ def _read_task_event_counts(
             )
         ):
             raise DesktopPhaseBFailure("verify", "task_marker_content_invalid")
+        if session_hash != expected_session_hash:
+            continue
         counts[phase] += 1
+    if counts["session-start"] == 0:
+        raise DesktopPhaseBFailure(
+            "verify",
+            "task_marker_expected_session_missing",
+        )
     if counts["subagent-start"] != 0:
         raise DesktopPhaseBFailure("verify", "unexpected_subagent_seen")
     return counts

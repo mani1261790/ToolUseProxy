@@ -1026,7 +1026,7 @@ text(JSON.stringify(r));
                 "task_data_path_content_invalid", raised.exception.code
             )
 
-    def test_single_task_dispatch_rejects_another_session(self) -> None:
+    def test_single_task_dispatch_requires_expected_session(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory).resolve()
             nonce = "0123456789abcdef0123456789abcdef"
@@ -1047,8 +1047,44 @@ text(JSON.stringify(r));
                 )
 
             self.assertEqual(
-                "task_marker_content_invalid", raised.exception.code
+                "task_marker_expected_session_missing",
+                raised.exception.code,
             )
+
+    def test_single_task_dispatch_ignores_other_session(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory).resolve()
+            nonce = "0123456789abcdef0123456789abcdef"
+            marker = root / PROBE_MARKER_FILENAME
+            expected = _probe_id_hash(
+                nonce,
+                kind="session",
+                value="expected",
+            )
+            other = _probe_id_hash(nonce, kind="session", value="other")
+            marker.write_text(
+                (
+                    f"session-start\t{other}\t-\n"
+                    f"pre-tool-use\t{other}\t{'a' * 64}\n"
+                    f"session-start\t{expected}\t-\n"
+                    f"pre-tool-use\t{expected}\t{'b' * 64}\n"
+                    f"post-tool-use\t{expected}\t{'b' * 64}\n"
+                    f"stop\t{expected}\t-\n"
+                ),
+                encoding="utf-8",
+            )
+            marker.chmod(0o600)
+
+            counts = _read_task_event_counts(
+                marker,
+                probe_nonce=nonce,
+                session_id="expected",
+            )
+
+            self.assertEqual(1, counts["session-start"])
+            self.assertEqual(1, counts["pre-tool-use"])
+            self.assertEqual(1, counts["post-tool-use"])
+            self.assertEqual(1, counts["stop"])
 
     def test_checkpoint_hooks_trusted_returns_single_test_task(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -2013,6 +2049,30 @@ text(JSON.stringify(r));
             _assert_no_tooluseproxy_collision(state, stage="plan")
 
         self.assertEqual("tooluseproxy_collision", raised.exception.code)
+
+    def test_collision_check_refuses_existing_phase_b_plugin_data(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            codex_home = Path(temporary_directory).resolve()
+            data = (
+                codex_home
+                / "plugins"
+                / "data"
+                / "tooluseproxy-tooluseproxy-desktop-phase-b"
+            )
+            data.mkdir(parents=True)
+            state = {
+                "plugins": [],
+                "marketplace_names": ["openai-bundled"],
+            }
+
+            with self.assertRaises(DesktopPhaseBFailure) as raised:
+                _assert_no_tooluseproxy_collision(
+                    state,
+                    stage="plan",
+                    codex_home=codex_home,
+                )
+
+            self.assertEqual("tooluseproxy_collision", raised.exception.code)
 
     def test_shared_state_cas_uses_inventory_config_and_versions(self) -> None:
         before = self._shared_state()
