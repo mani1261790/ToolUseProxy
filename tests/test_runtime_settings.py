@@ -26,11 +26,55 @@ from hook_monitor.runtime.storage import CURRENT_SCHEMA_VERSION, EventStore
 from hook_monitor.runtime.workspace import resolve_workspace
 from tooluseproxy.cli import (
     SETUP_PROFILE_FILE_PAYLOAD_EXACT,
+    _plugin_manifest_version_matches_runtime,
     main as tooluseproxy_main,
 )
 
 
 class RuntimeSettingsDomainTest(unittest.TestCase):
+    def test_plugin_manifest_version_accepts_exact_phase_b_build(self) -> None:
+        self.assertTrue(
+            _plugin_manifest_version_matches_runtime(
+                "0.1.0-alpha.9.desktop-phase-b.58ebca0a0216",
+                "0.1.0a9",
+            )
+        )
+        self.assertTrue(
+            _plugin_manifest_version_matches_runtime(
+                "1.2.3-desktop-phase-b.fedcba987654",
+                "1.2.3",
+            )
+        )
+        self.assertTrue(
+            _plugin_manifest_version_matches_runtime(
+                "0.1.0-alpha.9",
+                "0.1.0a9",
+            )
+        )
+
+    def test_plugin_manifest_version_rejects_unapproved_suffixes(self) -> None:
+        rejected = (
+            ("0.1.0-alpha.9.desktop-phase-b.58ebca0a021", "0.1.0a9"),
+            ("0.1.0-alpha.9.desktop-phase-b.58ebca0a02160", "0.1.0a9"),
+            ("0.1.0-alpha.9.desktop-phase-b.58ebca0a021Z", "0.1.0a9"),
+            ("0.1.0-alpha.9.desktop-phase-b.58EBCA0A0216", "0.1.0a9"),
+            (
+                "0.1.0-alpha.9.desktop-phase-b.58ebca0a0216.extra",
+                "0.1.0a9",
+            ),
+            ("0.1.0-alpha.9.arbitrary.58ebca0a0216", "0.1.0a9"),
+            ("invalid-alpha.9.desktop-phase-b.58ebca0a0216", "invalida9"),
+            ("1.2.4-desktop-phase-b.fedcba987654", "1.2.3"),
+        )
+        for manifest_version, runtime_version in rejected:
+            with self.subTest(manifest_version=manifest_version):
+                self.assertFalse(
+                    _plugin_manifest_version_matches_runtime(
+                        manifest_version,
+                        runtime_version,
+                    )
+                )
+
     def test_revision_is_deterministic_and_key_order_independent(self) -> None:
         first = make_workspace_runtime_settings(
             "workspace",
