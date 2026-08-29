@@ -25,6 +25,10 @@ class SourceConfigError(ValueError):
     """Raised when the protected sources config is malformed."""
 
 
+class ProtectedSourceUnavailableError(ValueError):
+    """Raised when a registered source no longer resolves to a safe file."""
+
+
 SCOPED_SOURCE_ID_VERSION = "protected_source_v1"
 
 
@@ -115,7 +119,7 @@ def resolve_protected_source_path(
             raise ValueError
         return resolved
     except (OSError, RuntimeError, ValueError):
-        raise ValueError(
+        raise ProtectedSourceUnavailableError(
             "protected source path must be a non-symlink regular file inside workspace"
         ) from None
 

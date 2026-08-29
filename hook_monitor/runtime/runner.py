@@ -30,6 +30,7 @@ from hook_monitor.runtime.pre_tool_policy import (
     render_mcp_input_limit_deny,
 )
 from hook_monitor.runtime.externality_rules import (
+    classify_static_externality_hook_decision,
     conservative_function_tool_decision,
     failed_externality_hook_decision,
     prepare_externality_hook_decision,
@@ -316,6 +317,25 @@ def run_hook(
         resource_snapshots=post_snapshots,
     )
     externality_decision = None
+    recovery_externality_decision = None
+    if (
+        phase == "pre_tool_use"
+        and event_pre_tool_adapter in {"bash", "mcp"}
+        and _runtime_policy_workspace_enabled(event)
+    ):
+        try:
+            recovery_externality_decision = classify_static_externality_hook_decision(
+                event,
+                workspace_root=Path(event.workspace_root or ""),
+                trusted_plugin_root=(
+                    Path(os.environ["PLUGIN_ROOT"])
+                    if os.environ.get("PLUGIN_ROOT")
+                    else None
+                ),
+                plugin_data=store.db_path.parent,
+            )
+        except Exception:
+            recovery_externality_decision = failed_externality_hook_decision()
     if phase == "pre_tool_use" and event_pre_tool_adapter == "function":
         externality_decision = conservative_function_tool_decision(event.tool_name)
     elif (
@@ -374,6 +394,7 @@ def run_hook(
                     )
                 ),
                 externality_decision=externality_decision,
+                recovery_externality_decision=recovery_externality_decision,
             )
         except Exception:  # pragma: no cover - defensive hook boundary
             _emit_pre_tool_safety_stop("pre_tool_policy_failed")

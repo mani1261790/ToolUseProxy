@@ -4,9 +4,9 @@ ToolUseProxyは、AI coding agentがローカルの非公開情報を外部へ�
 
 たとえば、未公開コード、研究ノート、`.env`、設計方針などを`protected source`として登録します。ToolUseProxyはCodexのtool useをローカルで観測し、外部送信候補へ保護情報が到達していないかを確認します。
 
-本プロジェクトは[SecHack365](https://sechack365.nict.go.jp/)での研究・開発成果物です。`0.1.0-alpha.10`はrelease候補の検証中です。公開channelの`alpha.8`には下記のfail-open問題があり、未公開候補の`alpha.9`には旧設定が残るworkspaceで通常setupを完了できない問題があったため、alpha.10のfresh Desktop確認まで新規installと通常利用を一時停止してください。研究用public alphaであり、完成したDLP製品ではありません。
+本プロジェクトは[SecHack365](https://sechack365.nict.go.jp/)での研究・開発成果物です。`0.1.0-alpha.11`はrelease候補の検証中です。公開channelの`alpha.8`には下記のfail-open問題があり、未公開候補の`alpha.9`には旧設定から更新できない問題、`alpha.10`には移動・削除済みの保護対象が残るprojectで自己復旧できない問題がありました。alpha.11のfresh Desktop確認まで新規installと通常利用を一時停止してください。研究用public alphaであり、完成したDLP製品ではありません。
 
-> **以前の版から更新する場合:** `alpha.8`には、安全に確認できない外部payloadをblockせず実行する問題がありました。`alpha.9`を先行導入した環境では、互換性のある旧3設定へ不足設定を追加できずsetupが止まる問題がありました。`alpha.10`へ更新し、5 Hookを改めて確認してください。
+> **以前の版から更新する場合:** `alpha.8`には、安全に確認できない外部payloadをblockせず実行する問題がありました。`alpha.9`は互換旧設定から更新できず、`alpha.10`は登録後に移動・削除された保護対象があるとローカル診断まで止まりました。`alpha.11`へ更新し、5 Hookを改めて確認してください。
 
 - [5分クイックスタート](QUICKSTART.md)
 - [詳しいPlugin導入ガイド](docs/設定/Plugin導入.md)
@@ -41,7 +41,7 @@ Python 3.11または3.12と、Plugin対応のCodex CLIまたはCodex Desktopを�
 
 ### 1. Pluginをインストールする
 
-alpha.10のrelease gate完了前は、次のコマンドを実行しないでください。公開再開後は、検証済みreleaseだけを配信する`public-alpha`からインストールします。
+alpha.11のrelease gate完了前は、次のコマンドを実行しないでください。公開再開後は、検証済みreleaseだけを配信する`public-alpha`からインストールします。
 
 ```bash
 codex plugin marketplace add mani1261790/ToolUseProxy --ref public-alpha
@@ -98,7 +98,7 @@ adapterにない未知のcallは、raw commandやpathなどを含まない構造
 | --- | --- | --- |
 | Trace / Detect | 中核実装済み | tool I/O、file operation、内容対応から観測可能なprovenanceを再構成 |
 | Stop | alpha実装済み | 明示的に有効化したworkspaceで、既知adapterと未知のローカルToolを実行前判定。Stop再確認も提供 |
-| Plugin配布 | alpha.10 release gate中 | alpha.8からの別version upgrade、互換旧設定の原子的更新、clean artifact、lifecycle、隔離installを検証し、fresh Desktop確認後に公開channelを再開 |
+| Plugin配布 | alpha.11 release gate中 | alpha.8からの別version upgrade、互換旧設定の原子的更新、clean artifact、lifecycle、隔離installを検証し、fresh Desktop確認後に公開channelを再開 |
 | 外部性判定 | local保護は通常setupで有効 | adapter、bounded static analysis、未確認external payloadのfail-closed、Codex-only background judge、人間review済みrule。LLM providerは既定off |
 | 実network観測 | 評価専用 | Codex network proxyのOTLP eventは実行後かつtool単位join不能のため、production blockには不採用 |
 | hosted tool境界 | 緩和のみ | SessionStart / SubagentStartでprotected contentをhosted toolへ渡さないdeveloper contextを注入。Hook非可視のため技術的遮断ではない |
@@ -107,6 +107,7 @@ adapterにない未知のcallは、raw commandやpathなどを含まない構造
 
 - Hook内からnetwork、remote embedding、telemetryを使わない
 - protected sourceを自動登録しない
+- 移動・削除済みの保護対象は一括計画を示し、明示承認なしに登録を外さない
 - 候補本文、raw command、URL、host、path、credentialをExternality Judgeへ送らない
 - 初見unknownにprotected flowが到達した場合、background分類を待たず実行前に止める
 - 外部payloadのoption、file size、入力形式、内部処理を安全に確認しきれない場合はallowせず実行前に止める

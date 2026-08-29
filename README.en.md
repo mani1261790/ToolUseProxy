@@ -4,9 +4,9 @@ ToolUseProxy is a local-first research implementation for tracing information fl
 
 This project is a research and development outcome of [SecHack365](https://sechack365.nict.go.jp/).
 
-`0.1.0-alpha.10` is undergoing release-candidate validation. New installation and normal use are temporarily paused. The public alpha.8 release has the fail-open issue described below, while the unpublished alpha.9 candidate could not complete normal setup in a workspace with an older compatible settings subset. Alpha.10 keeps fail-closed externality protection and adds a revision-bound compatible setup path. It is a research alpha, not a complete DLP system.
+`0.1.0-alpha.11` is undergoing release-candidate validation. New installation and normal use are temporarily paused. The public alpha.8 release has the fail-open issue described below. The unpublished alpha.9 candidate could not update an older compatible settings subset, and alpha.10 could deadlock local diagnosis when registered sources had been moved or deleted. Alpha.11 keeps external or uncertain calls fail-closed while allowing statically proven local recovery and the exact fixed setup commands. It is a research alpha, not a complete DLP system.
 
-Users upgrading from alpha.8, or from an alpha.9 candidate installed for early testing, must upgrade to alpha.10 and review all five Hooks again. Alpha.8 could allow unsupported curl options or oversized file payloads without comparison, and an earlier three-Hook artifact reused the same alpha.8 version identifier.
+Users upgrading from alpha.8, alpha.9, or alpha.10 must upgrade to alpha.11 and review all five Hooks again. Alpha.8 could allow unsupported curl options or oversized file payloads without comparison, and an earlier three-Hook artifact reused the same alpha.8 version identifier.
 
 ToolUseProxy is licensed under the [Apache License 2.0](LICENSE).
 
@@ -22,7 +22,7 @@ ToolUseProxy is licensed under the [Apache License 2.0](LICENSE).
 
 ## Install the Plugin
 
-Do not run the following commands before the alpha.10 release gate is complete.
+Do not run the following commands before the alpha.11 release gate is complete.
 After publication resumes, install from the protected `public-alpha` release channel:
 
 ```bash
@@ -42,7 +42,7 @@ codex plugin marketplace upgrade tooluseproxy
 codex plugin list --json
 ```
 
-Use the immutable `v0.1.0-alpha.10` tag instead of `public-alpha` when reproducible version pinning matters. A pinned tag does not move when the marketplace is upgraded. Review the exact Hook definitions after installation or an update before trusting them. A changed matcher, command, or source invalidates the earlier trust decision; a Hook with `trustStatus: modified` must be reviewed again. Then follow the [Japanese five-minute quickstart](QUICKSTART.md) to initialize ToolUseProxy and review protected-source proposals in batches of up to ten. The CLI update path is tested, including replacement of the stale three-Hook alpha.8 artifact while preserving Plugin data.
+Use the immutable `v0.1.0-alpha.11` tag instead of `public-alpha` when reproducible version pinning matters. A pinned tag does not move when the marketplace is upgraded. Review the exact Hook definitions after installation or an update before trusting them. A changed matcher, command, or source invalidates the earlier trust decision; a Hook with `trustStatus: modified` must be reviewed again. Then follow the [Japanese five-minute quickstart](QUICKSTART.md) to initialize ToolUseProxy and review protected-source proposals in batches of up to ten. The CLI update path is tested, including replacement of the stale three-Hook alpha.8 artifact while preserving Plugin data.
 
 On Codex Desktop for macOS, the current five-Hook definition (`SessionStart`, `SubagentStart`, `PreToolUse`, `PostToolUse`, and `Stop`) passed a fresh August 22 run. The run verified two command approvals, one public side effect, zero protected side effects, one exact pre-execution block, and zero raw protected-value exposures. Earlier August 9 runs also covered data migration, backup rollback, direct Remove without Disable, saved-task revalidation, and atomic setup. Desktop task history records local shell calls as `exec_command`, while the canonical Hook matcher name is `Bash`; value-free markers, the Hook database, stable definition hashes, and task records remain the evidence boundary. Linux and Windows Desktop are not established by this result.
 

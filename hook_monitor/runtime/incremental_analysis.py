@@ -49,6 +49,7 @@ from hook_monitor.runtime.models import (
 )
 from hook_monitor.runtime.source_config import (
     DEFAULT_CONFIG_PATH,
+    ProtectedSourceUnavailableError,
     load_protected_sources,
     protected_source_selector_payload,
     resolve_protected_source_path,
@@ -612,13 +613,18 @@ def _load_source_manifest(
         digest = _stored_source_digest(workspace_id, sources, chunks)
         return digest, sources, None
 
-    sources = load_protected_sources(config_path, workspace_id=workspace_id)
-    digest = _source_manifest_digest(
-        config_path,
-        repo_root,
-        workspace_id,
-        sources,
-    )
+    try:
+        sources = load_protected_sources(config_path, workspace_id=workspace_id)
+        digest = _source_manifest_digest(
+            config_path,
+            repo_root,
+            workspace_id,
+            sources,
+        )
+    except (OSError, UnicodeError, ValueError):
+        raise ProtectedSourceUnavailableError(
+            "protected source configuration is unavailable"
+        ) from None
     return digest, sources, config_path
 
 

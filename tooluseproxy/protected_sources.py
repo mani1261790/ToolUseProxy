@@ -42,6 +42,8 @@ MAX_MANIFEST_SOURCES = 256
 MANIFEST_MIGRATION_KIND = "protected_sources_manifest_v1_to_v2"
 MANIFEST_MIGRATION_WRITER_VERSION = "protected-source-manifest-migration-v1"
 MANIFEST_MIGRATION_FORMATTING_POLICY = "utf8_2_space_lf"
+MANIFEST_RECONCILIATION_KIND = "protected_sources_unavailable_reconciliation"
+MANIFEST_RECONCILIATION_WRITER_VERSION = "protected-source-reconciliation-v1"
 MANIFEST_BACKUP_DIRECTORY = "manifest-backups"
 PROTECTED_SOURCE_SCANNER_VERSION = "protected-source-scan-v1"
 
@@ -350,6 +352,9 @@ _ERROR_MESSAGES = {
     "manifest_backup_unavailable": "the private manifest backup directory is unavailable",
     "manifest_backup_missing": "the original manifest backup required for recovery is missing",
     "manifest_backup_conflict": "the original manifest backup does not match the reviewed migration",
+    "manifest_reconciliation_not_required": "all registered protected sources are available",
+    "manifest_reconciliation_revision_invalid": "manifest reconciliation revision does not match the reviewed plan",
+    "manifest_reconciliation_conflict": "protected_sources.json changed after the reconciliation plan was created",
     "scan_limits_invalid": "protected source scan limits are invalid",
 }
 
@@ -726,6 +731,74 @@ class ProtectedSourceManifestMigrationResult:
         }
 
 
+@dataclass(frozen=True)
+class ProtectedSourceReconciliationPlan:
+    status: Literal["review_required", "clean"]
+    reconciliation_id: str | None
+    reconciliation_revision: str | None
+    source_count: int
+    unavailable_sources: tuple[tuple[str, str], ...]
+    remaining_source_count: int
+    manifest_sha256: str
+    result_manifest_sha256: str
+    backup_relative_path: str | None
+    encoded_manifest: bytes | None = field(default=None, repr=False, compare=False)
+
+    def to_public_payload(self) -> dict[str, object]:
+        return {
+            "schema_version": REGISTRATION_SCHEMA_VERSION,
+            "status": self.status,
+            "reconciliation_kind": MANIFEST_RECONCILIATION_KIND,
+            "reconciliation_id": self.reconciliation_id,
+            "reconciliation_revision": self.reconciliation_revision,
+            "source_count": self.source_count,
+            "unavailable_source_count": len(self.unavailable_sources),
+            "unavailable_sources": [
+                {"source_id": source_id, "path": path}
+                for source_id, path in self.unavailable_sources
+            ],
+            "remaining_source_count": self.remaining_source_count,
+            "manifest_sha256": self.manifest_sha256,
+            "result_manifest_sha256": self.result_manifest_sha256,
+            "backup_relative_path": self.backup_relative_path,
+            "source_file_changes": 0,
+            "review_required": self.status == "review_required",
+            "changes": (
+                []
+                if self.status == "clean"
+                else [
+                    "remove_unavailable_registrations",
+                    "preserve_available_registrations",
+                    "leave_source_files_unchanged",
+                    "create_private_exact_byte_backup",
+                ]
+            ),
+        }
+
+
+@dataclass(frozen=True)
+class ProtectedSourceReconciliationResult:
+    status: Literal["reconciled", "already_reconciled"]
+    reconciliation_id: str
+    removed_source_count: int
+    remaining_source_count: int
+    manifest_sha256: str
+    backup_relative_path: str
+
+    def to_public_payload(self) -> dict[str, object]:
+        return {
+            "schema_version": REGISTRATION_SCHEMA_VERSION,
+            "status": self.status,
+            "reconciliation_kind": MANIFEST_RECONCILIATION_KIND,
+            "reconciliation_id": self.reconciliation_id,
+            "removed_source_count": self.removed_source_count,
+            "remaining_source_count": self.remaining_source_count,
+            "manifest_sha256": self.manifest_sha256,
+            "backup_relative_path": self.backup_relative_path,
+            "source_file_changes": 0,
+        }
+
+
 def suggest_protected_source(
     workspace_root: Path,
     relative_path: str,
@@ -1070,6 +1143,144 @@ def apply_protected_source_manifest_migration(
             current_manifest_text=manifest_text,
             current_manifest_binding=manifest_binding,
             backup_root=backup_root,
+        )
+
+
+def plan_unavailable_source_reconciliation(
+    workspace_root: Path,
+    *,
+    workspace_id: str,
+    backup_root: Path,
+) -> ProtectedSourceReconciliationPlan:
+    """Plan removal of registrations whose files are no longer safely available."""
+
+    _validate_migration_workspace_id(workspace_id)
+    _validate_private_backup_root(backup_root)
+    with lock_protected_source_workspace(workspace_root) as workspace_lock:
+        root_fd, root_path, root_stat = _require_workspace_lock(
+            workspace_root,
+            workspace_lock,
+        )
+        manifest_text, manifest_binding = _read_manifest_text(
+            root_fd,
+            root_stat.st_dev,
+        )
+        plan = _build_unavailable_source_reconciliation_plan(
+            root_path,
+            workspace_id=workspace_id,
+            manifest_text=manifest_text,
+            manifest_binding=manifest_binding,
+        )
+        _verify_workspace_path(root_path, root_stat)
+        _, confirmed_binding = _read_manifest_text(root_fd, root_stat.st_dev)
+        if confirmed_binding != manifest_binding:
+            _raise("manifest_reconciliation_conflict")
+        return replace(plan, encoded_manifest=None)
+
+
+def apply_unavailable_source_reconciliation(
+    workspace_root: Path,
+    *,
+    workspace_id: str,
+    reconciliation_revision: str,
+    expected_manifest_sha256: str,
+    backup_root: Path,
+) -> ProtectedSourceReconciliationResult:
+    """Apply one exact reviewed unavailable-source reconciliation."""
+
+    _validate_migration_workspace_id(workspace_id)
+    _validate_reconciliation_revision(reconciliation_revision)
+    if _HEX_SHA256.fullmatch(expected_manifest_sha256) is None:
+        _raise("manifest_reconciliation_conflict")
+    _validate_private_backup_root(backup_root)
+    with lock_protected_source_workspace(workspace_root) as workspace_lock:
+        root_fd, root_path, root_stat = _require_workspace_lock(
+            workspace_root,
+            workspace_lock,
+        )
+        manifest_text, manifest_binding = _read_manifest_text(
+            root_fd,
+            root_stat.st_dev,
+        )
+        backup_relative_path = _reconciliation_backup_relative_path(
+            workspace_id,
+            expected_manifest_sha256,
+        )
+        if hmac.compare_digest(
+            manifest_binding.sha256,
+            expected_manifest_sha256,
+        ):
+            plan = _build_unavailable_source_reconciliation_plan(
+                root_path,
+                workspace_id=workspace_id,
+                manifest_text=manifest_text,
+                manifest_binding=manifest_binding,
+            )
+            _verify_reviewed_reconciliation(plan, reconciliation_revision)
+            assert plan.encoded_manifest is not None
+            assert plan.backup_relative_path is not None
+            assert plan.reconciliation_id is not None
+            _ensure_manifest_backup(
+                backup_root,
+                plan.backup_relative_path,
+                manifest_text.encode("utf-8"),
+            )
+            installed_sha256 = _install_migrated_manifest(
+                root_fd,
+                root_path,
+                root_stat,
+                workspace_id=workspace_id,
+                initial_binding=manifest_binding,
+                encoded=plan.encoded_manifest,
+            )
+            return ProtectedSourceReconciliationResult(
+                status="reconciled",
+                reconciliation_id=plan.reconciliation_id,
+                removed_source_count=len(plan.unavailable_sources),
+                remaining_source_count=plan.remaining_source_count,
+                manifest_sha256=installed_sha256,
+                backup_relative_path=plan.backup_relative_path,
+            )
+
+        try:
+            backup_text, backup_binding = _read_manifest_backup(
+                backup_root,
+                backup_relative_path,
+                missing_code="manifest_backup_missing",
+            )
+        except ProtectedSourceRegistrationError as exc:
+            if exc.code == "manifest_backup_missing":
+                _raise("manifest_reconciliation_conflict")
+            raise
+        if not hmac.compare_digest(
+            backup_binding.sha256,
+            expected_manifest_sha256,
+        ):
+            _raise("manifest_backup_conflict")
+        original_plan = _build_unavailable_source_reconciliation_plan(
+            root_path,
+            workspace_id=workspace_id,
+            manifest_text=backup_text,
+            manifest_binding=backup_binding,
+        )
+        _verify_reviewed_reconciliation(original_plan, reconciliation_revision)
+        if not hmac.compare_digest(
+            manifest_binding.sha256,
+            original_plan.result_manifest_sha256,
+        ):
+            _raise("manifest_reconciliation_conflict")
+        assert original_plan.reconciliation_id is not None
+        try:
+            os.fsync(root_fd)
+        except OSError:
+            _raise("manifest_durability_unknown")
+        return ProtectedSourceReconciliationResult(
+            status="already_reconciled",
+            reconciliation_id=original_plan.reconciliation_id,
+            removed_source_count=len(original_plan.unavailable_sources),
+            remaining_source_count=original_plan.remaining_source_count,
+            manifest_sha256=manifest_binding.sha256,
+            backup_relative_path=backup_relative_path,
         )
 
 
@@ -2980,6 +3191,163 @@ def _build_manifest_migration_plan(
     )
 
 
+def _build_unavailable_source_reconciliation_plan(
+    root_path: Path,
+    *,
+    workspace_id: str,
+    manifest_text: str,
+    manifest_binding: FileBinding,
+) -> ProtectedSourceReconciliationPlan:
+    manifest, schema_version, _ = _parse_manifest_for_migration(
+        manifest_text,
+        root_path,
+        validate_source_paths=False,
+    )
+    if schema_version != CURRENT_MANIFEST_SCHEMA_VERSION:
+        _raise("manifest_schema_legacy")
+    raw_sources = manifest.get("sources")
+    assert isinstance(raw_sources, list)
+    unavailable: list[tuple[str, str]] = []
+    remaining: list[object] = []
+    normalized_paths: set[str] = set()
+    for raw_source in raw_sources:
+        assert isinstance(raw_source, dict)
+        source_id = raw_source.get("id")
+        source_path = raw_source.get("path")
+        assert isinstance(source_id, str)
+        assert isinstance(source_path, str)
+        normalized_path = _normalized_reconciliation_path(root_path, source_path)
+        if normalized_path in normalized_paths:
+            _raise("manifest_duplicate_path")
+        normalized_paths.add(normalized_path)
+        try:
+            _canonical_manifest_source_path(root_path, source_path)
+        except ProtectedSourceRegistrationError as exc:
+            if exc.code != "manifest_source_invalid":
+                raise
+            unavailable.append((source_id, normalized_path))
+        else:
+            remaining.append(raw_source)
+
+    if not unavailable:
+        return ProtectedSourceReconciliationPlan(
+            status="clean",
+            reconciliation_id=None,
+            reconciliation_revision=None,
+            source_count=len(raw_sources),
+            unavailable_sources=(),
+            remaining_source_count=len(raw_sources),
+            manifest_sha256=manifest_binding.sha256,
+            result_manifest_sha256=manifest_binding.sha256,
+            backup_relative_path=None,
+        )
+    reconciled = dict(manifest)
+    reconciled["sources"] = remaining
+    encoded = _encode_manifest(reconciled)
+    _parse_and_validate_manifest(encoded.decode("utf-8"), root_path)
+    result_manifest_sha256 = hashlib.sha256(encoded).hexdigest()
+    backup_relative_path = _reconciliation_backup_relative_path(
+        workspace_id,
+        manifest_binding.sha256,
+    )
+    reconciliation_id, reconciliation_revision = _reconciliation_commitment(
+        workspace_id=workspace_id,
+        manifest_sha256=manifest_binding.sha256,
+        result_manifest_sha256=result_manifest_sha256,
+        unavailable_sources=tuple(unavailable),
+        backup_relative_path=backup_relative_path,
+    )
+    return ProtectedSourceReconciliationPlan(
+        status="review_required",
+        reconciliation_id=reconciliation_id,
+        reconciliation_revision=reconciliation_revision,
+        source_count=len(raw_sources),
+        unavailable_sources=tuple(unavailable),
+        remaining_source_count=len(remaining),
+        manifest_sha256=manifest_binding.sha256,
+        result_manifest_sha256=result_manifest_sha256,
+        backup_relative_path=backup_relative_path,
+        encoded_manifest=encoded,
+    )
+
+
+def _normalized_reconciliation_path(root_path: Path, source_path: str) -> str:
+    try:
+        candidate = Path(source_path).expanduser()
+        if not candidate.is_absolute():
+            candidate = root_path / candidate
+        lexical = Path(os.path.abspath(os.path.normpath(candidate)))
+        relative = lexical.relative_to(root_path)
+        if not relative.parts or any(part == ".." for part in relative.parts):
+            _raise("manifest_source_invalid")
+        return relative.as_posix()
+    except ProtectedSourceRegistrationError:
+        raise
+    except (OSError, RuntimeError, TypeError, ValueError):
+        _raise("manifest_source_invalid")
+
+
+def _reconciliation_backup_relative_path(
+    workspace_id: str,
+    manifest_sha256: str,
+) -> str:
+    namespace = hashlib.sha256(
+        (
+            MANIFEST_RECONCILIATION_WRITER_VERSION
+            + "\0"
+            + workspace_id
+        ).encode("utf-8")
+    ).hexdigest()
+    return (
+        f"{MANIFEST_BACKUP_DIRECTORY}/{namespace}/"
+        f"protected_sources.reconciliation.{manifest_sha256}.json"
+    )
+
+
+def _reconciliation_commitment(
+    *,
+    workspace_id: str,
+    manifest_sha256: str,
+    result_manifest_sha256: str,
+    unavailable_sources: tuple[tuple[str, str], ...],
+    backup_relative_path: str,
+) -> tuple[str, str]:
+    digest = hashlib.sha256(
+        _canonical_json_bytes(
+            {
+                "operation": MANIFEST_RECONCILIATION_KIND,
+                "writer_version": MANIFEST_RECONCILIATION_WRITER_VERSION,
+                "workspace_id": workspace_id,
+                "manifest_sha256": manifest_sha256,
+                "result_manifest_sha256": result_manifest_sha256,
+                "unavailable_sources": [
+                    {"source_id": source_id, "path": path}
+                    for source_id, path in unavailable_sources
+                ],
+                "backup_relative_path": backup_relative_path,
+            }
+        )
+    ).hexdigest()
+    return digest[:32], f"r1_{digest}"
+
+
+def _validate_reconciliation_revision(revision: str) -> None:
+    if re.fullmatch(r"r1_[0-9a-f]{64}", revision or "") is None:
+        _raise("manifest_reconciliation_revision_invalid")
+
+
+def _verify_reviewed_reconciliation(
+    plan: ProtectedSourceReconciliationPlan,
+    revision: str,
+) -> None:
+    if (
+        plan.status != "review_required"
+        or plan.reconciliation_revision is None
+        or not hmac.compare_digest(plan.reconciliation_revision, revision)
+    ):
+        _raise("manifest_reconciliation_revision_invalid")
+
+
 def _encode_migrated_manifest(
     manifest: Mapping[str, object],
     *,
@@ -3531,7 +3899,11 @@ def _open_private_backup_namespace(
         or parts[0] != MANIFEST_BACKUP_DIRECTORY
         or _HEX_SHA256.fullmatch(parts[1]) is None
         or re.fullmatch(
-            r"protected_sources\.schema-v1\.[0-9a-f]{64}\.json",
+            (
+                r"protected_sources\."
+                r"(?:schema-v1|reconciliation)\."
+                r"[0-9a-f]{64}\.json"
+            ),
             parts[2],
         )
         is None
