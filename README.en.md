@@ -22,7 +22,8 @@ ToolUseProxy is licensed under the [Apache License 2.0](LICENSE).
 
 ## Install the Plugin
 
-For normal alpha use, install from the protected `public-alpha` release channel:
+Do not run the following commands before the alpha.10 release gate is complete.
+After publication resumes, install from the protected `public-alpha` release channel:
 
 ```bash
 codex plugin marketplace add mani1261790/ToolUseProxy --ref public-alpha

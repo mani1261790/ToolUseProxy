@@ -41,6 +41,8 @@ Python 3.11または3.12と、Plugin対応のCodex CLIまたはCodex Desktopを�
 
 ### 1. Pluginをインストールする
 
+alpha.10のrelease gate完了前は、次のコマンドを実行しないでください。公開再開後は、検証済みreleaseだけを配信する`public-alpha`からインストールします。
+
 ```bash
 codex plugin marketplace add mani1261790/ToolUseProxy --ref public-alpha
 codex plugin add tooluseproxy@tooluseproxy
