@@ -1,6 +1,6 @@
 # ToolUseProxy 5分クイックスタート
 
-> **一時停止中:** `alpha.9`のfresh Desktop release gateが完了するまで、新規installと`public-alpha`からの通常利用を開始しないでください。既存の`alpha.8`には安全に確認できない外部payloadを許可する問題があります。
+> **一時停止中:** `alpha.10`のfresh Desktop release gateが完了するまで、新規installと`public-alpha`からの通常利用を開始しないでください。公開channelの`alpha.8`には安全に確認できない外部payloadを許可する問題があります。
 
 release gate完了後、この手順では検証済みの公開alphaを保護branch `public-alpha`からインストールします。開発中の変更を含む`main`は、通常利用のインストール元にしないでください。
 
@@ -26,12 +26,12 @@ MarketplaceとPluginのインストールは、Codex環境ごとに1回だけで
 特定versionへ固定する場合は、1つ目のコマンドで`public-alpha`の代わりにimmutable tagを指定します。
 
 ```bash
-codex plugin marketplace add mani1261790/ToolUseProxy --ref v0.1.0-alpha.9
+codex plugin marketplace add mani1261790/ToolUseProxy --ref v0.1.0-alpha.10
 ```
 
 ## 3. 5つのHookを確認してTrustする
 
-`alpha.8`以前を使っていた場合は、先に`codex plugin marketplace upgrade tooluseproxy`を実行し、`codex plugin list --json`で`0.1.0-alpha.9`になったことを確認してください。同じ版番号の古い3 Hook cacheが残る問題を避けるため、alpha.8のまま使い続けないでください。
+`alpha.8`以前、または先行導入した`alpha.9`を使っていた場合は、先に`codex plugin marketplace upgrade tooluseproxy`を実行し、`codex plugin list --json`で`0.1.0-alpha.10`になったことを確認してください。古い版のまま使い続けないでください。
 
 Codexが表示するHookを、次の条件と照合してください。
 
