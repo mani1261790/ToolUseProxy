@@ -18,8 +18,8 @@ BASELINE_COMMIT = "22974427ab62e55a00d21af164d8fc837cb5e8b7"
 BASELINE_PLUGIN_VERSION = "0.1.0-alpha.1"
 STALE_ALPHA8_COMMIT = "4f771d0099e60957cebaa35125fb53a0fc62af4f"
 STALE_ALPHA8_VERSION = "0.1.0-alpha.8"
-CURRENT_PLUGIN_VERSION = "0.1.0-alpha.9"
-CURRENT_PYTHON_VERSION = "0.1.0a9"
+CURRENT_PLUGIN_VERSION = "0.1.0-alpha.10"
+CURRENT_PYTHON_VERSION = "0.1.0a10"
 UPDATE_REF = "public-alpha-test"
 
 
@@ -33,7 +33,7 @@ class _QuietRequestHandler(http.server.SimpleHTTPRequestHandler):
     "Codex CLI and Git are required for marketplace upgrade rehearsal",
 )
 class CodexMarketplaceUpgradeTest(unittest.TestCase):
-    def test_same_named_stale_alpha8_is_replaced_by_alpha9(self) -> None:
+    def test_same_named_stale_alpha8_is_replaced_by_alpha10(self) -> None:
         with tempfile.TemporaryDirectory(
             prefix="tooluseproxy-stale-alpha8-upgrade-"
         ) as temporary_directory:

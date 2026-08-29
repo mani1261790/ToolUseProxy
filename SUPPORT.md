@@ -1,6 +1,6 @@
 # サポート範囲と既知の制限
 
-ToolUseProxy `0.1.0-alpha.9`はrelease候補の検証中です。既存の`alpha.8`にfail-open問題があるため、fresh Desktop gateと公開昇格が完了するまで新規installと通常利用を一時停止しています。本番環境向けのSLA、security certification、完全なDLP、全toolの遮断保証は提供しません。対応と未対応をsilent fallbackで同一視せず、次の範囲を現在の契約とします。
+ToolUseProxy `0.1.0-alpha.10`はrelease候補の検証中です。公開channelの`alpha.8`にfail-open問題があり、先行検証用`alpha.9`の通常setupにも互換旧設定から更新できない問題があったため、alpha.10のfresh Desktop gateと公開昇格が完了するまで新規installと通常利用を一時停止しています。本番環境向けのSLA、security certification、完全なDLP、全toolの遮断保証は提供しません。対応と未対応をsilent fallbackで同一視せず、次の範囲を現在の契約とします。
 
 ## 実行環境
 
@@ -22,7 +22,7 @@ POSIX launcherもpackage metadataと同じPython 3.11 / 3.12だけを選びま�
 ## Codex Plugin
 
 - localでCodex CLIのmarketplace add / Plugin installを検証済み
-- Gitのmoving refを使う`codex plugin marketplace upgrade`で、alpha.1および正式公開前の3 Hook alpha.8からalpha.9へ置き換わり、Plugin dataが保持されることを実Codex CLIで自動検証
+- Gitのmoving refを使う`codex plugin marketplace upgrade`で、alpha.1および正式公開前の3 Hook alpha.8からalpha.10へ置き換わり、Plugin dataが保持されることを実Codex CLIで自動検証
 - Hook definitionのreview / trustを迂回しない
 - MCPはread-only名でもqueryをserverへ送るexternal boundaryとして扱う。上限内の全key/valueとactive source全体の比較を完了できたpublic inputだけを許可し、一致・上限超過・比較失敗は実行前deny
 - install後のcodeは`PLUGIN_ROOT`、mutable dataは`PLUGIN_DATA`へ分離
@@ -67,7 +67,7 @@ Codex Plugin APIやHook payloadはToolUseProxyとは別に変更され得ます�
 - candidate retrievalはartifact 50 / source 200の有限上限を持つ
 - local SQLiteにはraw Hook payloadやprotected source由来textが平文で残り得る
 - database、backup、trace exportの自動retention / secure eraseはない
-- moving marketplace refによるalpha.1およびstale alpha.8からalpha.9へのnative upgrade、immutable baselineからalpha.9へのlifecycle upgrade、backupを使うsafe rollback、Plugin / marketplace remove、data保持 / 明示uninstallはisolated Codex CLIで検証済み。Linux実Codex CLI、Windows実機、将来version間の反復は未完了
+- moving marketplace refによるalpha.1およびstale alpha.8からalpha.10へのnative upgrade、immutable baselineからalpha.10へのlifecycle upgrade、backupを使うsafe rollback、Plugin / marketplace remove、data保持 / 明示uninstallはisolated Codex CLIで検証済み。Linux実Codex CLI、Windows実機、将来version間の反復は未完了
 - runtime policyは他のHookやtool自体をexclusiveに制御できず、ToolUseProxy単独で完全な外部送信防止を保証しない
 - Externality JudgeのCodex routeは事前probe合格と24時間以内のreceiptを要求する。実測latencyは約3.4〜6.3秒だが、この待ち時間はHook外workerに限定され、PreToolUseには入らない
 
