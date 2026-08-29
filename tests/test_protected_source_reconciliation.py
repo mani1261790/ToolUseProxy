@@ -132,6 +132,30 @@ class ProtectedSourceReconciliationTest(unittest.TestCase):
 
         self.assertEqual("manifest_reconciliation_conflict", caught.exception.code)
 
+    def test_apply_rejects_non_string_commitments_with_stable_codes(self) -> None:
+        with self.assertRaises(ProtectedSourceRegistrationError) as revision_error:
+            apply_unavailable_source_reconciliation(
+                self.root,
+                workspace_id="workspace-test",
+                reconciliation_revision=1,  # type: ignore[arg-type]
+                expected_manifest_sha256="a" * 64,
+                backup_root=self.backup_root,
+            )
+        self.assertEqual(
+            "manifest_reconciliation_revision_invalid",
+            revision_error.exception.code,
+        )
+
+        with self.assertRaises(ProtectedSourceRegistrationError) as hash_error:
+            apply_unavailable_source_reconciliation(
+                self.root,
+                workspace_id="workspace-test",
+                reconciliation_revision="r1_" + "a" * 64,
+                expected_manifest_sha256=1,  # type: ignore[arg-type]
+                backup_root=self.backup_root,
+            )
+        self.assertEqual("manifest_reconciliation_conflict", hash_error.exception.code)
+
     def test_clean_manifest_requires_no_review(self) -> None:
         payload = json.loads(self.manifest_path.read_text(encoding="utf-8"))
         payload["sources"] = payload["sources"][:1]
@@ -197,6 +221,37 @@ class ProtectedSourceReconciliationTest(unittest.TestCase):
         self.assertEqual(0, apply_exit)
         applied = json.loads(apply_stdout.getvalue())
         self.assertEqual("reconciled", applied["status"])
+
+    def test_cli_text_plan_includes_paths_and_apply_commitments(self) -> None:
+        db_path = self.backup_root / "events.db"
+        store = EventStore(db_path)
+        store.initialize()
+        workspace = resolve_workspace(
+            str(self.root),
+            str(self.root),
+            discovered_by="test",
+        )
+        store.register_workspace(workspace)
+        stdout = StringIO()
+
+        with redirect_stdout(stdout):
+            exit_code = tooluseproxy_main(
+                [
+                    "protect",
+                    "reconcile",
+                    "plan",
+                    "--workspace",
+                    str(self.root),
+                    "--db",
+                    str(db_path),
+                ]
+            )
+
+        self.assertEqual(0, exit_code)
+        rendered = stdout.getvalue()
+        self.assertIn("reconciliation_revision: r1_", rendered)
+        self.assertIn("moved/missing.md", rendered)
+        self.assertIn("unavailable_source_count: 1", rendered)
 
     def test_setup_reports_reconciliation_instead_of_generic_failure(self) -> None:
         db_path = self.backup_root / "events.db"

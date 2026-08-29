@@ -321,6 +321,7 @@ def run_hook(
     if (
         phase == "pre_tool_use"
         and event_pre_tool_adapter in {"bash", "mcp"}
+        and event_pre_tool_adapter in enabled_pre_tool_adapters
         and _runtime_policy_workspace_enabled(event)
     ):
         try:

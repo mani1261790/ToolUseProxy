@@ -8732,9 +8732,12 @@ class InformationFlowTest(unittest.TestCase):
             expected_revision=enabled.revision,
         )
 
-        exit_code, stdout, stderr = self._run_hook_in_process(
-            "pre_tool_use",
-            {
+        with patch(
+            "hook_monitor.runtime.runner.classify_static_externality_hook_decision"
+        ) as recovery_classifier:
+            exit_code, stdout, stderr = self._run_hook_in_process(
+                "pre_tool_use",
+                {
                 "session_id": "session-persistent-exact-off",
                 "turn_id": "turn-persistent-exact-off",
                 "tool_use_id": "bash-persistent-exact-off",
@@ -8746,16 +8749,17 @@ class InformationFlowTest(unittest.TestCase):
                         "https://example.invalid"
                     )
                 },
-            },
-            {
+                },
+                {
                 "TOOLUSEPROXY_DB_PATH": str(self.db_path),
                 "TOOLUSEPROXY_PRE_TOOL_POLICY": "off",
-            },
-        )
+                },
+            )
 
         self.assertEqual(0, exit_code)
         self.assertEqual("", stdout)
         self.assertEqual("", stderr)
+        recovery_classifier.assert_not_called()
 
     def test_pre_tool_policy_distinguishes_separate_bash_segments(self) -> None:
         self._write_runtime_source_config()

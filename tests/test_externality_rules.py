@@ -7,6 +7,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import hook_monitor.runtime.externality_rules as externality_rules
+
 from hook_monitor.externality.models import ExternalityVerdict
 from hook_monitor.externality.providers import JudgeChainResult, JudgeObservation
 from hook_monitor.runtime.externality_rules import (
@@ -110,6 +112,24 @@ class ExternalityRuleTest(unittest.TestCase):
         self.assertEqual("pending", row[1])
         self.assertNotIn(canary, row[0])
         self.assertNotIn("opaque-agent", row[0])
+
+    def test_ambiguous_hook_performs_static_analysis_once(self) -> None:
+        event = self._event("./opaque-agent --local-only")
+
+        with patch.object(
+            externality_rules,
+            "analyze_bash_externality",
+            wraps=externality_rules.analyze_bash_externality,
+        ) as analyzer:
+            decision = prepare_externality_hook_decision(
+                self.db_path,
+                event,
+                workspace_root=self.root,
+            )
+
+        assert decision is not None
+        self.assertEqual("queued", decision.state)
+        analyzer.assert_called_once()
 
     def test_static_external_is_immediate_and_never_queued_or_sent_to_llm(self) -> None:
         command = (

@@ -14,6 +14,7 @@ from hook_monitor.analysis.adapters.bash import classify_bash_sink_type
 from hook_monitor.analysis.adapters.mcp import classify_mcp_sink_type
 from hook_monitor.externality.configuration import resolve_judge_configuration
 from hook_monitor.externality.envelope import (
+    StaticExternalityResult,
     analyze_bash_externality,
     analyze_mcp_externality,
 )
@@ -111,13 +112,31 @@ def classify_static_externality_hook_decision(
 ) -> ExternalityHookDecision | None:
     """Classify without queue, cache, provider, or network activity."""
 
+    decision, _ = _classify_static_externality_hook_decision(
+        event,
+        workspace_root=workspace_root,
+        trusted_plugin_root=trusted_plugin_root,
+        plugin_data=plugin_data,
+    )
+    return decision
+
+
+def _classify_static_externality_hook_decision(
+    event: NormalizedEvent,
+    *,
+    workspace_root: Path,
+    trusted_plugin_root: Path | None,
+    plugin_data: Path | None,
+) -> tuple[ExternalityHookDecision | None, StaticExternalityResult | None]:
+    """Return one static decision and the already-computed value-free result."""
+
     if event.phase != "pre_tool_use" or event.workspace_status != "ready":
-        return None
+        return None, None
     tool_input = event.raw_payload.get("tool_input")
     if is_enforced_shell_tool(event.tool_name):
         command = shell_command_from_input(event.tool_name, tool_input)
         if command is None:
-            return None
+            return None, None
         if plugin_data is not None:
             trusted_setup_operation = _trusted_local_recovery_operation(
                 command,
@@ -131,7 +150,7 @@ def classify_static_externality_hook_decision(
                     + b"\0"
                     + trusted_setup_operation.encode("ascii")
                 ).hexdigest()
-                return ExternalityHookDecision(digest, "known_local")
+                return ExternalityHookDecision(digest, "known_local"), None
         static = analyze_bash_externality(
             command,
             workspace_root=workspace_root,
@@ -146,13 +165,13 @@ def classify_static_externality_hook_decision(
         static = analyze_mcp_externality(event.tool_name, tool_input)
         adapter_external = classify_mcp_sink_type(event.tool_name, tool_input) is not None
     else:
-        return None
+        return None, None
     digest = static.envelope.digest_sha256()
     if adapter_external or static.verdict == "external":
-        return ExternalityHookDecision(digest, "known_external")
+        return ExternalityHookDecision(digest, "known_external"), static
     if static.verdict == "local":
-        return ExternalityHookDecision(digest, "known_local")
-    return ExternalityHookDecision(digest, "analysis_failed")
+        return ExternalityHookDecision(digest, "known_local"), static
+    return ExternalityHookDecision(digest, "analysis_failed"), static
 
 
 def prepare_externality_hook_decision(
@@ -163,7 +182,7 @@ def prepare_externality_hook_decision(
     trusted_plugin_root: Path | None = None,
 ) -> ExternalityHookDecision | None:
     """Perform only bounded static analysis and local SQLite work in the Hook."""
-    static_decision = classify_static_externality_hook_decision(
+    static_decision, static = _classify_static_externality_hook_decision(
         event,
         workspace_root=workspace_root,
         trusted_plugin_root=trusted_plugin_root,
@@ -171,30 +190,13 @@ def prepare_externality_hook_decision(
     )
     if static_decision is None or static_decision.state != "analysis_failed":
         return static_decision
+    assert static is not None
     digest = static_decision.envelope_sha256
     if event.workspace_id is None:
         return None
     rule = lookup_externality_rule(db_path, event.workspace_id, digest)
     if rule is not None:
         return ExternalityHookDecision(digest, "cache_hit", rule)
-    tool_input = event.raw_payload.get("tool_input")
-    if is_enforced_shell_tool(event.tool_name):
-        command = shell_command_from_input(event.tool_name, tool_input)
-        if command is None:
-            return None
-        static = analyze_bash_externality(
-            command,
-            workspace_root=workspace_root,
-            cwd=Path(event.workspace_execution_cwd or workspace_root),
-        )
-    elif (
-        isinstance(tool_input, dict)
-        and event.tool_name
-        and event.tool_name.startswith("mcp__")
-    ):
-        static = analyze_mcp_externality(event.tool_name, tool_input)
-    else:
-        return None
     queue_externality_envelope(db_path, event.workspace_id, static.envelope)
     return ExternalityHookDecision(digest, "queued")
 

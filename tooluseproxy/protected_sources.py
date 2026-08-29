@@ -1190,7 +1190,10 @@ def apply_unavailable_source_reconciliation(
 
     _validate_migration_workspace_id(workspace_id)
     _validate_reconciliation_revision(reconciliation_revision)
-    if _HEX_SHA256.fullmatch(expected_manifest_sha256) is None:
+    if (
+        not isinstance(expected_manifest_sha256, str)
+        or _HEX_SHA256.fullmatch(expected_manifest_sha256) is None
+    ):
         _raise("manifest_reconciliation_conflict")
     _validate_private_backup_root(backup_root)
     with lock_protected_source_workspace(workspace_root) as workspace_lock:
@@ -3332,7 +3335,10 @@ def _reconciliation_commitment(
 
 
 def _validate_reconciliation_revision(revision: str) -> None:
-    if re.fullmatch(r"r1_[0-9a-f]{64}", revision or "") is None:
+    if (
+        not isinstance(revision, str)
+        or re.fullmatch(r"r1_[0-9a-f]{64}", revision) is None
+    ):
         _raise("manifest_reconciliation_revision_invalid")
 
 
