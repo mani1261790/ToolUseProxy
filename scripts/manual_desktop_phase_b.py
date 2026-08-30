@@ -2478,13 +2478,23 @@ def _assert_no_tooluseproxy_collision(
     plugin_collisions = [
         item
         for item in state["plugins"]
-        if item.get("name") == PLUGIN_NAME
-        or str(item.get("pluginId", "")).startswith(f"{PLUGIN_NAME}@")
+        if (
+            str(item.get("pluginId", "")) == PLUGIN_ID
+            or (
+                (
+                    item.get("name") == PLUGIN_NAME
+                    or str(item.get("pluginId", "")).startswith(
+                        f"{PLUGIN_NAME}@"
+                    )
+                )
+                and item.get("enabled") is not False
+            )
+        )
     ]
     marketplace_collisions = [
         name
         for name in state["marketplace_names"]
-        if str(name).startswith("tooluseproxy")
+        if str(name) == MARKETPLACE_NAME
     ]
     data_collision = False
     if codex_home is not None:

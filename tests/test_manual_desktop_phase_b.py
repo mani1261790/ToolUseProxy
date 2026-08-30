@@ -2035,12 +2035,13 @@ text(JSON.stringify(r));
                 raised.exception.code,
             )
 
-    def test_collision_check_refuses_any_tooluseproxy_plugin(self) -> None:
+    def test_collision_check_refuses_enabled_tooluseproxy_plugin(self) -> None:
         state = {
             "plugins": [
                 {
                     "pluginId": "tooluseproxy@another-marketplace",
                     "name": "tooluseproxy",
+                    "enabled": True,
                 }
             ],
             "marketplace_names": ["openai-bundled"],
@@ -2050,6 +2051,20 @@ text(JSON.stringify(r));
             _assert_no_tooluseproxy_collision(state, stage="plan")
 
         self.assertEqual("tooluseproxy_collision", raised.exception.code)
+
+    def test_collision_check_allows_disabled_normal_tooluseproxy(self) -> None:
+        state = {
+            "plugins": [
+                {
+                    "pluginId": "tooluseproxy@tooluseproxy",
+                    "name": "tooluseproxy",
+                    "enabled": False,
+                }
+            ],
+            "marketplace_names": ["tooluseproxy", "openai-bundled"],
+        }
+
+        _assert_no_tooluseproxy_collision(state, stage="plan")
 
     def test_collision_check_refuses_existing_phase_b_plugin_data(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
