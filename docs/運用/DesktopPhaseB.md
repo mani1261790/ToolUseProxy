@@ -4,7 +4,7 @@ Issue [#53](https://github.com/mani1261790/ToolUseProxy/issues/53)では、CLI T
 
 ## 現在地
 
-専用harnessは実装済みです。2026-07-28以降、Codex Desktop同梱のCodexで人による実機確認を行いました。2026-08-28までの結果は次のとおりです。
+専用harnessは実装済みです。2026-07-28以降、Codex Desktop同梱のCodexで人による実機確認を行いました。2026-08-31までの結果は次のとおりです。
 
 | 段階 | 結果 |
 | --- | --- |
@@ -20,6 +20,7 @@ Issue [#53](https://github.com/mani1261790/ToolUseProxy/issues/53)では、CLI T
 | 2-command setup | fresh Desktopで承認UI 2回を確認。説明はある程度理解可能。public 1 / protected 0 / exact block 1 / raw exposure 0で正式な`passed` |
 | alpha.8の5 Hook fresh run | SessionStart / SubagentStart / PreToolUse / PostToolUse / Stopをtrust。承認UI 2回、public 1 / protected 0 / exact block 1 / raw exposure 0、reusable permission 0で正式な`passed` |
 | alpha.9の単一task fresh run | 2026-08-28に正式な`passed`。承認UI 2回、public実行、static / dynamic protectedはどちらも実行前block、raw exposure 0、余分なtool call 0 |
+| alpha.12 current-invocation fresh run | 2026-08-31に全35 checksがtrue。承認UI 2回、public side effect 1、static / dynamic protected side effect各0、実行前block各1、raw exposure 0、余分なtool call 0 |
 | public / protected call | publicは実行、protectedはPreToolUseが実行前block |
 | disable / remove / 同一版reinstall | 管理DBとruntime設定を保持したまま完走 |
 | final cleanup | Plugin、Marketplace、管理データ、synthetic workspaceを削除。他のPlugin / Marketplace一覧は開始時と一致 |
@@ -34,6 +35,12 @@ Desktopのtask履歴で使われる`exec_command`は、Hook matcherのtool名で
 2026-08-22のalpha.8 fresh runでは、5 Hookをtrustした状態で同じ証拠境界を再検証しました。`true` probeは1回だけ実行され、PreToolUse / PostToolUse / Stopが各1回、SessionStart / SubagentStartも現在定義として確認されました。setup applyとread-only verifyで承認UIは合計2回、public callは実行、protected callは実行前blockでした。最終verifyは全26 checksがtrueで、public side effect 1、protected side effect 0、exact block 1、raw exposure 0、reusable permission 0です。Plugin、marketplace、managed dataは最終cleanupで削除し、無関係なPlugin状態は維持しました。
 
 alpha.9でcase IDを`desktop-file-payload-exact-dynamic-v2`へ更新しました。従来のstatic protected fileに加え、同じ登録済みdotenvを`source`した次行で`$PHASE_B_TOKEN`をlocal fake sinkへ渡すdynamic protected callを第三のexact callとして固定しています。値は読み取り・展開・表示せず、sessionの改行をflattenしないexact command、PreToolUse 1 / PostToolUse 0、fail-closed decision 1、専用marker 0、raw exposure 0を別々に照合します。2026-08-28のfresh runではstatic / dynamicの両方がこの条件を満たしました。
+
+alpha.12ではcase IDを`desktop-file-payload-exact-dynamic-v3`へ更新しました。setup verification commandへ毎回新しいopaque probe tokenを付け、そのcommand自身のPreToolUse eventと実行中Plugin artifactを照合します。alpha.9のv2合格は当時のblock証拠として保持しますが、alpha.12のcurrent-invocation healthには流用しません。
+
+2026-08-31のfresh runでは、Desktop `26.825.41651`、同梱Codex `0.151.0-alpha.7.1`、source commit `2831075`から作った計測用alpha.12 bundleを使用しました。現在のDesktopが保存する、単一`tools.exec_command`を含む固定wrapperからpublic、static protected、dynamic protectedの3 commandを厳密に抽出できました。publicはPreToolUse / PostToolUse各1件とside effect 1件、protected 2件はそれぞれPreToolUse 1件、PostToolUse 0件、side effect 0件でした。この結果は固定wrapperだけの証拠であり、任意JavaScriptや他のnested toolへ一般化しません。
+
+同じrunでdisable、Remove、同一版reinstall、managed state再利用、final Remove、cleanupまで完走しました。Phase B Plugin、marketplace、約54 MiBの管理データ、synthetic workspaceを削除し、通常版ToolUseProxyを有効へ戻しました。検証reportと値を含まないlifecycle stateは保持しています。
 
 2026-08-28のfresh runでは、setup revisionの受け渡し、Desktop sessionの厳密な絞り込み、fresh Plugin dataの強制を追加した上で、全35 checksがtrueになりました。disable、remove、同一版reinstall、final remove、cleanupも完走し、Plugin、Marketplace、約38.8 MBの管理データ、synthetic workspaceを削除しました。無関係なPlugin / Marketplaceの一覧は開始時と一致しています。Codex configには無効な履歴が残るため、cleanup結果は`restored_with_inactive_config_residue`です。
 

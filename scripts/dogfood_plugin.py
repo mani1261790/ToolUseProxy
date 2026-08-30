@@ -5,6 +5,7 @@ import argparse
 import hashlib
 import json
 import os
+import secrets
 import shlex
 import shutil
 import sqlite3
@@ -425,9 +426,10 @@ def _run_dogfood(installation_mode: str) -> dict[str, Any]:
             raise DogfoodFailure(stage, "setup_profile_not_verified")
 
         stage = "status"
-        status = _run_plugin_json(
-            cli_launcher,
+        status_result = _run_command(
             [
+                "sh",
+                str(cli_launcher),
                 "status",
                 "--workspace",
                 str(workspace),
@@ -439,9 +441,11 @@ def _run_dogfood(installation_mode: str) -> dict[str, Any]:
             env=plugin_environment,
             stage=stage,
             captured_outputs=captured_outputs,
+            expected_returncodes=(1,),
         )
-        if status.get("status") != "active":
-            raise DogfoodFailure(stage, "runtime_not_active")
+        status = _parse_json(status_result.stdout, stage)
+        if status.get("status") != "configured_unverified":
+            raise DogfoodFailure(stage, "runtime_not_unverified_before_hook")
 
         public_file = workspace / PUBLIC_FILE
         public_file.write_text("DOGFOOD PUBLIC FILE\n", encoding="utf-8")
@@ -618,18 +622,42 @@ def _run_dogfood(installation_mode: str) -> dict[str, Any]:
         _assert_denied(protected_mcp, "protected_mcp")
 
         stage = "runtime_enforcement_verify"
+        verify_probe_token = f"tup-probe-v1-{secrets.token_hex(16)}"
+        verify_arguments = [
+            "setup",
+            "verify",
+            "file-payload-exact",
+            "--hook-probe-token",
+            verify_probe_token,
+            "--workspace",
+            str(workspace.resolve()),
+            "--data-dir",
+            str(data_dir),
+            "--json",
+        ]
+        verify_probe_output = _run_hook(
+            hook_launcher,
+            "pre-tool-use",
+            _pre_tool_payload(
+                workspace,
+                tool_use_id="dogfood-runtime-verify-probe",
+                tool_name="Bash",
+                tool_input={
+                    "command": shlex.join(
+                        ["sh", str(cli_launcher), *verify_arguments]
+                    )
+                },
+            ),
+            workspace,
+            plugin_environment,
+            f"{stage}_hook",
+            captured_outputs,
+        )
+        if verify_probe_output.strip():
+            raise DogfoodFailure(stage, "verification_probe_not_allowed")
         runtime_verified = _run_plugin_json(
             cli_launcher,
-            [
-                "setup",
-                "verify",
-                "file-payload-exact",
-                "--workspace",
-                str(workspace),
-                "--data-dir",
-                str(data_dir),
-                "--json",
-            ],
+            verify_arguments,
             cwd=workspace,
             env=plugin_environment,
             stage=stage,
@@ -638,12 +666,54 @@ def _run_dogfood(installation_mode: str) -> dict[str, Any]:
         runtime_evidence = runtime_verified.get("runtime_enforcement")
         if (
             not isinstance(runtime_evidence, dict)
-            or runtime_evidence.get("status") != "protected_block_observed"
+            or runtime_evidence.get("status")
+            != "current_invocation_protected_block_observed"
             or runtime_evidence.get("hook_delivery_verified") is not True
             or runtime_evidence.get("protected_block_verified") is not True
             or runtime_evidence.get("evidence_is_value_free") is not True
         ):
             raise DogfoodFailure(stage, "runtime_enforcement_not_verified")
+        status_probe_token = f"tup-probe-v1-{secrets.token_hex(16)}"
+        status_arguments = [
+            "status",
+            "--hook-probe-token",
+            status_probe_token,
+            "--workspace",
+            str(workspace.resolve()),
+            "--data-dir",
+            str(data_dir),
+            "--json",
+        ]
+        status_probe_output = _run_hook(
+            hook_launcher,
+            "pre-tool-use",
+            _pre_tool_payload(
+                workspace,
+                tool_use_id="dogfood-active-status-probe",
+                tool_name="Bash",
+                tool_input={
+                    "command": shlex.join(
+                        ["sh", str(cli_launcher), *status_arguments]
+                    )
+                },
+            ),
+            workspace,
+            plugin_environment,
+            "active_status_hook",
+            captured_outputs,
+        )
+        if status_probe_output.strip():
+            raise DogfoodFailure("active_status", "status_probe_not_allowed")
+        active_status = _run_plugin_json(
+            cli_launcher,
+            status_arguments,
+            cwd=workspace,
+            env=plugin_environment,
+            stage="active_status",
+            captured_outputs=captured_outputs,
+        )
+        if active_status.get("status") != "active":
+            raise DogfoodFailure("active_status", "runtime_not_active")
 
         stop = _run_hook_json(
             hook_launcher,
@@ -956,6 +1026,7 @@ def _run_command(
     input_text: str | None = None,
     stage: str,
     captured_outputs: list[str],
+    expected_returncodes: tuple[int, ...] = (0,),
 ) -> subprocess.CompletedProcess[str]:
     result = subprocess.run(
         command,
@@ -967,7 +1038,7 @@ def _run_command(
         check=False,
     )
     captured_outputs.extend((result.stdout, result.stderr))
-    if result.returncode != 0:
+    if result.returncode not in expected_returncodes:
         raise DogfoodFailure(stage, "command_failed")
     return result
 

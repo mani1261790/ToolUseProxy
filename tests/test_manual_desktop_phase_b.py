@@ -2035,12 +2035,13 @@ text(JSON.stringify(r));
                 raised.exception.code,
             )
 
-    def test_collision_check_refuses_any_tooluseproxy_plugin(self) -> None:
+    def test_collision_check_refuses_enabled_tooluseproxy_plugin(self) -> None:
         state = {
             "plugins": [
                 {
                     "pluginId": "tooluseproxy@another-marketplace",
                     "name": "tooluseproxy",
+                    "enabled": True,
                 }
             ],
             "marketplace_names": ["openai-bundled"],
@@ -2050,6 +2051,20 @@ text(JSON.stringify(r));
             _assert_no_tooluseproxy_collision(state, stage="plan")
 
         self.assertEqual("tooluseproxy_collision", raised.exception.code)
+
+    def test_collision_check_allows_disabled_normal_tooluseproxy(self) -> None:
+        state = {
+            "plugins": [
+                {
+                    "pluginId": "tooluseproxy@tooluseproxy",
+                    "name": "tooluseproxy",
+                    "enabled": False,
+                }
+            ],
+            "marketplace_names": ["tooluseproxy", "openai-bundled"],
+        }
+
+        _assert_no_tooluseproxy_collision(state, stage="plan")
 
     def test_collision_check_refuses_existing_phase_b_plugin_data(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -2997,6 +3012,7 @@ text(JSON.stringify(r));
             )
             setup_verify = (
                 f"sh {launcher} setup verify file-payload-exact "
+                f"--hook-probe-token {'tup-probe-v1-' + 'e' * 32} "
                 f"--workspace {workspace} --data-dir {plugin_data} --json"
             )
             self.assertTrue(_phase_b_command_allowed(setup_apply, **arguments))
@@ -3042,6 +3058,12 @@ text(JSON.stringify(r));
                     **arguments,
                 )
             )
+            self.assertFalse(
+                _phase_b_command_allowed(
+                    setup_verify.replace("e" * 32, "z" * 32),
+                    **arguments,
+                )
+            )
 
     def test_session_parser_counts_fixed_setup_profile_flow(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -3061,6 +3083,7 @@ text(JSON.stringify(r));
             )
             setup_verify = (
                 f"sh {launcher} setup verify file-payload-exact "
+                f"--hook-probe-token {'tup-probe-v1-' + 'f' * 32} "
                 f"--workspace {workspace} --data-dir {plugin_data} --json"
             )
             apply_reason = (

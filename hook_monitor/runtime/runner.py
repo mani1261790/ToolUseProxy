@@ -5,6 +5,7 @@ import os
 import re
 import sys
 from pathlib import Path
+from typing import Mapping
 
 from hook_monitor.analysis.adapters.mcp import (
     classify_mcp_sink_type,
@@ -67,6 +68,7 @@ def run_hook(
     *,
     db_path: Path | None = None,
     allow_schema_migration: bool = True,
+    runtime_attestation: Mapping[str, str] | None = None,
 ) -> int:
     resolved_db_path = db_path if db_path is not None else _resolve_db_path()
     store = EventStore(resolved_db_path)
@@ -195,6 +197,12 @@ def run_hook(
                 "Codex supplied a Hook payload that ToolUseProxy could not parse",
             )
         return 0
+
+    if runtime_attestation is not None:
+        payload["_tooluseproxy_runtime"] = {
+            str(key): str(value)
+            for key, value in sorted(runtime_attestation.items())
+        }
 
     payload_cwd = payload.get("cwd")
     configured_root = _configured_workspace_root(

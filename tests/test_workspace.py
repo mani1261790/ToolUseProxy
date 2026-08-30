@@ -427,9 +427,15 @@ class WorkspaceIdentityTest(unittest.TestCase):
         self.assertEqual(1, len(event_rows))
         self.assertTrue(all(row[0] == "workspace_root_path_missing" for row in event_rows))
         self.assertTrue(all((row[1] or "").startswith("ws_cfg_v1_") for row in event_rows))
+        stored_payload = json.loads(event_rows[0][2])
+        runtime_attestation = stored_payload.pop("_tooluseproxy_runtime")
+        self.assertEqual(
+            {"plugin_version", "runtime_version", "hooks_sha256"},
+            set(runtime_attestation),
+        )
         self.assertEqual(
             {**base_payload, "tool_response": {"exit_code": 0}},
-            json.loads(event_rows[0][2]),
+            stored_payload,
         )
         self.assertIsNone(operation)
         self.assertEqual(0, outcome_count)

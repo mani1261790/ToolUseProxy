@@ -4,6 +4,7 @@ import sqlite3
 import tempfile
 import unittest
 import json
+import hashlib
 from contextlib import redirect_stderr, redirect_stdout
 from datetime import UTC, datetime
 from io import StringIO
@@ -25,18 +26,35 @@ from hook_monitor.runtime.incremental_analysis import RUNTIME_GRAPH_DETECTOR_VER
 from hook_monitor.runtime.storage import CURRENT_SCHEMA_VERSION, EventStore
 from hook_monitor.runtime.workspace import resolve_workspace
 from tooluseproxy.cli import (
+    _analysis_run_covers_sequence,
     SETUP_PROFILE_FILE_PAYLOAD_EXACT,
     _plugin_manifest_version_matches_runtime,
     main as tooluseproxy_main,
 )
+from tooluseproxy import __version__
 
 
 class RuntimeSettingsDomainTest(unittest.TestCase):
+    def test_runtime_analysis_must_cover_probe_event_sequence(self) -> None:
+        self.assertTrue(
+            _analysis_run_covers_sequence(
+                '{"through_sequence_no": 12}',
+                12,
+            )
+        )
+        self.assertFalse(
+            _analysis_run_covers_sequence(
+                '{"through_sequence_no": 11}',
+                12,
+            )
+        )
+        self.assertFalse(_analysis_run_covers_sequence("{}", 12))
+
     def test_plugin_manifest_version_accepts_exact_phase_b_build(self) -> None:
         self.assertTrue(
             _plugin_manifest_version_matches_runtime(
-                "0.1.0-alpha.11.desktop-phase-b.58ebca0a0216",
-                "0.1.0a11",
+                "0.1.0-alpha.12.desktop-phase-b.58ebca0a0216",
+                "0.1.0a12",
             )
         )
         self.assertTrue(
@@ -47,8 +65,8 @@ class RuntimeSettingsDomainTest(unittest.TestCase):
         )
         self.assertTrue(
             _plugin_manifest_version_matches_runtime(
-                "0.1.0-alpha.11",
-                "0.1.0a11",
+                "0.1.0-alpha.12",
+                "0.1.0a12",
             )
         )
 
@@ -490,7 +508,8 @@ class RuntimeSettingsCliTest(unittest.TestCase):
                 "--json",
             ]
         )
-        self.assertEqual(0, exit_code)
+        self.assertEqual(1, exit_code)
+        self.assertEqual("inactive", status["status"])
         self.assertTrue(status["runtime_settings"]["ok"])
 
     def test_dependency_and_unknown_key_return_stable_errors(self) -> None:
@@ -602,7 +621,7 @@ class RuntimeSettingsCliTest(unittest.TestCase):
         self.assertEqual("configuration_passed", verified["status"])
         self.assertEqual("configuration_only", verified["verification_scope"])
         self.assertEqual(
-            "requires_fresh_hook_probe",
+            "requires_current_invocation_hook_probe",
             verified["runtime_enforcement"]["status"],
         )
         self.assertFalse(
@@ -910,21 +929,73 @@ class RuntimeSettingsCliTest(unittest.TestCase):
         workspace_id = str(applied["workspace_id"])
         observed_at = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S")
         database = data / "events.db"
+        repo_root = Path(__file__).resolve().parents[1]
+        plugin_version = json.loads(
+            (repo_root / ".codex-plugin" / "plugin.json").read_text()
+        )["version"]
+        runtime_attestation = {
+            "plugin_version": plugin_version,
+            "runtime_version": __version__,
+            "hooks_sha256": hashlib.sha256(
+                (repo_root / "hooks" / "hooks.json").read_bytes()
+            ).hexdigest(),
+        }
+        session_id = "runtime-evidence-session"
+        verify_probe_token = "tup-probe-v1-" + "1" * 32
+        status_probe_token = "tup-probe-v1-" + "2" * 32
+        session_payload = json.dumps(
+            {"_tooluseproxy_runtime": runtime_attestation},
+            sort_keys=True,
+        )
+        verify_payload = json.dumps(
+            {
+                "_tooluseproxy_runtime": runtime_attestation,
+                "tool_input": {
+                    "command": (
+                        "tooluseproxy setup verify --hook-probe-token "
+                        + verify_probe_token
+                    )
+                },
+            },
+            sort_keys=True,
+        )
         with sqlite3.connect(database) as connection:
             connection.execute(
                 """
                 INSERT INTO events (
-                    event_id, phase, payload_json, recorded_at, workspace_id
-                ) VALUES (?, 'pre_tool_use', '{}', ?, ?)
+                    event_id, phase, session_id, payload_json, recorded_at,
+                    workspace_id, sequence_no
+                ) VALUES (?, 'session_start', ?, ?, ?, ?, 1)
                 """,
-                ("runtime-evidence-event", observed_at, workspace_id),
+                (
+                    "runtime-evidence-session-event",
+                    session_id,
+                    session_payload,
+                    observed_at,
+                    workspace_id,
+                ),
+            )
+            connection.execute(
+                """
+                INSERT INTO events (
+                    event_id, phase, session_id, tool_name, payload_json,
+                    recorded_at, workspace_id, sequence_no
+                ) VALUES (?, 'pre_tool_use', ?, 'Bash', ?, ?, ?, 2)
+                """,
+                (
+                    "runtime-evidence-event",
+                    session_id,
+                    verify_payload,
+                    observed_at,
+                    workspace_id,
+                ),
             )
             connection.execute(
                 """
                 INSERT INTO analysis_runs (
                     analysis_run_id, detector_version, config_json,
-                    started_at, completed_at, workspace_id
-                ) VALUES (?, ?, '{}', ?, ?, ?)
+                    started_at, completed_at, workspace_id, session_id
+                ) VALUES (?, ?, '{"through_sequence_no": 2}', ?, ?, ?, ?)
                 """,
                 (
                     "runtime-evidence-run",
@@ -932,6 +1003,7 @@ class RuntimeSettingsCliTest(unittest.TestCase):
                     observed_at,
                     observed_at,
                     workspace_id,
+                    session_id,
                 ),
             )
             connection.execute(
@@ -954,6 +1026,229 @@ class RuntimeSettingsCliTest(unittest.TestCase):
                     "runtime-evidence-sink",
                 ),
             )
+        verify_code, verified, _ = self._run(
+            [
+                "setup",
+                "verify",
+                SETUP_PROFILE_FILE_PAYLOAD_EXACT,
+                "--workspace",
+                str(workspace),
+                "--data-dir",
+                str(data),
+                "--hook-probe-token",
+                verify_probe_token,
+                "--json",
+            ]
+        )
+
+        self.assertEqual(0, verify_code)
+        runtime = verified["runtime_enforcement"]
+        self.assertEqual(
+            "configuration_and_current_invocation_hook_delivery",
+            verified["verification_scope"],
+        )
+        self.assertEqual(
+            "current_invocation_protected_block_observed",
+            runtime["status"],
+        )
+        self.assertTrue(runtime["hook_delivery_verified"])
+        self.assertTrue(runtime["session_start_verified"])
+        self.assertTrue(runtime["pre_tool_delivery_verified"])
+        self.assertTrue(runtime["runtime_artifact_verified"])
+        self.assertTrue(runtime["protected_block_verified"])
+        self.assertTrue(runtime["current_invocation_probe_verified"])
+        self.assertFalse(runtime["hook_trust_verified"])
+        self.assertTrue(runtime["evidence_is_value_free"])
+        self.assertNotIn(verify_probe_token, json.dumps(verified))
+
+        with sqlite3.connect(database) as connection:
+            status_payload = json.dumps(
+                {
+                    "_tooluseproxy_runtime": runtime_attestation,
+                    "tool_input": {
+                        "command": (
+                            "tooluseproxy status --hook-probe-token "
+                            + status_probe_token
+                        )
+                    },
+                },
+                sort_keys=True,
+            )
+            connection.execute(
+                """
+                INSERT INTO events (
+                    event_id, phase, session_id, tool_name, payload_json,
+                    recorded_at, workspace_id, sequence_no
+                ) VALUES ('runtime-status-event', 'pre_tool_use', ?, 'Bash',
+                    ?, ?, ?, 3)
+                """,
+                (session_id, status_payload, observed_at, workspace_id),
+            )
+            connection.execute(
+                """
+                INSERT INTO analysis_runs (
+                    analysis_run_id, detector_version, config_json,
+                    started_at, completed_at, workspace_id, session_id
+                ) VALUES ('runtime-status-run', ?,
+                    '{"through_sequence_no": 3}', ?, ?, ?, ?)
+                """,
+                (
+                    RUNTIME_GRAPH_DETECTOR_VERSION,
+                    observed_at,
+                    observed_at,
+                    workspace_id,
+                    session_id,
+                ),
+            )
+
+        status_code, status, _ = self._run(
+            [
+                "status",
+                "--workspace",
+                str(workspace),
+                "--data-dir",
+                str(data),
+                "--hook-probe-token",
+                status_probe_token,
+                "--json",
+            ]
+        )
+        self.assertEqual(0, status_code)
+        self.assertEqual("active", status["status"])
+        self.assertTrue(
+            status["runtime_enforcement"]["hook_delivery_verified"]
+        )
+        self.assertNotIn(status_probe_token, json.dumps(status))
+
+        unbound_status_code, unbound_status, _ = self._run(
+            [
+                "status",
+                "--workspace",
+                str(workspace),
+                "--data-dir",
+                str(data),
+                "--json",
+            ]
+        )
+        self.assertEqual(1, unbound_status_code)
+        self.assertEqual("configured_unverified", unbound_status["status"])
+        self.assertFalse(
+            unbound_status["runtime_enforcement"][
+                "current_invocation_probe_verified"
+            ]
+        )
+
+    def test_setup_verify_does_not_reuse_another_session_block(self) -> None:
+        workspace = self.root / "cross-session-evidence-workspace"
+        data = self.root / "cross-session-evidence-data"
+        workspace.mkdir()
+        apply_code, applied, _ = self._run(
+            [
+                "setup",
+                "apply",
+                SETUP_PROFILE_FILE_PAYLOAD_EXACT,
+                "--codex",
+                "--expect-empty-settings",
+                "--workspace",
+                str(workspace),
+                "--data-dir",
+                str(data),
+                "--json",
+            ]
+        )
+        self.assertEqual(0, apply_code)
+        workspace_id = str(applied["workspace_id"])
+        observed_at = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S")
+        repo_root = Path(__file__).resolve().parents[1]
+        attestation = {
+            "plugin_version": json.loads(
+                (repo_root / ".codex-plugin" / "plugin.json").read_text()
+            )["version"],
+            "runtime_version": __version__,
+            "hooks_sha256": hashlib.sha256(
+                (repo_root / "hooks" / "hooks.json").read_bytes()
+            ).hexdigest(),
+        }
+        probe_token = "tup-probe-v1-" + "3" * 32
+        payload = json.dumps(
+            {
+                "_tooluseproxy_runtime": attestation,
+                "tool_input": {
+                    "command": (
+                        "tooluseproxy setup verify --hook-probe-token "
+                        + probe_token
+                    )
+                },
+            },
+            sort_keys=True,
+        )
+        database = data / "events.db"
+        with sqlite3.connect(database) as connection:
+            connection.execute(
+                """
+                INSERT INTO events (
+                    event_id, phase, session_id, payload_json, recorded_at,
+                    workspace_id, sequence_no
+                ) VALUES ('old-session-start', 'session_start', 'old-session',
+                    ?, ?, ?, 1)
+                """,
+                (payload, observed_at, workspace_id),
+            )
+            connection.execute(
+                """
+                INSERT INTO events (
+                    event_id, phase, session_id, tool_name, payload_json,
+                    recorded_at, workspace_id, sequence_no
+                ) VALUES ('new-pre-tool', 'pre_tool_use', 'new-session',
+                    'Bash', ?, ?, ?, 2)
+                """,
+                (payload, observed_at, workspace_id),
+            )
+            connection.execute(
+                """
+                INSERT INTO analysis_runs (
+                    analysis_run_id, detector_version, config_json,
+                    started_at, completed_at, workspace_id, session_id
+                ) VALUES ('new-run', ?, '{"through_sequence_no": 2}',
+                    ?, ?, ?, 'new-session')
+                """,
+                (
+                    RUNTIME_GRAPH_DETECTOR_VERSION,
+                    observed_at,
+                    observed_at,
+                    workspace_id,
+                ),
+            )
+            connection.execute(
+                """
+                INSERT INTO analysis_runs (
+                    analysis_run_id, detector_version, config_json,
+                    started_at, completed_at, workspace_id, session_id
+                ) VALUES ('old-run', ?, '{"through_sequence_no": 1}',
+                    ?, ?, ?, 'old-session')
+                """,
+                (
+                    RUNTIME_GRAPH_DETECTOR_VERSION,
+                    observed_at,
+                    observed_at,
+                    workspace_id,
+                ),
+            )
+            connection.execute(
+                """
+                INSERT INTO policy_decisions (
+                    decision_id, finding_id, analysis_run_id, hook_event,
+                    action, severity, sink_type, source_node_kind,
+                    source_node_id, sink_node_id, path_score, reason,
+                    user_message, technical_summary, trace_command,
+                    path_summary_json
+                ) VALUES ('old-decision', 'old-finding', 'old-run',
+                    'PreToolUse', 'block', 'critical',
+                    'external_http_request', 'protected_source_scope',
+                    'old-source', 'old-sink', 1.0, 'value-free old block',
+                    '', '', '', '[]')
+                """
+            )
 
         verify_code, verified, _ = self._run(
             [
@@ -964,17 +1259,23 @@ class RuntimeSettingsCliTest(unittest.TestCase):
                 str(workspace),
                 "--data-dir",
                 str(data),
+                "--hook-probe-token",
+                probe_token,
                 "--json",
             ]
         )
 
         self.assertEqual(0, verify_code)
         runtime = verified["runtime_enforcement"]
-        self.assertEqual("protected_block_observed", runtime["status"])
+        self.assertEqual(
+            "current_invocation_hook_delivery_observed_block_not_tested",
+            runtime["status"],
+        )
+        self.assertFalse(runtime["session_start_verified"])
+        self.assertTrue(runtime["pre_tool_delivery_verified"])
+        self.assertTrue(runtime["runtime_artifact_verified"])
         self.assertTrue(runtime["hook_delivery_verified"])
-        self.assertTrue(runtime["protected_block_verified"])
-        self.assertFalse(runtime["hook_trust_verified"])
-        self.assertTrue(runtime["evidence_is_value_free"])
+        self.assertFalse(runtime["protected_block_verified"])
 
     def test_setup_verify_rejects_stale_or_mismatched_plugin_artifact(self) -> None:
         workspace = self.root / "artifact-mismatch-workspace"

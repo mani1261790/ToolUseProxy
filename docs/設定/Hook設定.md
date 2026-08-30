@@ -102,7 +102,9 @@ project単位では、trustedなrepositoryの`.codex/hooks.json`へ次のよう�
 
 `matcher`は正規表現です。`PreToolUse`と`PostToolUse`ではHook APIのcanonical tool名に適用されますが、`Stop`ではmatcherがサポートされないため省略します。配布Pluginは`^.*$`を使い、Hook APIへ届くlocal function toolを個別列挙なしで購読します。既知のBash / MCPは専用adapterで判定し、未知のlocal function toolはprotected flowが入力へ到達した場合だけ潜在的な外部sinkとして保守的にdenyします。`apply_patch`、`Edit`、`Write`のようなlocal file mutationは観測・記録しますが、それ自体を外部sinkとは扱いません。
 
-ただし、これはCodexの全操作を捕捉するという意味ではありません。hosted Web SearchはHookへ届かず、実行中processへ入力を追加する`write_stdin`では新しい`PreToolUse`が発火しません。特殊な実行経路がHookを省略する可能性もあるため、coverage statusではそれぞれ`not_interceptable`、`not_rechecked`、`unverified`と表示します。Codexはtimeoutを省略すると600秒を使用するため、この軽量Hookでは明示的に5秒へ制限します。commandはsessionの`cwd`で実行され、複数のmatching command hookは並行起動されます。project-local Hookは実行前に定義内容をtrustする必要があります。matcherやcommandなどを変更すると、以前のtrustはその新定義へ引き継がれず`modified`になります。再reviewして`trusted`になるまで実行対象として扱いません。
+ただし、これはCodexの全操作を捕捉するという意味ではありません。hosted Web SearchはHookへ届かず、実行中processへ入力を追加する`write_stdin`では新しい`PreToolUse`が発火しません。programmatic tool内の入れ子toolや特殊な実行経路も、実機でHook配送を確認できるまで`unverified`です。coverage statusでは、それぞれ`not_interceptable`、`not_rechecked`、`unverified`と表示します。Codexはtimeoutを省略すると600秒を使用するため、この軽量Hookでは明示的に5秒へ制限します。commandはsessionの`cwd`で実行され、複数のmatching command hookは並行起動されます。project-local Hookは実行前に定義内容をtrustする必要があります。matcherやcommandなどを変更すると、以前のtrustはその新定義へ引き継がれず`modified`になります。再reviewして`trusted`になるまで実行対象として扱いません。
+
+alpha.12以降は、Plugin wrapperが各Hook eventへPlugin版、Python runtime版、`hooks.json`のSHA-256を値なしの内部attestationとして付けます。`status`と`setup verify`は、毎回新しいopaque probe tokenをcommandへ付け、そのtokenを実際に含むPreToolUse、current detectorの解析run、attestationを同じsessionで照合します。tokenなしでは設定確認だけを行い、`active`を返しません。設定済みでも現在のcommandへの配送証拠がなければ`configured_unverified`で停止し、別task、別session、別artifactの成功を現在の`active`判定へ使いません。
 
 tool名は表示面ごとに同じとは限りません。Codex Desktopのtask履歴ではlocal shell実行が`exec_command`として記録されますが、PreToolUse / PostToolUseのmatcherとHook payloadではcanonical名`Bash`を使います。Pluginのmatcherへtask履歴上の`exec_command`をそのまま追加する必要はありません。ToolUseProxyの`exec_command + tool_input.cmd`互換レイヤーは、session由来payloadや互換fixtureの解析用としてraw payloadを変えずに保持します。
 

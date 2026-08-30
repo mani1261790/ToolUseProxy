@@ -9127,6 +9127,7 @@ class InformationFlowTest(unittest.TestCase):
             "tool_input": {
                 "command": (
                     f"sh {launcher} setup verify file-payload-exact "
+                    f"--hook-probe-token {'tup-probe-v1-' + 'd' * 32} "
                     f"--workspace {workspace} --data-dir {self.db_path.parent} "
                     "--json"
                 )

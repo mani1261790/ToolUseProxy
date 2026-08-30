@@ -4,9 +4,9 @@ ToolUseProxyは、AI coding agentがローカルの非公開情報を外部へ�
 
 たとえば、未公開コード、研究ノート、`.env`、設計方針などを`protected source`として登録します。ToolUseProxyはCodexのtool useをローカルで観測し、外部送信候補へ保護情報が到達していないかを確認します。
 
-本プロジェクトは[SecHack365](https://sechack365.nict.go.jp/)での研究・開発成果物です。`0.1.0-alpha.11`はrelease候補の検証中です。公開channelの`alpha.8`には下記のfail-open問題があり、未公開候補の`alpha.9`には旧設定から更新できない問題、`alpha.10`には移動・削除済みの保護対象が残るprojectで自己復旧できない問題がありました。alpha.11のfresh Desktop確認まで新規installと通常利用を一時停止してください。研究用public alphaであり、完成したDLP製品ではありません。
+本プロジェクトは[SecHack365](https://sechack365.nict.go.jp/)での研究・開発成果物です。現在の検証済みreleaseは`0.1.0-alpha.12`です。alpha.12では、設定や過去のblock記録が残っているだけで「保護中」と表示しません。現在のverification commandそのものに、インストール済みの同じPlugin版から`PreToolUse`が届いたことを確認して初めて`active`になります。研究用public alphaであり、完成したDLP製品ではありません。
 
-> **以前の版から更新する場合:** `alpha.8`には、安全に確認できない外部payloadをblockせず実行する問題がありました。`alpha.9`は互換旧設定から更新できず、`alpha.10`は登録後に移動・削除された保護対象があるとローカル診断まで止まりました。`alpha.11`へ更新し、5 Hookを改めて確認してください。
+> **以前の版から更新する場合:** `alpha.8`には、安全に確認できない外部payloadをblockせず実行する問題がありました。`alpha.9`は互換旧設定から更新できず、`alpha.10`は登録後に移動・削除された保護対象があるとローカル診断まで止まりました。`alpha.11`では過去セッションの成功を現在の保護状態と区別できませんでした。`alpha.12`へ更新し、Codexを完全に終了して起動し直した後、5 Hookを改めて確認してください。
 
 - [5分クイックスタート](QUICKSTART.md)
 - [詳しいPlugin導入ガイド](docs/設定/Plugin導入.md)
@@ -41,7 +41,7 @@ Python 3.11または3.12と、Plugin対応のCodex CLIまたはCodex Desktopを�
 
 ### 1. Pluginをインストールする
 
-alpha.11のrelease gate完了前は、次のコマンドを実行しないでください。公開再開後は、検証済みreleaseだけを配信する`public-alpha`からインストールします。
+検証済みreleaseだけを配信する`public-alpha`からインストールします。
 
 ```bash
 codex plugin marketplace add mani1261790/ToolUseProxy --ref public-alpha
@@ -52,7 +52,7 @@ codex plugin add tooluseproxy@tooluseproxy
 
 ### 2. 5つのHookを確認する
 
-Codexに表示されるsourceが`Plugin - tooluseproxy@tooluseproxy`で、`SessionStart`、`SubagentStart`、`PreToolUse`、`PostToolUse`、`Stop`の5件だけであることを確認してTrustします。source、件数、command pathが違う場合は許可しないでください。
+Codexに表示されるsourceが`Plugin - tooluseproxy@tooluseproxy`で、`SessionStart`、`SubagentStart`、`PreToolUse`、`PostToolUse`、`Stop`の5件だけであることを確認してTrustします。source、件数、command pathが違う場合は許可しないでください。インストールや更新の直後は、Codexを完全に終了して起動し直してから新しいタスクを始めます。画面の版表示だけでは、実行中タスクが新しいHookを読み込んだ証拠になりません。
 
 ### 3. projectで有効にする
 
@@ -60,7 +60,7 @@ Codexに表示されるsourceが`Plugin - tooluseproxy@tooluseproxy`で、`Sessi
 
 > ToolUseProxyをこのプロジェクトで使えるようにして
 
-これは入力例であり、この通りの言い方でなくても構いません。ToolUseProxyは初期設定と読み取り確認を行い、何を変更するか、外部通信があるか、なぜ許可が必要かをその場で説明します。通常、長い内部commandや保存先を利用者がコピーして貼り直す必要はありません。
+これは入力例であり、この通りの言い方でなくても構いません。ToolUseProxyは初期設定と読み取り確認を行い、何を変更するか、外部通信があるか、なぜ許可が必要かをその場で説明します。設定だけが揃った状態は`configured_unverified`、現在のverification commandそのものへ実行前チェックが届き、実行中Pluginと一致した場合だけ`active`と表示します。内部では使い捨ての照合用tokenを使いますが、利用者が覚えたり入力したりするものではありません。通常、長い内部commandや保存先を利用者がコピーして貼り直す必要はありません。
 
 ### 4. 守る情報を選ぶ
 
@@ -98,10 +98,11 @@ adapterにない未知のcallは、raw commandやpathなどを含まない構造
 | --- | --- | --- |
 | Trace / Detect | 中核実装済み | tool I/O、file operation、内容対応から観測可能なprovenanceを再構成 |
 | Stop | alpha実装済み | 明示的に有効化したworkspaceで、既知adapterと未知のローカルToolを実行前判定。Stop再確認も提供 |
-| Plugin配布 | alpha.11 release gate中 | alpha.8からの別version upgrade、互換旧設定の原子的更新、clean artifact、lifecycle、隔離installを検証し、fresh Desktop確認後に公開channelを再開 |
+| Plugin配布 | alpha.12公開 | current-invocation照合、fresh Desktop、lifecycle、artifact、full testのrelease gateを通過したcommitだけを`public-alpha`へ配信 |
 | 外部性判定 | local保護は通常setupで有効 | adapter、bounded static analysis、未確認external payloadのfail-closed、Codex-only background judge、人間review済みrule。LLM providerは既定off |
 | 実network観測 | 評価専用 | Codex network proxyのOTLP eventは実行後かつtool単位join不能のため、production blockには不採用 |
 | hosted tool境界 | 緩和のみ | SessionStart / SubagentStartでprotected contentをhosted toolへ渡さないdeveloper contextを注入。Hook非可視のため技術的遮断ではない |
+| 現在のverification健全性 | alpha実装済み | 使い捨てtokenでverification command自身のPreToolUse eventを特定し、解析run、Plugin版、Hook定義hashを同一sessionで照合。別taskや過去sessionのblockは現在の`active`判定へ流用しない |
 
 ## 安全側の約束
 
@@ -114,6 +115,7 @@ adapterにない未知のcallは、raw commandやpathなどを含まない構造
 - LLM分類を自動採用せず、人間が確認した完全一致ruleだけをworkspace単位で使う
 - 承認済みruleで既存adapterやstatic blockを弱めない
 - runtimeによるtool inputの書換えは、最終入力を証明できないため無効にする
+- 設定済み、Hook信頼済み、過去にblock済みという情報だけでは`active`にしない
 - Plugin削除時にlocal監査dataを自動削除しない
 
 ## まだ保証しないこと
@@ -122,6 +124,7 @@ adapterにない未知のcallは、raw commandやpathなどを含まない構造
 - hosted Web Searchなど、Codex Hookへ現れない経路の技術的な実行前遮断（SessionStart / SubagentStartのdeveloper contextで誤送信を緩和するが、強制境界ではない）
 - 実行中processへの`write_stdin`追加入力の再検査（新しい`PreToolUse`が発火しない）
 - CodexがHookを省略する特殊なtool経路の遮断（現時点では未検証として表示する）
+- 任意のprogrammatic nested tool経路の遮断。現在のCodex Desktopが使う、単一の`tools.exec_command`だけを含む固定wrapperはalpha.12実機で確認済みだが、別wrapper、複数command、他の入れ子toolへ一般化しない
 - 任意program、暗号化・圧縮payload、Git objectの内容を常に自動判別すること。安全に確認できないHook-visible external操作は止めるため、false blockが発生し得る
 - LLM内部の完全なtaint trackingや、意味類似度による因果関係の証明
 - Linux / Windowsを含む全環境での同一動作

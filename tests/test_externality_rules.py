@@ -185,18 +185,22 @@ class ExternalityRuleTest(unittest.TestCase):
         launcher.parent.mkdir(parents=True)
         launcher.write_text("#!/bin/sh\n", encoding="utf-8")
         revision = "a" * 64
+        probe_token = "tup-probe-v1-" + "b" * 32
         commands = (
             f"sh {launcher} setup apply file-payload-exact --codex "
             f"--expected-revision {revision} --workspace {self.root} "
             f"--data-dir {self.db_path.parent} --json",
             f"sh {launcher} setup verify file-payload-exact "
-            f"--workspace {self.root} --data-dir {self.db_path.parent} --json",
+            f"--hook-probe-token {probe_token} --workspace {self.root} "
+            f"--data-dir {self.db_path.parent} --json",
             f"sh {launcher} setup apply file-payload-exact --codex "
             f"--expect-empty-settings --workspace {self.root} --json",
             f"sh {launcher} setup apply file-payload-exact --codex "
             f"--expect-compatible-settings --workspace {self.root} --json",
             f"sh {launcher} setup verify file-payload-exact "
-            f"--workspace {self.root} --json",
+            f"--hook-probe-token {probe_token} --workspace {self.root} --json",
+            f"sh {launcher} status --hook-probe-token {probe_token} "
+            f"--workspace {self.root} --data-dir {self.db_path.parent} --json",
             f"sh {launcher} protect reconcile plan "
             f"--workspace {self.root} --json",
             f"sh {launcher} protect reconcile apply "
@@ -268,6 +272,7 @@ class ExternalityRuleTest(unittest.TestCase):
         launcher.write_text("#!/bin/sh\n", encoding="utf-8")
         valid = (
             f"sh {launcher} setup verify file-payload-exact "
+            f"--hook-probe-token {'tup-probe-v1-' + 'c' * 32} "
             f"--workspace {self.root} --data-dir {self.db_path.parent} --json"
         )
         compatible_apply = (
@@ -291,6 +296,8 @@ class ExternalityRuleTest(unittest.TestCase):
                 "--data-dir /tmp/other",
             ),
             valid.replace("setup verify", "config show"),
+            valid.replace("c" * 32, "z" * 32),
+            valid.replace("c" * 32, "c" * 31),
             f"PLUGIN_ROOT={plugin_root} {valid}",
             f"{reconciliation_apply}; true",
             reconciliation_apply.replace("r1_", "r2_"),
