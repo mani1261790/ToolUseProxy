@@ -281,7 +281,7 @@ class CodexMarketplaceUpgradeTest(unittest.TestCase):
                 )
                 self.assertEqual(CURRENT_PYTHON_VERSION, migrated["version"])
                 self.assertIsInstance(migrated["migration_backup"], str)
-                status = self._run_json(
+                status_result = self._run(
                     [
                         "sh",
                         str(current_cli),
@@ -294,8 +294,10 @@ class CodexMarketplaceUpgradeTest(unittest.TestCase):
                     ],
                     cwd=workspace,
                     env=environment,
+                    expected_returncodes=(1,),
                 )
-                self.assertEqual("active", status["status"])
+                status = json.loads(status_result.stdout)
+                self.assertEqual("inactive", status["status"])
                 self.assertEqual(CURRENT_PYTHON_VERSION, status["version"])
             finally:
                 server.shutdown()
@@ -335,6 +337,7 @@ class CodexMarketplaceUpgradeTest(unittest.TestCase):
         *,
         cwd: Path | None = None,
         env: dict[str, str] | None = None,
+        expected_returncodes: tuple[int, ...] = (0,),
     ) -> subprocess.CompletedProcess[str]:
         result = subprocess.run(
             command,
@@ -344,9 +347,9 @@ class CodexMarketplaceUpgradeTest(unittest.TestCase):
             text=True,
             check=False,
         )
-        self.assertEqual(
-            0,
+        self.assertIn(
             result.returncode,
+            expected_returncodes,
             f"{' '.join(command)}\n{result.stdout}\n{result.stderr}",
         )
         return result
