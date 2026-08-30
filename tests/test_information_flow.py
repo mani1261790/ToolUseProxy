@@ -8733,7 +8733,7 @@ class InformationFlowTest(unittest.TestCase):
         )
 
         with patch(
-            "hook_monitor.runtime.runner.classify_static_externality_hook_decision"
+            "hook_monitor.runtime.runner.classify_static_externality_hook_analysis"
         ) as recovery_classifier:
             exit_code, stdout, stderr = self._run_hook_in_process(
                 "pre_tool_use",

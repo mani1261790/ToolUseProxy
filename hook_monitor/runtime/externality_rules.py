@@ -112,7 +112,7 @@ def classify_static_externality_hook_decision(
 ) -> ExternalityHookDecision | None:
     """Classify without queue, cache, provider, or network activity."""
 
-    decision, _ = _classify_static_externality_hook_decision(
+    decision, _ = classify_static_externality_hook_analysis(
         event,
         workspace_root=workspace_root,
         trusted_plugin_root=trusted_plugin_root,
@@ -121,7 +121,7 @@ def classify_static_externality_hook_decision(
     return decision
 
 
-def _classify_static_externality_hook_decision(
+def classify_static_externality_hook_analysis(
     event: NormalizedEvent,
     *,
     workspace_root: Path,
@@ -180,14 +180,20 @@ def prepare_externality_hook_decision(
     *,
     workspace_root: Path,
     trusted_plugin_root: Path | None = None,
+    static_analysis: tuple[
+        ExternalityHookDecision | None, StaticExternalityResult | None
+    ]
+    | None = None,
 ) -> ExternalityHookDecision | None:
     """Perform only bounded static analysis and local SQLite work in the Hook."""
-    static_decision, static = _classify_static_externality_hook_decision(
-        event,
-        workspace_root=workspace_root,
-        trusted_plugin_root=trusted_plugin_root,
-        plugin_data=db_path.parent,
-    )
+    if static_analysis is None:
+        static_analysis = classify_static_externality_hook_analysis(
+            event,
+            workspace_root=workspace_root,
+            trusted_plugin_root=trusted_plugin_root,
+            plugin_data=db_path.parent,
+        )
+    static_decision, static = static_analysis
     if static_decision is None or static_decision.state != "analysis_failed":
         return static_decision
     assert static is not None

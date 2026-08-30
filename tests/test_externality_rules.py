@@ -131,6 +131,31 @@ class ExternalityRuleTest(unittest.TestCase):
         self.assertEqual("queued", decision.state)
         analyzer.assert_called_once()
 
+    def test_precomputed_ambiguous_analysis_is_reused(self) -> None:
+        event = self._event("./opaque-agent --local-only")
+        analysis = externality_rules.classify_static_externality_hook_analysis(
+            event,
+            workspace_root=self.root,
+            trusted_plugin_root=None,
+            plugin_data=self.db_path.parent,
+        )
+
+        with patch.object(
+            externality_rules,
+            "analyze_bash_externality",
+            wraps=externality_rules.analyze_bash_externality,
+        ) as analyzer:
+            decision = prepare_externality_hook_decision(
+                self.db_path,
+                event,
+                workspace_root=self.root,
+                static_analysis=analysis,
+            )
+
+        assert decision is not None
+        self.assertEqual("queued", decision.state)
+        analyzer.assert_not_called()
+
     def test_static_external_is_immediate_and_never_queued_or_sent_to_llm(self) -> None:
         command = (
             "python -c \"import requests; "

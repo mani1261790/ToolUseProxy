@@ -30,7 +30,7 @@ from hook_monitor.runtime.pre_tool_policy import (
     render_mcp_input_limit_deny,
 )
 from hook_monitor.runtime.externality_rules import (
-    classify_static_externality_hook_decision,
+    classify_static_externality_hook_analysis,
     conservative_function_tool_decision,
     failed_externality_hook_decision,
     prepare_externality_hook_decision,
@@ -318,6 +318,7 @@ def run_hook(
     )
     externality_decision = None
     recovery_externality_decision = None
+    static_externality_analysis = None
     if (
         phase == "pre_tool_use"
         and event_pre_tool_adapter in {"bash", "mcp"}
@@ -325,7 +326,7 @@ def run_hook(
         and _runtime_policy_workspace_enabled(event)
     ):
         try:
-            recovery_externality_decision = classify_static_externality_hook_decision(
+            static_externality_analysis = classify_static_externality_hook_analysis(
                 event,
                 workspace_root=Path(event.workspace_root or ""),
                 trusted_plugin_root=(
@@ -335,6 +336,7 @@ def run_hook(
                 ),
                 plugin_data=store.db_path.parent,
             )
+            recovery_externality_decision = static_externality_analysis[0]
         except Exception:
             recovery_externality_decision = failed_externality_hook_decision()
     if phase == "pre_tool_use" and event_pre_tool_adapter == "function":
@@ -354,6 +356,7 @@ def run_hook(
                     if os.environ.get("PLUGIN_ROOT")
                     else None
                 ),
+                static_analysis=static_externality_analysis,
             )
         except Exception:
             # Preserve a value-free conservative sink when queue/cache/static
