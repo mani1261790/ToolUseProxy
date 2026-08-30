@@ -35,6 +35,8 @@ Desktopのtask履歴で使われる`exec_command`は、Hook matcherのtool名で
 
 alpha.9でcase IDを`desktop-file-payload-exact-dynamic-v2`へ更新しました。従来のstatic protected fileに加え、同じ登録済みdotenvを`source`した次行で`$PHASE_B_TOKEN`をlocal fake sinkへ渡すdynamic protected callを第三のexact callとして固定しています。値は読み取り・展開・表示せず、sessionの改行をflattenしないexact command、PreToolUse 1 / PostToolUse 0、fail-closed decision 1、専用marker 0、raw exposure 0を別々に照合します。2026-08-28のfresh runではstatic / dynamicの両方がこの条件を満たしました。
 
+alpha.12ではcase IDを`desktop-file-payload-exact-dynamic-v3`へ更新しました。setup verification commandへ毎回新しいopaque probe tokenを付け、そのcommand自身のPreToolUse eventと実行中Plugin artifactを照合します。alpha.9のv2合格は当時のblock証拠として保持しますが、alpha.12のcurrent-invocation healthには流用しません。
+
 2026-08-28のfresh runでは、setup revisionの受け渡し、Desktop sessionの厳密な絞り込み、fresh Plugin dataの強制を追加した上で、全35 checksがtrueになりました。disable、remove、同一版reinstall、final remove、cleanupも完走し、Plugin、Marketplace、約38.8 MBの管理データ、synthetic workspaceを削除しました。無関係なPlugin / Marketplaceの一覧は開始時と一致しています。Codex configには無効な履歴が残るため、cleanup結果は`restored_with_inactive_config_residue`です。
 
 このrunでstandalone Codex CLIが`0.147.0`から`0.150.1`へ自動更新されましたが、Desktop本体`26.820.60940`とDesktop同梱Codex `0.150.0-alpha.8`は不変でした。Desktop証拠のidentityは同梱Codexを使い、無関係なstandalone CLIの更新で失敗しないようにしています。また、旧runから引き継がれていた破損DBはfresh証拠に使わず、別rootに隔離しました。以後の`prepare`は既存のPhase B dataがあれば変更せず停止します。

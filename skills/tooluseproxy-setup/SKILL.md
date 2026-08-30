@@ -29,10 +29,10 @@ When setup starts, lead with:
 
 `このプロジェクトでToolUseProxyを使えるようにします。初期設定と安全確認のため、通常は確認画面が2回出ます。どちらも外部通信は行いません。`
 
-When configuration verification succeeds but no fresh Hook probe has run, lead
-with:
+When configuration verification succeeds but the current verification command
+has no verified PreToolUse delivery, lead with:
 
-`初期設定は完了しました。ただし、これは設定の確認までです。CodexがHookを実際に呼び、保護対象を実行前に止められることはまだ確認していません。Hookを確認済みのfresh taskで安全な動作確認を行ってから、保護が動作していると判断します。`
+`初期設定は完了しました。ただし、今の確認操作にToolUseProxyの実行前チェックが届くことは確認できていません。この状態では保護中とは扱いません。Codexを再起動して新しいタスクから安全な動作確認を行います。`
 
 Only after separate fresh Hook evidence proves delivery and a protected
 pre-execution denial may you lead with:
@@ -57,11 +57,14 @@ tool; explain the limitation to the user. Do not describe this context rule as
 pre-execution enforcement or complete DLP.
 
 Never describe an installed/enabled Plugin or trusted Hooks as active
-protection. Protection is active for the current workspace only after the
-fixed setup application and read-only verification both pass. If the database
-is missing, say plainly that the Plugin is installed but this workspace is not
-protected yet. Do not present protected-source registration plans before that
-gate passes.
+protection. `configured_unverified` means the files and settings exist but the
+current verification command has not proved delivery from the exact installed
+PreToolUse runtime. Only `active` means that current-invocation delivery is proven for
+Hook-visible local tools. It never includes hosted tools, `write_stdin`
+continuations, or unverified programmatic nested-tool paths. If the database is
+missing, say plainly that the Plugin is installed but this workspace is not
+protected yet. Do not present protected-source registration plans before the
+configuration gate passes.
 
 If the request contains a version-specific skill link for an older Plugin
 cache entry, do not treat the removed cache directory as a product failure and
@@ -235,8 +238,14 @@ do not report missing initial output as a command failure.
    calls for that workflow:
 
    ```text
-   sh "<PLUGIN_ROOT>/hooks/run_cli.sh" setup verify file-payload-exact --workspace <workspace-root> --data-dir <PLUGIN_DATA> --json
+   sh "<PLUGIN_ROOT>/hooks/run_cli.sh" setup verify file-payload-exact --hook-probe-token <fresh-probe-token> --workspace <workspace-root> --data-dir <PLUGIN_DATA> --json
    ```
+
+   Create `<fresh-probe-token>` directly for this command using the exact form
+   `tup-probe-v1-` followed by 32 lowercase hexadecimal characters. Do not run
+   another command to generate it, show it to the user, or reuse one from an
+   earlier verification. It is not a secret; it only correlates this command
+   with its immediately preceding PreToolUse event.
 
    Stop before any send test unless the setup application and combined
    verification both succeed. The approval is required because these commands
@@ -301,26 +310,27 @@ do not report missing initial output as a command failure.
    Then run the one read-only configuration verification command:
 
    ```text
-   sh "<PLUGIN_ROOT>/hooks/run_cli.sh" setup verify file-payload-exact --workspace <workspace-root> --json
+   sh "<PLUGIN_ROOT>/hooks/run_cli.sh" setup verify file-payload-exact --hook-probe-token <fresh-probe-token> --workspace <workspace-root> --json
    ```
 
-   A successful result is `status: configuration_passed`. It proves the local
-   database, settings, manifest readability, and installed artifact shape. It
-   explicitly does not prove Hook trust, Hook delivery, or a protected block.
-   Never summarize it as `ToolUseProxy is active`, `protection passed`, or an
-   end-to-end pass. Start a fresh task after Hook review and obtain separate
-   Hook probe evidence before making any runtime-protection claim.
+   A successful result is `status: configuration_passed`. The
+   `verification_scope` and `runtime_enforcement` fields say whether this was
+   configuration-only or also proved delivery from the exact installed Hook
+   runtime for this verification command. Never infer current protection from a block
+   recorded by another session or an older Plugin version.
 
    Interpret `runtime_enforcement.status` literally:
 
-   - `requires_fresh_hook_probe`: no current-detector PreToolUse delivery is
-     proven; report setup only.
-   - `hook_delivery_observed_block_not_tested`: current PreToolUse delivery is
-     proven, but a protected block is not; do not claim enforcement passed.
-   - `protected_block_observed`: current-detector delivery and at least one
-     PreToolUse block are present in the value-free local audit. This still does
-     not prove all five Hook trust states; combine it with the user's Hook review
-     before reporting an end-to-end pass.
+   - `requires_current_invocation_hook_probe`: this exact verification command
+     has no matching PreToolUse event; report setup only.
+   - `stale_or_unattested_hook_runtime`: an event exists, but it is not bound
+     to the currently installed Plugin version and Hook definition; stop.
+   - `current_invocation_hook_delivery_observed_block_not_tested`: the current
+     runtime reaches Hook-visible local tools in this session, but a protected
+     block has not been tested.
+   - `current_invocation_protected_block_observed`: current runtime delivery and a
+     protected PreToolUse block exist in the same session. This does not extend
+     protection to hosted or otherwise Hook-invisible paths.
 
    These are the normal two approval screens. Never add `--data-dir` derived
    from a guessed path. If either command reports that the installed Plugin
@@ -443,7 +453,14 @@ do not report missing initial output as a command failure.
 
    Run the whole `protect scan / suggest / review / approve / reject / ignore` workflow only on POSIX (macOS/Linux); it is not supported on Windows yet. Neither `init` nor a Hook runs the scanner implicitly.
 
-10. Use `status` to verify the database, canonical workspace registration, schema v2 manifest, and protected sources all resolve to the same workspace. `status: active` means runtime health, not that a complete scan ran or that every sensitive file is registered.
+10. Use `status --hook-probe-token <fresh-probe-token>` to verify the database,
+    schema v2 manifest, settings, and current-invocation Hook delivery.
+    Generate a different token with the same exact format for every status
+    invocation. Without a fresh token, status is deliberately
+    configuration-only and cannot return `active`.
+    `configured_unverified` is not active protection. `active` applies only to
+    Hook-visible local tools for the verified invocation; it does not mean that a
+    complete scan ran or that every sensitive file is registered.
 
 11. If the user asks to uninstall, remove or disable the Plugin first so new Hook writes stop. Data retention is the default; Plugin or package removal never approves data deletion. If the user also asks to delete local data, run a non-mutating plan from an installed package or the exact release artifact being removed:
 

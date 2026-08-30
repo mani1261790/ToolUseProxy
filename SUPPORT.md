@@ -1,6 +1,6 @@
 # サポート範囲と既知の制限
 
-ToolUseProxy `0.1.0-alpha.11`はrelease候補の検証中です。公開channelの`alpha.8`にfail-open問題、先行検証用`alpha.9`に互換旧設定から更新できない問題、`alpha.10`に移動・削除済みの保護対象があるprojectで自己復旧できない問題があったため、alpha.11のfresh Desktop gateと公開昇格が完了するまで新規installと通常利用を一時停止しています。本番環境向けのSLA、security certification、完全なDLP、全toolの遮断保証は提供しません。
+ToolUseProxy `0.1.0-alpha.12`はrelease候補の検証中です。alpha.12は、現在のverification command自身へ届いたPreToolUseをsession、Plugin版、Hook定義hashに結び付け、別taskや過去sessionの成功と分けて表示します。fresh Desktop gateと公開昇格が完了するまで新規installと通常利用を一時停止しています。本番環境向けのSLA、security certification、完全なDLP、全toolの遮断保証は提供しません。
 
 ## 実行環境
 
@@ -22,7 +22,7 @@ POSIX launcherもpackage metadataと同じPython 3.11 / 3.12だけを選びま�
 ## Codex Plugin
 
 - localでCodex CLIのmarketplace add / Plugin installを検証済み
-- Gitのmoving refを使う`codex plugin marketplace upgrade`で、alpha.1および正式公開前の3 Hook alpha.8からalpha.11へ置き換わり、Plugin dataが保持されることを実Codex CLIで自動検証
+- Gitのmoving refを使う`codex plugin marketplace upgrade`で、alpha.1および正式公開前の3 Hook alpha.8からalpha.12候補へ置き換わり、Plugin dataが保持されることを実Codex CLIで自動検証。alpha.12への更新後再起動とfresh Desktop配送はrelease gate中
 - Hook definitionのreview / trustを迂回しない
 - MCPはread-only名でもqueryをserverへ送るexternal boundaryとして扱う。上限内の全key/valueとactive source全体の比較を完了できたpublic inputだけを許可し、一致・上限超過・比較失敗は実行前deny
 - install後のcodeは`PLUGIN_ROOT`、mutable dataは`PLUGIN_DATA`へ分離
@@ -49,6 +49,7 @@ Codex Plugin APIやHook payloadはToolUseProxyとは別に変更され得ます�
 | protected source候補scan | POSIX対応 | bounded offline scan。上限到達時は完全探索と主張しない |
 | candidate batch review | POSIX対応 | 最大10件のvalue-free proposalをまとめて提示し、候補ごとの明示判断を一度に反映。1件用commandも互換維持 |
 | Hook-visible local toolのPreToolUse deny | 通常setupで有効 | 既知adapterを精密判定し、外部payloadを安全に確認できない場合は保護sourceがあるworkspaceで保守的にdeny。package既定値自体はoff |
+| current-invocation health | alpha.12対応 | 毎回新しいopaque tokenでverification command自身のPreToolUse、解析run、Plugin版、Hook定義hashを同じsessionへ照合。設定だけなら`configured_unverified`、このcommandへの配送確認済みなら`active` |
 | Stop final-answer review | alpha対応 | critical findingを`continue_review`で差し戻す |
 | runtime redact / `updatedInput` | 未対応 | 複数Hook後の最終採用inputを証明できないため無効 |
 | Externality Protection | local判定は通常setupで有効 | Hookはlocal static/cache判定を行い、未確認external payloadを保守的にdeny。LLM providerは既定offで、明示的なHook外worker、人間review、workspace単位の完全一致cacheを使い、LLM分類を自動昇格しない |
@@ -61,13 +62,14 @@ Codex Plugin APIやHook payloadはToolUseProxyとは別に変更され得ます�
 - hosted Web Searchは現在のPreToolUse / PostToolUse Hookへ現れず、技術的な実行前遮断の対象外。SessionStart / SubagentStartのdeveloper contextでprotected contentを渡さないよう指示するが、これは強制境界ではない
 - 実行中processへ`write_stdin`で追加する入力は、新しいPreToolUseが発火しないため再検査できない
 - Codexの特殊なtool経路がHookを省略する可能性は未検証であり、coverage statusでも`unverified`として扱う
+- programmatic tool内の入れ子toolは、外側と内側のどちらへHookが届くかを現行Desktop実機で確認するまで`unverified`として扱う
 - Bashのshell変数、command substitution、未知option、複雑なpipelineを一般shellとして完全評価しない。外部payloadを完全に評価できない場合はallowせずdenyするため、false blockが発生し得る
 - Codex Hook payloadに信頼できる終了statusがない操作は、write成功を推測せず`unknown`として扱う
 - lexical similarityは意味的な言い換えを一般には検知しない
 - candidate retrievalはartifact 50 / source 200の有限上限を持つ
 - local SQLiteにはraw Hook payloadやprotected source由来textが平文で残り得る
 - database、backup、trace exportの自動retention / secure eraseはない
-- moving marketplace refによるalpha.1およびstale alpha.8からalpha.11へのnative upgrade、immutable baselineからalpha.11へのlifecycle upgrade、backupを使うsafe rollback、Plugin / marketplace remove、data保持 / 明示uninstallはisolated Codex CLIで検証済み。Linux実Codex CLI、Windows実機、将来version間の反復は未完了
+- moving marketplace refによるalpha.1およびstale alpha.8からalpha.12候補へのnative upgrade、immutable baselineからalpha.12候補へのlifecycle upgrade、backupを使うsafe rollback、Plugin / marketplace remove、data保持 / 明示uninstallはisolated Codex CLIで検証対象。fresh Desktop配送、Linux実Codex CLI、Windows実機、将来version間の反復は未完了
 - runtime policyは他のHookやtool自体をexclusiveに制御できず、ToolUseProxy単独で完全な外部送信防止を保証しない
 - Externality JudgeのCodex routeは事前probe合格と24時間以内のreceiptを要求する。実測latencyは約3.4〜6.3秒だが、この待ち時間はHook外workerに限定され、PreToolUseには入らない
 

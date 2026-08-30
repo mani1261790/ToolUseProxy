@@ -21,6 +21,7 @@ from hook_monitor.externality.envelope import (
 from hook_monitor.externality.models import ExternalityEnvelope, ExternalityVerdict
 from hook_monitor.externality.providers import JudgeObservation
 from hook_monitor.runtime.models import NormalizedEvent
+from tooluseproxy.runtime_probe import hook_probe_token_is_valid
 from hook_monitor.runtime.tool_compat import (
     is_enforced_shell_tool,
     shell_command_from_input,
@@ -33,7 +34,7 @@ EXTERNALITY_RULE_CONTRACT_SHA256 = hashlib.sha256(
 ).hexdigest()
 EXTERNALITY_RULE_BUSY_TIMEOUT_MS = 10
 GENERIC_FUNCTION_EXTERNALITY_CONTRACT = b"generic-function-externality-v1"
-TRUSTED_SETUP_PROFILE_CONTRACT = b"trusted-tooluseproxy-setup-profile-v1"
+TRUSTED_SETUP_PROFILE_CONTRACT = b"trusted-tooluseproxy-setup-profile-v2"
 _REVISION_PATTERN = re.compile(r"[0-9a-f]{64}")
 _RECONCILIATION_REVISION_PATTERN = re.compile(r"r1_[0-9a-f]{64}")
 
@@ -213,7 +214,13 @@ def _trusted_local_recovery_operation(
     plugin_root: Path | None,
     workspace_root: Path,
     plugin_data: Path,
-) -> Literal["apply", "verify", "reconcile_plan", "reconcile_apply"] | None:
+) -> Literal[
+    "apply",
+    "verify",
+    "status",
+    "reconcile_plan",
+    "reconcile_apply",
+] | None:
     """Recognize only fixed, revision-bound local recovery commands."""
 
     if plugin_root is None:
@@ -266,27 +273,35 @@ def _trusted_local_recovery_operation(
         == reconciliation_suffix[2:]
     ):
         return "reconcile_apply"
-    if tokens in (
-        [
-            *common,
-            "verify",
-            "file-payload-exact",
-            "--workspace",
-            workspace,
-            "--data-dir",
-            data_dir,
-            "--json",
-        ],
-        [
-            *common,
-            "verify",
-            "file-payload-exact",
-            "--workspace",
-            workspace,
-            "--json",
-        ],
+    verify_prefix = [*common, "verify", "file-payload-exact"]
+    verify_suffixes = (
+        ["--workspace", workspace, "--data-dir", data_dir, "--json"],
+        ["--workspace", workspace, "--json"],
+    )
+    if any(tokens == [*verify_prefix, *suffix] for suffix in verify_suffixes):
+        return "verify"
+    if any(
+        len(tokens) == len(verify_prefix) + len(suffix) + 2
+        and tokens[: len(verify_prefix)] == verify_prefix
+        and tokens[len(verify_prefix)] == "--hook-probe-token"
+        and hook_probe_token_is_valid(tokens[len(verify_prefix) + 1])
+        and tokens[len(verify_prefix) + 2 :] == suffix
+        for suffix in verify_suffixes
     ):
         return "verify"
+    status_suffixes = (
+        ["--workspace", workspace, "--data-dir", data_dir, "--json"],
+        ["--workspace", workspace, "--json"],
+    )
+    if any(
+        len(tokens) == 5 + len(suffix)
+        and tokens[:3] == ["sh", launcher, "status"]
+        and tokens[3] == "--hook-probe-token"
+        and hook_probe_token_is_valid(tokens[4])
+        and tokens[5:] == suffix
+        for suffix in status_suffixes
+    ):
+        return "status"
     if tokens in (
         [
             *common,

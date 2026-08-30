@@ -59,6 +59,10 @@ from tooluseproxy.paths import (
     resolve_runtime_paths,
     secure_database_permissions,
 )
+from tooluseproxy.runtime_probe import (
+    hook_probe_token_is_valid,
+    payload_contains_hook_probe_token,
+)
 from tooluseproxy.protected_sources import (
     DEFAULT_PROTECTED_SOURCE_SCAN_LIMITS,
     DETECTOR_VERSION,
@@ -205,6 +209,14 @@ def _build_parser() -> argparse.ArgumentParser:
 
     status = subparsers.add_parser("status", help="Show current runtime status.")
     status.add_argument("--workspace", type=Path, default=Path.cwd())
+    status.add_argument(
+        "--hook-probe-token",
+        type=_parse_hook_probe_token,
+        help=(
+            "Bind runtime health to the PreToolUse event for this exact "
+            "invocation. Omit for configuration-only status."
+        ),
+    )
     status.add_argument("--json", action="store_true", help="Print machine-readable output.")
     _add_runtime_path_arguments(status)
 
@@ -255,6 +267,14 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=(SETUP_PROFILE_FILE_PAYLOAD_EXACT,),
     )
     setup_verify.add_argument("--workspace", type=Path, default=Path.cwd())
+    setup_verify.add_argument(
+        "--hook-probe-token",
+        type=_parse_hook_probe_token,
+        help=(
+            "Bind runtime health to the PreToolUse event for this exact "
+            "invocation. Omit for configuration-only verification."
+        ),
+    )
     setup_verify.add_argument("--json", action="store_true")
     _add_runtime_path_arguments(setup_verify)
 
@@ -944,11 +964,17 @@ def _run_setup_verify(args: argparse.Namespace) -> int:
         runtime_enforcement = _runtime_enforcement_evidence(
             paths.db_path,
             workspace.workspace_id,
+            plugin_artifact=plugin_artifact,
+            probe_token=args.hook_probe_token,
         )
         payload = {
             "schema_version": SETUP_OUTPUT_SCHEMA_VERSION,
             "status": "configuration_passed" if ok else "needs_attention",
-            "verification_scope": "configuration_only",
+            "verification_scope": (
+                "configuration_and_current_invocation_hook_delivery"
+                if runtime_enforcement["hook_delivery_verified"]
+                else "configuration_only"
+            ),
             "runtime_enforcement": runtime_enforcement,
             "profile": args.profile,
             "version": __version__,
@@ -1080,31 +1106,78 @@ def _plugin_manifest_version_matches_runtime(
 def _runtime_enforcement_evidence(
     db_path: Path,
     workspace_id: str | None,
+    *,
+    plugin_artifact: dict[str, object] | None = None,
+    probe_token: str | None = None,
 ) -> dict[str, object]:
-    """Report value-free Hook evidence without inferring unobserved trust."""
+    """Report exact-invocation Hook evidence without reusing stale success."""
 
-    if workspace_id is None or not db_path.is_file():
+    if (
+        workspace_id is None
+        or not db_path.is_file()
+        or probe_token is None
+    ):
         return _empty_runtime_enforcement_evidence()
     try:
         with sqlite3.connect(f"{db_path.as_uri()}?mode=ro", uri=True) as connection:
-            latest_pre_tool = connection.execute(
+            candidate_rows = connection.execute(
                 """
-                SELECT MAX(recorded_at)
+                SELECT session_id, tool_name, payload_json, recorded_at,
+                       sequence_no
                 FROM events
-                WHERE workspace_id = ? AND phase = 'pre_tool_use'
+                WHERE workspace_id = ?
+                  AND phase = 'pre_tool_use'
+                  AND session_id IS NOT NULL
+                ORDER BY recorded_at DESC, sequence_no DESC
+                LIMIT 50
                 """,
                 (workspace_id,),
-            ).fetchone()[0]
-            matching_detector_runs = int(
-                connection.execute(
-                    """
-                    SELECT COUNT(*)
-                    FROM analysis_runs
-                    WHERE workspace_id = ? AND detector_version = ?
-                    """,
-                    (workspace_id, RUNTIME_GRAPH_DETECTOR_VERSION),
-                ).fetchone()[0]
+            ).fetchall()
+            latest_pre_tool_row = next(
+                (
+                    row
+                    for row in candidate_rows
+                    if _payload_json_contains_probe_token(row[2], probe_token)
+                ),
+                None,
             )
+            if latest_pre_tool_row is None:
+                return _empty_runtime_enforcement_evidence()
+            (
+                latest_session_id,
+                latest_tool_name,
+                latest_payload_json,
+                latest_pre_tool_at,
+                latest_pre_tool_sequence_no,
+            ) = latest_pre_tool_row
+            if not isinstance(latest_session_id, str) or not latest_session_id:
+                return _empty_runtime_enforcement_evidence()
+            session_start_row = connection.execute(
+                """
+                SELECT payload_json
+                FROM events
+                WHERE workspace_id = ?
+                  AND phase = 'session_start'
+                  AND session_id = ?
+                ORDER BY sequence_no DESC
+                LIMIT 1
+                """,
+                (workspace_id, latest_session_id),
+            ).fetchone()
+            detector_run_rows = connection.execute(
+                """
+                SELECT config_json, completed_at
+                FROM analysis_runs
+                WHERE workspace_id = ?
+                  AND session_id = ?
+                  AND detector_version = ?
+                """,
+                (
+                    workspace_id,
+                    latest_session_id,
+                    RUNTIME_GRAPH_DETECTOR_VERSION,
+                ),
+            ).fetchall()
             current_detector_blocks = int(
                 connection.execute(
                     """
@@ -1113,42 +1186,104 @@ def _runtime_enforcement_evidence(
                     JOIN analysis_runs AS runs
                       ON runs.analysis_run_id = decisions.analysis_run_id
                     WHERE runs.workspace_id = ?
+                      AND runs.session_id = ?
                       AND runs.detector_version = ?
                       AND decisions.hook_event = 'PreToolUse'
                       AND decisions.action = 'block'
                     """,
-                    (workspace_id, RUNTIME_GRAPH_DETECTOR_VERSION),
+                    (
+                        workspace_id,
+                        latest_session_id,
+                        RUNTIME_GRAPH_DETECTOR_VERSION,
+                    ),
                 ).fetchone()[0]
             )
     except (sqlite3.Error, TypeError, ValueError):
         return _empty_runtime_enforcement_evidence(
             status="runtime_evidence_unavailable"
         )
-    recent_pre_tool = _timestamp_is_recent(latest_pre_tool)
-    hook_delivery_verified = recent_pre_tool and matching_detector_runs > 0
-    protected_block_verified = current_detector_blocks > 0
+    recent_pre_tool = _timestamp_is_recent(latest_pre_tool_at)
+    matching_detector_run = bool(
+        isinstance(latest_pre_tool_sequence_no, int)
+        and any(
+            completed_at is not None
+            and _analysis_run_covers_sequence(
+                config_json,
+                latest_pre_tool_sequence_no,
+            )
+            for config_json, completed_at in detector_run_rows
+        )
+    )
+    pre_tool_attestation = _parse_runtime_attestation(latest_payload_json)
+    session_start_attestation = _parse_runtime_attestation(
+        None if session_start_row is None else session_start_row[0]
+    )
+    expected_attestation = {
+        "plugin_version": (
+            None
+            if plugin_artifact is None
+            else plugin_artifact.get("plugin_version")
+        ),
+        "runtime_version": __version__,
+        "hooks_sha256": (
+            None
+            if plugin_artifact is None
+            else plugin_artifact.get("hooks_sha256")
+        ),
+    }
+    pre_tool_runtime_artifact_verified = bool(
+        plugin_artifact
+        and plugin_artifact.get("ok") is True
+        and all(isinstance(value, str) and value for value in expected_attestation.values())
+        and pre_tool_attestation == expected_attestation
+    )
+    session_start_verified = bool(
+        session_start_row is not None
+        and session_start_attestation == expected_attestation
+    )
+    pre_tool_delivery_verified = recent_pre_tool and matching_detector_run
+    hook_delivery_verified = bool(
+        pre_tool_delivery_verified and pre_tool_runtime_artifact_verified
+    )
+    protected_block_verified = bool(
+        hook_delivery_verified and current_detector_blocks > 0
+    )
     if hook_delivery_verified and protected_block_verified:
-        status = "protected_block_observed"
+        status = "current_invocation_protected_block_observed"
         detail = (
-            "current detector PreToolUse delivery and a pre-execution block "
-            "are present in value-free local audit evidence"
+            "the current installed Hook runtime recorded PreToolUse for this "
+            "verification command and a pre-execution block in one session"
         )
     elif hook_delivery_verified:
-        status = "hook_delivery_observed_block_not_tested"
+        status = "current_invocation_hook_delivery_observed_block_not_tested"
         detail = (
-            "current detector PreToolUse delivery is present, but no current "
-            "detector block has been observed"
+            "the current installed Hook runtime reached this verification "
+            "command, but no protected pre-execution block has been observed "
+            "in the same session"
+        )
+    elif recent_pre_tool and not pre_tool_runtime_artifact_verified:
+        status = "stale_or_unattested_hook_runtime"
+        detail = (
+            "a recent PreToolUse event exists, but it is not bound to the "
+            "currently installed Plugin runtime"
         )
     else:
-        status = "requires_fresh_hook_probe"
+        status = "requires_current_invocation_hook_probe"
         detail = (
-            "setup configuration is valid, but fresh current-detector Hook "
-            "delivery has not been observed"
+            "setup configuration is valid, but PreToolUse delivery for this "
+            "verification command has not been proven"
         )
     return {
         "hook_delivery_verified": hook_delivery_verified,
+        "session_start_verified": session_start_verified,
+        "pre_tool_delivery_verified": pre_tool_delivery_verified,
+        "runtime_artifact_verified": pre_tool_runtime_artifact_verified,
         "hook_trust_verified": False,
         "protected_block_verified": protected_block_verified,
+        "observed_tool_surface": (
+            latest_tool_name if isinstance(latest_tool_name, str) else None
+        ),
+        "current_invocation_probe_verified": hook_delivery_verified,
         "status": status,
         "detail": detail,
         "evidence_is_value_free": True,
@@ -1158,12 +1293,17 @@ def _runtime_enforcement_evidence(
 
 def _empty_runtime_enforcement_evidence(
     *,
-    status: str = "requires_fresh_hook_probe",
+    status: str = "requires_current_invocation_hook_probe",
 ) -> dict[str, object]:
     return {
         "hook_delivery_verified": False,
+        "session_start_verified": False,
+        "pre_tool_delivery_verified": False,
+        "runtime_artifact_verified": False,
         "hook_trust_verified": False,
         "protected_block_verified": False,
+        "observed_tool_surface": None,
+        "current_invocation_probe_verified": False,
         "status": status,
         "detail": (
             "setup configuration does not prove Codex Hook trust, delivery, "
@@ -1172,6 +1312,65 @@ def _empty_runtime_enforcement_evidence(
         "evidence_is_value_free": True,
         "detector_version": RUNTIME_GRAPH_DETECTOR_VERSION,
     }
+
+
+def _payload_json_contains_probe_token(
+    payload_json: object,
+    probe_token: str,
+) -> bool:
+    if not isinstance(payload_json, str):
+        return False
+    try:
+        payload = json.loads(payload_json)
+    except json.JSONDecodeError:
+        return False
+    return payload_contains_hook_probe_token(payload, probe_token)
+
+
+def _analysis_run_covers_sequence(
+    config_json: object,
+    event_sequence_no: int,
+) -> bool:
+    if not isinstance(config_json, str):
+        return False
+    try:
+        config = json.loads(config_json)
+    except json.JSONDecodeError:
+        return False
+    return bool(
+        isinstance(config, dict)
+        and type(config.get("through_sequence_no")) is int
+        and config["through_sequence_no"] >= event_sequence_no
+    )
+
+
+def _parse_hook_probe_token(value: str) -> str:
+    if not hook_probe_token_is_valid(value):
+        raise argparse.ArgumentTypeError(
+            "hook probe token must use tup-probe-v1- plus 32 lowercase hex characters"
+        )
+    return value
+
+
+def _parse_runtime_attestation(payload_json: object) -> dict[str, object] | None:
+    if not isinstance(payload_json, str):
+        return None
+    try:
+        payload = json.loads(payload_json)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    attestation = payload.get("_tooluseproxy_runtime")
+    if not isinstance(attestation, dict):
+        return None
+    expected_keys = {"plugin_version", "runtime_version", "hooks_sha256"}
+    if set(attestation) != expected_keys or not all(
+        isinstance(attestation[key], str) and attestation[key]
+        for key in expected_keys
+    ):
+        return None
+    return {key: attestation[key] for key in sorted(expected_keys)}
 
 
 def _timestamp_is_recent(value: object) -> bool:
@@ -1327,17 +1526,38 @@ def _run_status(args: argparse.Namespace) -> int:
         workspace,
         workspace_path,
     )
+    effective_settings = {
+        item.get("key"): item.get("effective_value")
+        for item in runtime_settings.get("settings", [])
+        if isinstance(item, dict)
+    }
+    protection_profile_effective = all(
+        effective_settings.get(key) is value
+        for key, value in SETUP_PROFILE_SETTINGS.items()
+    )
+    configured = bool(
+        workspace.ready
+        and summary["ok"]
+        and registration_ok
+        and protected_sources["runtime_readable"]
+        and runtime_settings["ok"]
+        and protection_profile_effective
+    )
+    plugin_artifact = _inspect_plugin_artifact()
+    runtime_enforcement = _runtime_enforcement_evidence(
+        paths.db_path,
+        workspace.workspace_id,
+        plugin_artifact=plugin_artifact,
+        probe_token=args.hook_probe_token,
+    )
+    current_invocation_active = bool(
+        configured and runtime_enforcement["hook_delivery_verified"]
+    )
     payload = {
         "status": (
             "active"
-            if (
-                workspace.ready
-                and summary["ok"]
-                and registration_ok
-                and protected_sources["runtime_readable"]
-                and runtime_settings["ok"]
-            )
-            else "inactive"
+            if current_invocation_active
+            else ("configured_unverified" if configured else "inactive")
         ),
         "version": __version__,
         "path_source": paths.source,
@@ -1351,10 +1571,12 @@ def _run_status(args: argparse.Namespace) -> int:
         },
         "protected_sources": protected_sources,
         "runtime_settings": runtime_settings,
+        "runtime_enforcement": runtime_enforcement,
+        "plugin_artifact": plugin_artifact,
         "enforcement_coverage": codex_enforcement_coverage(),
     }
     _render(payload, as_json=args.json)
-    return 0 if payload["status"] == "active" else 1
+    return 0 if current_invocation_active else 1
 
 
 def _run_config(args: argparse.Namespace) -> int:

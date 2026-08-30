@@ -2997,6 +2997,7 @@ text(JSON.stringify(r));
             )
             setup_verify = (
                 f"sh {launcher} setup verify file-payload-exact "
+                f"--hook-probe-token {'tup-probe-v1-' + 'e' * 32} "
                 f"--workspace {workspace} --data-dir {plugin_data} --json"
             )
             self.assertTrue(_phase_b_command_allowed(setup_apply, **arguments))
@@ -3042,6 +3043,12 @@ text(JSON.stringify(r));
                     **arguments,
                 )
             )
+            self.assertFalse(
+                _phase_b_command_allowed(
+                    setup_verify.replace("e" * 32, "z" * 32),
+                    **arguments,
+                )
+            )
 
     def test_session_parser_counts_fixed_setup_profile_flow(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -3061,6 +3068,7 @@ text(JSON.stringify(r));
             )
             setup_verify = (
                 f"sh {launcher} setup verify file-payload-exact "
+                f"--hook-probe-token {'tup-probe-v1-' + 'f' * 32} "
                 f"--workspace {workspace} --data-dir {plugin_data} --json"
             )
             apply_reason = (

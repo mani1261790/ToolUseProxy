@@ -6,6 +6,8 @@ import hashlib
 import io
 import json
 import os
+import secrets
+import shlex
 import shutil
 import sqlite3
 import subprocess
@@ -243,10 +245,10 @@ def rehearse_lifecycle(
             raise LifecycleFailure(stage, "database_not_upgraded")
         if "baseline-event" not in _event_tool_use_ids(database):
             raise LifecycleFailure(stage, "upgrade_lost_baseline_data")
-        status = _run_plugin_json(
+        diagnosis = _run_plugin_json(
             current_cli,
             [
-                "status",
+                "doctor",
                 "--workspace",
                 str(workspace),
                 "--data-dir",
@@ -255,16 +257,19 @@ def rehearse_lifecycle(
             ],
             cwd=workspace,
             env=current_environment,
-            stage="upgrade_status",
+            stage="upgrade_doctor",
             captured_outputs=captured_outputs,
         )
-        if status.get("status") != "active":
-            raise LifecycleFailure("upgrade_status", "upgraded_runtime_inactive")
+        if diagnosis.get("status") != "ok":
+            raise LifecycleFailure("upgrade_doctor", "upgraded_runtime_invalid")
         runtime_settings = _run_plugin_json(
             current_cli,
             [
-                "config",
-                "show",
+                "setup",
+                "apply",
+                "file-payload-exact",
+                "--codex",
+                "--expect-empty-settings",
                 "--workspace",
                 str(workspace),
                 "--data-dir",
@@ -273,42 +278,13 @@ def rehearse_lifecycle(
             ],
             cwd=workspace,
             env=current_environment,
-            stage="runtime_settings_show",
+            stage="runtime_settings_apply",
             captured_outputs=captured_outputs,
         )
         settings_revision = _runtime_settings_revision(
             runtime_settings,
-            "runtime_settings_show",
+            "runtime_settings_apply",
         )
-        for setting_key in (
-            "pre-tool-policy",
-            "file-payload-shadow",
-            "file-payload-exact-enforcement",
-        ):
-            runtime_settings = _run_plugin_json(
-                current_cli,
-                [
-                    "config",
-                    "set",
-                    setting_key,
-                    "on",
-                    "--expected-revision",
-                    settings_revision,
-                    "--workspace",
-                    str(workspace),
-                    "--data-dir",
-                    str(current_data),
-                    "--json",
-                ],
-                cwd=workspace,
-                env=current_environment,
-                stage=f"runtime_settings_set_{setting_key}",
-                captured_outputs=captured_outputs,
-            )
-            settings_revision = _runtime_settings_revision(
-                runtime_settings,
-                f"runtime_settings_set_{setting_key}",
-            )
         _run_hook(
             current_hook,
             _pre_tool_payload(workspace, "current-event"),
@@ -319,6 +295,45 @@ def rehearse_lifecycle(
         )
         if "current-event" not in _event_tool_use_ids(database):
             raise LifecycleFailure("current_event", "current_event_missing")
+        status_probe_token = f"tup-probe-v1-{secrets.token_hex(16)}"
+        status_arguments = [
+            "status",
+            "--hook-probe-token",
+            status_probe_token,
+            "--workspace",
+            str(workspace.resolve()),
+            "--data-dir",
+            str(current_data),
+            "--json",
+        ]
+        _run_hook(
+            current_hook,
+            _pre_tool_payload(
+                workspace,
+                "current-status-probe",
+                command=shlex.join(
+                    ["sh", str(current_cli), *status_arguments]
+                ),
+            ),
+            cwd=workspace,
+            env=current_environment,
+            stage="upgrade_status_hook",
+            captured_outputs=captured_outputs,
+        )
+        status = _run_plugin_json(
+            current_cli,
+            status_arguments,
+            cwd=workspace,
+            env=current_environment,
+            stage="upgrade_status",
+            captured_outputs=captured_outputs,
+        )
+        if (
+            status.get("status") != "active"
+            or not isinstance(status.get("runtime_enforcement"), dict)
+            or status["runtime_enforcement"].get("hook_delivery_verified") is not True
+        ):
+            raise LifecycleFailure("upgrade_status", "upgraded_runtime_inactive")
 
         stage = "current_remove"
         installer.disable()
@@ -550,19 +565,14 @@ def _all_runtime_settings_enabled(payload: dict[str, Any]) -> bool:
         "file-payload-shadow",
         "file-payload-exact-enforcement",
     }
-    shadow = by_key.get("externality-protection")
     return (
         set(by_key) == protected_keys | {"externality-protection"}
         and all(
             by_key[key].get("configured_value") is True
             and by_key[key].get("effective_value") is True
             and by_key[key].get("source") == "workspace"
-            for key in protected_keys
+            for key in protected_keys | {"externality-protection"}
         )
-        and shadow is not None
-        and shadow.get("configured_value") is None
-        and shadow.get("effective_value") is False
-        and shadow.get("source") == "default"
     )
 
 
@@ -891,14 +901,21 @@ def _read_json(path: Path, stage: str) -> dict[str, Any]:
     return payload
 
 
-def _pre_tool_payload(workspace: Path, tool_use_id: str) -> dict[str, Any]:
+def _pre_tool_payload(
+    workspace: Path,
+    tool_use_id: str,
+    *,
+    command: str | None = None,
+) -> dict[str, Any]:
     return {
         "hook_event_name": "PreToolUse",
         "session_id": "lifecycle-session",
         "turn_id": f"{tool_use_id}-turn",
         "tool_use_id": tool_use_id,
         "tool_name": "Bash",
-        "tool_input": {"command": f"printf '{SYNTHETIC_MARKER}'"},
+        "tool_input": {
+            "command": command or f"printf '{SYNTHETIC_MARKER}'"
+        },
         "cwd": str(workspace),
     }
 

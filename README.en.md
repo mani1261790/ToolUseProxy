@@ -4,9 +4,9 @@ ToolUseProxy is a local-first research implementation for tracing information fl
 
 This project is a research and development outcome of [SecHack365](https://sechack365.nict.go.jp/).
 
-`0.1.0-alpha.11` is undergoing release-candidate validation. New installation and normal use are temporarily paused. The public alpha.8 release has the fail-open issue described below. The unpublished alpha.9 candidate could not update an older compatible settings subset, and alpha.10 could deadlock local diagnosis when registered sources had been moved or deleted. Alpha.11 keeps external or uncertain calls fail-closed while allowing statically proven local recovery and the exact fixed setup commands. It is a research alpha, not a complete DLP system.
+`0.1.0-alpha.12` is undergoing release-candidate validation. New installation and normal use are temporarily paused. Alpha.12 binds the verification command's own PreToolUse event to its session, installed Plugin version, and Hook definition hash. Configuration or an older session's block no longer qualifies as active protection. It is a research alpha, not a complete DLP system.
 
-Users upgrading from alpha.8, alpha.9, or alpha.10 must upgrade to alpha.11 and review all five Hooks again. Alpha.8 could allow unsupported curl options or oversized file payloads without comparison, and an earlier three-Hook artifact reused the same alpha.8 version identifier.
+Users upgrading from alpha.8 through alpha.11 must upgrade to alpha.12, fully restart Codex, and review all five Hooks again. Alpha.8 could allow unsupported curl options or oversized file payloads without comparison, while alpha.11 could reuse older runtime evidence when reporting current protection.
 
 ToolUseProxy is licensed under the [Apache License 2.0](LICENSE).
 
@@ -22,7 +22,7 @@ ToolUseProxy is licensed under the [Apache License 2.0](LICENSE).
 
 ## Install the Plugin
 
-Do not run the following commands before the alpha.11 release gate is complete.
+Do not run the following commands before the alpha.12 release gate is complete.
 After publication resumes, install from the protected `public-alpha` release channel:
 
 ```bash
@@ -42,7 +42,7 @@ codex plugin marketplace upgrade tooluseproxy
 codex plugin list --json
 ```
 
-Use the immutable `v0.1.0-alpha.11` tag instead of `public-alpha` when reproducible version pinning matters. A pinned tag does not move when the marketplace is upgraded. Review the exact Hook definitions after installation or an update before trusting them. A changed matcher, command, or source invalidates the earlier trust decision; a Hook with `trustStatus: modified` must be reviewed again. Then follow the [Japanese five-minute quickstart](QUICKSTART.md) to initialize ToolUseProxy and review protected-source proposals in batches of up to ten. The CLI update path is tested, including replacement of the stale three-Hook alpha.8 artifact while preserving Plugin data.
+Use the immutable `v0.1.0-alpha.12` tag instead of `public-alpha` when reproducible version pinning matters. A pinned tag does not move when the marketplace is upgraded. Review the exact Hook definitions after installation or an update before trusting them, then fully restart Codex and begin a new task. A changed matcher, command, or source invalidates the earlier trust decision; a Hook with `trustStatus: modified` must be reviewed again. Then follow the [Japanese five-minute quickstart](QUICKSTART.md) to initialize ToolUseProxy and review protected-source proposals in batches of up to ten.
 
 On Codex Desktop for macOS, the current five-Hook definition (`SessionStart`, `SubagentStart`, `PreToolUse`, `PostToolUse`, and `Stop`) passed a fresh August 22 run. The run verified two command approvals, one public side effect, zero protected side effects, one exact pre-execution block, and zero raw protected-value exposures. Earlier August 9 runs also covered data migration, backup rollback, direct Remove without Disable, saved-task revalidation, and atomic setup. Desktop task history records local shell calls as `exec_command`, while the canonical Hook matcher name is `Bash`; value-free markers, the Hook database, stable definition hashes, and task records remain the evidence boundary. Linux and Windows Desktop are not established by this result.
 
@@ -64,7 +64,8 @@ The preview does not replace manual Hook review or an actual Codex task.
 - Removing the Plugin does not delete local audit data.
 - Protected-source onboarding and manifest migration are supported on macOS and Linux for this alpha, not Windows.
 - Hosted Web Search does not appear in the current `PreToolUse` / `PostToolUse` Hook surface, so ToolUseProxy cannot observe or technically block it before execution. `SessionStart` and `SubagentStart` Hooks add developer context instructing Codex never to send protected or derived content through hosted tools, but this is a mitigation rather than an enforcement boundary.
-- Additional input sent to a running process through `write_stdin` does not trigger another `PreToolUse`, and specialized Codex tool paths may bypass Hooks; neither boundary is claimed as protected.
+- Additional input sent to a running process through `write_stdin` does not trigger another `PreToolUse`. Programmatic nested tools and specialized Codex tool paths remain unverified until current Desktop evidence proves Hook delivery; none of these boundaries is claimed as protected.
+- `configured_unverified` means the workspace files and settings exist but delivery to the current verification command is not proven. `active` applies only to Hook-visible local tools after a fresh opaque token binds that command's PreToolUse event to the exact installed runtime. The user does not generate, remember, or enter this internal token.
 - Local externality protection is enabled by the normal setup profile. The experimental LLM judge provider remains off by default; classification runs outside Hooks, never auto-promotes a rule, and cannot weaken an existing block. Its provider-specific processing and retention boundary is documented in [privacy and retention](PRIVACY.md).
 
 Read [support and known limitations](SUPPORT.md), [privacy and retention](PRIVACY.md), [private vulnerability reporting](SECURITY.md), and the [Japanese project documentation](README.md) before using the alpha.

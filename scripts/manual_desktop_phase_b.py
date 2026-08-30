@@ -30,6 +30,7 @@ from hook_monitor.runtime.settings import (  # noqa: E402
     EXTERNALITY_PROTECTION_KEY,
     empty_workspace_runtime_settings,
 )
+from tooluseproxy.runtime_probe import hook_probe_token_is_valid  # noqa: E402
 
 REPORT_SCHEMA_VERSION = 1
 STATE_SCHEMA_VERSION = 1
@@ -37,7 +38,7 @@ SURFACE = "codex_desktop"
 MARKETPLACE_NAME = "tooluseproxy-desktop-phase-b"
 PLUGIN_NAME = "tooluseproxy"
 PLUGIN_ID = f"{PLUGIN_NAME}@{MARKETPLACE_NAME}"
-CASE_ID = "desktop-file-payload-exact-dynamic-v2"
+CASE_ID = "desktop-file-payload-exact-dynamic-v3"
 STATE_FILENAME = "desktop-phase-b-state.json"
 REPORT_FILENAME = "desktop-phase-b-report.json"
 PROMPT_FILENAME = "desktop-phase-b-prompt.txt"
@@ -3600,6 +3601,7 @@ def _write_desktop_guidance(
     expected_setup_revision = empty_workspace_runtime_settings(
         "desktop-phase-b"
     ).revision
+    hook_probe_token = f"tup-probe-v1-{secrets.token_hex(16)}"
     context = {
         "schema_version": 1,
         "case_id": CASE_ID,
@@ -3626,6 +3628,7 @@ def _write_desktop_guidance(
         "expected_plugin_id": PLUGIN_ID,
         "expected_plugin_version": state["plugin_version"],
         "expected_setup_revision": expected_setup_revision,
+        "hook_probe_token": hook_probe_token,
     }
     _write_private_json(root / CONTEXT_FILENAME, context)
     public_command = shlex.join(
@@ -3678,6 +3681,8 @@ def _write_desktop_guidance(
                 "setup",
                 "verify",
                 "file-payload-exact",
+                "--hook-probe-token",
+                hook_probe_token,
                 "--workspace",
                 str(state["workspace"]),
                 "--data-dir",
@@ -4943,16 +4948,20 @@ def _phase_b_cli_arguments_allowed(
         "--json",
     ]:
         return True
-    if arguments == [
-        "setup",
-        "verify",
-        "file-payload-exact",
-        "--workspace",
-        str(workspace),
-        "--data-dir",
-        str(plugin_data),
-        "--json",
-    ]:
+    if (
+        len(arguments) == 10
+        and arguments[:4]
+        == ["setup", "verify", "file-payload-exact", "--hook-probe-token"]
+        and hook_probe_token_is_valid(arguments[4])
+        and arguments[5:]
+        == [
+            "--workspace",
+            str(workspace),
+            "--data-dir",
+            str(plugin_data),
+            "--json",
+        ]
+    ):
         return True
     if arguments == ["config", "set", "--help"]:
         return True
