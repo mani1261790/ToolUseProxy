@@ -8708,6 +8708,49 @@ class InformationFlowTest(unittest.TestCase):
         self.assertEqual("", stdout)
         self.assertEqual("", stderr)
 
+    def test_pre_tool_runner_denies_external_call_for_invalid_manifest(
+        self,
+    ) -> None:
+        workspace = Path(self.temporary_directory.name)
+        (workspace / "protected_sources.json").write_text("{", encoding="utf-8")
+        context = resolve_workspace(
+            str(workspace),
+            str(workspace),
+            discovered_by="test",
+        )
+        self.store.register_workspace(context)
+        assert context.workspace_id is not None
+        initial = self.store.get_workspace_runtime_settings(context.workspace_id)
+        self.store.update_workspace_runtime_setting(
+            context.workspace_id,
+            setting_key=PRE_TOOL_POLICY_KEY,
+            value=True,
+            expected_revision=initial.revision,
+        )
+
+        exit_code, stdout, stderr = self._run_hook_in_process(
+            "pre_tool_use",
+            {
+                "session_id": "session-invalid-manifest-external",
+                "turn_id": "turn-invalid-manifest-external",
+                "tool_use_id": "bash-invalid-manifest-external",
+                "tool_name": "Bash",
+                "cwd": str(workspace),
+                "tool_input": {"command": "curl https://example.invalid"},
+            },
+            {"TOOLUSEPROXY_DB_PATH": str(self.db_path)},
+        )
+
+        self.assertEqual(0, exit_code)
+        self.assertEqual("", stderr)
+        rendered = json.loads(stdout)
+        self.assertEqual(
+            "deny",
+            rendered["hookSpecificOutput"]["permissionDecision"],
+        )
+        self.assertIn("protected_source_unavailable", stdout)
+        self.assertNotIn(SECRET, stdout)
+
     def test_environment_off_overrides_persistent_pre_tool_policy(self) -> None:
         workspace = self._write_runtime_source_config()
         (workspace / "payload.txt").write_text(SECRET, encoding="utf-8")

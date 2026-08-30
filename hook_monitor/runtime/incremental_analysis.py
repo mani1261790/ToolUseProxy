@@ -621,6 +621,10 @@ def _load_source_manifest(
             workspace_id,
             sources,
         )
+    # Malformed manifests use the same recovery boundary deliberately: only a
+    # statically proven local command may continue, while external or unknown
+    # calls remain denied before execution. This avoids making local repair
+    # impossible without weakening the exfiltration boundary.
     except (OSError, UnicodeError, ValueError):
         raise ProtectedSourceUnavailableError(
             "protected source configuration is unavailable"
