@@ -102,7 +102,9 @@ project単位では、trustedなrepositoryの`.codex/hooks.json`へ次のよう�
 
 `matcher`は正規表現です。`PreToolUse`と`PostToolUse`ではHook APIのcanonical tool名に適用されますが、`Stop`ではmatcherがサポートされないため省略します。配布Pluginは`^.*$`を使い、Hook APIへ届くlocal function toolを個別列挙なしで購読します。既知のBash / MCPは専用adapterで判定し、未知のlocal function toolはprotected flowが入力へ到達した場合だけ潜在的な外部sinkとして保守的にdenyします。`apply_patch`、`Edit`、`Write`のようなlocal file mutationは観測・記録しますが、それ自体を外部sinkとは扱いません。
 
-ただし、これはCodexの全操作を捕捉するという意味ではありません。hosted Web SearchはHookへ届かず、実行中processへ入力を追加する`write_stdin`では新しい`PreToolUse`が発火しません。特殊な実行経路がHookを省略する可能性もあるため、coverage statusではそれぞれ`not_interceptable`、`not_rechecked`、`unverified`と表示します。Codexはtimeoutを省略すると600秒を使用するため、この軽量Hookでは明示的に5秒へ制限します。commandはsessionの`cwd`で実行され、複数のmatching command hookは並行起動されます。project-local Hookは実行前に定義内容をtrustする必要があります。matcherやcommandなどを変更すると、以前のtrustはその新定義へ引き継がれず`modified`になります。再reviewして`trusted`になるまで実行対象として扱いません。
+ただし、これはCodexの全操作を捕捉するという意味ではありません。hosted Web SearchはHookへ届かず、実行中processへ入力を追加する`write_stdin`では新しい`PreToolUse`が発火しません。programmatic tool内の入れ子toolや特殊な実行経路も、実機でHook配送を確認できるまで`unverified`です。coverage statusでは、それぞれ`not_interceptable`、`not_rechecked`、`unverified`と表示します。Codexはtimeoutを省略すると600秒を使用するため、この軽量Hookでは明示的に5秒へ制限します。commandはsessionの`cwd`で実行され、複数のmatching command hookは並行起動されます。project-local Hookは実行前に定義内容をtrustする必要があります。matcherやcommandなどを変更すると、以前のtrustはその新定義へ引き継がれず`modified`になります。再reviewして`trusted`になるまで実行対象として扱いません。
+
+alpha.12以降は、Plugin wrapperが各Hook eventへPlugin版、Python runtime版、`hooks.json`のSHA-256を値なしの内部attestationとして付けます。`status`と`setup verify`は、毎回新しいopaque probe tokenをcommandへ付け、そのtokenを実際に含むPreToolUse、current detectorの解析run、attestationを同じsessionで照合します。tokenなしでは設定確認だけを行い、`active`を返しません。設定済みでも現在のcommandへの配送証拠がなければ`configured_unverified`で停止し、別task、別session、別artifactの成功を現在の`active`判定へ使いません。
 
 tool名は表示面ごとに同じとは限りません。Codex Desktopのtask履歴ではlocal shell実行が`exec_command`として記録されますが、PreToolUse / PostToolUseのmatcherとHook payloadではcanonical名`Bash`を使います。Pluginのmatcherへtask履歴上の`exec_command`をそのまま追加する必要はありません。ToolUseProxyの`exec_command + tool_input.cmd`互換レイヤーは、session由来payloadや互換fixtureの解析用としてraw payloadを変えずに保持します。
 
@@ -132,7 +134,7 @@ Codex の GUI か設定ファイルで、次の command を指定します。`/a
 
 `TOOLUSEPROXY_WORKSPACE_ROOT`の指定を推奨します。rootは既存の絶対directoryで、root自身がsymlinkではなく、Hook payloadの`cwd`がその配下にある必要があります。canonical rootのSHA-256から安定した`workspace_id`を作り、lexical rootと実行時cwdも別fieldで監査保存します。rootを指定しない場合はHook payloadの`cwd`自体をworkspace rootとして扱うため、同じrepositoryでもsubdirectoryごとに別workspaceになり得ます。
 
-明示rootの検証に失敗したeventはraw evidenceとして保存しますが、snapshot取得とruntime policy評価はfail-openで省略します。workspaceを推測するための親directory走査やGit探索は行いません。
+明示rootの検証に失敗したPreToolUseは別workspaceを推測せず実行前denyします。PostToolUse / Stopは不確かなsnapshotやruntime graphを作らずadvisoryに留めます。workspaceを推測するための親directory走査やGit探索は行いません。
 
 この段階の目的は、hook から I/O を受け取り、後から情報流を再解析できる観測ログを残すことです。加えて `Stop` では、最終応答をユーザーへ出す直前の確認点として `continue_review` を返す最小接続を行います。
 
@@ -283,7 +285,7 @@ moveではsourceが消えたこととtargetの現在内容を別snapshotで確�
 
 既定の`TOOLUSEPROXY_SNAPSHOT_PLAINTEXT=0`では、UTF-8 textでも`body_text`を保存せず`captured_hash_only`にします。opt-in時だけ`captured_text`として本文を保存します。binary本文はopt-inでも保存しません。同じpathの取得結果を再利用する場合も、重複本文を保存せず`cached_hash_only`にします。
 
-`content_sha256`は、上限内のファイル全体を安定して読み切った場合だけ計算します。apply_patch文字列やBash segmentのhashをfile content hashとして代用しません。capture全体の例外はHookをfail-openにし、outcome evidenceへ例外型だけを追記します。path単位の失敗は`capture_status`と`error_code`を保存し、可能な場合はhashless resource versionへfallbackします。ただし、delete tombstoneは不在を確認した場合だけ作り、`execution_unknown`と`ambiguous_final_writer`はmaterializeしません。
+`content_sha256`は、上限内のファイル全体を安定して読み切った場合だけ計算します。apply_patch文字列やBash segmentのhashをfile content hashとして代用しません。実行後のPostToolUse capture全体の例外は、すでに完了した操作の結果を変えずadvisoryに留め、outcome evidenceへ例外型だけを追記します。path単位の失敗は`capture_status`と`error_code`を保存し、可能な場合はhashless resource versionへfallbackします。ただし、delete tombstoneは不在を確認した場合だけ作り、`execution_unknown`と`ambiguous_final_writer`はmaterializeしません。
 
 snapshotの自動retentionやpruneはまだ実装していないため、recordはDBを削除または明示的に整理するまで残ります。SQLite自体も暗号化しません。snapshot本文をoffにしても、raw Hook payload、artifact、operation fragmentにはtool input/outputが平文で保存され得ます。さらにcompleted offline runの`analysis_node_snapshots.metadata_json`はcontent-addressedですが暗号化・匿名化ではなく、artifact fragmentやsource chunkのtextを過去run再現用に保持します。live sourceを削除しても過去run snapshotは自動pruneされません。DBを外部へ共有せず、OSのfile permissionとdisk encryptionで保護してください。
 
@@ -348,7 +350,7 @@ TOOLUSEPROXY_PRE_TOOL_POLICY=1 python3 /absolute/path/to/ToolUseProxy/hooks/moni
 
 直接実行される`curl`では、`-d VALUE`、`-dVALUE`と、`--data`、`--data-ascii`、`--data-binary`、`--data-raw`、`--data-urlencode`、`--json`、`--form-string`のseparated / `=`形式をsegment単位で静的解析します。複数operandの順序は保ちますが最終bodyは合成しません。operand全体とprotected source chunkのraw valueが完全一致した場合だけscore 1.0のbindingを作ります。
 
-shell変数、command substitution、glob / brace / tilde展開、body以外のdynamic option / operand、dynamic redirection、unknown option arity、file-backedな`@file` / `@-`、空値、上限超過があれば、そのsegmentの抽出値をすべて破棄して`coarse_fallback`にします。ただし`--data-raw @literal`と`--form-string name=@literal`はcurlが`@`をliteralとして扱うためstaticです。`--data-urlencode`もfile formだけをfallbackにします。fallbackでもexternal sinkと従来のsegment-to-sink / path / pipe evidenceは残しますが、未知のruntime値を秘密値とは仮定しません。
+shell変数、command substitution、glob / brace / tilde展開、body以外のdynamic option / operand、dynamic redirection、unknown option arity、file-backedな`@file` / `@-`、空値、上限超過があれば、そのsegmentの抽出値をすべて破棄して`coarse_fallback`にします。ただし`--data-raw @literal`と`--form-string name=@literal`はcurlが`@`をliteralとして扱うためstaticです。`--data-urlencode`もfile formだけをfallbackにします。fallbackでもexternal sinkと従来のsegment-to-sink / path / pipe evidenceは残します。複数行全体を正確なplanにできない場合も既知external commandはcoarse command sinkとして保持します。未知のruntime値を秘密値と推測したり展開したりはせず、protected sourceが有効な実行時policyでは完全確認不能としてdenyします。
 
 この抽出はshell、subprocess、networkを実行せず、fileも読みません。上限は1 segmentあたり32値、1値32 KiB、合計128 KiBです。projection値を追加fragment、DB row、評価report本文へ複製しません。
 
@@ -385,11 +387,13 @@ TOOLUSEPROXY_PRE_TOOL_POLICY=1 TOOLUSEPROXY_PRE_TOOL_FILE_PAYLOAD_EXACT_ENFORCEM
 
 対象はcurrent Bash eventの`curl --data-binary @relative-file`です。`resolution_status`と`comparison_status`がともに`evaluated`、extractionが`resolved_file`、snapshotが`pre_execution_file_snapshot`であり、active source chunkとの`resolved_payload_exact`または`resolved_payload_exact_substring`がある場合だけcritical blockを返します。一般的なshingle、token equivalent、embedding / semantic類似はこのdenyへ接続しません。
 
-public no-match、unsupported、上限超過、resolver例外は新しいdenyを作らず、先に確定したlineage policyのallow / warn / blockを維持します。exact evidence確定後に監査保存だけが失敗した場合は外部side effectを許可せずdenyを維持します。shadow flagも同時に有効化した場合は同じ一回のfile snapshot比較から値なし観測を保存し、payloadを二重に読みません。
+public no-matchは、active source全体との比較が上限内で完了した場合だけallow候補になります。unsupported、上限超過、resolver / comparison例外、外部sinkのpayload未確認は、protected sourceが有効なら実行前denyします。exact evidence確定後に監査保存だけが失敗した場合もdenyを維持します。shadow flagを同時に有効化した場合は同じ一回のfile snapshot比較から値なし観測を保存し、payloadを二重に読みません。
+
+MCPは`get`、`list`、`search`を含め、引数がMCP serverへ送られる全callをexternal boundaryとして扱います。32 KiB / 32 fields / depth 8以内の全scalar値とkeyを、最大512 chunks / 512 KiBのactive source全体と候補省略なしで比較します。protected一致、入力・source上限超過、比較時間超過、解析例外は実行前denyし、全比較が完了したpublic inputだけを通します。
 
 denyは「file-backed external payloadにprotected contentが見つかった」と説明し、参照fileから保護内容を除くかpublic payloadを選ぶよう案内します。ただし実行前snapshotとcurlが後で読むbytesの一致は証明しないため、TOCTOUの制限は残ります。既定有効化は別のgo / no-go判断です。
 
-MCP Hookのmatcherは、たとえば`^mcp__.*$`、または対象を絞った`^mcp__github__.*$`を使用します。実CodexのMCP payloadは`tool_name: mcp__<server>__<tool>`で、`tool_input`にはMCP toolへ渡すraw argumentsが入ります。adapterが外部送信と分類するwrite-like toolだけがsinkとなり、read-only toolは記録して通過させます。MCP tool名はUTF-8で4 KiBを上限とし、超過時はartifact / sinkをmaterializeする前に`tool_name_bytes_exceeded`でdenyします。tool名自体が1 MiBのraw read上限を跨いで後続`cwd`を読めない場合も、明示`TOOLUSEPROXY_WORKSPACE_ROOT`が有効ならそのrootだけを早期deny scopeとして検証します。
+MCP Hookのmatcherは`^mcp__.*$`です。実CodexのMCP payloadは`tool_name: mcp__<server>__<tool>`で、`tool_input`にはMCP toolへ渡すraw argumentsが入ります。read-only名を含む全MCP callがexternal boundaryとなり、mutation名はsink種別の精密化にだけ使います。MCP tool名はUTF-8で4 KiBを上限とし、超過時はartifact / sinkをmaterializeする前に`tool_name_bytes_exceeded`でdenyします。tool名自体が1 MiBのraw read上限を跨いで後続`cwd`を読めない場合も、明示`TOOLUSEPROXY_WORKSPACE_ROOT`が有効ならそのrootだけを早期deny scopeとして検証します。
 
 現在eventの`event_id`、`sequence_no`、`tool_use_id`、adapter種別が一致するexternal sinkだけを評価します。過去eventの未解消findingを理由に現在の呼出しを止めません。
 
@@ -406,7 +410,8 @@ Post event本体を保存した後、runnerはdormantなredaction confirmation�
 - critical: `permissionDecision: deny`
 - high: `additionalContext`を返して実行継続
 - medium以下またはfindingなし: stdoutなしで実行継続
-- session ID欠落、policy無効、解析例外: fail-open
+- session / workspace / tool identity欠落、解析例外: 初期化後のPreToolUseは実行前deny
+- policyを利用者が明示的に無効化したworkspace: policyなしで実行継続
 
 未サポートの`permissionDecision: ask`と`continue: false`には依存しません。通常のHook処理はSQLite、静的adapter、indexed lexical candidate、差分lineageだけを使い、network、embedding、全DB再解析は行いません。
 
@@ -488,7 +493,7 @@ source manifestの基準directoryはeventのcanonical workspace rootです。`pr
   - `.env` や `private.py` を「守るべき source」として定義する入口です
 - `hook_monitor/runtime/runner.py`
   - 全体の実行順序をまとめる orchestrator です
-  - direct Hook環境でMCP raw gateも有効な場合は`bounded prefix read -> top-level tool/workspace scope -> real MCP raw gate -> parse -> normalize -> bounded input preflight`を先に行います。ready workspaceのreal MCPだけをraw JSON 1 MiB / depth 64 / numeric token 128 charsで制限し、超過したwriteはdeny、read-only / unsinked / workspace未確定は空stdoutで早期bypassします。既知の非MCP toolは従来経路を維持し、Hook JSONはUTF-8・BOMなしだけを受理します
+  - direct Hook環境でMCP raw gateも有効な場合は`bounded prefix read -> top-level tool/workspace scope -> real MCP raw gate -> parse -> normalize -> bounded input preflight`を先に行います。ready workspaceのreal MCPをraw JSON 1 MiB / depth 64 / numeric token 128 charsで制限し、read-only名を含む超過callとworkspace未確定callをdenyします。既知の非MCP toolは従来経路を維持し、Hook JSONはUTF-8・BOMなしだけを受理します
 - `hook_monitor/analysis/chunking.py`
   - 保護対象 source を chunk に分割します
   - `.py` は関数や class 単位、テキストは段落単位で分割します
@@ -605,17 +610,17 @@ legacy manifestで新しいsourceを登録する前に、coding agentは`sh "<PL
 
 migration plan後にmanifestが変わればapplyせず、agentは新しいplanを示して再承認を得ます。途中停止時は同じrevisionとmanifest SHA-256で再試行します。migrationもworkspace lockで協調writerを直列化しますが、同一UIDの非協調的なeditorとの最終再検証から置換、またはdurability再確認から完了確定までの競合は保証外です。migrationはPOSIX（macOS/Linux）のみ対応し、`init`やHookから暗黙には実行しません。migration承認は後続source登録の承認を兼ねません。
 
-coding agentがmanifestを直接編集する代わりに、schema v2へ明示移行した後のPluginでは`sh "<PLUGIN_ROOT>/hooks/run_cli.sh" protect scan --workspace <workspace-root> --data-dir <PLUGIN_DATA> --json`を明示的に実行できます。`scan`はVCS、依存関係、virtual environment、build / cache、runtime dataなどを除外し、深さ、entry数、file数、総read bytes、candidate数の固定上限内でworkspaceをoffline探索します。`.env` / `.env.*` / JSONのsecretらしいfield名に一致した非空stringだけをdotenv key / JSON Pointerとして候補化し、stableな相対path順で次の1件だけを提示します。sourceとmanifestは変更しませんが、local runtime DBにはvalue-freeな候補・review監査と内部再検証用のsource hash/statを保存します。raw valueと本文previewはstdout、stderr、候補row、review rowのいずれにも残さず、source hashとabsolute pathは外向きoutputやreviewには出しません。
+coding agentがmanifestを直接編集する代わりに、schema v2へ明示移行した後のPluginでは`sh "<PLUGIN_ROOT>/hooks/run_cli.sh" protect scan --workspace <workspace-root> --data-dir <PLUGIN_DATA> --json`を明示的に実行できます。`scan`はVCS、依存関係、virtual environment、build / cache、runtime dataなどを除外し、深さ、entry数、file数、総read bytes、candidate数の固定上限内でworkspaceをoffline探索します。`.env` / `.env.*` / JSONのsecretらしいfield名に一致した非空stringだけをdotenv key / JSON Pointerとして候補化し、stableな相対path順で最大10件を提示します。sourceとmanifestは変更しませんが、local runtime DBにはvalue-freeな候補・review監査と内部再検証用のsource hash/statを保存します。raw valueと本文previewはstdout、stderr、候補row、review rowのいずれにも残さず、source hashとabsolute pathは外向きoutputやreviewには出しません。
 
-`scan_complete: false`は固定上限で探索が部分結果になったことを表すため、agentは候補なしと言い切らず、到達した上限reasonと未探索範囲が残ることを説明します。候補は最大10件を番号付きでまとめて提示し、候補ごとの明示判断を`protect review`で一度に反映します。batch適用は全candidate revisionと共有manifest hashを再確認し、manifestを1回だけ更新します。ユーザーまたはagentが既にpathを特定した場合は、`protect suggest --path <relative-path> --json`を使い、`--path`を繰り返して最大10件を同じreview batchにできます。`init`、PreToolUse、PostToolUse、Stopはこのworkspace scanを暗黙実行しません。
+`remaining_candidate_count`は現在batch外の既知の未提案候補数を示すJSON整数で、未探索範囲を含みません。`scan_complete`は探索完了を示すJSON真偽値で、falseの場合は固定上限で未探索範囲が残ります。`continuation_required`は現在batchの候補提示中、既知の残候補あり、承認処理中、または探索未完了でtrueになり、現在batchがあるだけでもtrueなので再scan命令そのものではありません。agentは候補を最大10件の番号付き一覧で提示し、候補ごとの明示判断を`protect review`で一度に反映します。batch適用は全candidate revisionと共有manifest hashを再確認し、manifestを1回だけ更新します。review成功後は元のscan結果で`remaining_candidate_count > 0`または`scan_complete: false`の場合だけ再scanし、それ以外は完了です。ユーザーまたはagentが既にpathを特定した場合は、`protect suggest --path <relative-path> --json`を使い、`--path`を繰り返して最大10件を同じreview batchにできます。suggestも同じbatch metadataを返しますが、指定path全体を扱うためremainingは0、scanはcompleteです。`init`、PreToolUse、PostToolUse、Stopはこのworkspace scanを暗黙実行しません。
 
 Plugin更新でprotected-source detector versionが変わった場合も、更新前の`proposed`候補のID / opaque revisionは再利用しません。旧proposalへのapprove、reject、ignoreはcandidateやreviewを変更する前にvalue-freeな`candidate_detector_stale`で終了します。agentは`protect scan`を再実行し、現在versionが作った新しいcandidate IDとrevisionを提示して改めて承認を得ます。旧versionのreject / ignoreは新versionの候補を抑止しません。すでにmanifestへ登録されたapproved sourceは更新後も維持し、detector変更だけを理由にentryやselectorを自動変更しません。更新前に開始した`approving`または完了した`approved`へのexact approve再試行だけは、途中停止のdurability recoveryとして扱います。Hookはこの候補互換処理やscanを暗黙実行しません。
 
-`scan`と`suggest`はmanifestを変更しません。agentは提案entryをユーザーへ示し、明示承認後にだけ`protect approve`へ保存済みcandidate ID、opaque revision、提案時manifest SHA-256を渡します。approveはworkspace lockを取得してからDB上の候補を`proposed`から`approving`へ予約し、sourceのstat・content hash・selector解決とexpected manifest hashの楽観的な事前条件を再検証します。lockはmanifest更新後のDB確定または安全なreleaseまで保持するため、同時のreject / ignore / approveが異なる状態を確定しません。途中停止や一時的なstate errorでは、同じcandidate ID、opaque revision、manifest SHA-256のapprove入力を再実行します。exact登録の回復はdirectory fsyncと再検証に成功した後だけDBをapprovedへ進めます。workspace lockで直列化するのはToolUseProxyの協調writer同士です。POSIX filesystemには同一UIDの非協調editorも含めたportableなcontent compare-and-swapがないため、filesystemの最終再検証からatomic replaceまで、またはdurability再確認からDB確定までの競合を含むfilesystem / DB横断の直列化は保証外です。この登録workflowは現在POSIX（macOS/Linux）対応で、Windowsでは`protect scan / suggest / approve / reject / ignore`を未対応とします。候補作成と再検証で検出したsourceまたはmanifestの変更は登録せず、新しいscanまたはsuggestを要求します。
+`scan`と`suggest`はmanifestを変更しません。agentは最大10件の提案を番号付きでまとめて示し、候補ごとの明示判断がすべて揃った後だけ`protect review`へ保存済みcandidate ID、opaque revision、判断、提案時の共有manifest SHA-256を渡します。reviewはworkspace lockを取得し、全候補のstate、source stat・content hash・selector解決、共有manifest hashを再検証します。1件でもstale、重複、未知、または不正なら全transactionをrollbackします。承認対象を予約した後、manifestはbatch全体に対して1回だけatomic replaceし、reject / ignoreを含む全判断を同じtransactionで確定します。途中停止やdurability不明では、同じdecision集合、revision、manifest SHA-256をそのまま再実行します。workspace lockで直列化するのはToolUseProxyの協調writer同士です。POSIX filesystemには同一UIDの非協調editorも含めたportableなcontent compare-and-swapがないため、filesystemの最終再検証からatomic replaceまで、またはdurability再確認からDB確定までの競合を含むfilesystem / DB横断の直列化は保証外です。この登録workflowは現在POSIX（macOS/Linux）対応で、Windowsでは`protect scan / suggest / review / approve / reject / ignore`を未対応とします。候補作成と再検証で検出したsourceまたはmanifestの変更は登録せず、新しいscanまたはsuggestを要求します。1件用commandは互換fallbackであり、通常UXでは一括reviewを使います。
 
 候補のSQLite rowにはpath、selector、固定rule、confidence、内部再検証用hash/statだけを保持し、secret本文は保持しません。`reject` / `ignore`は同一file内容・detector versionの候補を再提示しないためのvalue-free監査です。schema省略またはschema v1のlegacy manifestはruntime互換を維持し、明示的な`protect migrate plan` / `apply`が完了するまで新しいentryを登録しません。登録済みmanifestは次のanalysisでsource digest差分として検出され、そのworkspace / sessionをfull rebuildします。
 
-直接実行される`curl`の静的body optionでは、送信operandとselected secret valueが完全一致した場合だけ、command全体の長さに影響されないcritical bindingを作ります。shell変数やcommand substitutionは展開せず、unknown option、`@file` / `@-`、上限超過を含むsegmentは値単位の証明をせず従来のsegment-level evidenceへ戻します。抽出値は追加の永続rowや評価reportへ保存しません。
+直接実行される`curl`の静的body optionでは、送信operandとselected secret valueが完全一致した場合だけ、command全体の長さに影響されないcritical bindingを作ります。shell変数やcommand substitutionは展開せず、unknown option、`@file` / `@-`、上限超過を含むsegmentは値単位の証明をせずsegment-levelまたはcoarse command evidenceへ戻します。protected sourceが有効なPreToolUseで外部payloadを完全確認できなければdenyします。抽出値は追加の永続rowや評価reportへ保存しません。
 
 JSONの例:
 

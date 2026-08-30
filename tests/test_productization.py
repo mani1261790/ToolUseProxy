@@ -137,12 +137,12 @@ class RuntimePathsTest(unittest.TestCase):
             root = Path(temporary_directory)
             codex_home = root / "codex-home"
             plugin_root = (
-                codex_home / "plugins" / "cache" / "tooluseproxy" / "tooluseproxy" / "0.1.0-alpha.8"
+                codex_home / "plugins" / "cache" / "tooluseproxy" / "tooluseproxy" / "0.1.0-alpha.12"
             )
             manifest_dir = plugin_root / ".codex-plugin"
             manifest_dir.mkdir(parents=True)
             (manifest_dir / "plugin.json").write_text(
-                json.dumps({"name": "tooluseproxy", "version": "0.1.0-alpha.8"}),
+                json.dumps({"name": "tooluseproxy", "version": "0.1.0-alpha.12"}),
                 encoding="utf-8",
             )
 
@@ -330,9 +330,15 @@ class ProductCliTest(unittest.TestCase):
                             "--json",
                         ]
                     )
-                self.assertEqual(0, exit_code, stdout.getvalue())
+                self.assertEqual(
+                    0 if command == "doctor" else 1,
+                    exit_code,
+                    stdout.getvalue(),
+                )
                 payload = json.loads(stdout.getvalue())
                 self.assertEqual(str(data_dir / "events.db"), payload["db_path"])
+                if command == "status":
+                    self.assertEqual("inactive", payload["status"])
 
             with sqlite3.connect(data_dir / "events.db") as conn:
                 registered = conn.execute("SELECT canonical_root FROM workspaces").fetchall()
@@ -950,7 +956,7 @@ class PluginBundleTest(unittest.TestCase):
             root = Path(temporary_directory)
             codex_home = root / "codex-home"
             plugin_root = (
-                codex_home / "plugins" / "cache" / "tooluseproxy" / "tooluseproxy" / "0.1.0-alpha.8"
+                codex_home / "plugins" / "cache" / "tooluseproxy" / "tooluseproxy" / "0.1.0-alpha.12"
             )
             plugin_root.mkdir(parents=True)
             for directory in (".codex-plugin", "hook_monitor", "hooks", "tooluseproxy"):
@@ -996,7 +1002,7 @@ class PluginBundleTest(unittest.TestCase):
                     "apply",
                     "file-payload-exact",
                     "--codex",
-                    "--expect-empty-settings",
+                    "--expect-compatible-settings",
                     "--workspace",
                     str(workspace),
                     "--json",
@@ -1030,7 +1036,15 @@ class PluginBundleTest(unittest.TestCase):
                 text=True,
                 check=True,
             )
-            self.assertEqual("passed", json.loads(verified.stdout)["status"])
+            verified_payload = json.loads(verified.stdout)
+            self.assertEqual(
+                "configuration_passed",
+                verified_payload["status"],
+            )
+            self.assertEqual(
+                "requires_current_invocation_hook_probe",
+                verified_payload["runtime_enforcement"]["status"],
+            )
 
             suggested = subprocess.run(
                 [
@@ -1189,10 +1203,11 @@ class PluginBundleTest(unittest.TestCase):
                 env=environment,
                 capture_output=True,
                 text=True,
-                check=True,
+                check=False,
             )
+            self.assertEqual(1, legacy_status.returncode)
             legacy_status_payload = json.loads(legacy_status.stdout)
-            self.assertEqual("active", legacy_status_payload["status"])
+            self.assertEqual("inactive", legacy_status_payload["status"])
             self.assertTrue(legacy_status_payload["protected_sources"]["runtime_readable"])
             self.assertFalse(legacy_status_payload["protected_sources"]["registration_writable"])
             self.assertTrue(legacy_status_payload["protected_sources"]["migration_required"])
@@ -1565,9 +1580,10 @@ class PluginBundleTest(unittest.TestCase):
                 env=environment,
                 capture_output=True,
                 text=True,
-                check=True,
+                check=False,
             )
-            self.assertEqual("active", json.loads(status.stdout)["status"])
+            self.assertEqual(1, status.returncode)
+            self.assertEqual("inactive", json.loads(status.stdout)["status"])
             self.assertNotIn(
                 registration_secret,
                 status.stdout + status.stderr,

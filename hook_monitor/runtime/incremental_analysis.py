@@ -49,6 +49,7 @@ from hook_monitor.runtime.models import (
 )
 from hook_monitor.runtime.source_config import (
     DEFAULT_CONFIG_PATH,
+    ProtectedSourceUnavailableError,
     load_protected_sources,
     protected_source_selector_payload,
     resolve_protected_source_path,
@@ -58,7 +59,7 @@ from hook_monitor.runtime.storage import EventStore
 
 _MCP_PROFILE_GRAPH_VERSION = DEFAULT_MCP_PROFILE_REGISTRY.registry_version.rsplit(":", 1)[-1][:12]
 RUNTIME_GRAPH_DETECTOR_VERSION = (
-    f"runtime-graph-v19-{SIMILARITY_PROFILE_VERSION}-{SOURCE_CHUNKER_VERSION}-"
+    f"runtime-graph-v21-{SIMILARITY_PROFILE_VERSION}-{SOURCE_CHUNKER_VERSION}-"
     f"{BASH_SUBMISSION_EXTRACTOR_VERSION}-"
     f"mcp-profiles-{_MCP_PROFILE_GRAPH_VERSION}"
 )
@@ -612,13 +613,22 @@ def _load_source_manifest(
         digest = _stored_source_digest(workspace_id, sources, chunks)
         return digest, sources, None
 
-    sources = load_protected_sources(config_path, workspace_id=workspace_id)
-    digest = _source_manifest_digest(
-        config_path,
-        repo_root,
-        workspace_id,
-        sources,
-    )
+    try:
+        sources = load_protected_sources(config_path, workspace_id=workspace_id)
+        digest = _source_manifest_digest(
+            config_path,
+            repo_root,
+            workspace_id,
+            sources,
+        )
+    # Malformed manifests use the same recovery boundary deliberately: only a
+    # statically proven local command may continue, while external or unknown
+    # calls remain denied before execution. This avoids making local repair
+    # impossible without weakening the exfiltration boundary.
+    except (OSError, UnicodeError, ValueError):
+        raise ProtectedSourceUnavailableError(
+            "protected source configuration is unavailable"
+        ) from None
     return digest, sources, config_path
 
 

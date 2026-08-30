@@ -1,10 +1,10 @@
 # Codex Desktop Phase B
 
-Issue [#53](https://github.com/mani1261790/ToolUseProxy/issues/53)では、CLI TUIの結果を流用せず、Codex Desktop / GUI上のPlugin install、Hook review、public allow、protected block、disable / remove、同一版reinstallを人と実証します。
+Issue [#53](https://github.com/mani1261790/ToolUseProxy/issues/53)では、CLI TUIの結果を流用せず、Codex Desktop / GUI上のPlugin install、Hook review、public allow、static protected block、dynamic protected fail-closed、disable / remove、同一版reinstallを人と実証します。
 
 ## 現在地
 
-専用harnessは実装済みです。2026-07-28以降、Codex Desktop同梱のCodexで人による実機確認を行いました。2026-08-09までの結果は次のとおりです。
+専用harnessは実装済みです。2026-07-28以降、Codex Desktop同梱のCodexで人による実機確認を行いました。2026-08-31までの結果は次のとおりです。
 
 | 段階 | 結果 |
 | --- | --- |
@@ -18,6 +18,9 @@ Issue [#53](https://github.com/mani1261790/ToolUseProxy/issues/53)では、CLI T
 | 個別commandの承認UI | 表示を確認。短いplain textで内容は理解できたが、初期設定で約10回の承認が必要 |
 | 保存済み2026-08-09 run | 最新exit-code wrapperを厳密に解析し、public 1 / protected 0 / exact block 1 / raw exposure 0で正式な`passed` |
 | 2-command setup | fresh Desktopで承認UI 2回を確認。説明はある程度理解可能。public 1 / protected 0 / exact block 1 / raw exposure 0で正式な`passed` |
+| alpha.8の5 Hook fresh run | SessionStart / SubagentStart / PreToolUse / PostToolUse / Stopをtrust。承認UI 2回、public 1 / protected 0 / exact block 1 / raw exposure 0、reusable permission 0で正式な`passed` |
+| alpha.9の単一task fresh run | 2026-08-28に正式な`passed`。承認UI 2回、public実行、static / dynamic protectedはどちらも実行前block、raw exposure 0、余分なtool call 0 |
+| alpha.12 current-invocation fresh run | 2026-08-31に全35 checksがtrue。承認UI 2回、public side effect 1、static / dynamic protected side effect各0、実行前block各1、raw exposure 0、余分なtool call 0 |
 | public / protected call | publicは実行、protectedはPreToolUseが実行前block |
 | disable / remove / 同一版reinstall | 管理DBとruntime設定を保持したまま完走 |
 | final cleanup | Plugin、Marketplace、管理データ、synthetic workspaceを削除。他のPlugin / Marketplace一覧は開始時と一致 |
@@ -27,7 +30,21 @@ Issue [#53](https://github.com/mani1261790/ToolUseProxy/issues/53)では、CLI T
 
 Desktopのtask履歴で使われる`exec_command`は、Hook matcherのtool名ではありません。CodexがPreToolUse / PostToolUseへ渡すcanonical名はDesktopでも`Bash`です。したがってPluginのmatcherは`Bash`を使い、`exec_command`へ変更しません。ToolUseProxy内部の互換レイヤーはsession由来payloadなどの解析用として保持しますが、Hookを有効にする条件とは分けます。
 
-最新runでは、3 Hookの`trustStatus`と定義hashを機械確認した後、値を含まない専用markerでPreToolUse、PostToolUse、Stop各1件を確認できました。markerはrun固有nonceでhash化したsession IDとtool-use IDに結び付き、別taskのHook eventでは合格できません。UIに診断が表示されるかどうかは合格条件にしていません。
+2026-08-09のrunでは、3 Hookの`trustStatus`と定義hashを機械確認した後、値を含まない専用markerでPreToolUse、PostToolUse、Stop各1件を確認できました。markerはrun固有nonceでhash化したsession IDとtool-use IDに結び付き、別taskのHook eventでは合格できません。UIに診断が表示されるかどうかは合格条件にしていません。
+
+2026-08-22のalpha.8 fresh runでは、5 Hookをtrustした状態で同じ証拠境界を再検証しました。`true` probeは1回だけ実行され、PreToolUse / PostToolUse / Stopが各1回、SessionStart / SubagentStartも現在定義として確認されました。setup applyとread-only verifyで承認UIは合計2回、public callは実行、protected callは実行前blockでした。最終verifyは全26 checksがtrueで、public side effect 1、protected side effect 0、exact block 1、raw exposure 0、reusable permission 0です。Plugin、marketplace、managed dataは最終cleanupで削除し、無関係なPlugin状態は維持しました。
+
+alpha.9でcase IDを`desktop-file-payload-exact-dynamic-v2`へ更新しました。従来のstatic protected fileに加え、同じ登録済みdotenvを`source`した次行で`$PHASE_B_TOKEN`をlocal fake sinkへ渡すdynamic protected callを第三のexact callとして固定しています。値は読み取り・展開・表示せず、sessionの改行をflattenしないexact command、PreToolUse 1 / PostToolUse 0、fail-closed decision 1、専用marker 0、raw exposure 0を別々に照合します。2026-08-28のfresh runではstatic / dynamicの両方がこの条件を満たしました。
+
+alpha.12ではcase IDを`desktop-file-payload-exact-dynamic-v3`へ更新しました。setup verification commandへ毎回新しいopaque probe tokenを付け、そのcommand自身のPreToolUse eventと実行中Plugin artifactを照合します。alpha.9のv2合格は当時のblock証拠として保持しますが、alpha.12のcurrent-invocation healthには流用しません。
+
+2026-08-31のfresh runでは、Desktop `26.825.41651`、同梱Codex `0.151.0-alpha.7.1`、source commit `2831075`から作った計測用alpha.12 bundleを使用しました。現在のDesktopが保存する、単一`tools.exec_command`を含む固定wrapperからpublic、static protected、dynamic protectedの3 commandを厳密に抽出できました。publicはPreToolUse / PostToolUse各1件とside effect 1件、protected 2件はそれぞれPreToolUse 1件、PostToolUse 0件、side effect 0件でした。この結果は固定wrapperだけの証拠であり、任意JavaScriptや他のnested toolへ一般化しません。
+
+同じrunでdisable、Remove、同一版reinstall、managed state再利用、final Remove、cleanupまで完走しました。Phase B Plugin、marketplace、約54 MiBの管理データ、synthetic workspaceを削除し、通常版ToolUseProxyを有効へ戻しました。検証reportと値を含まないlifecycle stateは保持しています。
+
+2026-08-28のfresh runでは、setup revisionの受け渡し、Desktop sessionの厳密な絞り込み、fresh Plugin dataの強制を追加した上で、全35 checksがtrueになりました。disable、remove、同一版reinstall、final remove、cleanupも完走し、Plugin、Marketplace、約38.8 MBの管理データ、synthetic workspaceを削除しました。無関係なPlugin / Marketplaceの一覧は開始時と一致しています。Codex configには無効な履歴が残るため、cleanup結果は`restored_with_inactive_config_residue`です。
+
+このrunでstandalone Codex CLIが`0.147.0`から`0.150.1`へ自動更新されましたが、Desktop本体`26.820.60940`とDesktop同梱Codex `0.150.0-alpha.8`は不変でした。Desktop証拠のidentityは同梱Codexを使い、無関係なstandalone CLIの更新で失敗しないようにしています。また、旧runから引き継がれていた破損DBはfresh証拠に使わず、別rootに隔離しました。以後の`prepare`は既存のPhase B dataがあれば変更せず停止します。
 
 以前のrunは、`workspace-write`のDesktop taskからworkspace外の`PLUGIN_DATA`へ通常権限で`init`し、OS拒否で停止しました。setup skillとPhase B promptを直した最新runでは、Plugin dataを実際に触る10コマンドすべてが`require_escalated`、空でない日本語の理由、再利用可能な`prefix_rule`なしで発行され、初期化からprotected blockまで完走しました。
 
@@ -75,7 +92,7 @@ Desktop / GUI上で今回のfile-backed exact-only保護が動くことは確認
 - workspace外のPlugin dataへ書くsetup commandは通常権限で先に試さず、exactな1コマンドだけのsandbox昇格を要求する
 - test sinkはnetworkへ接続せず、synthetic workspace内のmarkerだけを更新する
 - verifierはDesktop session、Hook定義hash、dispatch marker、Hook DB、side-effect marker、Plugin source / versionを相互照合する
-- verifierは全tool inputも確認し、指定context / setup skillのread、exactなToolUseProxy setup command、public / protected test call以外のWeb・MCP・編集・任意shellが1件でもあれば不合格にする
+- verifierは全tool inputも確認し、指定context / setup skillのread、exactなToolUseProxy setup command、public / static protected / dynamic protected test call以外のWeb・MCP・編集・任意shellが1件でもあれば不合格にする。dynamic callは改行を含む二行全体が完全一致し、`;`への置換や別sourceを拒否する
 - 本試験promptは承認文の正解を埋め込まない。通常利用と同じく、インストール済みsetup skillだけから説明を組み立てさせ、verifierは「行うこと」「変更されるもの」「外部通信」「確認が必要な理由」「利用者への直接の質問」が順番どおり揃い、操作内容と矛盾しないことを確認する
 - cleanup-planでmanaged dataの件数・file数・byte数・未管理entry数とexact uninstall tokenを固定し、apply中に別の削除planへ差し替えない
 - cleanupはPhase B専用dataとmarketplaceだけを削除し、未管理dataと無関係なPlugin / marketplaceを保持する。途中失敗時はdata削除前後・marketplace削除前後の保存済み段階から再開する
@@ -117,29 +134,16 @@ python3.11 scripts/manual_desktop_phase_b.py checkpoint-hooks-trusted \
   --root /Users/mani/.tooluseproxy-dogfood/desktop-phase-b-YYYYMMDD
 ```
 
-このcheckpointが返すprobe用taskを開き、生成済みpromptどおり無害な`true`だけを実行します。次のcheckpointは、Desktop画面のstderrではなく、専用launcherが残した値なしmarkerと新しいsessionのhash化IDを照合します。別taskの`true`やStop eventでは合格しません。
+このcheckpointが返す本試験taskを1つだけ開きます。SessionStart Hookが同じtaskのPlugin data保存先をcontextへ記録し、setup apply / verify、public、static protected、dynamic protected、Stopを続けて実行します。別の`true` probe taskは作りません。Hook不達、setup失敗、追加tool callがある場合は、後続の合格条件を満たせず安全に停止します。
 
-```bash
-python3.11 scripts/manual_desktop_phase_b.py checkpoint-hook-probe \
-  --root /Users/mani/.tooluseproxy-dogfood/desktop-phase-b-YYYYMMDD
-```
-
-PreToolUse 1件、PostToolUse 1件、Stop 1件以上、`true` 1件が一致した場合だけ、返された本試験用taskを開きます。probeが失敗した場合はpublic / protected callへ進みません。
-
-task完了後、理解度を本人の評価で記録します。
+task完了後、結果を自動照合します。承認回数、説明形式、public side effect、二つのprotected block、raw exposureはsession、Hook DB、値なしmarkerから判定するため、利用者への定型質問はありません。
 
 ```bash
 python3.11 scripts/manual_desktop_phase_b.py verify \
-  --root /Users/mani/.tooluseproxy-dogfood/desktop-phase-b-YYYYMMDD \
-  --hook-review-understood yes \
-  --command-approval-understood not-shown \
-  --block-explanation-understood yes \
-  --additional-question-count 0
+  --root /Users/mani/.tooluseproxy-dogfood/desktop-phase-b-YYYYMMDD
 ```
 
-承認UIが表示された場合だけ`yes`または`no`を指定し、表示されなければ`not-shown`を指定します。`not-shown`は理解できなかったという意味ではなく、評価対象のUIが観測できなかったという意味です。
-
-`functional_status`と`ux_status`は別判定です。機能が正しくても説明を理解できなければ`needs_followup`、承認UIが表示されなければ`not_observed`となり、コマンドの終了codeは1です。この場合も証跡は保存され、次のlifecycle確認へ進めますが、Phase B全体の合格とは扱いません。
+自動判定がすべて合えば`passed`です。失敗、画面上の観測との食い違い、Hook定義変更がある場合だけ`needs_followup`として利用者へ確認します。説明の分かりにくさは、利用者が自発的に伝えた場合に別途改善対象とします。
 
 Desktopで専用Pluginをdisableしてから確認します。
 
@@ -200,23 +204,24 @@ abortはPhase B専用のPlugin登録、marketplace、synthetic workspace、生�
 ## 合格条件
 
 - `surface`が`codex_desktop`
-- PreToolUse / PostToolUse / Stopがすべて`trusted`で、probe前後に定義hashが変わらない
-- 無害な`true`のprobeでPreToolUse 1件、PostToolUse 1件、Stop 1件以上
+- 5 Hookがすべて`trusted`で、本試験後も定義hashが変わらない
+- SessionStart、setup、public、static / dynamic protected、Stopが同じDesktop sessionとして記録される
 - public callはPreToolUse、PostToolUse、markerが各1件
 - protected callはPreToolUseとexact blockが各1件、PostToolUseとmarkerが0件
+- dynamic protected callはPreToolUseとfail-closed blockが各1件、PostToolUseと専用markerが0件
 - file payload shadow observationがpublic / protectedの2件
 - workspace runtime設定3項目が有効で、remove / reinstall後も同じrevision
 - assistant、全tool input、tool output、shadow tableへのraw synthetic value露出が0
-- 指定したread / setup / public / protected call以外のtool callが0
+- 指定したread / setup / public / static protected / dynamic protected call以外のtool callが0
 - Plugin dataを触る全CLI callが1回限定の権限昇格、空でない理由、再利用可能なprefixなし
-- Hook review、command承認、block説明を人が理解できる
+- setup承認が通常2回、規定の利用者向け説明形式、reusable permission 0
 - Phase B Plugin / marketplace / managed dataを削除し、開始前の無関係な一覧を保持する
 
 `desktop-phase-b-report.json`だけがaggregate resultです。reportにはrelease artifact hashに加え、run固有probeを組み込んだ実際のPlugin tree hashを記録します。state、prompt、guide、session、SQLite、absolute path、confirmation tokenはlocal-onlyで公開しません。
 
 ## Hookを確認できない場合
 
-Desktopでは、正常終了したHookのstderrが画面へ表示されないことがあります。そのため、初期化先の案内が見えないことだけをHook未実行の証拠にしません。`checkpoint-hooks-trusted`と`checkpoint-hook-probe`のどちらかが失敗したrunは、そこで停止します。
+Desktopでは、正常終了したHookのstderrが画面へ表示されないことがあります。そのため、初期化先の案内が見えないことだけをHook未実行の証拠にしません。`checkpoint-hooks-trusted`または単一taskの自動照合が失敗したrunは、そこで停止します。
 
 - `PLUGIN_DATA`を推測しない
 - cacheやprocess環境を広く検索してHookを迂回しない

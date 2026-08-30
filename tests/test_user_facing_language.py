@@ -45,8 +45,14 @@ def test_normal_onboarding_does_not_require_internal_path_diagnostics() -> None:
     plugin_guide = (REPO_ROOT / "docs" / "設定" / "Plugin導入.md").read_text(encoding="utf-8")
     skill = (REPO_ROOT / "skills" / "tooluseproxy-setup" / "SKILL.md").read_text(encoding="utf-8")
 
-    assert "--expect-empty-settings" in skill
+    assert "--expect-compatible-settings" in skill
+    assert "Before the exact setup command, do not run `pwd`" in skill
+    assert "A denial returned by ToolUseProxy's `PreToolUse` Hook" in skill
+    assert "setup itself was not attempted" in skill
     assert "--whole-file" in skill
+    assert "protect reconcile plan" in skill
+    assert "protect reconcile apply" in skill
+    assert "do not ask the user to open the Plugin diagnostics" in skill
     assert "do not ask the user to paste `database_missing`" in skill
     assert "do not depend on a Hook diagnostic" in skill
     assert "If `PLUGIN_DATA` is not available" not in skill
@@ -87,7 +93,7 @@ def test_approval_templates_stay_short_and_self_contained() -> None:
         if line.startswith("- ") and "`ToolUseProxyの操作確認｜" in line
     ]
 
-    assert len(templates) == 11
+    assert len(templates) == 13
     labels = (
         "｜行うこと：",
         "｜変更されるもの：",
@@ -108,9 +114,13 @@ def test_approval_templates_stay_short_and_self_contained() -> None:
 
     setup = next(value for value in templates if "このプロジェクトの保護を有効" in value)
     scan = next(value for value in templates if "守った方がよいファイルを探します" in value)
+    reconcile = next(
+        value for value in templates if "見つからない登録を保護リストから外します" in value
+    )
     assert "外部送信を実行前に止める" in setup
     assert "専用保存領域へ設定を保存" in setup
     assert "専用保存領域へ確認結果を記録" in scan
+    assert "元ファイルを変えずに古い登録だけを整理" in reconcile
     assert "このプロジェクト内を安全な範囲で読むため" not in scan
 
 

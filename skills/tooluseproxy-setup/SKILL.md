@@ -29,9 +29,15 @@ When setup starts, lead with:
 
 `このプロジェクトでToolUseProxyを使えるようにします。初期設定と安全確認のため、通常は確認画面が2回出ます。どちらも外部通信は行いません。`
 
-When setup succeeds, lead with:
+When configuration verification succeeds but the current verification command
+has no verified PreToolUse delivery, lead with:
 
-`準備できました。このプロジェクトではToolUseProxyが動作しています。保護するファイルはまだ自動登録されていません。続けて、守るファイルを探すよう自然な言葉で依頼できます（例：「守った方がよいファイルを探して」）。`
+`初期設定は完了しました。ただし、今の確認操作にToolUseProxyの実行前チェックが届くことは確認できていません。この状態では保護中とは扱いません。Codexを再起動して新しいタスクから安全な動作確認を行います。`
+
+Only after separate fresh Hook evidence proves delivery and a protected
+pre-execution denial may you lead with:
+
+`動作確認まで完了しました。このプロジェクトではToolUseProxyのHookが届き、保護対象の外部送信を実行前に止められることを確認しました。`
 
 When setup or verification fails, lead with:
 
@@ -51,11 +57,14 @@ tool; explain the limitation to the user. Do not describe this context rule as
 pre-execution enforcement or complete DLP.
 
 Never describe an installed/enabled Plugin or trusted Hooks as active
-protection. Protection is active for the current workspace only after the
-fixed setup application and read-only verification both pass. If the database
-is missing, say plainly that the Plugin is installed but this workspace is not
-protected yet. Do not present protected-source registration plans before that
-gate passes.
+protection. `configured_unverified` means the files and settings exist but the
+current verification command has not proved delivery from the exact installed
+PreToolUse runtime. Only `active` means that current-invocation delivery is proven for
+Hook-visible local tools. It never includes hosted tools, `write_stdin`
+continuations, or unverified programmatic nested-tool paths. If the database is
+missing, say plainly that the Plugin is installed but this workspace is not
+protected yet. Do not present protected-source registration plans before the
+configuration gate passes.
 
 If the request contains a version-specific skill link for an older Plugin
 cache entry, do not treat the removed cache directory as a product failure and
@@ -92,6 +101,11 @@ ToolUseProxy entries individually. Explain that trust applies to the exact
 definitions currently shown and changed definitions require review again. If
 any ToolUseProxy source, count, or path differs, tell the user not to trust and
 stop setup.
+
+A denial returned by ToolUseProxy's `PreToolUse` Hook is evidence that this Hook
+was delivered for that command. Never reinterpret that denial as evidence that
+the Hooks are untrusted, and never ask the user to repeat Hook review solely
+because ToolUseProxy denied a command.
 
 Before requesting permission to run any `run_cli.sh` or `run_cli.cmd` command,
 explain the operation in plain language. The explanation must let a person
@@ -132,6 +146,8 @@ whether state changes:
 - protected-source batch review: `ToolUseProxyの操作確認｜行うこと：表示した候補への選択をまとめて反映します｜変更されるもの：選んだ保護対象と見送った記録｜外部通信：ありません｜確認が必要な理由：専用保存領域へ選択結果を保存するためです｜この内容で実行してよいですか？`
 - protected-source migration plan: `ToolUseProxyの操作確認｜行うこと：保護対象リストを安全に更新できるか確認します｜変更されるもの：ありません｜外部通信：ありません｜確認が必要な理由：プロジェクト外の専用保存領域を読み取るためです｜この内容で実行してよいですか？`
 - protected-source migration apply: `ToolUseProxyの操作確認｜行うこと：保護対象リストを新しい形式へ更新します｜変更されるもの：リストの形式と専用保存領域のバックアップ｜外部通信：ありません｜確認が必要な理由：更新前の状態を安全に保存するためです｜この内容で実行してよいですか？`
+- unavailable-source reconciliation plan: `ToolUseProxyの操作確認｜行うこと：見つからない保護対象の登録をまとめて確認します｜変更されるもの：ありません｜外部通信：ありません｜確認が必要な理由：専用保存領域と保護リストを読み取るためです｜この内容で実行してよいですか？`
+- unavailable-source reconciliation apply: `ToolUseProxyの操作確認｜行うこと：表示した見つからない登録を保護リストから外します｜変更されるもの：保護リストと更新前のバックアップ｜外部通信：ありません｜確認が必要な理由：元ファイルを変えずに古い登録だけを整理するためです｜この内容で実行してよいですか？`
 - removal without data deletion: `ToolUseProxyの操作確認｜行うこと：このプロジェクトでの利用を止めます｜変更されるもの：Pluginの有効状態だけ｜外部通信：ありません｜確認が必要な理由：新しい記録を止めるためです｜この内容で実行してよいですか？`
 - managed-data deletion: `ToolUseProxyの操作確認｜行うこと：表示したToolUseProxyデータを削除します｜変更されるもの：表示した管理対象データ｜外部通信：ありません｜確認が必要な理由：削除すると元に戻せないためです｜この内容で実行してよいですか？`
 
@@ -205,12 +221,13 @@ do not report missing initial output as a command failure.
 
    If an approved manual workflow supplies an exact `file-payload-exact`
    setup-profile command and expected revision, use that one command instead
-   of separate `init` and three `config set` commands. The profile is fixed to
-   `pre-tool-policy`, `file-payload-shadow`, and
-   `file-payload-exact-enforcement` all enabled; it accepts no arbitrary
-   settings object. It does not enable the experimental
-   `externality-protection` setting or select a remote provider. Do not
-   substitute another profile or revision.
+   of separate `init` and four `config set` commands. The profile is fixed to
+   `pre-tool-policy`, `file-payload-shadow`,
+   `file-payload-exact-enforcement`, and `externality-protection` all enabled;
+   it accepts no arbitrary settings object. Enabling externality protection
+   activates local static/cache classification and conservative handling of
+   unverified external sinks. It does not select an LLM provider or send a
+   judge request. Do not substitute another profile or revision.
 
    ```text
    sh "<PLUGIN_ROOT>/hooks/run_cli.sh" setup apply file-payload-exact --codex --expected-revision <expected-revision> --workspace <workspace-root> --data-dir <PLUGIN_DATA> --json
@@ -221,8 +238,14 @@ do not report missing initial output as a command failure.
    calls for that workflow:
 
    ```text
-   sh "<PLUGIN_ROOT>/hooks/run_cli.sh" setup verify file-payload-exact --workspace <workspace-root> --data-dir <PLUGIN_DATA> --json
+   sh "<PLUGIN_ROOT>/hooks/run_cli.sh" setup verify file-payload-exact --hook-probe-token <fresh-probe-token> --workspace <workspace-root> --data-dir <PLUGIN_DATA> --json
    ```
+
+   Create `<fresh-probe-token>` directly for this command using the exact form
+   `tup-probe-v1-` followed by 32 lowercase hexadecimal characters. Do not run
+   another command to generate it, show it to the user, or reuse one from an
+   earlier verification. It is not a secret; it only correlates this command
+   with its immediately preceding PreToolUse event.
 
    Stop before any send test unless the setup application and combined
    verification both succeed. The approval is required because these commands
@@ -238,19 +261,76 @@ do not report missing initial output as a command failure.
    corresponding Codex Plugin data directory using Codex's Plugin-store
    contract. It fails closed if any identity or layout check differs.
 
-   Apply the fixed profile with the explicit empty-settings precondition. This
-   is safe for a new workspace, idempotent when the same profile is already
-   applied, and refuses to overwrite a partial or different existing setup:
+   After reading this skill, treat the task's current working directory as the
+   intended workspace root. Before the exact setup command, do not run `pwd`,
+   `git`, memory searches, repository scans, or a compound diagnostic command.
+   The setup command performs its own strict workspace and Plugin-store checks.
+
+   Apply the fixed profile with the compatible-settings precondition. This is
+   safe for a new workspace, idempotent when the same profile is already
+   applied, and atomically adds settings that are missing from an older
+   compatible setup. If any configured value differs from the fixed profile,
+   it refuses the entire change:
 
    ```text
-   sh "<PLUGIN_ROOT>/hooks/run_cli.sh" setup apply file-payload-exact --codex --expect-empty-settings --workspace <workspace-root> --json
+   sh "<PLUGIN_ROOT>/hooks/run_cli.sh" setup apply file-payload-exact --codex --expect-compatible-settings --workspace <workspace-root> --json
    ```
 
-   Then run the one read-only verification command:
+   If this exact command returns `protected_source_unavailable`, do not call it
+   a Hook trust failure and do not ask the user to open the Plugin diagnostics.
+   It means one or more files registered earlier have since been moved, deleted,
+   or made unsafe. Run the exact value-free batch plan:
 
    ```text
-   sh "<PLUGIN_ROOT>/hooks/run_cli.sh" setup verify file-payload-exact --workspace <workspace-root> --json
+   sh "<PLUGIN_ROOT>/hooks/run_cli.sh" protect reconcile plan --workspace <workspace-root> --json
    ```
+
+   Show every returned workspace-relative path together in one numbered list.
+   Explain that ToolUseProxy cannot protect those old paths while the files are
+   absent, that removing the registrations does not change or delete any source
+   file, that all still-available registrations remain, and that an exact private
+   backup of the current protection list will be kept. Ask for one decision for
+   the entire displayed batch. Natural approval is accepted; never require an
+   English command or exact phrase. If the user wants to restore or relocate a
+   file instead, stop without changing the list.
+
+   Only after explicit approval, pass the unchanged revision and manifest hash:
+
+   ```text
+   sh "<PLUGIN_ROOT>/hooks/run_cli.sh" protect reconcile apply --reconciliation-revision <reconciliation-revision> --expected-manifest-sha256 <manifest-sha256> --workspace <workspace-root> --json
+   ```
+
+   The apply command removes exactly the unavailable registrations committed by
+   the reviewed plan in one atomic manifest replacement. It preserves unknown
+   manifest fields, available entries, their order, and every source file. If
+   the manifest or source availability changed, create and show a new plan and
+   obtain new approval. After a successful or already-reconciled result, rerun
+   the same fixed setup apply command once, then continue to verification.
+
+   Then run the one read-only configuration verification command:
+
+   ```text
+   sh "<PLUGIN_ROOT>/hooks/run_cli.sh" setup verify file-payload-exact --hook-probe-token <fresh-probe-token> --workspace <workspace-root> --json
+   ```
+
+   A successful result is `status: configuration_passed`. The
+   `verification_scope` and `runtime_enforcement` fields say whether this was
+   configuration-only or also proved delivery from the exact installed Hook
+   runtime for this verification command. Never infer current protection from a block
+   recorded by another session or an older Plugin version.
+
+   Interpret `runtime_enforcement.status` literally:
+
+   - `requires_current_invocation_hook_probe`: this exact verification command
+     has no matching PreToolUse event; report setup only.
+   - `stale_or_unattested_hook_runtime`: an event exists, but it is not bound
+     to the currently installed Plugin version and Hook definition; stop.
+   - `current_invocation_hook_delivery_observed_block_not_tested`: the current
+     runtime reaches Hook-visible local tools in this session, but a protected
+     block has not been tested.
+   - `current_invocation_protected_block_observed`: current runtime delivery and a
+     protected PreToolUse block exist in the same session. This does not extend
+     protection to hosted or otherwise Hook-invisible paths.
 
    These are the normal two approval screens. Never add `--data-dir` derived
    from a guessed path. If either command reports that the installed Plugin
@@ -258,11 +338,16 @@ do not report missing initial output as a command failure.
    wording and stop. Do not fall back to asking the user for internal
    diagnostics.
 
+   If an earlier exploratory command was denied before setup, say explicitly
+   that setup itself was not attempted. Do not call that command the initial
+   setup or claim that no Hook was delivered.
+
 5. For a manual context-bound Phase B workflow, run `doctor` and `status` with
    the exact context-supplied `--workspace` and `--data-dir` values when that
    workflow requires the individual commands. For a normal marketplace setup,
-   the combined `setup verify` above is the health gate. Stop and explain every
-   failing check before protected-source review or stronger policy tests. A
+   the combined `setup verify` above is only the configuration gate. Stop and
+   explain every failing check before protected-source review or stronger
+   policy tests. Do not treat `configuration_passed` as Hook-delivery evidence. A
    legacy manifest may remain runtime-readable and active while reporting
    `registration_writable: false` and `migration_required: true`.
    In a manual Phase B run, if `init`, `doctor`, `status`, or `protect scan`
@@ -368,7 +453,14 @@ do not report missing initial output as a command failure.
 
    Run the whole `protect scan / suggest / review / approve / reject / ignore` workflow only on POSIX (macOS/Linux); it is not supported on Windows yet. Neither `init` nor a Hook runs the scanner implicitly.
 
-10. Use `status` to verify the database, canonical workspace registration, schema v2 manifest, and protected sources all resolve to the same workspace. `status: active` means runtime health, not that a complete scan ran or that every sensitive file is registered.
+10. Use `status --hook-probe-token <fresh-probe-token>` to verify the database,
+    schema v2 manifest, settings, and current-invocation Hook delivery.
+    Generate a different token with the same exact format for every status
+    invocation. Without a fresh token, status is deliberately
+    configuration-only and cannot return `active`.
+    `configured_unverified` is not active protection. `active` applies only to
+    Hook-visible local tools for the verified invocation; it does not mean that a
+    complete scan ran or that every sensitive file is registered.
 
 11. If the user asks to uninstall, remove or disable the Plugin first so new Hook writes stop. Data retention is the default; Plugin or package removal never approves data deletion. If the user also asks to delete local data, run a non-mutating plan from an installed package or the exact release artifact being removed:
 

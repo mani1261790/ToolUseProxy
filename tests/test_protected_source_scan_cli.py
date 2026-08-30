@@ -808,7 +808,7 @@ class ProtectedSourceScanCliTest(unittest.TestCase):
         self.assertGreaterEqual(repeated_scan["already_registered_count"], 1)
         self.assertEqual(manifest_before, self.manifest_path.read_bytes())
         self.assertNotIn(secret, json.dumps(repeated_scan) + stderr)
-        for command, expected_status in (("doctor", "ok"), ("status", "active")):
+        for command, expected_status in (("doctor", "ok"), ("status", "inactive")):
             with self.subTest(command=command):
                 exit_code, payload, stderr = self._run_json(
                     command,
@@ -818,7 +818,7 @@ class ProtectedSourceScanCliTest(unittest.TestCase):
                     str(self.data_dir),
                     "--json",
                 )
-                self.assertEqual(0, exit_code, stderr)
+                self.assertEqual(0 if command == "doctor" else 1, exit_code, stderr)
                 self.assertEqual(expected_status, payload["status"])
                 self.assertNotIn(secret, json.dumps(payload) + stderr)
 

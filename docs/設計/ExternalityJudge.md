@@ -78,7 +78,7 @@ queueとreviewに保存するのはenvelope、envelope hash、model hash、close
 
 LLM分類は`review_pending`になるだけで、自動ではruleになりません。初見unknownに対する保守的sinkはreview前から有効です。人間が表示された構造要約、closed verdict、provider、model hashを確認し、exact revisionを指定して承認した`external` / `possibly_external` ruleは、同じworkspace、envelope hash、judge contractにだけ一致します。承認済み`local` ruleは、その完全一致構造に対する保守的unknown sinkだけを外します。既存adapter、static external判定、別構造のblockは解除しません。`unknown`は承認できません。
 
-static解析、queue、cache準備が失敗した場合も、値非保持のfailure sinkを現在callへ追加し、protected lineageが到達すればdenyします。ただしruntime DB自体が利用不能で既存情報流解析を完了できない場合は、製品全体の従来どおりのschema diagnostic / fail-open境界が残ります。この運用上の限界を「偽陰性ゼロの数学的保証」とは表現しません。
+static解析、queue、cache準備が失敗した場合も、値非保持のfailure sinkを現在callへ追加し、protected lineageが到達すればdenyします。初期化後にruntime DBや情報流解析を利用できないPreToolUseも実行前denyします。未初期化DBだけはsetup用advisoryです。Hook非配送のhosted toolやTOCTOUなどPlugin外の境界が残るため、「偽陰性ゼロの数学的保証」とは表現しません。
 
 ```bash
 # 明示したproviderで、待機中の値非保持jobを最大10件分類する

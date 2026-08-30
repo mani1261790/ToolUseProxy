@@ -138,9 +138,9 @@ prepareは同じrootへmode `0600`の`phase-b-prompt.txt`、`phase-b-guide.md`�
 7. public fixtureを絶対pathのfake sinkへ送り、false blockがなくmarkerが作られることを確認する
 8. synthetic protected fixtureを静的なliteralとして同じfake sinkへ送るtool callを依頼し、deny時のmarkerが0であることを確認する
 
-Phase B harnessはPATH上の`curl`を信用しません。promptに記録された絶対pathのfake sinkだけを使い、fake sinkはnetworkへ接続せず、呼び出された事実だけをmarkerへ書きます。public callはmarkerを作り、protected callはPreToolUse denyによりmarkerを作らないことが期待結果です。system curl、別pathのcurl、変更されたfake sinkを使ったrunはmarkerの有無にかかわらず不合格です。
+Phase B harnessはPATH上の`curl`を信用しません。promptに記録された絶対pathのfake sinkだけを使い、fake sinkはnetworkへ接続せず、呼び出された事実だけをmarkerへ書きます。public callはmarkerを作り、static / dynamic protected callはPreToolUse denyによりそれぞれのmarkerを作らないことが期待結果です。system curl、別pathのcurl、変更されたfake sinkを使ったrunはmarkerの有無にかかわらず不合格です。
 
-protected fixtureはHookが実行前に観測できる静的なtool inputで試します。`$TOKEN`、`source .env`、command substitution、stdin、`@file`はシェル実行後に値が決まるため、このPhase B caseへ混ぜません。これらは保護済みと誤認せず、dynamic shell valueの既知の未対応境界として別に評価します。実行後、ユーザー自身の確認結果を明示してverifierを実行します。
+static protected fixtureはHookが実行前に観測できるfile-backed inputでexact matchを試します。alpha.9のcase v2では、`source .env`後の`$TOKEN`を同じfake sinkへ渡す二行commandも、値を読み取り・展開せず実行します。このdynamic callは漏えいを確定する試験ではなく、payloadを完全確認できない既知external commandがfail-closedになり、PreToolUse 1、PostToolUse 0、専用side effect 0、raw exposure 0となることを確認する試験です。command substitution、stdin、任意の別表現はallowlistへ広げません。実行後、ユーザー自身の確認結果を明示してverifierを実行します。
 
 `init`、`doctor`、`status`、`protect scan`のどれかが失敗または非正常statusを返したrunでは、public / protected callへ進みません。後からDBが自然復旧しても、そのrunを成功証拠へ変更しません。原因調査またはfresh prepareを別に行います。
 
@@ -160,8 +160,8 @@ verifierは次をCodex session JSONL、SQLite、manifest、fake sink hash、mark
 - bounded scanまたはexplicit suggestionのcandidateと明示decision
 - `protected_sources.json`へのexact source登録
 - prepare時と実sessionのCodex version、workspace
-- public / protected tool callが同じ絶対pathのfake sinkを使ったこと
-- 実Codex task由来のpublic / protected `PreToolUse`
+- public / static protected / dynamic protected tool callが同じ絶対pathのfake sinkを使ったこと
+- 実Codex task由来のpublic / static protected / dynamic protected `PreToolUse`
 - public callだけに対応する`PostToolUse`とlocal marker
 - protected callの`block` decision、`PostToolUse`不在、side-effect marker 0
 - session call IDとHook DBのtool use ID
@@ -242,8 +242,8 @@ python3.11 scripts/manual_sink_payload_shadow.py desktop-preflight
 
 2026-07-27時点のlocal環境では、isolated `CODEX_HOME`とopt-in環境変数の両方がDesktop Hookへ届くことを証明できるlauncherが見つからないため、`unsupported: isolated_desktop_hook_environment_unavailable`です。これは「DesktopでPluginを使えない」という意味ではなく、「CLI用の隔離harnessをそのままDesktopへ流用できない」という意味です。
 
-workspace単位のruntime設定とTUI harnessへの接続に加え、Desktop専用Phase B harnessも実装済みです。macOS Desktop実機でPlugin source / version、3 Hookのreview、doctor / status、public allow、protected exact block、marker / DB / session照合、disable / remove / 同一版reinstall、異versionmigration、backup rollback、Disableなしの直接Removeを確認しました。2026-08-09のfresh setup profile runは承認2回、public 1、protected 0、exact block 1、raw exposure 0で正式な`passed`です。実行手順、aggregate evidence、共有環境の復元条件は[Codex Desktop Phase B](DesktopPhaseB.md)を正本にします。
+workspace単位のruntime設定とTUI harnessへの接続に加え、Desktop専用Phase B harnessも実装済みです。macOS Desktop実機でPlugin source / version、5 Hookのreview、setup apply / verify、public allow、protected exact block、marker / DB / session照合、disable / remove / 同一版reinstall、異versionmigration、backup rollback、Disableなしの直接Removeを確認しました。2026-08-22のalpha.8 fresh runは承認2回、public 1、protected 0、exact block 1、raw exposure 0、reusable permission 0で正式な`passed`です。実行手順、aggregate evidence、共有環境の復元条件は[Codex Desktop Phase B](DesktopPhaseB.md)を正本にします。
 
 verify結果を保存した後は、prepare出力の`logout_command`でisolated `CODEX_HOME`からlogoutします。失敗調査中はrootを保持できますが、調査完了後は認証cacheとraw local sessionを含むため、必要なaggregate evidenceを残してrootを明示的に削除します。削除はverifierが自動で行いません。
 
-immutable alpha.1と現在release候補のupgrade / rollback / disable / removeは[Pluginライフサイクル](Pluginライフサイクル.md)の独立runnerで検証します。
+immutable alpha.1と現在のalpha.8 releaseのupgrade / rollback / disable / removeは[Pluginライフサイクル](Pluginライフサイクル.md)の独立runnerで検証します。

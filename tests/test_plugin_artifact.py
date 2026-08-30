@@ -175,11 +175,12 @@ class PluginArtifactTest(unittest.TestCase):
                 ],
                 cwd=workspace,
                 env=environment,
-                check=True,
+                check=False,
                 capture_output=True,
                 text=True,
             )
-            self.assertEqual("active", json.loads(status.stdout)["status"])
+            self.assertEqual(1, status.returncode)
+            self.assertEqual("inactive", json.loads(status.stdout)["status"])
             hook = subprocess.run(
                 ["sh", str(plugin_root / "hooks" / "run_hook.sh"), "pre-tool-use"],
                 cwd=workspace,

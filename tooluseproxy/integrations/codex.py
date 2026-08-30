@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import io
 import json
+import os
 from pathlib import Path
 
 from hook_monitor.runtime.runner import inactive_hook_output, run_hook
+from tooluseproxy import __version__
 from tooluseproxy.paths import (
     prepare_data_directory,
     resolve_runtime_paths,
@@ -45,7 +48,34 @@ def codex_enforcement_coverage() -> dict[str, object]:
         "hosted_tool_mitigation": "session_and_subagent_developer_context",
         "hosted_tool_pre_execution_block": False,
         "write_stdin_continuations": "not_rechecked",
+        "programmatic_nested_tools": "unverified",
         "specialized_tool_paths": "unverified",
+    }
+
+
+def _runtime_attestation() -> dict[str, str]:
+    """Bind Hook evidence to the exact installed runtime and definitions."""
+
+    plugin_root = Path(
+        os.environ.get("PLUGIN_ROOT", Path(__file__).resolve().parents[2])
+    )
+    manifest_path = plugin_root / ".codex-plugin" / "plugin.json"
+    hooks_path = plugin_root / "hooks" / "hooks.json"
+    if not manifest_path.is_file() or not hooks_path.is_file():
+        return {
+            "plugin_version": __version__,
+            "runtime_version": __version__,
+            "hooks_sha256": "package-runtime-without-plugin-manifest",
+        }
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    plugin_version = manifest.get("version")
+    if not isinstance(plugin_version, str) or not plugin_version:
+        raise ValueError("Plugin manifest version is unavailable")
+    hooks_bytes = hooks_path.read_bytes()
+    return {
+        "plugin_version": plugin_version,
+        "runtime_version": __version__,
+        "hooks_sha256": hashlib.sha256(hooks_bytes).hexdigest(),
     }
 
 
@@ -59,43 +89,72 @@ def run_codex_hook(
         runtime_phase = CODEX_HOOK_PHASES[phase]
     except KeyError:
         raise ValueError(f"unsupported Codex hook phase: {phase}") from None
-    if runtime_phase in {"session_start", "subagent_start"}:
-        hook_event = (
-            "SessionStart" if runtime_phase == "session_start" else "SubagentStart"
-        )
-        print(
-            json.dumps(
-                {
-                    "hookSpecificOutput": {
-                        "hookEventName": hook_event,
-                        "additionalContext": HOSTED_TOOL_BOUNDARY_CONTEXT,
-                    }
-                },
-                ensure_ascii=False,
-            )
-        )
-        return 0
-
     captured = io.StringIO()
     try:
         paths = resolve_runtime_paths(db_path=db_path, data_dir=data_dir)
+        if (
+            runtime_phase in {"session_start", "subagent_start"}
+            and not paths.db_path.is_file()
+        ):
+            hook_event = (
+                "SessionStart"
+                if runtime_phase == "session_start"
+                else "SubagentStart"
+            )
+            print(
+                json.dumps(
+                    {
+                        "hookSpecificOutput": {
+                            "hookEventName": hook_event,
+                            "additionalContext": HOSTED_TOOL_BOUNDARY_CONTEXT,
+                        }
+                    },
+                    ensure_ascii=False,
+                )
+            )
+            return 0
         prepare_data_directory(paths)
+        attestation = _runtime_attestation()
         try:
             with contextlib.redirect_stdout(captured):
                 result = run_hook(
                     runtime_phase,
                     db_path=paths.db_path,
                     allow_schema_migration=False,
+                    runtime_attestation=attestation,
                 )
         finally:
             secure_database_permissions(paths.db_path)
         output = _validated_hook_output(captured.getvalue(), runtime_phase)
         if captured.getvalue().strip() and output is None:
             raise ValueError("Hook runtime returned an invalid output")
+        if runtime_phase in {"session_start", "subagent_start"}:
+            hook_event = (
+                "SessionStart"
+                if runtime_phase == "session_start"
+                else "SubagentStart"
+            )
+            prior_context = ""
+            if output is not None:
+                hook_output = output.get("hookSpecificOutput")
+                if isinstance(hook_output, dict):
+                    candidate = hook_output.get("additionalContext")
+                    if isinstance(candidate, str):
+                        prior_context = candidate.strip()
+            output = {
+                "hookSpecificOutput": {
+                    "hookEventName": hook_event,
+                    "additionalContext": " ".join(
+                        item
+                        for item in (prior_context, HOSTED_TOOL_BOUNDARY_CONTEXT)
+                        if item
+                    ),
+                }
+            }
         if output is not None:
             print(json.dumps(output, ensure_ascii=False))
         return result
-    except Exception:  # Hook integrations must never block Codex on local failure.
+    except Exception:  # PreToolUse fails closed; later phases stay advisory.
         output = _validated_hook_output(captured.getvalue(), runtime_phase)
         if output is None:
             output = inactive_hook_output(
@@ -104,7 +163,23 @@ def run_codex_hook(
                     "ToolUseProxy inactive (runtime_error): "
                     "the local Hook runtime could not start"
                 ),
+                deny_pre_tool=runtime_phase == "pre_tool_use",
             )
+        if runtime_phase in {"session_start", "subagent_start"}:
+            hook_event = (
+                "SessionStart"
+                if runtime_phase == "session_start"
+                else "SubagentStart"
+            )
+            output = {
+                "hookSpecificOutput": {
+                    "hookEventName": hook_event,
+                    "additionalContext": (
+                        "ToolUseProxyのHook実行状態を記録できませんでした。 "
+                        + HOSTED_TOOL_BOUNDARY_CONTEXT
+                    ),
+                }
+            }
         print(
             json.dumps(output, ensure_ascii=False)
         )

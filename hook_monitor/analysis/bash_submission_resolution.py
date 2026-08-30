@@ -24,14 +24,32 @@ from hook_monitor.analysis.bash_submission import (
 
 
 BASH_SUBMISSION_RESOLVER_VERSION = (
-    "bash-submission-resolver-v2-component-safe-data-binary-file"
+    "bash-submission-resolver-v4-fail-closed-multiline-data-binary-file"
 )
 MAX_BASH_SUBMISSION_PATH_BYTES = 4 * 1024
 MAX_BASH_SUBMISSION_FILE_REFERENCES = 8
 DEFAULT_BASH_SUBMISSION_RESOLUTION_TIME_BUDGET_MS = 200
 MAX_BASH_SUBMISSION_RESOLUTION_TIME_BUDGET_MS = 1000
 
-_KNOWN_ONE_ARGUMENT_OPTIONS = frozenset({"-X", "--request"})
+_KNOWN_ONE_ARGUMENT_OPTIONS = frozenset(
+    {
+        "-A",
+        "--connect-timeout",
+        "--header",
+        "--max-time",
+        "--output",
+        "--proxy",
+        "--request",
+        "--retry",
+        "--url",
+        "--user-agent",
+        "-H",
+        "-m",
+        "-o",
+        "-x",
+        "-X",
+    }
+)
 _KNOWN_NO_ARGUMENT_OPTIONS = frozenset(
     {
         "-f",
@@ -184,9 +202,28 @@ def _resolve_file_backed_segment(
         if word in _KNOWN_ONE_ARGUMENT_OPTIONS:
             if index + 1 >= len(words) or not words[index + 1].is_static_literal:
                 return _unsupported(segment, "dynamic_curl_option_argument")
+            if word in {"-H", "--header"} and words[index + 1].value.startswith("@"):
+                return _unsupported(segment, "header_file_reference_unsupported")
             index += 2
             continue
-        if word.startswith("-X") and word != "-X" and not word.startswith("--"):
+        if word.startswith("--header=@"):
+            return _unsupported(segment, "header_file_reference_unsupported")
+        if word.startswith("--") and any(
+            word.startswith(f"{option}=")
+            for option in _KNOWN_ONE_ARGUMENT_OPTIONS
+            if option.startswith("--")
+        ):
+            index += 1
+            continue
+        if (
+            any(
+                word.startswith(prefix) and word != prefix
+                for prefix in ("-A", "-H", "-m", "-o", "-x", "-X")
+            )
+            and not word.startswith("--")
+        ):
+            if word.startswith("-H@"):
+                return _unsupported(segment, "header_file_reference_unsupported")
             index += 1
             continue
 

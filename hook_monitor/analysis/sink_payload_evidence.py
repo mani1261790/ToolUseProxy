@@ -100,7 +100,7 @@ def inspect_bash_sink_payload_evidence(
             key=lambda item: item.chunk_id,
         )
     )
-    comparison_limit_reason = _source_comparison_limit_reason(scoped_chunks)
+    comparison_limit_reason = source_comparison_limit_reason(scoped_chunks)
 
     projections = resolve_bash_http_submissions(
         command,
@@ -220,7 +220,7 @@ def _duration_ms(started_at: float) -> float:
     return max(0.0, (time.monotonic() - started_at) * 1000)
 
 
-def _source_comparison_limit_reason(
+def source_comparison_limit_reason(
     chunks: tuple[SourceChunk, ...],
 ) -> str | None:
     if len(chunks) > MAX_SINK_PAYLOAD_EVIDENCE_SOURCE_CHUNKS:

@@ -4,7 +4,9 @@ ToolUseProxy is a local-first research implementation for tracing information fl
 
 This project is a research and development outcome of [SecHack365](https://sechack365.nict.go.jp/).
 
-The current release candidate is `0.1.0-alpha.8`. It adds conservative, opt-in externality protection while keeping LLM classification outside Hooks and requiring human review before any local allow rule is created. The public channel remains on alpha.7 until the alpha.8 fresh Desktop gate passes. It is not a complete DLP system.
+The current verified release is `0.1.0-alpha.12`. Alpha.12 binds the verification command's own PreToolUse event to its session, installed Plugin version, and Hook definition hash. Configuration or an older session's block no longer qualifies as active protection. It is a research alpha, not a complete DLP system.
+
+Users upgrading from alpha.8 through alpha.11 must upgrade to alpha.12, fully restart Codex, and review all five Hooks again. Alpha.8 could allow unsupported curl options or oversized file payloads without comparison, while alpha.11 could reuse older runtime evidence when reporting current protection.
 
 ToolUseProxy is licensed under the [Apache License 2.0](LICENSE).
 
@@ -20,7 +22,7 @@ ToolUseProxy is licensed under the [Apache License 2.0](LICENSE).
 
 ## Install the Plugin
 
-For normal alpha use, install from the protected `public-alpha` release channel:
+Install from the protected `public-alpha` release channel:
 
 ```bash
 codex plugin marketplace add mani1261790/ToolUseProxy --ref public-alpha
@@ -39,9 +41,9 @@ codex plugin marketplace upgrade tooluseproxy
 codex plugin list --json
 ```
 
-Use the immutable `v0.1.0-alpha.7` tag instead of `public-alpha` when reproducible version pinning matters. A pinned tag does not move when the marketplace is upgraded. Review the exact Hook definitions after installation or an update before trusting them. A changed matcher, command, or source invalidates the earlier trust decision; a Hook with `trustStatus: modified` must be reviewed again. Then follow the [Japanese five-minute quickstart](QUICKSTART.md) to initialize ToolUseProxy and review protected-source proposals in batches of up to ten. The CLI update path is tested.
+Use the immutable `v0.1.0-alpha.12` tag instead of `public-alpha` when reproducible version pinning matters. A pinned tag does not move when the marketplace is upgraded. Review the exact Hook definitions after installation or an update before trusting them, then fully restart Codex and begin a new task. A changed matcher, command, or source invalidates the earlier trust decision; a Hook with `trustStatus: modified` must be reviewed again. Then follow the [Japanese five-minute quickstart](QUICKSTART.md) to initialize ToolUseProxy and review protected-source proposals in batches of up to ten.
 
-On Codex Desktop for macOS, Plugin installation, review and trust of the earlier three-Hook definition, `PreToolUse` / `PostToolUse` / `Stop` delivery, public allow, and the pre-execution block of a file-backed protected payload have been verified. The August 9 runs also covered alpha.1-to-alpha.3 data migration, backup rollback, direct Remove without Disable, saved-task revalidation, and a fresh atomic setup-profile run. The fresh run passed with two command approvals, one public side effect, zero protected side effects, one exact block, and zero raw protected-value exposures. The current five-Hook candidate, which adds `SessionStart` and `SubagentStart`, still requires a fresh Desktop run. Desktop task history records local shell calls as `exec_command`, while the canonical Hook matcher name is `Bash`; value-free markers, the Hook database, stable definition hashes, and task records remain the evidence boundary. Linux and Windows Desktop are not established by this result.
+On Codex Desktop for macOS, alpha.12 passed a fresh August 31 run with all 35 checks true. The run verified two scoped command approvals, one public side effect, zero static or dynamic protected side effects, two pre-execution blocks, and zero raw protected-value exposures. Remove, same-version reinstall with managed-state reuse, final Remove, and cleanup also passed. Desktop task history records local shell calls as `exec_command`, while the canonical Hook matcher name is `Bash`; value-free markers, the Hook database, stable definition hashes, and task records remain the evidence boundary. Linux and Windows Desktop are not established by this result.
 
 ## Try the synthetic preview
 
@@ -56,12 +58,13 @@ The preview does not replace manual Hook review or an actual Codex task.
 ## Important boundaries
 
 - PreToolUse enforcement is off by default.
-- Internal failures and unknown schemas generally fail open.
+- PreToolUse runtime, policy, unsupported-payload, and bounded-analysis failures fail closed after setup. A missing database remains advisory so initial setup can run.
 - Local SQLite data can contain plaintext Hook payloads and protected-source chunks.
 - Removing the Plugin does not delete local audit data.
 - Protected-source onboarding and manifest migration are supported on macOS and Linux for this alpha, not Windows.
 - Hosted Web Search does not appear in the current `PreToolUse` / `PostToolUse` Hook surface, so ToolUseProxy cannot observe or technically block it before execution. `SessionStart` and `SubagentStart` Hooks add developer context instructing Codex never to send protected or derived content through hosted tools, but this is a mitigation rather than an enforcement boundary.
-- Additional input sent to a running process through `write_stdin` does not trigger another `PreToolUse`, and specialized Codex tool paths may bypass Hooks; neither boundary is claimed as protected.
-- The Externality Judge is experimental, off by default, and not part of the normal setup profile. LLM classification runs outside Hooks, never auto-promotes a rule, and cannot weaken an existing block. Its provider-specific processing and retention boundary is documented in [privacy and retention](PRIVACY.md).
+- Additional input sent to a running process through `write_stdin` does not trigger another `PreToolUse`. Alpha.12 verifies the current Desktop wrapper containing exactly one nested `tools.exec_command`; this result does not generalize to other wrappers, multiple commands, other nested tools, or specialized Codex paths.
+- `configured_unverified` means the workspace files and settings exist but delivery to the current verification command is not proven. `active` applies only to Hook-visible local tools after a fresh opaque token binds that command's PreToolUse event to the exact installed runtime. The user does not generate, remember, or enter this internal token.
+- Local externality protection is enabled by the normal setup profile. The experimental LLM judge provider remains off by default; classification runs outside Hooks, never auto-promotes a rule, and cannot weaken an existing block. Its provider-specific processing and retention boundary is documented in [privacy and retention](PRIVACY.md).
 
 Read [support and known limitations](SUPPORT.md), [privacy and retention](PRIVACY.md), [private vulnerability reporting](SECURITY.md), and the [Japanese project documentation](README.md) before using the alpha.

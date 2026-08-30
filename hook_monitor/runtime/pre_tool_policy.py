@@ -14,6 +14,9 @@ from hook_monitor.analysis.adapters.mcp_profiles import (
     inspect_mcp_input,
 )
 from hook_monitor.analysis.leak_detection import LeakFinding, detect_leaks
+from hook_monitor.analysis.mcp_payload_evidence import (
+    verify_mcp_payload_against_sources,
+)
 from hook_monitor.analysis.sink_payload_evidence import (
     BashSinkPayloadEvidence,
     inspect_bash_sink_payload_evidence,
@@ -23,8 +26,11 @@ from hook_monitor.policy.codex_output import (
     select_strongest_decision,
 )
 from hook_monitor.policy.engine import evaluate_policy, make_policy_decision_id
+from hook_monitor.policy.models import PolicyDecision
 from hook_monitor.policy.sink_payload_exact import (
     build_exact_file_payload_decisions,
+    build_unresolved_external_payload_decisions,
+    build_unverified_external_sink_decisions,
 )
 from hook_monitor.policy.redaction_preview import (
     DEFAULT_REDACTION_PREVIEW_LIMITS,
@@ -38,6 +44,7 @@ from hook_monitor.runtime.incremental_analysis import (
 from hook_monitor.runtime.models import AnalysisRun, NormalizedEvent, SinkCandidate
 from hook_monitor.runtime.policy_audit import store_policy_decision
 from hook_monitor.runtime.redaction_audit import store_redaction_preview_plan
+from hook_monitor.runtime.source_config import ProtectedSourceUnavailableError
 from hook_monitor.runtime.sink_payload_shadow import (
     build_sink_payload_shadow_observation,
     store_sink_payload_shadow_observations,
@@ -51,10 +58,16 @@ from hook_monitor.runtime.tool_compat import (
 
 
 DEFAULT_PRE_TOOL_ADAPTERS = frozenset({"bash"})
-LOCAL_FILE_TOOL_NAMES = frozenset({"apply_patch", "edit", "write"})
+LOCAL_FILE_TOOL_NAMES = frozenset(
+    {"apply_patch", "edit", "glob", "grep", "read", "write"}
+)
 MCP_INPUT_LIMIT_DENY_REASON = (
     "ToolUseProxy blocked this MCP call because its input exceeds bounded "
     "static-analysis limits"
+)
+PRE_TOOL_PREREQUISITE_DENY_REASON = (
+    "ToolUseProxy blocked this call because required Hook identity could not "
+    "be verified"
 )
 MCP_INPUT_REJECTION_CODES = frozenset(
     {
@@ -92,6 +105,38 @@ def render_mcp_input_limit_deny(rejection_code: str) -> dict[str, object]:
             "permissionDecision": "deny",
             "permissionDecisionReason": (
                 f"{MCP_INPUT_LIMIT_DENY_REASON} ({safe_code})."
+            ),
+        }
+    }
+
+
+def render_pre_tool_prerequisite_deny(rejection_code: str) -> dict[str, object]:
+    return {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": (
+                f"{PRE_TOOL_PREREQUISITE_DENY_REASON} ({rejection_code})."
+            ),
+        }
+    }
+
+
+def render_protected_source_unavailable_deny() -> dict[str, object]:
+    return {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "additionalContext": (
+                "登録済みの保護対象が現在の場所に見つかりません。"
+                "（技術情報: protected_source_unavailable）"
+            ),
+            "permissionDecision": "deny",
+            "permissionDecisionReason": (
+                "ToolUseProxyが操作を実行前に止めました。登録済みの保護対象を"
+                "確認できない間は、外部通信の可能性がある操作を許可できません。"
+                "保護対象の登録を確認してからやり直してください。\n"
+                "結果：外部操作は実行されていません。"
+                "保護対象の内容も表示していません。"
             ),
         }
     }
@@ -161,13 +206,17 @@ def evaluate_pre_tool_hook_policy(
     minimum_path_score: float = 0.15,
     leak_min_score: float = 0.3,
     externality_decision: ExternalityHookDecision | None = None,
+    recovery_externality_decision: ExternalityHookDecision | None = None,
 ) -> dict[str, object]:
     current_adapter = pre_tool_adapter(current_event.tool_name)
+    if current_event.session_id is None:
+        return render_pre_tool_prerequisite_deny("session_identity_missing")
+    if current_event.workspace_status != "ready" or current_event.workspace_id is None:
+        return render_pre_tool_prerequisite_deny("workspace_identity_unavailable")
+    if not isinstance(current_event.tool_name, str) or not current_event.tool_name.strip():
+        return render_pre_tool_prerequisite_deny("tool_identity_missing")
     if (
-        current_event.session_id is None
-        or current_event.workspace_status != "ready"
-        or current_event.workspace_id is None
-        or current_adapter is None
+        current_adapter is None
         or current_adapter not in enabled_adapters
     ):
         return {}
@@ -184,13 +233,21 @@ def evaluate_pre_tool_hook_policy(
         current_adapter=current_adapter,
         decision=externality_decision,
     )
-    runtime_result = update_runtime_analysis(
-        store,
-        current_event_id=current_event.event_id,
-        detector_version=RUNTIME_GRAPH_DETECTOR_VERSION,
-        minimum_path_score=minimum_path_score,
-        externality_policy_risk=externality_risk,
-    )
+    try:
+        runtime_result = update_runtime_analysis(
+            store,
+            current_event_id=current_event.event_id,
+            detector_version=RUNTIME_GRAPH_DETECTOR_VERSION,
+            minimum_path_score=minimum_path_score,
+            externality_policy_risk=externality_risk,
+        )
+    except ProtectedSourceUnavailableError:
+        if (
+            recovery_externality_decision is not None
+            and recovery_externality_decision.state == "known_local"
+        ):
+            return {}
+        return render_protected_source_unavailable_deny()
     current_sequence_no = store.get_event_sequence_no(current_event.event_id)
     current_sinks = _current_external_sinks(
         list(runtime_result.sinks),
@@ -269,6 +326,7 @@ def evaluate_pre_tool_hook_policy(
     if current_adapter == "bash" and (
         sink_payload_shadow_enabled or sink_payload_exact_enforcement_enabled
     ):
+        inspection_failed = False
         try:
             payload_evidence = _inspect_bash_sink_payload(
                 current_event=current_event,
@@ -276,8 +334,10 @@ def evaluate_pre_tool_hook_policy(
                 current_sinks=tuple(current_sinks),
             )
         except Exception:
-            # Resolution failure must preserve the existing lineage policy.
+            # Exact enforcement must fail closed below. Shadow-only mode keeps
+            # its observation semantics and never changes the baseline action.
             payload_evidence = ()
+            inspection_failed = True
         if sink_payload_shadow_enabled:
             try:
                 _store_bash_sink_payload_shadow(
@@ -292,11 +352,46 @@ def evaluate_pre_tool_hook_policy(
             except Exception:
                 # Observation must never change the already-rendered policy output.
                 pass
-        if sink_payload_exact_enforcement_enabled and payload_evidence:
-            exact_decisions = build_exact_file_payload_decisions(
-                payload_evidence,
-                sink_candidates=tuple(current_sinks),
-                analysis_run_id=runtime_result.analysis_run.analysis_run_id,
+        if sink_payload_exact_enforcement_enabled:
+            protected_source_node_ids = tuple(
+                chunk.chunk_id for chunk in runtime_result.source_chunks
+            )
+            if inspection_failed or (
+                not payload_evidence
+                and any(
+                    sink.sink_type == "external_http_request"
+                    and sink.metadata.get("matched_program") == "curl"
+                    for sink in current_sinks
+                )
+            ):
+                exact_decisions = build_unresolved_external_payload_decisions(
+                    sink_candidates=tuple(current_sinks),
+                    analysis_run_id=runtime_result.analysis_run.analysis_run_id,
+                    protected_source_node_ids=protected_source_node_ids,
+                    reason=(
+                        "payload_inspection_error"
+                        if inspection_failed
+                        else "payload_evidence_missing"
+                    ),
+                )
+            else:
+                exact_decisions = build_exact_file_payload_decisions(
+                    payload_evidence,
+                    sink_candidates=tuple(current_sinks),
+                    analysis_run_id=runtime_result.analysis_run.analysis_run_id,
+                    protected_source_node_ids=protected_source_node_ids,
+                )
+            exact_decisions.extend(
+                build_unverified_external_sink_decisions(
+                    sink_candidates=tuple(current_sinks),
+                    analysis_run_id=runtime_result.analysis_run.analysis_run_id,
+                    protected_source_node_ids=protected_source_node_ids,
+                    verified_sink_node_ids=_verified_external_sink_ids(
+                        payload_evidence,
+                        tuple(current_sinks),
+                        tuple(exact_decisions),
+                    ),
+                )
             )
             exact_selected = select_strongest_decision(
                 exact_decisions,
@@ -319,7 +414,117 @@ def evaluate_pre_tool_hook_policy(
                     db_path=store.db_path,
                     analysis_run_id=runtime_result.analysis_run.analysis_run_id,
                 )
+    if (
+        sink_payload_exact_enforcement_enabled
+        and current_adapter == "mcp"
+        and runtime_result.source_chunks
+    ):
+        try:
+            verification = verify_mcp_payload_against_sources(
+                current_event.raw_payload.get("tool_input"),
+                runtime_result.source_chunks,
+            )
+        except Exception:
+            verified_sink_node_ids = frozenset()
+        else:
+            verified_sink_node_ids = (
+                frozenset(
+                    sink.node_id
+                    for sink in current_sinks
+                    if sink.sink_type.startswith("external_")
+                )
+                if verification.status == "safe"
+                else frozenset()
+            )
+        conservative_decisions = build_unverified_external_sink_decisions(
+            sink_candidates=tuple(current_sinks),
+            analysis_run_id=runtime_result.analysis_run.analysis_run_id,
+            protected_source_node_ids=tuple(
+                chunk.chunk_id for chunk in runtime_result.source_chunks
+            ),
+            verified_sink_node_ids=verified_sink_node_ids,
+        )
+        conservative_selected = select_strongest_decision(
+            conservative_decisions,
+            "PreToolUse",
+        )
+        if conservative_selected is not None:
+            try:
+                store_policy_decision(
+                    store,
+                    conservative_selected,
+                    runtime_result.analysis_run.analysis_run_id,
+                )
+            except Exception:
+                pass
+            return render_codex_hook_output(
+                conservative_selected,
+                "PreToolUse",
+                db_path=store.db_path,
+                analysis_run_id=runtime_result.analysis_run.analysis_run_id,
+            )
+    if (
+        sink_payload_exact_enforcement_enabled
+        and current_adapter == "function"
+        and runtime_result.source_chunks
+    ):
+        conservative_decisions = build_unverified_external_sink_decisions(
+            sink_candidates=tuple(current_sinks),
+            analysis_run_id=runtime_result.analysis_run.analysis_run_id,
+            protected_source_node_ids=tuple(
+                chunk.chunk_id for chunk in runtime_result.source_chunks
+            ),
+            verified_sink_node_ids=frozenset(),
+        )
+        conservative_selected = select_strongest_decision(
+            conservative_decisions,
+            "PreToolUse",
+        )
+        if (
+            conservative_selected is not None
+            and conservative_selected.action == "block"
+        ):
+            try:
+                store_policy_decision(
+                    store,
+                    conservative_selected,
+                    runtime_result.analysis_run.analysis_run_id,
+                )
+            except Exception:
+                pass
+            return render_codex_hook_output(
+                conservative_selected,
+                "PreToolUse",
+                db_path=store.db_path,
+                analysis_run_id=runtime_result.analysis_run.analysis_run_id,
+            )
     return hook_output
+
+
+def _verified_external_sink_ids(
+    payload_evidence: tuple[BashSinkPayloadEvidence, ...],
+    current_sinks: tuple[SinkCandidate, ...],
+    exact_decisions: tuple[PolicyDecision, ...],
+) -> frozenset[str]:
+    direct_ids = {item.sink_node_id for item in payload_evidence}
+    direct_ids.update(
+        decision.sink_node_id for decision in exact_decisions
+    )
+    verified_fragment_ids = {
+        sink.metadata.get("command_fragment_id")
+        for sink in current_sinks
+        if sink.node_id in direct_ids
+        and isinstance(sink.metadata.get("command_fragment_id"), str)
+    }
+    return frozenset(
+        sink.node_id
+        for sink in current_sinks
+        if sink.node_id in direct_ids
+        or (
+            sink.metadata.get("basis") == "static_external"
+            and sink.metadata.get("command_fragment_id") in verified_fragment_ids
+        )
+    )
 
 
 def _externality_policy_risk(

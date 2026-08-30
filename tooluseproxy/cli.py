@@ -5,11 +5,13 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import sqlite3
 import stat
 import sys
 import tempfile
 from dataclasses import asdict
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -17,9 +19,11 @@ from hook_monitor.analysis.source_index import load_sources_and_chunks
 from hook_monitor.runtime.source_config import (
     CURRENT_MANIFEST_SCHEMA_VERSION,
     LEGACY_MANIFEST_SCHEMA_VERSION,
+    ProtectedSourceUnavailableError,
     SourceConfigError,
 )
 from hook_monitor.runtime.settings import (
+    EXTERNALITY_PROTECTION_KEY,
     FILE_PAYLOAD_EXACT_ENFORCEMENT_KEY,
     FILE_PAYLOAD_SHADOW_KEY,
     PRE_TOOL_POLICY_KEY,
@@ -34,6 +38,7 @@ from hook_monitor.runtime.settings import (
 from hook_monitor.runtime.models import (
     ProtectedSourceCandidate as StoredProtectedSourceCandidate,
 )
+from hook_monitor.runtime.incremental_analysis import RUNTIME_GRAPH_DETECTOR_VERSION
 from hook_monitor.runtime.storage import (
     CURRENT_SCHEMA_VERSION,
     EventStore,
@@ -54,6 +59,10 @@ from tooluseproxy.paths import (
     resolve_runtime_paths,
     secure_database_permissions,
 )
+from tooluseproxy.runtime_probe import (
+    hook_probe_token_is_valid,
+    payload_contains_hook_probe_token,
+)
 from tooluseproxy.protected_sources import (
     DEFAULT_PROTECTED_SOURCE_SCAN_LIMITS,
     DETECTOR_VERSION,
@@ -67,9 +76,11 @@ from tooluseproxy.protected_sources import (
     approve_protected_source,
     approve_protected_source_batch,
     apply_protected_source_manifest_migration,
+    apply_unavailable_source_reconciliation,
     ignore_protected_source_candidate,
     lock_protected_source_workspace,
     plan_protected_source_manifest_migration,
+    plan_unavailable_source_reconciliation,
     reject_protected_source_candidate,
     scan_protected_sources,
     suggest_protected_source,
@@ -92,7 +103,11 @@ SETUP_PROFILE_SETTINGS = {
     PRE_TOOL_POLICY_KEY: True,
     FILE_PAYLOAD_SHADOW_KEY: True,
     FILE_PAYLOAD_EXACT_ENFORCEMENT_KEY: True,
+    EXTERNALITY_PROTECTION_KEY: True,
 }
+EXPECTED_CODEX_HOOK_EVENTS = frozenset(
+    {"SessionStart", "SubagentStart", "PreToolUse", "PostToolUse", "Stop"}
+)
 
 
 class _ProtectCliError(ValueError):
@@ -194,6 +209,14 @@ def _build_parser() -> argparse.ArgumentParser:
 
     status = subparsers.add_parser("status", help="Show current runtime status.")
     status.add_argument("--workspace", type=Path, default=Path.cwd())
+    status.add_argument(
+        "--hook-probe-token",
+        type=_parse_hook_probe_token,
+        help=(
+            "Bind runtime health to the PreToolUse event for this exact "
+            "invocation. Omit for configuration-only status."
+        ),
+    )
     status.add_argument("--json", action="store_true", help="Print machine-readable output.")
     _add_runtime_path_arguments(status)
 
@@ -223,6 +246,14 @@ def _build_parser() -> argparse.ArgumentParser:
             "Apply only when this workspace has no configured runtime settings."
         ),
     )
+    setup_precondition.add_argument(
+        "--expect-compatible-settings",
+        action="store_true",
+        help=(
+            "Apply only when every configured runtime setting already matches "
+            "the fixed profile."
+        ),
+    )
     setup_apply.add_argument("--workspace", type=Path, default=Path.cwd())
     setup_apply.add_argument("--json", action="store_true")
     _add_runtime_path_arguments(setup_apply)
@@ -236,6 +267,14 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=(SETUP_PROFILE_FILE_PAYLOAD_EXACT,),
     )
     setup_verify.add_argument("--workspace", type=Path, default=Path.cwd())
+    setup_verify.add_argument(
+        "--hook-probe-token",
+        type=_parse_hook_probe_token,
+        help=(
+            "Bind runtime health to the PreToolUse event for this exact "
+            "invocation. Omit for configuration-only verification."
+        ),
+    )
     setup_verify.add_argument("--json", action="store_true")
     _add_runtime_path_arguments(setup_verify)
 
@@ -416,6 +455,31 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Print machine-readable output.",
     )
     _add_runtime_path_arguments(migration_apply)
+
+    reconcile = protect_subparsers.add_parser(
+        "reconcile",
+        help="Plan or explicitly remove registrations whose source files are unavailable.",
+    )
+    reconcile_subparsers = reconcile.add_subparsers(
+        dest="reconciliation_command",
+        required=True,
+    )
+    reconciliation_plan = reconcile_subparsers.add_parser(
+        "plan",
+        help="Create a value-free unavailable-source reconciliation plan.",
+    )
+    reconciliation_plan.add_argument("--workspace", type=Path, default=Path.cwd())
+    reconciliation_plan.add_argument("--json", action="store_true")
+    _add_runtime_path_arguments(reconciliation_plan)
+    reconciliation_apply = reconcile_subparsers.add_parser(
+        "apply",
+        help="Apply one explicitly reviewed unavailable-source reconciliation.",
+    )
+    reconciliation_apply.add_argument("--reconciliation-revision", required=True)
+    reconciliation_apply.add_argument("--expected-manifest-sha256", required=True)
+    reconciliation_apply.add_argument("--workspace", type=Path, default=Path.cwd())
+    reconciliation_apply.add_argument("--json", action="store_true")
+    _add_runtime_path_arguments(reconciliation_apply)
 
     trace = subparsers.add_parser("trace", help="Show source lineage for a stored analysis run.")
     trace.add_argument("arguments", nargs=argparse.REMAINDER)
@@ -668,6 +732,22 @@ def _run_setup_apply(args: argparse.Namespace) -> int:
             expected_revision = empty_workspace_runtime_settings(
                 workspace.workspace_id
             ).revision
+        elif args.expect_compatible_settings:
+            current_settings = store.get_workspace_runtime_settings(
+                workspace.workspace_id
+            )
+            conflicting_keys = sorted(
+                key
+                for key, value in current_settings.settings.items()
+                if SETUP_PROFILE_SETTINGS.get(key) is not value
+            )
+            if conflicting_keys:
+                raise RuntimeSettingsError(
+                    "settings_profile_conflict",
+                    "existing runtime settings differ from the fixed setup "
+                    "profile; no settings were changed",
+                )
+            expected_revision = current_settings.revision
         assert expected_revision is not None
         settings, changes = store.apply_workspace_runtime_settings_profile(
             workspace,
@@ -686,7 +766,11 @@ def _run_setup_apply(args: argparse.Namespace) -> int:
             "precondition": (
                 "empty_settings"
                 if args.expect_empty_settings
-                else "exact_revision"
+                else (
+                    "compatible_settings"
+                    if args.expect_compatible_settings
+                    else "exact_revision"
+                )
             ),
             "path_source": paths.source,
             "data_dir": str(paths.data_dir),
@@ -706,6 +790,14 @@ def _run_setup_apply(args: argparse.Namespace) -> int:
         }
     except RuntimeSettingsError as exc:
         _render_setup_error(exc.code, str(exc), as_json=args.json)
+        return 1
+    except ProtectedSourceUnavailableError:
+        _render_setup_error(
+            "protected_source_unavailable",
+            "one or more registered protected source files are unavailable; "
+            "create a value-free reconciliation plan",
+            as_json=args.json,
+        )
         return 1
     except (
         OSError,
@@ -785,10 +877,11 @@ def _run_setup_verify(args: argparse.Namespace) -> int:
                 "settings_schema_version": settings.schema_version,
                 "settings_revision": settings.revision,
                 "settings": [
-                    asdict(effective.settings[key])
-                    for key in RUNTIME_SETTING_KEYS
+                    asdict(effective.settings[key]) for key in RUNTIME_SETTING_KEYS
                 ],
             }
+
+        plugin_artifact = _inspect_plugin_artifact()
 
         checks = [
             _check("workspace", workspace.ready, str(workspace_path)),
@@ -828,6 +921,11 @@ def _run_setup_verify(args: argparse.Namespace) -> int:
                 profile_effective,
                 args.profile,
             ),
+            _check(
+                "plugin_artifact",
+                bool(plugin_artifact["ok"]),
+                str(plugin_artifact["detail"]),
+            ),
         ]
         plugin_root = os.environ.get("PLUGIN_ROOT")
         plugin_data = os.environ.get("PLUGIN_DATA")
@@ -863,9 +961,21 @@ def _run_setup_verify(args: argparse.Namespace) -> int:
                 )
             )
         ok = all(bool(item["ok"]) for item in checks)
+        runtime_enforcement = _runtime_enforcement_evidence(
+            paths.db_path,
+            workspace.workspace_id,
+            plugin_artifact=plugin_artifact,
+            probe_token=args.hook_probe_token,
+        )
         payload = {
             "schema_version": SETUP_OUTPUT_SCHEMA_VERSION,
-            "status": "passed" if ok else "needs_attention",
+            "status": "configuration_passed" if ok else "needs_attention",
+            "verification_scope": (
+                "configuration_and_current_invocation_hook_delivery"
+                if runtime_enforcement["hook_delivery_verified"]
+                else "configuration_only"
+            ),
+            "runtime_enforcement": runtime_enforcement,
             "profile": args.profile,
             "version": __version__,
             "path_source": paths.source,
@@ -881,6 +991,7 @@ def _run_setup_verify(args: argparse.Namespace) -> int:
             "protected_sources": protected_sources,
             "runtime_settings": settings_payload,
             "enforcement_coverage": codex_enforcement_coverage(),
+            "plugin_artifact": plugin_artifact,
         }
     except (
         OSError,
@@ -899,6 +1010,378 @@ def _run_setup_verify(args: argparse.Namespace) -> int:
         return 1
     _render(payload, as_json=args.json)
     return 0 if ok else 1
+
+
+def _inspect_plugin_artifact() -> dict[str, object]:
+    """Validate the local Plugin files without claiming Codex loaded them."""
+
+    plugin_root = Path(__file__).resolve().parents[1]
+    manifest_path = plugin_root / ".codex-plugin" / "plugin.json"
+    hooks_path = plugin_root / "hooks" / "hooks.json"
+    try:
+        hooks_bytes = hooks_path.read_bytes()
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        hook_manifest = json.loads(hooks_bytes.decode("utf-8"))
+        hooks = hook_manifest.get("hooks")
+        if not isinstance(manifest, dict) or not isinstance(hooks, dict):
+            raise ValueError("Plugin manifests must be JSON objects")
+        events = frozenset(str(key) for key in hooks)
+        definition_count = sum(
+            len(definitions) if isinstance(definitions, list) else 0
+            for definitions in hooks.values()
+        )
+        manifest_version = manifest.get("version")
+        version_matches = bool(
+            isinstance(manifest_version, str)
+            and _plugin_manifest_version_matches_runtime(
+                manifest_version,
+                __version__,
+            )
+        )
+        ok = bool(
+            manifest.get("name") == "tooluseproxy"
+            and version_matches
+            and events == EXPECTED_CODEX_HOOK_EVENTS
+            and definition_count == len(EXPECTED_CODEX_HOOK_EVENTS)
+        )
+        return {
+            "ok": ok,
+            "detail": (
+                "local Plugin artifact identity and five Hook definitions match"
+                if ok
+                else "local Plugin artifact identity or Hook definitions mismatch"
+            ),
+            "plugin_version": manifest_version,
+            "hook_events": sorted(events),
+            "hook_definition_count": definition_count,
+            "hooks_sha256": hashlib.sha256(hooks_bytes).hexdigest(),
+        }
+    except (OSError, ValueError, json.JSONDecodeError):
+        return {
+            "ok": False,
+            "detail": "local Plugin artifact could not be validated",
+            "plugin_version": None,
+            "hook_events": [],
+            "hook_definition_count": 0,
+            "hooks_sha256": None,
+        }
+
+
+def _plugin_manifest_version_matches_runtime(
+    manifest_version: str,
+    runtime_version: str,
+) -> bool:
+    release_version = manifest_version
+    prerelease_marker = ".desktop-phase-b."
+    stable_marker = "-desktop-phase-b."
+    stable_release = (
+        r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\."
+        r"(?:0|[1-9][0-9]*)"
+    )
+    release = stable_release + r"(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?"
+    if prerelease_marker in manifest_version:
+        release_version, nonce = manifest_version.rsplit(
+            prerelease_marker,
+            maxsplit=1,
+        )
+        if (
+            "-" not in release_version
+            or re.fullmatch(release, release_version) is None
+            or re.fullmatch(r"[0-9a-f]{12}", nonce) is None
+        ):
+            return False
+    elif stable_marker in manifest_version:
+        release_version, nonce = manifest_version.rsplit(
+            stable_marker,
+            maxsplit=1,
+        )
+        if (
+            re.fullmatch(stable_release, release_version) is None
+            or re.fullmatch(r"[0-9a-f]{12}", nonce) is None
+        ):
+            return False
+    return release_version.replace("-alpha.", "a") == runtime_version
+
+
+def _runtime_enforcement_evidence(
+    db_path: Path,
+    workspace_id: str | None,
+    *,
+    plugin_artifact: dict[str, object] | None = None,
+    probe_token: str | None = None,
+) -> dict[str, object]:
+    """Report exact-invocation Hook evidence without reusing stale success."""
+
+    if (
+        workspace_id is None
+        or not db_path.is_file()
+        or probe_token is None
+    ):
+        return _empty_runtime_enforcement_evidence()
+    try:
+        with sqlite3.connect(f"{db_path.as_uri()}?mode=ro", uri=True) as connection:
+            candidate_rows = connection.execute(
+                """
+                SELECT session_id, tool_name, payload_json, recorded_at,
+                       sequence_no
+                FROM events
+                WHERE workspace_id = ?
+                  AND phase = 'pre_tool_use'
+                  AND session_id IS NOT NULL
+                ORDER BY recorded_at DESC, sequence_no DESC
+                LIMIT 50
+                """,
+                (workspace_id,),
+            ).fetchall()
+            latest_pre_tool_row = next(
+                (
+                    row
+                    for row in candidate_rows
+                    if _payload_json_contains_probe_token(row[2], probe_token)
+                ),
+                None,
+            )
+            if latest_pre_tool_row is None:
+                return _empty_runtime_enforcement_evidence()
+            (
+                latest_session_id,
+                latest_tool_name,
+                latest_payload_json,
+                latest_pre_tool_at,
+                latest_pre_tool_sequence_no,
+            ) = latest_pre_tool_row
+            if not isinstance(latest_session_id, str) or not latest_session_id:
+                return _empty_runtime_enforcement_evidence()
+            session_start_row = connection.execute(
+                """
+                SELECT payload_json
+                FROM events
+                WHERE workspace_id = ?
+                  AND phase = 'session_start'
+                  AND session_id = ?
+                ORDER BY sequence_no DESC
+                LIMIT 1
+                """,
+                (workspace_id, latest_session_id),
+            ).fetchone()
+            detector_run_rows = connection.execute(
+                """
+                SELECT config_json, completed_at
+                FROM analysis_runs
+                WHERE workspace_id = ?
+                  AND session_id = ?
+                  AND detector_version = ?
+                """,
+                (
+                    workspace_id,
+                    latest_session_id,
+                    RUNTIME_GRAPH_DETECTOR_VERSION,
+                ),
+            ).fetchall()
+            current_detector_blocks = int(
+                connection.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM policy_decisions AS decisions
+                    JOIN analysis_runs AS runs
+                      ON runs.analysis_run_id = decisions.analysis_run_id
+                    WHERE runs.workspace_id = ?
+                      AND runs.session_id = ?
+                      AND runs.detector_version = ?
+                      AND decisions.hook_event = 'PreToolUse'
+                      AND decisions.action = 'block'
+                    """,
+                    (
+                        workspace_id,
+                        latest_session_id,
+                        RUNTIME_GRAPH_DETECTOR_VERSION,
+                    ),
+                ).fetchone()[0]
+            )
+    except (sqlite3.Error, TypeError, ValueError):
+        return _empty_runtime_enforcement_evidence(
+            status="runtime_evidence_unavailable"
+        )
+    recent_pre_tool = _timestamp_is_recent(latest_pre_tool_at)
+    matching_detector_run = bool(
+        isinstance(latest_pre_tool_sequence_no, int)
+        and any(
+            completed_at is not None
+            and _analysis_run_covers_sequence(
+                config_json,
+                latest_pre_tool_sequence_no,
+            )
+            for config_json, completed_at in detector_run_rows
+        )
+    )
+    pre_tool_attestation = _parse_runtime_attestation(latest_payload_json)
+    session_start_attestation = _parse_runtime_attestation(
+        None if session_start_row is None else session_start_row[0]
+    )
+    expected_attestation = {
+        "plugin_version": (
+            None
+            if plugin_artifact is None
+            else plugin_artifact.get("plugin_version")
+        ),
+        "runtime_version": __version__,
+        "hooks_sha256": (
+            None
+            if plugin_artifact is None
+            else plugin_artifact.get("hooks_sha256")
+        ),
+    }
+    pre_tool_runtime_artifact_verified = bool(
+        plugin_artifact
+        and plugin_artifact.get("ok") is True
+        and all(isinstance(value, str) and value for value in expected_attestation.values())
+        and pre_tool_attestation == expected_attestation
+    )
+    session_start_verified = bool(
+        session_start_row is not None
+        and session_start_attestation == expected_attestation
+    )
+    pre_tool_delivery_verified = recent_pre_tool and matching_detector_run
+    hook_delivery_verified = bool(
+        pre_tool_delivery_verified and pre_tool_runtime_artifact_verified
+    )
+    protected_block_verified = bool(
+        hook_delivery_verified and current_detector_blocks > 0
+    )
+    if hook_delivery_verified and protected_block_verified:
+        status = "current_invocation_protected_block_observed"
+        detail = (
+            "the current installed Hook runtime recorded PreToolUse for this "
+            "verification command and a pre-execution block in one session"
+        )
+    elif hook_delivery_verified:
+        status = "current_invocation_hook_delivery_observed_block_not_tested"
+        detail = (
+            "the current installed Hook runtime reached this verification "
+            "command, but no protected pre-execution block has been observed "
+            "in the same session"
+        )
+    elif recent_pre_tool and not pre_tool_runtime_artifact_verified:
+        status = "stale_or_unattested_hook_runtime"
+        detail = (
+            "a recent PreToolUse event exists, but it is not bound to the "
+            "currently installed Plugin runtime"
+        )
+    else:
+        status = "requires_current_invocation_hook_probe"
+        detail = (
+            "setup configuration is valid, but PreToolUse delivery for this "
+            "verification command has not been proven"
+        )
+    return {
+        "hook_delivery_verified": hook_delivery_verified,
+        "session_start_verified": session_start_verified,
+        "pre_tool_delivery_verified": pre_tool_delivery_verified,
+        "runtime_artifact_verified": pre_tool_runtime_artifact_verified,
+        "hook_trust_verified": False,
+        "protected_block_verified": protected_block_verified,
+        "observed_tool_surface": (
+            latest_tool_name if isinstance(latest_tool_name, str) else None
+        ),
+        "current_invocation_probe_verified": hook_delivery_verified,
+        "status": status,
+        "detail": detail,
+        "evidence_is_value_free": True,
+        "detector_version": RUNTIME_GRAPH_DETECTOR_VERSION,
+    }
+
+
+def _empty_runtime_enforcement_evidence(
+    *,
+    status: str = "requires_current_invocation_hook_probe",
+) -> dict[str, object]:
+    return {
+        "hook_delivery_verified": False,
+        "session_start_verified": False,
+        "pre_tool_delivery_verified": False,
+        "runtime_artifact_verified": False,
+        "hook_trust_verified": False,
+        "protected_block_verified": False,
+        "observed_tool_surface": None,
+        "current_invocation_probe_verified": False,
+        "status": status,
+        "detail": (
+            "setup configuration does not prove Codex Hook trust, delivery, "
+            "or a pre-execution block"
+        ),
+        "evidence_is_value_free": True,
+        "detector_version": RUNTIME_GRAPH_DETECTOR_VERSION,
+    }
+
+
+def _payload_json_contains_probe_token(
+    payload_json: object,
+    probe_token: str,
+) -> bool:
+    if not isinstance(payload_json, str):
+        return False
+    try:
+        payload = json.loads(payload_json)
+    except json.JSONDecodeError:
+        return False
+    return payload_contains_hook_probe_token(payload, probe_token)
+
+
+def _analysis_run_covers_sequence(
+    config_json: object,
+    event_sequence_no: int,
+) -> bool:
+    if not isinstance(config_json, str):
+        return False
+    try:
+        config = json.loads(config_json)
+    except json.JSONDecodeError:
+        return False
+    return bool(
+        isinstance(config, dict)
+        and type(config.get("through_sequence_no")) is int
+        and config["through_sequence_no"] >= event_sequence_no
+    )
+
+
+def _parse_hook_probe_token(value: str) -> str:
+    if not hook_probe_token_is_valid(value):
+        raise argparse.ArgumentTypeError(
+            "hook probe token must use tup-probe-v1- plus 32 lowercase hex characters"
+        )
+    return value
+
+
+def _parse_runtime_attestation(payload_json: object) -> dict[str, object] | None:
+    if not isinstance(payload_json, str):
+        return None
+    try:
+        payload = json.loads(payload_json)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    attestation = payload.get("_tooluseproxy_runtime")
+    if not isinstance(attestation, dict):
+        return None
+    expected_keys = {"plugin_version", "runtime_version", "hooks_sha256"}
+    if set(attestation) != expected_keys or not all(
+        isinstance(attestation[key], str) and attestation[key]
+        for key in expected_keys
+    ):
+        return None
+    return {key: attestation[key] for key in sorted(expected_keys)}
+
+
+def _timestamp_is_recent(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        observed = datetime.strptime(value, "%Y-%m-%d %H:%M:%S").replace(tzinfo=UTC)
+    except ValueError:
+        return False
+    now = datetime.now(UTC)
+    return now - timedelta(minutes=5) <= observed <= now + timedelta(seconds=5)
 
 
 def _render_setup_error(code: str, message: str, *, as_json: bool) -> None:
@@ -1043,17 +1526,38 @@ def _run_status(args: argparse.Namespace) -> int:
         workspace,
         workspace_path,
     )
+    effective_settings = {
+        item.get("key"): item.get("effective_value")
+        for item in runtime_settings.get("settings", [])
+        if isinstance(item, dict)
+    }
+    protection_profile_effective = all(
+        effective_settings.get(key) is value
+        for key, value in SETUP_PROFILE_SETTINGS.items()
+    )
+    configured = bool(
+        workspace.ready
+        and summary["ok"]
+        and registration_ok
+        and protected_sources["runtime_readable"]
+        and runtime_settings["ok"]
+        and protection_profile_effective
+    )
+    plugin_artifact = _inspect_plugin_artifact()
+    runtime_enforcement = _runtime_enforcement_evidence(
+        paths.db_path,
+        workspace.workspace_id,
+        plugin_artifact=plugin_artifact,
+        probe_token=args.hook_probe_token,
+    )
+    current_invocation_active = bool(
+        configured and runtime_enforcement["hook_delivery_verified"]
+    )
     payload = {
         "status": (
             "active"
-            if (
-                workspace.ready
-                and summary["ok"]
-                and registration_ok
-                and protected_sources["runtime_readable"]
-                and runtime_settings["ok"]
-            )
-            else "inactive"
+            if current_invocation_active
+            else ("configured_unverified" if configured else "inactive")
         ),
         "version": __version__,
         "path_source": paths.source,
@@ -1067,10 +1571,12 @@ def _run_status(args: argparse.Namespace) -> int:
         },
         "protected_sources": protected_sources,
         "runtime_settings": runtime_settings,
+        "runtime_enforcement": runtime_enforcement,
+        "plugin_artifact": plugin_artifact,
         "enforcement_coverage": codex_enforcement_coverage(),
     }
     _render(payload, as_json=args.json)
-    return 0 if payload["status"] == "active" else 1
+    return 0 if current_invocation_active else 1
 
 
 def _run_config(args: argparse.Namespace) -> int:
@@ -1308,6 +1814,23 @@ def _run_protect(args: argparse.Namespace) -> int:
                     backup_root=paths.data_dir,
                 )
             payload = migration.to_public_payload()
+        elif args.protect_command == "reconcile":
+            assert workspace.workspace_id is not None
+            if args.reconciliation_command == "plan":
+                reconciliation = plan_unavailable_source_reconciliation(
+                    workspace_path,
+                    workspace_id=workspace.workspace_id,
+                    backup_root=paths.data_dir,
+                )
+            else:
+                reconciliation = apply_unavailable_source_reconciliation(
+                    workspace_path,
+                    workspace_id=workspace.workspace_id,
+                    reconciliation_revision=args.reconciliation_revision,
+                    expected_manifest_sha256=args.expected_manifest_sha256,
+                    backup_root=paths.data_dir,
+                )
+            payload = reconciliation.to_public_payload()
         else:  # pragma: no cover - argparse constrains this branch
             raise _ProtectCliError(
                 "unsupported_protect_command",
@@ -1329,20 +1852,29 @@ def _run_protect(args: argparse.Namespace) -> int:
         return 1
     except ValueError:
         migration_command = args.protect_command == "migrate"
+        reconciliation_command = args.protect_command == "reconcile"
         scan_command = args.protect_command == "scan"
         _render_protect_error(
             (
                 "migration_state_conflict"
                 if migration_command
-                else "candidate_state_conflict"
+                else (
+                    "reconciliation_state_conflict"
+                    if reconciliation_command
+                    else "candidate_state_conflict"
+                )
             ),
             (
                 "protected source manifest changed; create a new migration plan"
                 if migration_command
                 else (
+                    "protected source manifest changed; create a new reconciliation plan"
+                    if reconciliation_command
+                    else (
                     "protected source candidate state changed; run scan again"
                     if scan_command
                     else "protected source candidate state changed; run suggest again"
+                    )
                 )
             ),
             as_json=args.json,
@@ -1757,10 +2289,18 @@ def _suggest_protected_sources_under_lock(
         "status": status,
         "scan_complete": True,
         "manifest_sha256": manifest_sha256,
+        "candidate_count": len(candidates),
         "candidates": candidates,
         "suppressed_count": suppressed_count,
         "already_registered_count": already_registered_count,
         "approval_in_progress_count": approval_in_progress_count,
+        "remaining_candidate_count": 0,
+        "continuation_required": bool(
+            candidates or approval_in_progress_count
+        ),
+        "approval_mode": "batch",
+        "review_batch_limit": PROTECTED_SOURCE_REVIEW_BATCH_LIMIT,
+        "rescan_required_after_manifest_change": False,
     }
 
 
@@ -2207,6 +2747,14 @@ def _render_protect_payload(payload: dict[str, Any], *, as_json: bool) -> None:
         "migration_kind",
         "migration_id",
         "migration_revision",
+        "reconciliation_kind",
+        "reconciliation_id",
+        "reconciliation_revision",
+        "unavailable_source_count",
+        "unavailable_sources",
+        "remaining_source_count",
+        "removed_source_count",
+        "source_file_changes",
         "result_manifest_sha256",
         "from_schema_version",
         "to_schema_version",

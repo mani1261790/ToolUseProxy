@@ -147,7 +147,7 @@ class ProtectedSourceMigrationCliTest(unittest.TestCase):
                     ).fetchone()[0],
                 )
 
-    def test_doctor_and_status_keep_a_legacy_manifest_runtime_active(self) -> None:
+    def test_doctor_and_status_keep_a_legacy_manifest_runtime_readable(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             _, workspace, data_dir = self._initialized_workspace(
                 Path(temporary_directory)
@@ -167,7 +167,7 @@ class ProtectedSourceMigrationCliTest(unittest.TestCase):
                 manifest_path.chmod(0o600)
 
             reports: dict[str, dict[str, object]] = {}
-            for command, expected_status in (("doctor", "ok"), ("status", "active")):
+            for command, expected_status in (("doctor", "ok"), ("status", "inactive")):
                 with self.subTest(command=command):
                     stdout = io.StringIO()
                     with redirect_stdout(stdout):
@@ -181,7 +181,11 @@ class ProtectedSourceMigrationCliTest(unittest.TestCase):
                                 "--json",
                             ]
                         )
-                    self.assertEqual(0, exit_code, stdout.getvalue())
+                    self.assertEqual(
+                        0 if command == "doctor" else 1,
+                        exit_code,
+                        stdout.getvalue(),
+                    )
                     report = json.loads(stdout.getvalue())
                     self.assertEqual(expected_status, report["status"])
                     self.assertNotIn(sentinel, stdout.getvalue())
@@ -214,9 +218,9 @@ class ProtectedSourceMigrationCliTest(unittest.TestCase):
                     ]
                 )
 
-            self.assertEqual(0, exit_code, stdout.getvalue())
+            self.assertEqual(1, exit_code, stdout.getvalue())
             report = json.loads(stdout.getvalue())
-            self.assertEqual("active", report["status"])
+            self.assertEqual("inactive", report["status"])
             self.assertEqual(
                 {
                     "ok": True,
@@ -263,9 +267,9 @@ class ProtectedSourceMigrationCliTest(unittest.TestCase):
                         ]
                     )
 
-                self.assertEqual(0, exit_code, stdout.getvalue())
+                self.assertEqual(1, exit_code, stdout.getvalue())
                 report = json.loads(stdout.getvalue())
-                self.assertEqual("active", report["status"])
+                self.assertEqual("inactive", report["status"])
                 protected_sources = report["protected_sources"]
                 self.assertTrue(protected_sources["runtime_readable"])
                 self.assertFalse(protected_sources["registration_writable"])
@@ -303,9 +307,9 @@ class ProtectedSourceMigrationCliTest(unittest.TestCase):
                         ]
                     )
 
-                self.assertEqual(0, exit_code, stdout.getvalue())
+                self.assertEqual(1, exit_code, stdout.getvalue())
                 report = json.loads(stdout.getvalue())
-                self.assertEqual("active", report["status"])
+                self.assertEqual("inactive", report["status"])
                 protected_sources = report["protected_sources"]
                 self.assertTrue(protected_sources["runtime_readable"])
                 self.assertFalse(protected_sources["registration_writable"])

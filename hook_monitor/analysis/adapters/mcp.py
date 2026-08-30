@@ -259,7 +259,7 @@ def _classify_mcp(server: str | None, tool: str | None) -> str | None:
     if not normalized_tool:
         return None
     if _is_read_only_tool_name(normalized_tool):
-        return None
+        return "external_api_call"
 
     if _contains_any(normalized_server, {"slack", "gmail", "mail"}):
         if _contains_token_or_phrase(
@@ -287,7 +287,10 @@ def _classify_mcp(server: str | None, tool: str | None) -> str | None:
         {"send", "post", "create", "update", "upload", "publish", "share", "comment"},
     ):
         return "external_api_call"
-    return None
+    # A read-only MCP operation can still transmit its query and arguments to
+    # the MCP server. Treat every resolved MCP call as an outbound boundary;
+    # mutation-style names only refine the sink type above.
+    return "external_api_call"
 
 
 def _select_profiled_argument_contexts(

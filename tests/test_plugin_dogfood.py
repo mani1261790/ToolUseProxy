@@ -47,6 +47,11 @@ class PluginDogfoodTest(unittest.TestCase):
         self.assertTrue(
             payload["checks"]["protected_file_payload_denied_before_execution"]
         )
+        self.assertTrue(
+            payload["checks"][
+                "dynamic_protected_payload_denied_before_execution"
+            ]
+        )
         self.assertEqual(0, payload["metrics"]["external_side_effect_count"])
         self.assertEqual(1, payload["metrics"]["public_side_effect_count"])
         self.assertEqual(0, payload["metrics"]["protected_side_effect_count"])

