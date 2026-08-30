@@ -1,6 +1,6 @@
 # ToolUseProxy 5分クイックスタート
 
-> **一時停止中:** `alpha.10`のfresh Desktop release gateが完了するまで、新規installと`public-alpha`からの通常利用を開始しないでください。公開channelの`alpha.8`には安全に確認できない外部payloadを許可する問題があります。
+> **一時停止中:** `alpha.11`のfresh Desktop release gateが完了するまで、新規installと`public-alpha`からの通常利用を開始しないでください。公開channelの`alpha.8`には安全に確認できない外部payloadを許可する問題があります。
 
 release gate完了後、この手順では検証済みの公開alphaを保護branch `public-alpha`からインストールします。開発中の変更を含む`main`は、通常利用のインストール元にしないでください。
 
@@ -26,12 +26,12 @@ MarketplaceとPluginのインストールは、Codex環境ごとに1回だけで
 特定versionへ固定する場合は、1つ目のコマンドで`public-alpha`の代わりにimmutable tagを指定します。
 
 ```bash
-codex plugin marketplace add mani1261790/ToolUseProxy --ref v0.1.0-alpha.10
+codex plugin marketplace add mani1261790/ToolUseProxy --ref v0.1.0-alpha.11
 ```
 
 ## 3. 5つのHookを確認してTrustする
 
-`alpha.8`以前、または先行導入した`alpha.9`を使っていた場合は、先に`codex plugin marketplace upgrade tooluseproxy`を実行し、`codex plugin list --json`で`0.1.0-alpha.10`になったことを確認してください。古い版のまま使い続けないでください。
+`alpha.10`以前を使っていた場合は、先に`codex plugin marketplace upgrade tooluseproxy`を実行し、`codex plugin list --json`で`0.1.0-alpha.11`になったことを確認してください。古い版のまま使い続けないでください。
 
 Codexが表示するHookを、次の条件と照合してください。
 
@@ -69,6 +69,8 @@ ToolUseProxyが必要な初期設定と安全確認を案内します。操作�
 通常インストールでは、ToolUseProxy自身が現在のPlugin identityを検証して専用保存領域を特定します。利用者が`database_missing`などの内部診断、absolute path、初期化commandをコピーして貼り直す必要はありません。承認UIがないことだけを理由にターミナル実行へ切り替えません。保存先またはaccessを安全に確認できない場合は、別pathや広い権限を推測せず未設定のまま停止します。
 
 完了時の`configuration_passed`は初期設定だけの合格です。Hook trust、Hook delivery、protected blockまで確認した意味ではありません。fresh taskで安全な動作確認を行い、protected操作が実行前に止まった証拠を得てから、ToolUseProxyが動作していると判断します。すべての機密ファイルが自動登録されるわけではありません。
+
+以前登録したファイルが移動・削除されている場合、ToolUseProxyは外部通信や判定不能な操作を止めたまま、見つからない登録を一度に一覧表示します。利用者が一覧全体の整理を明示的に認めた場合だけ、古い登録を原子的に外して設定をやり直します。元ファイルは変更・削除せず、利用できる登録は残し、更新前の保護リストを専用保存領域へバックアップします。JSONを手で編集したり、1件ずつ同じ確認を繰り返したりする必要はありません。
 
 ## 5. protected source候補をまとめて確認する
 

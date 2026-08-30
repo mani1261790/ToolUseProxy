@@ -143,6 +143,8 @@ whether state changes:
 - protected-source batch review: `ToolUseProxyの操作確認｜行うこと：表示した候補への選択をまとめて反映します｜変更されるもの：選んだ保護対象と見送った記録｜外部通信：ありません｜確認が必要な理由：専用保存領域へ選択結果を保存するためです｜この内容で実行してよいですか？`
 - protected-source migration plan: `ToolUseProxyの操作確認｜行うこと：保護対象リストを安全に更新できるか確認します｜変更されるもの：ありません｜外部通信：ありません｜確認が必要な理由：プロジェクト外の専用保存領域を読み取るためです｜この内容で実行してよいですか？`
 - protected-source migration apply: `ToolUseProxyの操作確認｜行うこと：保護対象リストを新しい形式へ更新します｜変更されるもの：リストの形式と専用保存領域のバックアップ｜外部通信：ありません｜確認が必要な理由：更新前の状態を安全に保存するためです｜この内容で実行してよいですか？`
+- unavailable-source reconciliation plan: `ToolUseProxyの操作確認｜行うこと：見つからない保護対象の登録をまとめて確認します｜変更されるもの：ありません｜外部通信：ありません｜確認が必要な理由：専用保存領域と保護リストを読み取るためです｜この内容で実行してよいですか？`
+- unavailable-source reconciliation apply: `ToolUseProxyの操作確認｜行うこと：表示した見つからない登録を保護リストから外します｜変更されるもの：保護リストと更新前のバックアップ｜外部通信：ありません｜確認が必要な理由：元ファイルを変えずに古い登録だけを整理するためです｜この内容で実行してよいですか？`
 - removal without data deletion: `ToolUseProxyの操作確認｜行うこと：このプロジェクトでの利用を止めます｜変更されるもの：Pluginの有効状態だけ｜外部通信：ありません｜確認が必要な理由：新しい記録を止めるためです｜この内容で実行してよいですか？`
 - managed-data deletion: `ToolUseProxyの操作確認｜行うこと：表示したToolUseProxyデータを削除します｜変更されるもの：表示した管理対象データ｜外部通信：ありません｜確認が必要な理由：削除すると元に戻せないためです｜この内容で実行してよいですか？`
 
@@ -264,6 +266,37 @@ do not report missing initial output as a command failure.
    ```text
    sh "<PLUGIN_ROOT>/hooks/run_cli.sh" setup apply file-payload-exact --codex --expect-compatible-settings --workspace <workspace-root> --json
    ```
+
+   If this exact command returns `protected_source_unavailable`, do not call it
+   a Hook trust failure and do not ask the user to open the Plugin diagnostics.
+   It means one or more files registered earlier have since been moved, deleted,
+   or made unsafe. Run the exact value-free batch plan:
+
+   ```text
+   sh "<PLUGIN_ROOT>/hooks/run_cli.sh" protect reconcile plan --workspace <workspace-root> --json
+   ```
+
+   Show every returned workspace-relative path together in one numbered list.
+   Explain that ToolUseProxy cannot protect those old paths while the files are
+   absent, that removing the registrations does not change or delete any source
+   file, that all still-available registrations remain, and that an exact private
+   backup of the current protection list will be kept. Ask for one decision for
+   the entire displayed batch. Natural approval is accepted; never require an
+   English command or exact phrase. If the user wants to restore or relocate a
+   file instead, stop without changing the list.
+
+   Only after explicit approval, pass the unchanged revision and manifest hash:
+
+   ```text
+   sh "<PLUGIN_ROOT>/hooks/run_cli.sh" protect reconcile apply --reconciliation-revision <reconciliation-revision> --expected-manifest-sha256 <manifest-sha256> --workspace <workspace-root> --json
+   ```
+
+   The apply command removes exactly the unavailable registrations committed by
+   the reviewed plan in one atomic manifest replacement. It preserves unknown
+   manifest fields, available entries, their order, and every source file. If
+   the manifest or source availability changed, create and show a new plan and
+   obtain new approval. After a successful or already-reconciled result, rerun
+   the same fixed setup apply command once, then continue to verification.
 
    Then run the one read-only configuration verification command:
 

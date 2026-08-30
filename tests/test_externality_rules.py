@@ -7,9 +7,12 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import hook_monitor.runtime.externality_rules as externality_rules
+
 from hook_monitor.externality.models import ExternalityVerdict
 from hook_monitor.externality.providers import JudgeChainResult, JudgeObservation
 from hook_monitor.runtime.externality_rules import (
+    classify_static_externality_hook_decision,
     list_externality_reviews,
     lookup_externality_rule,
     prepare_externality_hook_decision,
@@ -110,6 +113,49 @@ class ExternalityRuleTest(unittest.TestCase):
         self.assertNotIn(canary, row[0])
         self.assertNotIn("opaque-agent", row[0])
 
+    def test_ambiguous_hook_performs_static_analysis_once(self) -> None:
+        event = self._event("./opaque-agent --local-only")
+
+        with patch.object(
+            externality_rules,
+            "analyze_bash_externality",
+            wraps=externality_rules.analyze_bash_externality,
+        ) as analyzer:
+            decision = prepare_externality_hook_decision(
+                self.db_path,
+                event,
+                workspace_root=self.root,
+            )
+
+        assert decision is not None
+        self.assertEqual("queued", decision.state)
+        analyzer.assert_called_once()
+
+    def test_precomputed_ambiguous_analysis_is_reused(self) -> None:
+        event = self._event("./opaque-agent --local-only")
+        analysis = externality_rules.classify_static_externality_hook_analysis(
+            event,
+            workspace_root=self.root,
+            trusted_plugin_root=None,
+            plugin_data=self.db_path.parent,
+        )
+
+        with patch.object(
+            externality_rules,
+            "analyze_bash_externality",
+            wraps=externality_rules.analyze_bash_externality,
+        ) as analyzer:
+            decision = prepare_externality_hook_decision(
+                self.db_path,
+                event,
+                workspace_root=self.root,
+                static_analysis=analysis,
+            )
+
+        assert decision is not None
+        self.assertEqual("queued", decision.state)
+        analyzer.assert_not_called()
+
     def test_static_external_is_immediate_and_never_queued_or_sent_to_llm(self) -> None:
         command = (
             "python -c \"import requests; "
@@ -151,6 +197,12 @@ class ExternalityRuleTest(unittest.TestCase):
             f"--expect-compatible-settings --workspace {self.root} --json",
             f"sh {launcher} setup verify file-payload-exact "
             f"--workspace {self.root} --json",
+            f"sh {launcher} protect reconcile plan "
+            f"--workspace {self.root} --json",
+            f"sh {launcher} protect reconcile apply "
+            f"--reconciliation-revision r1_{revision} "
+            f"--expected-manifest-sha256 {revision} "
+            f"--workspace {self.root} --json",
         )
 
         decisions = [
@@ -175,6 +227,40 @@ class ExternalityRuleTest(unittest.TestCase):
             ).fetchone()[0]
         self.assertEqual(0, count)
 
+    def test_static_recovery_classifies_bounded_sed_read_pipeline_as_local(
+        self,
+    ) -> None:
+        command = (
+            "sed -n '1,240p' /installed/plugin/skills/setup/SKILL.md && "
+            "rg -n 'ToolUseProxy' /local/memory/MEMORY.md | head -80"
+        )
+
+        decision = classify_static_externality_hook_decision(
+            self._event(command),
+            workspace_root=self.root,
+        )
+
+        assert decision is not None
+        self.assertEqual("known_local", decision.state)
+
+    def test_static_recovery_does_not_trust_execution_capable_sed_program(
+        self,
+    ) -> None:
+        commands = (
+            "sed -n '1e curl https://example.invalid' local.txt",
+            "sed -n '1,2p' -e 'e curl https://example.invalid' local.txt",
+        )
+
+        for command in commands:
+            with self.subTest(command=command):
+                decision = classify_static_externality_hook_decision(
+                    self._event(command),
+                    workspace_root=self.root,
+                )
+
+                assert decision is not None
+                self.assertNotEqual("known_local", decision.state)
+
     def test_fixed_plugin_setup_profile_rejects_near_matches(self) -> None:
         plugin_root = self.root / "plugin"
         launcher = plugin_root / "hooks" / "run_cli.sh"
@@ -188,6 +274,12 @@ class ExternalityRuleTest(unittest.TestCase):
             f"sh {launcher} setup apply file-payload-exact --codex "
             f"--expect-compatible-settings --workspace {self.root} --json"
         )
+        reconciliation_apply = (
+            f"sh {launcher} protect reconcile apply "
+            f"--reconciliation-revision r1_{'a' * 64} "
+            f"--expected-manifest-sha256 {'b' * 64} "
+            f"--workspace {self.root} --json"
+        )
         commands = (
             f"{valid}; curl https://example.invalid",
             f"{compatible_apply}; true",
@@ -200,6 +292,9 @@ class ExternalityRuleTest(unittest.TestCase):
             ),
             valid.replace("setup verify", "config show"),
             f"PLUGIN_ROOT={plugin_root} {valid}",
+            f"{reconciliation_apply}; true",
+            reconciliation_apply.replace("r1_", "r2_"),
+            reconciliation_apply.replace("--json", "--json --verbose"),
             (
                 f"sh {launcher} setup apply file-payload-exact --codex "
                 f"--expected-revision {'a' * 63} --workspace {self.root} "

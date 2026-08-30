@@ -14,6 +14,7 @@ from hook_monitor.analysis.adapters.bash import classify_bash_sink_type
 from hook_monitor.analysis.adapters.mcp import classify_mcp_sink_type
 from hook_monitor.externality.configuration import resolve_judge_configuration
 from hook_monitor.externality.envelope import (
+    StaticExternalityResult,
     analyze_bash_externality,
     analyze_mcp_externality,
 )
@@ -34,6 +35,7 @@ EXTERNALITY_RULE_BUSY_TIMEOUT_MS = 10
 GENERIC_FUNCTION_EXTERNALITY_CONTRACT = b"generic-function-externality-v1"
 TRUSTED_SETUP_PROFILE_CONTRACT = b"trusted-tooluseproxy-setup-profile-v1"
 _REVISION_PATTERN = re.compile(r"[0-9a-f]{64}")
+_RECONCILIATION_REVISION_PATTERN = re.compile(r"r1_[0-9a-f]{64}")
 
 
 @dataclass(frozen=True)
@@ -101,34 +103,54 @@ def conservative_function_tool_decision(tool_name: str | None) -> ExternalityHoo
     return ExternalityHookDecision(digest, "analysis_failed")
 
 
-def prepare_externality_hook_decision(
-    db_path: Path,
+def classify_static_externality_hook_decision(
     event: NormalizedEvent,
     *,
     workspace_root: Path,
     trusted_plugin_root: Path | None = None,
+    plugin_data: Path | None = None,
 ) -> ExternalityHookDecision | None:
-    """Perform only bounded static analysis and local SQLite work in the Hook."""
+    """Classify without queue, cache, provider, or network activity."""
+
+    decision, _ = classify_static_externality_hook_analysis(
+        event,
+        workspace_root=workspace_root,
+        trusted_plugin_root=trusted_plugin_root,
+        plugin_data=plugin_data,
+    )
+    return decision
+
+
+def classify_static_externality_hook_analysis(
+    event: NormalizedEvent,
+    *,
+    workspace_root: Path,
+    trusted_plugin_root: Path | None,
+    plugin_data: Path | None,
+) -> tuple[ExternalityHookDecision | None, StaticExternalityResult | None]:
+    """Return one static decision and the already-computed value-free result."""
+
     if event.phase != "pre_tool_use" or event.workspace_status != "ready":
-        return None
+        return None, None
     tool_input = event.raw_payload.get("tool_input")
     if is_enforced_shell_tool(event.tool_name):
         command = shell_command_from_input(event.tool_name, tool_input)
         if command is None:
-            return None
-        trusted_setup_operation = _trusted_setup_profile_operation(
-            command,
-            plugin_root=trusted_plugin_root,
-            workspace_root=workspace_root,
-            plugin_data=db_path.parent,
-        )
-        if trusted_setup_operation is not None:
-            digest = hashlib.sha256(
-                TRUSTED_SETUP_PROFILE_CONTRACT
-                + b"\0"
-                + trusted_setup_operation.encode("ascii")
-            ).hexdigest()
-            return ExternalityHookDecision(digest, "known_local")
+            return None, None
+        if plugin_data is not None:
+            trusted_setup_operation = _trusted_local_recovery_operation(
+                command,
+                plugin_root=trusted_plugin_root,
+                workspace_root=workspace_root,
+                plugin_data=plugin_data,
+            )
+            if trusted_setup_operation is not None:
+                digest = hashlib.sha256(
+                    TRUSTED_SETUP_PROFILE_CONTRACT
+                    + b"\0"
+                    + trusted_setup_operation.encode("ascii")
+                ).hexdigest()
+                return ExternalityHookDecision(digest, "known_local"), None
         static = analyze_bash_externality(
             command,
             workspace_root=workspace_root,
@@ -143,12 +165,39 @@ def prepare_externality_hook_decision(
         static = analyze_mcp_externality(event.tool_name, tool_input)
         adapter_external = classify_mcp_sink_type(event.tool_name, tool_input) is not None
     else:
-        return None
+        return None, None
     digest = static.envelope.digest_sha256()
     if adapter_external or static.verdict == "external":
-        return ExternalityHookDecision(digest, "known_external")
+        return ExternalityHookDecision(digest, "known_external"), static
     if static.verdict == "local":
-        return ExternalityHookDecision(digest, "known_local")
+        return ExternalityHookDecision(digest, "known_local"), static
+    return ExternalityHookDecision(digest, "analysis_failed"), static
+
+
+def prepare_externality_hook_decision(
+    db_path: Path,
+    event: NormalizedEvent,
+    *,
+    workspace_root: Path,
+    trusted_plugin_root: Path | None = None,
+    static_analysis: tuple[
+        ExternalityHookDecision | None, StaticExternalityResult | None
+    ]
+    | None = None,
+) -> ExternalityHookDecision | None:
+    """Perform only bounded static analysis and local SQLite work in the Hook."""
+    if static_analysis is None:
+        static_analysis = classify_static_externality_hook_analysis(
+            event,
+            workspace_root=workspace_root,
+            trusted_plugin_root=trusted_plugin_root,
+            plugin_data=db_path.parent,
+        )
+    static_decision, static = static_analysis
+    if static_decision is None or static_decision.state != "analysis_failed":
+        return static_decision
+    assert static is not None
+    digest = static_decision.envelope_sha256
     if event.workspace_id is None:
         return None
     rule = lookup_externality_rule(db_path, event.workspace_id, digest)
@@ -158,14 +207,14 @@ def prepare_externality_hook_decision(
     return ExternalityHookDecision(digest, "queued")
 
 
-def _trusted_setup_profile_operation(
+def _trusted_local_recovery_operation(
     command: str,
     *,
     plugin_root: Path | None,
     workspace_root: Path,
     plugin_data: Path,
-) -> Literal["apply", "verify"] | None:
-    """Recognize only the Plugin's fixed, value-free setup profile commands."""
+) -> Literal["apply", "verify", "reconcile_plan", "reconcile_apply"] | None:
+    """Recognize only fixed, revision-bound local recovery commands."""
 
     if plugin_root is None:
         return None
@@ -177,6 +226,46 @@ def _trusted_setup_profile_operation(
     common = ["sh", launcher, "setup"]
     workspace = str(workspace_root)
     data_dir = str(plugin_data)
+    if tokens == [
+        "sh",
+        launcher,
+        "protect",
+        "reconcile",
+        "plan",
+        "--workspace",
+        workspace,
+        "--json",
+    ]:
+        return "reconcile_plan"
+    reconciliation_prefix = [
+        "sh",
+        launcher,
+        "protect",
+        "reconcile",
+        "apply",
+        "--reconciliation-revision",
+    ]
+    reconciliation_suffix = [
+        "--expected-manifest-sha256",
+        None,
+        "--workspace",
+        workspace,
+        "--json",
+    ]
+    if (
+        len(tokens)
+        == len(reconciliation_prefix) + 1 + len(reconciliation_suffix)
+        and tokens[: len(reconciliation_prefix)] == reconciliation_prefix
+        and _RECONCILIATION_REVISION_PATTERN.fullmatch(
+            tokens[len(reconciliation_prefix)]
+        )
+        and tokens[-len(reconciliation_suffix) :][0]
+        == reconciliation_suffix[0]
+        and _REVISION_PATTERN.fullmatch(tokens[-len(reconciliation_suffix) :][1])
+        and tokens[-len(reconciliation_suffix) :][2:]
+        == reconciliation_suffix[2:]
+    ):
+        return "reconcile_apply"
     if tokens in (
         [
             *common,

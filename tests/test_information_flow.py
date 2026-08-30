@@ -8589,6 +8589,168 @@ class InformationFlowTest(unittest.TestCase):
         )
         self.assertNotIn(SECRET, stdout)
 
+    def test_pre_tool_runner_allows_proven_local_recovery_when_source_is_missing(
+        self,
+    ) -> None:
+        workspace = self._write_runtime_source_config()
+        (workspace / "private.py").unlink()
+        (workspace / "public.txt").write_text("public", encoding="utf-8")
+        context = resolve_workspace(
+            str(workspace),
+            str(workspace),
+            discovered_by="test",
+        )
+        self.store.register_workspace(context)
+        assert context.workspace_id is not None
+        initial = self.store.get_workspace_runtime_settings(context.workspace_id)
+        self.store.update_workspace_runtime_setting(
+            context.workspace_id,
+            setting_key=PRE_TOOL_POLICY_KEY,
+            value=True,
+            expected_revision=initial.revision,
+        )
+
+        exit_code, stdout, stderr = self._run_hook_in_process(
+            "pre_tool_use",
+            {
+                "session_id": "session-missing-source-local",
+                "turn_id": "turn-missing-source-local",
+                "tool_use_id": "bash-missing-source-local",
+                "tool_name": "Bash",
+                "cwd": str(workspace),
+                "tool_input": {"command": "cat public.txt"},
+            },
+            {"TOOLUSEPROXY_DB_PATH": str(self.db_path)},
+        )
+
+        self.assertEqual(0, exit_code)
+        self.assertEqual("", stdout)
+        self.assertEqual("", stderr)
+
+    def test_pre_tool_runner_blocks_external_call_when_source_is_missing(
+        self,
+    ) -> None:
+        workspace = self._write_runtime_source_config()
+        (workspace / "private.py").unlink()
+        context = resolve_workspace(
+            str(workspace),
+            str(workspace),
+            discovered_by="test",
+        )
+        self.store.register_workspace(context)
+        assert context.workspace_id is not None
+        initial = self.store.get_workspace_runtime_settings(context.workspace_id)
+        self.store.update_workspace_runtime_setting(
+            context.workspace_id,
+            setting_key=PRE_TOOL_POLICY_KEY,
+            value=True,
+            expected_revision=initial.revision,
+        )
+
+        exit_code, stdout, stderr = self._run_hook_in_process(
+            "pre_tool_use",
+            {
+                "session_id": "session-missing-source-external",
+                "turn_id": "turn-missing-source-external",
+                "tool_use_id": "bash-missing-source-external",
+                "tool_name": "Bash",
+                "cwd": str(workspace),
+                "tool_input": {"command": "curl https://example.invalid"},
+            },
+            {"TOOLUSEPROXY_DB_PATH": str(self.db_path)},
+        )
+
+        self.assertEqual(0, exit_code)
+        self.assertEqual("", stderr)
+        rendered = json.loads(stdout)
+        self.assertEqual(
+            "deny",
+            rendered["hookSpecificOutput"]["permissionDecision"],
+        )
+        self.assertIn("protected_source_unavailable", stdout)
+        self.assertNotIn(SECRET, stdout)
+
+    def test_pre_tool_runner_allows_local_recovery_for_invalid_manifest(
+        self,
+    ) -> None:
+        workspace = Path(self.temporary_directory.name)
+        (workspace / "protected_sources.json").write_text("{", encoding="utf-8")
+        (workspace / "public.txt").write_text("public", encoding="utf-8")
+        context = resolve_workspace(
+            str(workspace),
+            str(workspace),
+            discovered_by="test",
+        )
+        self.store.register_workspace(context)
+        assert context.workspace_id is not None
+        initial = self.store.get_workspace_runtime_settings(context.workspace_id)
+        self.store.update_workspace_runtime_setting(
+            context.workspace_id,
+            setting_key=PRE_TOOL_POLICY_KEY,
+            value=True,
+            expected_revision=initial.revision,
+        )
+
+        exit_code, stdout, stderr = self._run_hook_in_process(
+            "pre_tool_use",
+            {
+                "session_id": "session-invalid-manifest-local",
+                "turn_id": "turn-invalid-manifest-local",
+                "tool_use_id": "bash-invalid-manifest-local",
+                "tool_name": "Bash",
+                "cwd": str(workspace),
+                "tool_input": {"command": "cat public.txt"},
+            },
+            {"TOOLUSEPROXY_DB_PATH": str(self.db_path)},
+        )
+
+        self.assertEqual(0, exit_code)
+        self.assertEqual("", stdout)
+        self.assertEqual("", stderr)
+
+    def test_pre_tool_runner_denies_external_call_for_invalid_manifest(
+        self,
+    ) -> None:
+        workspace = Path(self.temporary_directory.name)
+        (workspace / "protected_sources.json").write_text("{", encoding="utf-8")
+        context = resolve_workspace(
+            str(workspace),
+            str(workspace),
+            discovered_by="test",
+        )
+        self.store.register_workspace(context)
+        assert context.workspace_id is not None
+        initial = self.store.get_workspace_runtime_settings(context.workspace_id)
+        self.store.update_workspace_runtime_setting(
+            context.workspace_id,
+            setting_key=PRE_TOOL_POLICY_KEY,
+            value=True,
+            expected_revision=initial.revision,
+        )
+
+        exit_code, stdout, stderr = self._run_hook_in_process(
+            "pre_tool_use",
+            {
+                "session_id": "session-invalid-manifest-external",
+                "turn_id": "turn-invalid-manifest-external",
+                "tool_use_id": "bash-invalid-manifest-external",
+                "tool_name": "Bash",
+                "cwd": str(workspace),
+                "tool_input": {"command": "curl https://example.invalid"},
+            },
+            {"TOOLUSEPROXY_DB_PATH": str(self.db_path)},
+        )
+
+        self.assertEqual(0, exit_code)
+        self.assertEqual("", stderr)
+        rendered = json.loads(stdout)
+        self.assertEqual(
+            "deny",
+            rendered["hookSpecificOutput"]["permissionDecision"],
+        )
+        self.assertIn("protected_source_unavailable", stdout)
+        self.assertNotIn(SECRET, stdout)
+
     def test_environment_off_overrides_persistent_pre_tool_policy(self) -> None:
         workspace = self._write_runtime_source_config()
         (workspace / "payload.txt").write_text(SECRET, encoding="utf-8")
@@ -8613,9 +8775,12 @@ class InformationFlowTest(unittest.TestCase):
             expected_revision=enabled.revision,
         )
 
-        exit_code, stdout, stderr = self._run_hook_in_process(
-            "pre_tool_use",
-            {
+        with patch(
+            "hook_monitor.runtime.runner.classify_static_externality_hook_analysis"
+        ) as recovery_classifier:
+            exit_code, stdout, stderr = self._run_hook_in_process(
+                "pre_tool_use",
+                {
                 "session_id": "session-persistent-exact-off",
                 "turn_id": "turn-persistent-exact-off",
                 "tool_use_id": "bash-persistent-exact-off",
@@ -8627,16 +8792,17 @@ class InformationFlowTest(unittest.TestCase):
                         "https://example.invalid"
                     )
                 },
-            },
-            {
+                },
+                {
                 "TOOLUSEPROXY_DB_PATH": str(self.db_path),
                 "TOOLUSEPROXY_PRE_TOOL_POLICY": "off",
-            },
-        )
+                },
+            )
 
         self.assertEqual(0, exit_code)
         self.assertEqual("", stdout)
         self.assertEqual("", stderr)
+        recovery_classifier.assert_not_called()
 
     def test_pre_tool_policy_distinguishes_separate_bash_segments(self) -> None:
         self._write_runtime_source_config()

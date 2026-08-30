@@ -19,6 +19,7 @@ from hook_monitor.analysis.source_index import load_sources_and_chunks
 from hook_monitor.runtime.source_config import (
     CURRENT_MANIFEST_SCHEMA_VERSION,
     LEGACY_MANIFEST_SCHEMA_VERSION,
+    ProtectedSourceUnavailableError,
     SourceConfigError,
 )
 from hook_monitor.runtime.settings import (
@@ -71,9 +72,11 @@ from tooluseproxy.protected_sources import (
     approve_protected_source,
     approve_protected_source_batch,
     apply_protected_source_manifest_migration,
+    apply_unavailable_source_reconciliation,
     ignore_protected_source_candidate,
     lock_protected_source_workspace,
     plan_protected_source_manifest_migration,
+    plan_unavailable_source_reconciliation,
     reject_protected_source_candidate,
     scan_protected_sources,
     suggest_protected_source,
@@ -433,6 +436,31 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     _add_runtime_path_arguments(migration_apply)
 
+    reconcile = protect_subparsers.add_parser(
+        "reconcile",
+        help="Plan or explicitly remove registrations whose source files are unavailable.",
+    )
+    reconcile_subparsers = reconcile.add_subparsers(
+        dest="reconciliation_command",
+        required=True,
+    )
+    reconciliation_plan = reconcile_subparsers.add_parser(
+        "plan",
+        help="Create a value-free unavailable-source reconciliation plan.",
+    )
+    reconciliation_plan.add_argument("--workspace", type=Path, default=Path.cwd())
+    reconciliation_plan.add_argument("--json", action="store_true")
+    _add_runtime_path_arguments(reconciliation_plan)
+    reconciliation_apply = reconcile_subparsers.add_parser(
+        "apply",
+        help="Apply one explicitly reviewed unavailable-source reconciliation.",
+    )
+    reconciliation_apply.add_argument("--reconciliation-revision", required=True)
+    reconciliation_apply.add_argument("--expected-manifest-sha256", required=True)
+    reconciliation_apply.add_argument("--workspace", type=Path, default=Path.cwd())
+    reconciliation_apply.add_argument("--json", action="store_true")
+    _add_runtime_path_arguments(reconciliation_apply)
+
     trace = subparsers.add_parser("trace", help="Show source lineage for a stored analysis run.")
     trace.add_argument("arguments", nargs=argparse.REMAINDER)
 
@@ -742,6 +770,14 @@ def _run_setup_apply(args: argparse.Namespace) -> int:
         }
     except RuntimeSettingsError as exc:
         _render_setup_error(exc.code, str(exc), as_json=args.json)
+        return 1
+    except ProtectedSourceUnavailableError:
+        _render_setup_error(
+            "protected_source_unavailable",
+            "one or more registered protected source files are unavailable; "
+            "create a value-free reconciliation plan",
+            as_json=args.json,
+        )
         return 1
     except (
         OSError,
@@ -1556,6 +1592,23 @@ def _run_protect(args: argparse.Namespace) -> int:
                     backup_root=paths.data_dir,
                 )
             payload = migration.to_public_payload()
+        elif args.protect_command == "reconcile":
+            assert workspace.workspace_id is not None
+            if args.reconciliation_command == "plan":
+                reconciliation = plan_unavailable_source_reconciliation(
+                    workspace_path,
+                    workspace_id=workspace.workspace_id,
+                    backup_root=paths.data_dir,
+                )
+            else:
+                reconciliation = apply_unavailable_source_reconciliation(
+                    workspace_path,
+                    workspace_id=workspace.workspace_id,
+                    reconciliation_revision=args.reconciliation_revision,
+                    expected_manifest_sha256=args.expected_manifest_sha256,
+                    backup_root=paths.data_dir,
+                )
+            payload = reconciliation.to_public_payload()
         else:  # pragma: no cover - argparse constrains this branch
             raise _ProtectCliError(
                 "unsupported_protect_command",
@@ -1577,20 +1630,29 @@ def _run_protect(args: argparse.Namespace) -> int:
         return 1
     except ValueError:
         migration_command = args.protect_command == "migrate"
+        reconciliation_command = args.protect_command == "reconcile"
         scan_command = args.protect_command == "scan"
         _render_protect_error(
             (
                 "migration_state_conflict"
                 if migration_command
-                else "candidate_state_conflict"
+                else (
+                    "reconciliation_state_conflict"
+                    if reconciliation_command
+                    else "candidate_state_conflict"
+                )
             ),
             (
                 "protected source manifest changed; create a new migration plan"
                 if migration_command
                 else (
+                    "protected source manifest changed; create a new reconciliation plan"
+                    if reconciliation_command
+                    else (
                     "protected source candidate state changed; run scan again"
                     if scan_command
                     else "protected source candidate state changed; run suggest again"
+                    )
                 )
             ),
             as_json=args.json,
@@ -2463,6 +2525,14 @@ def _render_protect_payload(payload: dict[str, Any], *, as_json: bool) -> None:
         "migration_kind",
         "migration_id",
         "migration_revision",
+        "reconciliation_kind",
+        "reconciliation_id",
+        "reconciliation_revision",
+        "unavailable_source_count",
+        "unavailable_sources",
+        "remaining_source_count",
+        "removed_source_count",
+        "source_file_changes",
         "result_manifest_sha256",
         "from_schema_version",
         "to_schema_version",

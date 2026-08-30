@@ -270,6 +270,8 @@ def _analyze_segment(
         return
     if program in _LOCAL_FILE_TOOLS:
         state.executable_classes.add("local_file_tool")
+        if program == "sed" and _sed_invocation_is_read_only(arguments):
+            return
         if program in _EXECUTION_CAPABLE_LOCAL_TOOLS:
             state.capabilities.add("child_process")
             state.risk_signals.add("execution_capable_tool")
@@ -289,6 +291,23 @@ def _analyze_segment(
     state.executable_classes.add("custom_or_unknown")
     state.risk_signals.add("unknown_executable")
     state.lower_coverage("opaque")
+
+
+_SED_PRINT_SCRIPT = re.compile(r"[0-9]+(?:,[0-9]+)?p")
+
+
+def _sed_invocation_is_read_only(arguments: list[str]) -> bool:
+    """Recognize only bounded line-printing sed invocations."""
+
+    remaining = list(arguments)
+    if remaining[:1] in (["-n"], ["--quiet"], ["--silent"]):
+        remaining = remaining[1:]
+    else:
+        return False
+    return bool(remaining) and (
+        _SED_PRINT_SCRIPT.fullmatch(remaining[0]) is not None
+        and all(not value.startswith("-") for value in remaining[1:])
+    )
 
 
 def _analyze_python_invocation(

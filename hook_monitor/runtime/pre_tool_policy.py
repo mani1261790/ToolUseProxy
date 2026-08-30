@@ -44,6 +44,7 @@ from hook_monitor.runtime.incremental_analysis import (
 from hook_monitor.runtime.models import AnalysisRun, NormalizedEvent, SinkCandidate
 from hook_monitor.runtime.policy_audit import store_policy_decision
 from hook_monitor.runtime.redaction_audit import store_redaction_preview_plan
+from hook_monitor.runtime.source_config import ProtectedSourceUnavailableError
 from hook_monitor.runtime.sink_payload_shadow import (
     build_sink_payload_shadow_observation,
     store_sink_payload_shadow_observations,
@@ -121,6 +122,26 @@ def render_pre_tool_prerequisite_deny(rejection_code: str) -> dict[str, object]:
     }
 
 
+def render_protected_source_unavailable_deny() -> dict[str, object]:
+    return {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "additionalContext": (
+                "登録済みの保護対象が現在の場所に見つかりません。"
+                "（技術情報: protected_source_unavailable）"
+            ),
+            "permissionDecision": "deny",
+            "permissionDecisionReason": (
+                "ToolUseProxyが操作を実行前に止めました。登録済みの保護対象を"
+                "確認できない間は、外部通信の可能性がある操作を許可できません。"
+                "保護対象の登録を確認してからやり直してください。\n"
+                "結果：外部操作は実行されていません。"
+                "保護対象の内容も表示していません。"
+            ),
+        }
+    }
+
+
 def is_enforced_bash_tool(tool_name: str | None) -> bool:
     return is_enforced_shell_tool(tool_name)
 
@@ -185,6 +206,7 @@ def evaluate_pre_tool_hook_policy(
     minimum_path_score: float = 0.15,
     leak_min_score: float = 0.3,
     externality_decision: ExternalityHookDecision | None = None,
+    recovery_externality_decision: ExternalityHookDecision | None = None,
 ) -> dict[str, object]:
     current_adapter = pre_tool_adapter(current_event.tool_name)
     if current_event.session_id is None:
@@ -211,13 +233,21 @@ def evaluate_pre_tool_hook_policy(
         current_adapter=current_adapter,
         decision=externality_decision,
     )
-    runtime_result = update_runtime_analysis(
-        store,
-        current_event_id=current_event.event_id,
-        detector_version=RUNTIME_GRAPH_DETECTOR_VERSION,
-        minimum_path_score=minimum_path_score,
-        externality_policy_risk=externality_risk,
-    )
+    try:
+        runtime_result = update_runtime_analysis(
+            store,
+            current_event_id=current_event.event_id,
+            detector_version=RUNTIME_GRAPH_DETECTOR_VERSION,
+            minimum_path_score=minimum_path_score,
+            externality_policy_risk=externality_risk,
+        )
+    except ProtectedSourceUnavailableError:
+        if (
+            recovery_externality_decision is not None
+            and recovery_externality_decision.state == "known_local"
+        ):
+            return {}
+        return render_protected_source_unavailable_deny()
     current_sequence_no = store.get_event_sequence_no(current_event.event_id)
     current_sinks = _current_external_sinks(
         list(runtime_result.sinks),
