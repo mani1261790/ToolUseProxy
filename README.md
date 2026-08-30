@@ -4,7 +4,7 @@ ToolUseProxyは、AI coding agentがローカルの非公開情報を外部へ�
 
 たとえば、未公開コード、研究ノート、`.env`、設計方針などを`protected source`として登録します。ToolUseProxyはCodexのtool useをローカルで観測し、外部送信候補へ保護情報が到達していないかを確認します。
 
-本プロジェクトは[SecHack365](https://sechack365.nict.go.jp/)での研究・開発成果物です。`0.1.0-alpha.12`はrelease候補の検証中です。alpha.12では、設定や過去のblock記録が残っているだけで「保護中」と表示しません。現在のverification commandそのものに、インストール済みの同じPlugin版から`PreToolUse`が届いたことを確認して初めて`active`になります。fresh Desktop確認まで新規installと通常利用を一時停止してください。研究用public alphaであり、完成したDLP製品ではありません。
+本プロジェクトは[SecHack365](https://sechack365.nict.go.jp/)での研究・開発成果物です。現在の検証済みreleaseは`0.1.0-alpha.12`です。alpha.12では、設定や過去のblock記録が残っているだけで「保護中」と表示しません。現在のverification commandそのものに、インストール済みの同じPlugin版から`PreToolUse`が届いたことを確認して初めて`active`になります。研究用public alphaであり、完成したDLP製品ではありません。
 
 > **以前の版から更新する場合:** `alpha.8`には、安全に確認できない外部payloadをblockせず実行する問題がありました。`alpha.9`は互換旧設定から更新できず、`alpha.10`は登録後に移動・削除された保護対象があるとローカル診断まで止まりました。`alpha.11`では過去セッションの成功を現在の保護状態と区別できませんでした。`alpha.12`へ更新し、Codexを完全に終了して起動し直した後、5 Hookを改めて確認してください。
 
@@ -41,7 +41,7 @@ Python 3.11または3.12と、Plugin対応のCodex CLIまたはCodex Desktopを�
 
 ### 1. Pluginをインストールする
 
-alpha.12のrelease gate完了前は、次のコマンドを実行しないでください。公開再開後は、検証済みreleaseだけを配信する`public-alpha`からインストールします。
+検証済みreleaseだけを配信する`public-alpha`からインストールします。
 
 ```bash
 codex plugin marketplace add mani1261790/ToolUseProxy --ref public-alpha
@@ -98,7 +98,7 @@ adapterにない未知のcallは、raw commandやpathなどを含まない構造
 | --- | --- | --- |
 | Trace / Detect | 中核実装済み | tool I/O、file operation、内容対応から観測可能なprovenanceを再構成 |
 | Stop | alpha実装済み | 明示的に有効化したworkspaceで、既知adapterと未知のローカルToolを実行前判定。Stop再確認も提供 |
-| Plugin配布 | alpha.12 release gate中 | verification command自身のHook到達と実行runtime版を照合し、fresh Desktop確認後に公開channelを再開 |
+| Plugin配布 | alpha.12公開 | current-invocation照合、fresh Desktop、lifecycle、artifact、full testのrelease gateを通過したcommitだけを`public-alpha`へ配信 |
 | 外部性判定 | local保護は通常setupで有効 | adapter、bounded static analysis、未確認external payloadのfail-closed、Codex-only background judge、人間review済みrule。LLM providerは既定off |
 | 実network観測 | 評価専用 | Codex network proxyのOTLP eventは実行後かつtool単位join不能のため、production blockには不採用 |
 | hosted tool境界 | 緩和のみ | SessionStart / SubagentStartでprotected contentをhosted toolへ渡さないdeveloper contextを注入。Hook非可視のため技術的遮断ではない |
@@ -124,7 +124,7 @@ adapterにない未知のcallは、raw commandやpathなどを含まない構造
 - hosted Web Searchなど、Codex Hookへ現れない経路の技術的な実行前遮断（SessionStart / SubagentStartのdeveloper contextで誤送信を緩和するが、強制境界ではない）
 - 実行中processへの`write_stdin`追加入力の再検査（新しい`PreToolUse`が発火しない）
 - CodexがHookを省略する特殊なtool経路の遮断（現時点では未検証として表示する）
-- programmatic tool内で入れ子実行されるtoolの遮断（Hook配送を実機確認できるまで`unverified`として扱う）
+- 任意のprogrammatic nested tool経路の遮断。現在のCodex Desktopが使う、単一の`tools.exec_command`だけを含む固定wrapperはalpha.12実機で確認済みだが、別wrapper、複数command、他の入れ子toolへ一般化しない
 - 任意program、暗号化・圧縮payload、Git objectの内容を常に自動判別すること。安全に確認できないHook-visible external操作は止めるため、false blockが発生し得る
 - LLM内部の完全なtaint trackingや、意味類似度による因果関係の証明
 - Linux / Windowsを含む全環境での同一動作

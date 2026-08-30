@@ -5,7 +5,7 @@ ToolUseProxyのCodex Pluginは、repository全体ではなく、生成時にallo
 ## 現在のsupport範囲
 
 - Python 3.11 / 3.12。3.13以降は現在未対応
-- macOS: local package、relocated Plugin bundle、Codex CLIのisolated marketplace install、alpha.1およびstale alpha.8→alpha.12候補 upgrade / safe rollbackを検証対象にしています。Python 3.12 package smokeはCIで継続確認します
+- macOS: local package、relocated Plugin bundle、Codex CLIのisolated marketplace install、alpha.1およびstale alpha.8→alpha.12 upgrade / safe rollback、alpha.12 fresh Desktopを検証済みです。Python 3.12 package smokeはCIで継続確認します
 - Linux: Ubuntu CIでPython 3.11 / 3.12のfull suite、package、relocated Plugin bundle、wheelのcheckout外実行を検証。Codex CLI marketplace installの実環境E2Eは未検証
 - Windows: `py -3.11`を使うlauncherを同梱するexperimental範囲。実機検証は未完了で、protected-source登録workflow全体は現在未対応
 - Hookは常にlocal-only。remote embeddingとtelemetryはなし。実験的なExternality Judgeを別途明示設定すると、Hookは値非保持要約をlocal queueへ保存し、初見unknown＋protected flowを保守的にdeny。選択済みproviderへの送信はHook外workerの明示実行時だけ
@@ -25,7 +25,7 @@ alphaのthreat modelは、Pluginやcoding agentの無承認manifest変更、stal
 
 ## 現在versionと更新
 
-`0.1.0-alpha.12`はrelease候補の検証中です。alpha.12は、verification command自身のPreToolUse event、session、解析run、Plugin版、Hook定義hashを照合し、設定や別task・過去sessionのblockだけでは`active`を返しません。fresh Desktop gateと公開昇格が完了するまで新規installと通常利用を一時停止しています。LLM providerは既定offで、LLM verdictからallow ruleを自動作成しません。
+`0.1.0-alpha.12`は現在の検証済みpublic alphaです。alpha.12は、verification command自身のPreToolUse event、session、解析run、Plugin版、Hook定義hashを照合し、設定や別task・過去sessionのblockだけでは`active`を返しません。LLM providerは既定offで、LLM verdictからallow ruleを自動作成しません。
 
 Codex CLIはPluginごとの自動更新commandではなく、登録済みGit marketplaceを明示的に更新する`codex plugin marketplace upgrade`を提供します。moving refを登録している場合、更新されたmarketplace snapshotからinstall済みPluginも置き換わります。ToolUseProxyは次の2方式を分けます。
 
@@ -42,7 +42,7 @@ SQLite schemaはalpha.8でv7です。Externality Protection用tableを追加す�
 
 ## install
 
-公開再開後の通常利用では、保護された更新チャンネルを指定します。release gate完了前には実行しないでください。
+通常利用では、保護された更新チャンネルを指定します。
 
 ```bash
 codex plugin marketplace add mani1261790/ToolUseProxy --ref public-alpha
@@ -55,7 +55,7 @@ versionを固定する場合は最初のcommandを次に置き換えます。
 codex plugin marketplace add mani1261790/ToolUseProxy --ref v0.1.0-alpha.12
 ```
 
-install後はCodexが表示するPlugin source、version、5つのHook definition（SessionStart / SubagentStart / PreToolUse / PostToolUse / Stop）を確認してtrustします。ToolUseProxyはこのreviewを迂回しません。以前trustしたHookでも、matcher、command、sourceなどの定義が変わると`modified`になり、再reviewが必要です。更新後はCodexを完全に終了して起動し直し、新しいタスクでcurrent-invocation healthを確認します。alpha.12のrelease artifact、checksum、SBOM、release notesはrelease gate完了後に公開します。
+install後はCodexが表示するPlugin source、version、5つのHook definition（SessionStart / SubagentStart / PreToolUse / PostToolUse / Stop）を確認してtrustします。ToolUseProxyはこのreviewを迂回しません。以前trustしたHookでも、matcher、command、sourceなどの定義が変わると`modified`になり、再reviewが必要です。更新後はCodexを完全に終了して起動し直し、新しいタスクでcurrent-invocation healthを確認します。alpha.12のrelease artifact、checksum、SBOM、release notesはGitHub pre-releaseに公開します。
 
 ### CLIで更新する
 
@@ -326,7 +326,7 @@ sh "<PLUGIN_ROOT>/hooks/run_cli.sh" uninstall apply \
 
 削除対象はSQLite database / sidecar、migration backup、manifest backupだけです。管理外fileは残し、plan後に内容が変わった場合はstale tokenを拒否します。workspace manifestやprotected source本体、symlink先、package codeは削除しません。secure eraseやfilesystem snapshotの削除は保証しません。
 
-alpha.1およびstale alpha.8からalpha.12候補へのupgrade / safe rollback手順は[Pluginライフサイクル](../運用/Pluginライフサイクル.md)を参照してください。fresh Desktop結果とcross-platformでの反復は引き続きpublic alphaの検証課題です。
+alpha.1およびstale alpha.8からalpha.12へのupgrade / safe rollback手順は[Pluginライフサイクル](../運用/Pluginライフサイクル.md)を参照してください。alpha.12 fresh DesktopはmacOSで確認済みです。Linux / Windowsと将来version間の反復は引き続きpublic alphaの検証課題です。
 
 pre-release候補で実際のHook trust、agent説明、実tool invocationを検証するときは、通常workspaceや実secretを使わず、[Pluginドッグフードのmanual Phase B](../運用/Pluginドッグフード.md#manual-phase-b)を実行します。prepare出力はlocal pathを含むため公開せず、raw値とpathを除外したverify結果だけをrelease evidenceとして扱います。
 

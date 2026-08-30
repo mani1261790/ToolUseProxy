@@ -1,8 +1,6 @@
 # ToolUseProxy 5分クイックスタート
 
-> **一時停止中:** `alpha.12`のfresh Desktop release gateが完了するまで、新規installと`public-alpha`からの通常利用を開始しないでください。公開channelの`alpha.8`には安全に確認できない外部payloadを許可する問題があります。
-
-release gate完了後、この手順では検証済みの公開alphaを保護branch `public-alpha`からインストールします。開発中の変更を含む`main`は、通常利用のインストール元にしないでください。
+この手順では、検証済みの公開alphaを保護branch `public-alpha`からインストールします。開発中の変更を含む`main`は、通常利用のインストール元にしないでください。現在の公開版は`0.1.0-alpha.12`です。
 
 ## 1. 必要なもの
 
@@ -49,7 +47,7 @@ Codexが表示するHookを、次の条件と照合してください。
 
 HookはCodex sandbox外でユーザー権限により実行されます。Hook自体はlocal dataだけを読み書きし、network通信やLLM待機を行いません。実験的なExternality Judgeを別途有効にすると、未知callは値非保持のlocal queueへ入り、protected情報がそのcallへ流れている場合は分類を待たず止まります。publicだけなら止まりません。LLM分類は、Hook外workerを利用者が明示実行した場合に、jobごとの新しい隔離済みCodex一時セッションでだけ行われ、この手順では有効になりません。ToolUseProxyはOpenAI APIやAPI keyを直接扱いません。source、件数、command pathが異なる場合はTrustしないでください。無関係なHookも表示されている場合は`Trust all`を使わず、ToolUseProxyの5件を個別に確認します。
 
-この実行前blockは、現在のタスクで`PreToolUse`到達を確認できたlocal toolが対象です。hosted Web SearchはHookへ届かず、実行中processへの`write_stdin`追加入力では新しい`PreToolUse`が発火しません。programmatic tool内の入れ子実行も、実機で配送を確認できるまで保護済みとは表示しません。
+この実行前blockは、現在のタスクで`PreToolUse`到達を確認できたlocal toolが対象です。hosted Web SearchはHookへ届かず、実行中processへの`write_stdin`追加入力では新しい`PreToolUse`が発火しません。Codex Desktopの単一`tools.exec_command`固定wrapperはalpha.12実機で配送とblockを確認済みです。別wrapper、複数command、他のprogrammatic nested toolは確認済みとは扱いません。
 
 ## 4. 利用するprojectを初期設定する
 
