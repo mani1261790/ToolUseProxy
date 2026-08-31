@@ -77,7 +77,7 @@ Desktop / GUI上で今回のfile-backed exact-only保護が動くことは確認
 
 同一版reinstallは「Plugin codeを削除しても`PLUGIN_DATA`の設定と監査DBが残り、再install時に再利用されること」を確認します。本物のupdateは異なる二つのimmutable versionが必要です。同じZIPを入れ直した結果をupdate成功とは数えません。
 
-異versionのupdate、schema migration、安全なrollback、DisableなしのRemoveはIssue [#62](https://github.com/mani1261790/ToolUseProxy/issues/62)で扱います。専用harnessと自動testは実装済みで、次はDesktop実機runです。実装境界、人が行う操作、安全停止条件は[Codex Desktop update / rollback 検証計画](DesktopUpdateRollback.md)を正本にします。
+異versionのupdate、schema migration、安全なrollback、DisableなしのRemoveはIssue [#62](https://github.com/mani1261790/ToolUseProxy/issues/62)で完了しました。実装境界、人が行った操作、安全停止条件は[Codex Desktop update / rollback 検証計画](DesktopUpdateRollback.md)に記録しています。
 
 ## 安全境界
 

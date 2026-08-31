@@ -6,6 +6,8 @@ This project is a research and development outcome of [SecHack365](https://secha
 
 The current verified release is `0.1.0-alpha.12`. Alpha.12 binds the verification command's own PreToolUse event to its session, installed Plugin version, and Hook definition hash. Configuration or an older session's block no longer qualifies as active protection. It is a research alpha, not a complete DLP system.
 
+The Codex Plugin integration milestone is complete for the supported alpha.12 scope. Current development focuses on ToolUseProxy's core detection quality: measuring real-project false blocks and misses, expanding sink payload resolution, and evaluating externality, semantics, lineage, and session boundaries. Follow the [current implementation order](docs/運用/実装タスク.md) and [Issue #99](https://github.com/mani1261790/ToolUseProxy/issues/99).
+
 Users upgrading from alpha.8 through alpha.11 must upgrade to alpha.12, fully restart Codex, and review all five Hooks again. Alpha.8 could allow unsupported curl options or oversized file payloads without comparison, while alpha.11 could reuse older runtime evidence when reporting current protection.
 
 ToolUseProxy is licensed under the [Apache License 2.0](LICENSE).
