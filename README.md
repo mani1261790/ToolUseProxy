@@ -4,11 +4,11 @@ ToolUseProxyは、AI coding agentがローカルの非公開情報を外部へ�
 
 たとえば、未公開コード、研究ノート、`.env`、設計方針などを`protected source`として登録します。ToolUseProxyはCodexのtool useをローカルで観測し、外部送信候補へ保護情報が到達していないかを確認します。
 
-本プロジェクトは[SecHack365](https://sechack365.nict.go.jp/)での研究・開発成果物です。現在の検証済みreleaseは`0.1.0-alpha.12`です。alpha.12では、設定や過去のblock記録が残っているだけで「保護中」と表示しません。現在のverification commandそのものに、インストール済みの同じPlugin版から`PreToolUse`が届いたことを確認して初めて`active`になります。研究用public alphaであり、完成したDLP製品ではありません。
+本プロジェクトは[SecHack365](https://sechack365.nict.go.jp/)での研究・開発成果物です。現在の検証済みreleaseは`0.1.0-alpha.13`です。alpha.13では、Pluginを導入しただけの未設定projectに案内・記録・停止を行わず、明示的に有効にしたprojectだけを対象にします。設定済みprojectでは、alpha.12で導入した現在taskのHook到達確認と安全側の停止を維持します。研究用public alphaであり、完成したDLP製品ではありません。
 
 Codex Pluginとしての導入、Hook配送確認、実行前停止、更新・削除はalpha.12で一区切りです。現在の開発テーマは、ToolUseProxy本体の検出精度です。実projectでfalse blockと見逃し候補を集め、sink payloadの解決、外部性判定、semantic、lineageのどこを改善すべきかを測ります。
 
-> **以前の版から更新する場合:** `alpha.8`には、安全に確認できない外部payloadをblockせず実行する問題がありました。`alpha.9`は互換旧設定から更新できず、`alpha.10`は登録後に移動・削除された保護対象があるとローカル診断まで止まりました。`alpha.11`では過去セッションの成功を現在の保護状態と区別できませんでした。`alpha.12`へ更新し、Codexを完全に終了して起動し直した後、5 Hookを改めて確認してください。
+> **以前の版から更新する場合:** `alpha.12`以前は、Pluginを利用しないprojectにも初期化できない旨の案内が出ることがありました。`alpha.13`へ更新し、Codexを完全に終了して起動し直した後、変更された5 Hookを改めて確認してください。
 
 - [5分クイックスタート](QUICKSTART.md)
 - [詳しいPlugin導入ガイド](docs/設定/Plugin導入.md)
@@ -52,6 +52,8 @@ codex plugin add tooluseproxy@tooluseproxy
 ```
 
 これはCodex環境に対して1回だけ行います。Pluginは複数projectで使えますが、保護設定と監査dataはprojectごとに分離されます。
+
+開発版では、インストールしただけの未設定projectに初期化案内・保護指示を出さず、操作も記録・停止しません。下記の依頼で有効にしたprojectだけが対象です。この修正はまだ公開alphaへ反映していません。
 
 ### 2. 5つのHookを確認する
 
@@ -116,7 +118,7 @@ adapterにない未知のcallは、raw commandやpathなどを含まない構造
 | Codex対応 | alpha.12で完了 | Plugin導入、workspace setup、protected source登録、現在のHook配送確認、実行前deny、update / rollback / removeを実証済み |
 | Trace / Detect | 中核実装済み・精度改善中 | tool I/O、file operation、内容対応から観測可能なprovenanceを再構成。実project pilotでfalse blockと見逃し候補を測定 |
 | Stop | 対応範囲内で実証済み | Hookから見えるローカルtoolを実行前判定し、protected flowの既知external / unknownをdeny。Stop再確認も提供 |
-| Plugin配布 | alpha.12公開 | current-invocation照合、fresh Desktop、lifecycle、artifact、full testのrelease gateを通過したcommitだけを`public-alpha`へ配信 |
+| Plugin配布 | alpha.13公開 | 未設定projectの無影響確認、current-invocation照合、lifecycle、artifact、full testのrelease gateを通過したcommitだけを`public-alpha`へ配信 |
 | 外部性判定 | local保護は通常setupで有効 | adapter、bounded static analysis、未確認external payloadのfail-closed、Codex-only background judge、人間review済みrule。LLM providerは既定off |
 | 実network観測 | 評価専用 | Codex network proxyのOTLP eventは実行後かつtool単位join不能のため、production blockには不採用 |
 | hosted tool境界 | 緩和のみ | SessionStart / SubagentStartでprotected contentをhosted toolへ渡さないdeveloper contextを注入。Hook非可視のため技術的遮断ではない |

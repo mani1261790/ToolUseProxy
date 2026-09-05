@@ -7,7 +7,7 @@ public alphaのinstall、明示upgrade、safe rollback、disable、remove、data
 baselineはPlugin packagingを導入したimmutable commit `22974427ab62e55a00d21af164d8fc837cb5e8b7`です。
 
 - baseline: Plugin `0.1.0-alpha.1`、Python `0.1.0a1`、SQLite schema v1
-- upgrade先: 現在の検証対象release candidate、Plugin `0.1.0-alpha.12`、SQLite schema v7
+- upgrade先: 現在の検証対象release candidate、Plugin `0.1.0-alpha.13`、SQLite schema v11
 
 baseline treeは`git archive`から一時directoryへ展開します。CI checkoutはこのcompatibility fixtureを取得できるようfull historyを使います。repositoryやworkspaceは変更しません。
 
@@ -21,7 +21,7 @@ baseline treeは`git archive`から一時directoryへ展開します。CI checko
 python3.11 -m pytest tests/test_codex_marketplace_upgrade.py
 ```
 
-testはloopback HTTPだけを使う一時Git marketplaceを作り、同じrefをalpha.1または正式公開前の3 Hook alpha.8から現在commitへfast-forwardします。`codex plugin marketplace upgrade tooluseproxy --json`後に、Plugin versionがalpha.12候補へ変わること、古いcacheが除かれること、Plugin dataが残ること、5 Hook artifactへ置換されることを確認します。外部networkや実secretは使いません。
+testはloopback HTTPだけを使う一時Git marketplaceを作り、同じrefをalpha.1または正式公開前の3 Hook alpha.8から現在commitへfast-forwardします。`codex plugin marketplace upgrade tooluseproxy --json`後に、Plugin versionがalpha.13候補へ変わること、古いcacheが除かれること、Plugin dataが残ること、5 Hook artifactへ置換されることを確認します。外部networkや実secretは使いません。
 
 公開運用では同じmoving refとして保護branch `public-alpha`を使います。このbranchはreview済み・CI green・公開済みのrelease commitだけへfast-forwardし、force pushと削除を禁止します。immutable tagによるversion固定も引き続き提供します。
 
@@ -53,13 +53,13 @@ python3.11 scripts/rehearse_plugin_lifecycle.py \
 
 1. alpha.1をinstallし、schema v1 DBへsynthetic eventを記録
 2. PluginをremoveしてHook codeを無効化し、marketplace削除前後でdata保持を確認
-3. alpha.12候補をinstallし、旧schemaに対するHookがDDLやevent書込みをせず安全停止することを確認
+3. alpha.13候補をinstallし、旧schemaに対するHookがDDLやevent書込みをせず安全停止することを確認
 4. Hook外の明示`init --codex`でv1 backupを作り、schema v7へupgrade
 5. baseline event、workspace登録、runtime activeを確認し、workspace runtime設定を保存してupgrade後eventを記録
-6. alpha.12候補のcodeをremoveしてdataを保持し、同じversionを再installしてruntime設定のrevisionと有効値が残ることを確認
+6. alpha.13候補のcodeをremoveしてdataを保持し、同じversionを再installしてruntime設定のrevisionと有効値が残ることを確認
 7. alpha.1をinstallし、schema v7を旧runtimeがinactiveとして拒否してDBを変更しないことを確認
 8. pre-migration v1 backupを別のrollback data directoryへSQLite backup APIでimport
-9. alpha.1 runtimeがactiveになり、baseline eventを保持し、backup後のalpha.12候補eventとruntime設定を含まないことを確認
+9. alpha.1 runtimeがactiveになり、baseline eventを保持し、backup後のalpha.13候補eventとruntime設定を含まないことを確認
 10. Plugin / marketplaceをremoveし、両data directoryをcurrent artifactの`uninstall plan / apply`で明示削除
 
 rollbackは新schema DBを旧runtimeで無理にdowngradeしません。upgrade後DBをそのまま保持し、pre-migration backupから別data directoryを作るため、rollback失敗時も新しい履歴を上書きしません。

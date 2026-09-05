@@ -451,6 +451,7 @@ class RuntimeSettingsCliTest(unittest.TestCase):
                 FILE_PAYLOAD_SHADOW_KEY,
                 FILE_PAYLOAD_EXACT_ENFORCEMENT_KEY,
                 EXTERNALITY_PROTECTION_KEY,
+                "pilot-recording",
             ],
             [item["key"] for item in shown["settings"]],
         )

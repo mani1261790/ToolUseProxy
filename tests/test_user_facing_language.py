@@ -124,25 +124,19 @@ def test_approval_templates_stay_short_and_self_contained() -> None:
     assert "このプロジェクト内を安全な範囲で読むため" not in scan
 
 
-def test_hook_status_messages_are_plain_japanese() -> None:
+def test_hooks_do_not_announce_protection_before_workspace_selection() -> None:
     hooks = json.loads((REPO_ROOT / "hooks" / "hooks.json").read_text())
     status_messages = [
-        hook["statusMessage"]
+        hook.get("statusMessage")
         for groups in hooks["hooks"].values()
         for group in groups
         for hook in group["hooks"]
     ]
 
-    assert status_messages == [
-        "ToolUseProxyの保護範囲を確認しています",
-        "SubagentへToolUseProxyの保護範囲を伝えています",
-        "送信前に保護対象が含まれていないか確認しています",
-        "ツールの実行記録をこの端末に保存しています",
-        "回答に保護対象が含まれていないか確認しています",
-    ]
+    assert status_messages == [None] * 5
 
 
-def test_missing_database_explains_next_step_in_japanese(tmp_path: Path) -> None:
+def test_missing_database_does_not_prompt_an_unconfigured_project(tmp_path: Path) -> None:
     result = subprocess.run(
         [
             sys.executable,
@@ -159,11 +153,6 @@ def test_missing_database_explains_next_step_in_japanese(tmp_path: Path) -> None
         text=True,
         check=True,
     )
-    message = json.loads(result.stdout)["systemMessage"]
-
-    assert "このプロジェクトではまだ準備されていません" in message
-    assert "ToolUseProxyをこのプロジェクトで使えるようにして" in message
-    assert "database_missing" in message
-    assert "手動で準備する場合のコマンド" not in message
-    assert str(tmp_path) not in message
-    assert "ToolUseProxy inactive" not in message
+    assert result.stdout == ""
+    assert result.stderr == ""
+    assert not (tmp_path / "data").exists()

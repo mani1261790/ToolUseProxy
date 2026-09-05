@@ -2,6 +2,48 @@
 
 phase=${1:-}
 
+workspace_may_be_enabled() {
+    candidate=$(pwd -P 2>/dev/null) || return 1
+    activation_dir=${PLUGIN_DATA:-}/events.db.workspaces
+    if [ -n "${PLUGIN_DATA:-}" ] && [ -d "$activation_dir" ]; then
+        has_complete_marker=0
+        for marker in "$activation_dir"/ws_v1_*.json; do
+            if [ -f "$marker" ]; then
+                has_complete_marker=1
+                break
+            fi
+        done
+        while :; do
+            if command -v shasum >/dev/null 2>&1; then
+                hash_output=$(printf '%s' "$candidate" | shasum -a 256) || return 1
+            elif [ -x /usr/bin/shasum ]; then
+                hash_output=$(printf '%s' "$candidate" | /usr/bin/shasum -a 256) || return 1
+            elif command -v sha256sum >/dev/null 2>&1; then
+                hash_output=$(printf '%s' "$candidate" | sha256sum) || return 1
+            else
+                return 1
+            fi
+            digest=${hash_output%% *}
+            [ -f "$activation_dir/ws_v1_$digest.json" ] && return 0
+            if [ -e "$candidate/.git" ] || [ -L "$candidate/.git" ]; then
+                break
+            fi
+            [ "$candidate" = "/" ] && break
+            candidate=${candidate%/*}
+            [ -n "$candidate" ] || candidate=/
+        done
+        [ "$has_complete_marker" -eq 1 ] && return 1
+        candidate=$(pwd -P 2>/dev/null) || return 1
+    fi
+    # Compatibility with releases that predate activation markers.
+    while :; do
+        [ -f "$candidate/protected_sources.json" ] && return 0
+        [ "$candidate" = "/" ] && return 1
+        candidate=${candidate%/*}
+        [ -n "$candidate" ] || candidate=/
+    done
+}
+
 emit_inactive() {
     code=$1
     case "$code" in
@@ -38,7 +80,9 @@ emit_inactive() {
 }
 
 if [ -z "$phase" ] || [ -z "${PLUGIN_ROOT:-}" ] || [ -z "${PLUGIN_DATA:-}" ]; then
-    emit_inactive "plugin_environment" "PLUGIN_ROOT and PLUGIN_DATA are required"
+    if workspace_may_be_enabled; then
+        emit_inactive "plugin_environment" "PLUGIN_ROOT and PLUGIN_DATA are required"
+    fi
     exit 0
 fi
 
@@ -58,11 +102,15 @@ for python in "${TOOLUSEPROXY_PYTHON:-}" python3.12 python3.11 python3; do
         fi
         exit 0
     fi
-    emit_inactive \
-        "runtime_start_failed" \
-        "the local Hook runtime could not start"
+    if workspace_may_be_enabled; then
+        emit_inactive \
+            "runtime_start_failed" \
+            "the local Hook runtime could not start"
+    fi
     exit 0
 done
 
-emit_inactive "python_missing" "Python 3.11 or 3.12 is required"
+if workspace_may_be_enabled; then
+    emit_inactive "python_missing" "Python 3.11 or 3.12 is required"
+fi
 exit 0

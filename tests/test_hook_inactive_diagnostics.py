@@ -12,6 +12,7 @@ from pathlib import Path
 from unittest import mock
 
 from hook_monitor.runtime.storage import EventStore
+from hook_monitor.runtime.workspace import resolve_workspace
 from tooluseproxy.integrations.codex import run_codex_hook
 
 
@@ -57,6 +58,14 @@ class HookInactiveDiagnosticTest(unittest.TestCase):
             contextlib.redirect_stdout(stdout),
             contextlib.redirect_stderr(stderr),
         ):
+            store = EventStore(Path(temporary_directory) / "events.db")
+            store.initialize()
+            store.register_workspace(resolve_workspace(temporary_directory))
+            stdin_patch = mock.patch("sys.stdin", io.TextIOWrapper(io.BytesIO(
+                json.dumps({"cwd": temporary_directory}).encode()
+            )))
+            stdin_patch.start()
+            self.addCleanup(stdin_patch.stop)
             self.assertEqual(
                 0,
                 run_codex_hook(
@@ -95,6 +104,14 @@ class HookInactiveDiagnosticTest(unittest.TestCase):
             contextlib.redirect_stdout(stdout),
             contextlib.redirect_stderr(stderr),
         ):
+            store = EventStore(Path(temporary_directory) / "events.db")
+            store.initialize()
+            store.register_workspace(resolve_workspace(temporary_directory))
+            stdin_patch = mock.patch("sys.stdin", io.TextIOWrapper(io.BytesIO(
+                json.dumps({"cwd": temporary_directory}).encode()
+            )))
+            stdin_patch.start()
+            self.addCleanup(stdin_patch.stop)
             self.assertEqual(
                 0,
                 run_codex_hook(
@@ -142,7 +159,7 @@ class HookInactiveDiagnosticTest(unittest.TestCase):
                 else:
                     self._assert_nonblocking(output, hook_event)
 
-    def test_missing_database_uses_phase_specific_json_without_stdin(
+    def test_missing_database_is_silent_in_an_unconfigured_workspace(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -165,12 +182,8 @@ class HookInactiveDiagnosticTest(unittest.TestCase):
                     check=True,
                 )
 
-                output = json.loads(result.stdout)
-                message = self._diagnostic_message(output, hook_event)
-                self.assertIn("database_missing", message)
-                self.assertNotIn(PROTECTED_SENTINEL, result.stdout)
+                self.assertEqual("", result.stdout)
                 self.assertEqual("", result.stderr)
-                self._assert_nonblocking(output, hook_event)
 
             self.assertFalse((data_dir / "events.db").exists())
 
@@ -181,6 +194,9 @@ class HookInactiveDiagnosticTest(unittest.TestCase):
             data_dir = Path(temporary_directory) / "data"
             data_dir.mkdir()
             EventStore(data_dir / "events.db").initialize()
+            EventStore(data_dir / "events.db").register_workspace(
+                resolve_workspace(str(data_dir))
+            )
             for phase, hook_event in PHASES:
                 result = subprocess.run(
                     [
@@ -193,7 +209,8 @@ class HookInactiveDiagnosticTest(unittest.TestCase):
                         str(data_dir),
                     ],
                     cwd=REPO_ROOT,
-                    input=f'{{"secret":"{PROTECTED_SENTINEL}"',
+                    input=(f'{{"cwd":{json.dumps(str(data_dir))},'
+                           f'"secret":"{PROTECTED_SENTINEL}"'),
                     capture_output=True,
                     text=True,
                     check=True,

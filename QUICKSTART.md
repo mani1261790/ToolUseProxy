@@ -1,6 +1,6 @@
 # ToolUseProxy 5分クイックスタート
 
-この手順では、検証済みの公開alphaを保護branch `public-alpha`からインストールします。開発中の変更を含む`main`は、通常利用のインストール元にしないでください。現在の公開版は`0.1.0-alpha.12`です。
+この手順では、検証済みの公開alphaを保護branch `public-alpha`からインストールします。開発中の変更を含む`main`は、通常利用のインストール元にしないでください。現在の公開版は`0.1.0-alpha.13`です。
 
 ## 1. 必要なもの
 
@@ -21,15 +21,17 @@ codex plugin add tooluseproxy@tooluseproxy
 
 MarketplaceとPluginのインストールは、Codex環境ごとに1回だけです。projectごとに再インストールする必要はなく、同じPluginを複数projectで利用できます。
 
+インストールしただけでは、開いているprojectでToolUseProxyは動きません。初期設定していないprojectでは案内を表示せず、操作を記録・停止しません。利用するprojectだけを手順4で明示的に有効にします。
+
 特定versionへ固定する場合は、1つ目のコマンドで`public-alpha`の代わりにimmutable tagを指定します。
 
 ```bash
-codex plugin marketplace add mani1261790/ToolUseProxy --ref v0.1.0-alpha.12
+codex plugin marketplace add mani1261790/ToolUseProxy --ref v0.1.0-alpha.13
 ```
 
 ## 3. 5つのHookを確認してTrustする
 
-`alpha.11`以前を使っていた場合は、先に`codex plugin marketplace upgrade tooluseproxy`を実行し、`codex plugin list --json`で`0.1.0-alpha.12`になったことを確認してください。更新後はCodexを完全に終了して起動し直し、新しいタスクを始めます。画面上の版表示だけでは、実行中タスクが新しいHookを読み込んだ証拠になりません。
+`alpha.12`以前を使っていた場合は、先に`codex plugin marketplace upgrade tooluseproxy`を実行し、`codex plugin list --json`で`0.1.0-alpha.13`になったことを確認してください。更新後はCodexを完全に終了して起動し直し、新しいタスクを始めます。画面上の版表示だけでは、実行中タスクが新しいHookを読み込んだ証拠になりません。
 
 Codexが表示するHookを、次の条件と照合してください。
 

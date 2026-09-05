@@ -566,7 +566,15 @@ def _all_runtime_settings_enabled(payload: dict[str, Any]) -> bool:
         "file-payload-exact-enforcement",
     }
     return (
-        set(by_key) == protected_keys | {"externality-protection"}
+        set(by_key) in (
+            protected_keys | {"externality-protection"},
+            protected_keys | {"externality-protection", "pilot-recording"},
+        )
+        and (
+            "pilot-recording" not in by_key
+            or (by_key["pilot-recording"].get("configured_value") is None
+                and by_key["pilot-recording"].get("effective_value") is False)
+        )
         and all(
             by_key[key].get("configured_value") is True
             and by_key[key].get("effective_value") is True
