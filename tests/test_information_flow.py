@@ -9808,6 +9808,7 @@ class InformationFlowTest(unittest.TestCase):
 
     def test_pre_tool_hook_runtime_is_opt_in(self) -> None:
         workspace = self._write_runtime_source_config()
+        self.store.register_workspace(resolve_workspace(str(workspace)))
         self.store.upsert_sources(
             [self._protected_source("private.py")],
             [self._source_chunk()],
@@ -9853,6 +9854,7 @@ class InformationFlowTest(unittest.TestCase):
 
     def test_pre_tool_mcp_runtime_uses_general_pre_tool_opt_in(self) -> None:
         workspace = self._write_runtime_source_config()
+        self.store.register_workspace(resolve_workspace(str(workspace)))
         self.store.upsert_sources(
             [self._protected_source("private.py")],
             [self._source_chunk()],
@@ -9904,6 +9906,7 @@ class InformationFlowTest(unittest.TestCase):
 
     def test_profiled_mcp_fixture_runs_through_real_hook_entrypoint(self) -> None:
         workspace = self._write_runtime_source_config()
+        self.store.register_workspace(resolve_workspace(str(workspace)))
         payload = json.loads(
             (
                 REPO_ROOT / "tests/fixtures/codex_hooks/mcp_profile_publish_text_pre_tool_use.json"
@@ -10764,6 +10767,7 @@ class InformationFlowTest(unittest.TestCase):
 
     def test_unknown_function_tool_runtime_denies_protected_input(self) -> None:
         workspace = self._write_runtime_source_config()
+        self.store.register_workspace(resolve_workspace(str(workspace)))
         payload = {
             "session_id": "session-unknown-function",
             "turn_id": "turn-1",

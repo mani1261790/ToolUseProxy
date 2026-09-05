@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import os
 import subprocess
 import tempfile
@@ -95,15 +94,7 @@ class PosixLauncherPythonContractTest(unittest.TestCase):
                 cli.stderr,
             )
             self.assertEqual(0, hook.returncode)
-            hook_output = json.loads(hook.stdout)
-            self.assertIn(
-                "Python 3.11または3.12が見つからないため、",
-                hook_output["hookSpecificOutput"]["additionalContext"],
-            )
-            self.assertEqual(
-                "PreToolUse",
-                hook_output["hookSpecificOutput"]["hookEventName"],
-            )
+            self.assertEqual("", hook.stdout)
             self.assertEqual("", hook.stderr)
             self.assertFalse(marker.exists())
 

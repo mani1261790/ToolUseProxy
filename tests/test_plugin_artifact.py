@@ -77,6 +77,12 @@ class PluginArtifactTest(unittest.TestCase):
             self.assertIn("tooluseproxy/skills/tooluseproxy-setup/SKILL.md", names)
             self.assertIn("tooluseproxy/tooluseproxy/__main__.py", names)
             self.assertIn("tooluseproxy/hook_monitor/runtime/runner.py", names)
+            self.assertIn("tooluseproxy/tooluseproxy/integrations/activation.py", names)
+            for module in ("pilot_models", "pilot_recording", "pilot_storage", "pilot_review",
+                           "pilot_aggregate", "pilot_stop", "pilot_coverage", "pilot_issue", "pilot_outbox"):
+                self.assertIn(f"tooluseproxy/hook_monitor/runtime/{module}.py", names)
+            self.assertIn("tooluseproxy/tooluseproxy/pilot_cli.py", names)
+            self.assertIn("tooluseproxy/tooluseproxy/pilot_worker.py", names)
             self.assertNotIn("tooluseproxy/hooks/monitor_pre_tool.py", names)
             self.assertNotIn("tooluseproxy/hooks/monitor_post_tool.py", names)
             self.assertNotIn("tooluseproxy/hooks/monitor_stop.py", names)
@@ -92,6 +98,14 @@ class PluginArtifactTest(unittest.TestCase):
                 self.assertFalse(parts & FORBIDDEN_PARTS, name)
                 self.assertFalse(name.endswith((".pyc", ".pyo", ".DS_Store")), name)
                 self.assertFalse(name.endswith(".db"), name)
+
+    def test_both_launchers_gate_startup_failures_by_workspace(self) -> None:
+        posix = (REPO_ROOT / "hooks" / "run_hook.sh").read_text(encoding="utf-8")
+        windows = (REPO_ROOT / "hooks" / "run_hook.cmd").read_text(encoding="utf-8")
+        self.assertIn("workspace_may_be_enabled", posix)
+        self.assertIn(":workspace_may_be_enabled", windows)
+        self.assertIn('"permissionDecision":"deny"', posix)
+        self.assertIn('"permissionDecision":"deny"', windows)
 
     def test_bundle_bytes_are_reproducible(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

@@ -1,6 +1,6 @@
 # サポート範囲と既知の制限
 
-ToolUseProxy `0.1.0-alpha.12`は現在の検証済みpublic alphaです。alpha.12は、現在のverification command自身へ届いたPreToolUseをsession、Plugin版、Hook定義hashに結び付け、別taskや過去sessionの成功と分けて表示します。本番環境向けのSLA、security certification、完全なDLP、全toolの遮断保証は提供しません。
+ToolUseProxy `0.1.0-alpha.13`は現在の検証済みpublic alphaです。未設定projectでは案内・記録・停止を行わず、明示設定済みprojectだけでHookを動かします。設定済みprojectではalpha.12の現在task照合と安全側の停止を維持します。本番環境向けのSLA、security certification、完全なDLP、全toolの遮断保証は提供しません。
 
 ## 実行環境
 
@@ -22,7 +22,7 @@ POSIX launcherもpackage metadataと同じPython 3.11 / 3.12だけを選びま�
 ## Codex Plugin
 
 - localでCodex CLIのmarketplace add / Plugin installを検証済み
-- Gitのmoving refを使う`codex plugin marketplace upgrade`で、alpha.1および3 Hook alpha.8からalpha.12へ置き換わり、Plugin dataが保持されることを実Codex CLIで自動検証。更新後の完全再起動とfresh Desktop配送もalpha.12で確認済み
+- Gitのmoving refを使う`codex plugin marketplace upgrade`で、alpha.1および3 Hook alpha.8からalpha.13へ置き換わり、Plugin dataが保持されることを実Codex CLIで自動検証。alpha.13ではmacOS上の未設定・設定済みprojectのCodex CLI実経路、alpha.12ではfresh Desktop配送を確認済み
 - Hook definitionのreview / trustを迂回しない
 - MCPはread-only名でもqueryをserverへ送るexternal boundaryとして扱う。上限内の全key/valueとactive source全体の比較を完了できたpublic inputだけを許可し、一致・上限超過・比較失敗は実行前deny
 - install後のcodeは`PLUGIN_ROOT`、mutable dataは`PLUGIN_DATA`へ分離

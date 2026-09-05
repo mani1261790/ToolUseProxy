@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal
+from hook_monitor.runtime.pilot_recording import PilotPolicyFacts
+from hook_monitor.runtime.pilot_models import PayloadResolution, EvidenceSource, ReasonCode
 
 from hook_monitor.analysis.adapters.mcp import (
     classify_mcp_sink_type,
@@ -207,8 +209,12 @@ def evaluate_pre_tool_hook_policy(
     leak_min_score: float = 0.3,
     externality_decision: ExternalityHookDecision | None = None,
     recovery_externality_decision: ExternalityHookDecision | None = None,
+    pilot_facts: PilotPolicyFacts | None = None,
 ) -> dict[str, object]:
     current_adapter = pre_tool_adapter(current_event.tool_name)
+    if pilot_facts is not None:
+        pilot_facts.eligible = True
+        pilot_facts.reason = ReasonCode.POLICY_SAFETY_FAILURE
     if current_event.session_id is None:
         return render_pre_tool_prerequisite_deny("session_identity_missing")
     if current_event.workspace_status != "ready" or current_event.workspace_id is None:
@@ -219,6 +225,8 @@ def evaluate_pre_tool_hook_policy(
         current_adapter is None
         or current_adapter not in enabled_adapters
     ):
+        if pilot_facts is not None:
+            pilot_facts.eligible = False
         return {}
 
     bounded_input_guard = evaluate_pre_tool_input_bounds(
@@ -246,6 +254,8 @@ def evaluate_pre_tool_hook_policy(
             recovery_externality_decision is not None
             and recovery_externality_decision.state == "known_local"
         ):
+            if pilot_facts is not None:
+                pilot_facts.eligible = False
             return {}
         return render_protected_source_unavailable_deny()
     current_sequence_no = store.get_event_sequence_no(current_event.event_id)
@@ -255,6 +265,11 @@ def evaluate_pre_tool_hook_policy(
         current_sequence_no,
         current_adapter,
     )
+    if pilot_facts is not None:
+        pilot_facts.eligible = bool(current_sinks) or (
+            externality_decision is not None and externality_decision.state != "known_local"
+        )
+        pilot_facts.completed = True
     findings = detect_leaks(
         analysis_run=runtime_result.analysis_run,
         assignments=list(runtime_result.assignments),
@@ -290,6 +305,8 @@ def evaluate_pre_tool_hook_policy(
             for decision in decisions
         ]
     selected = select_strongest_decision(decisions, "PreToolUse")
+    if pilot_facts is not None:
+        pilot_facts.selected(selected)
     if selected is not None and selected.action != "allow":
         store_policy_decision(
             store,
@@ -338,6 +355,13 @@ def evaluate_pre_tool_hook_policy(
             # its observation semantics and never changes the baseline action.
             payload_evidence = ()
             inspection_failed = True
+        if pilot_facts is not None and payload_evidence:
+            if all(item.resolution_status == "evaluated" for item in payload_evidence):
+                pilot_facts.resolution = (
+                    PayloadResolution.FILE
+                    if any(item.extraction == "resolved_file" for item in payload_evidence)
+                    else PayloadResolution.DIRECT
+                )
         if sink_payload_shadow_enabled:
             try:
                 _store_bash_sink_payload_shadow(
@@ -398,6 +422,8 @@ def evaluate_pre_tool_hook_policy(
                 "PreToolUse",
             )
             if exact_selected is not None and exact_selected.action == "block":
+                if pilot_facts is not None:
+                    pilot_facts.selected(exact_selected)
                 try:
                     store_policy_decision(
                         store,
@@ -427,6 +453,9 @@ def evaluate_pre_tool_hook_policy(
         except Exception:
             verified_sink_node_ids = frozenset()
         else:
+            if pilot_facts is not None and verification.status == "safe":
+                pilot_facts.resolution = PayloadResolution.DIRECT
+                pilot_facts.evidence = EvidenceSource.DIRECT
             verified_sink_node_ids = (
                 frozenset(
                     sink.node_id
@@ -449,6 +478,8 @@ def evaluate_pre_tool_hook_policy(
             "PreToolUse",
         )
         if conservative_selected is not None:
+            if pilot_facts is not None:
+                pilot_facts.selected(conservative_selected)
             try:
                 store_policy_decision(
                     store,
@@ -484,6 +515,8 @@ def evaluate_pre_tool_hook_policy(
             conservative_selected is not None
             and conservative_selected.action == "block"
         ):
+            if pilot_facts is not None:
+                pilot_facts.selected(conservative_selected)
             try:
                 store_policy_decision(
                     store,

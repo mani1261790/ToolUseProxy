@@ -4,6 +4,7 @@ import json
 import os
 import re
 import sys
+import time
 from pathlib import Path
 from typing import Mapping
 
@@ -41,6 +42,7 @@ from hook_monitor.runtime.settings import (
     FILE_PAYLOAD_EXACT_ENFORCEMENT_KEY,
     FILE_PAYLOAD_SHADOW_KEY,
     PRE_TOOL_POLICY_KEY,
+    PILOT_RECORDING_KEY,
     EffectiveRuntimeSettings,
     empty_workspace_runtime_settings,
     resolve_effective_runtime_settings,
@@ -69,7 +71,9 @@ def run_hook(
     db_path: Path | None = None,
     allow_schema_migration: bool = True,
     runtime_attestation: Mapping[str, str] | None = None,
+    activated_workspace_root: str | None = None,
 ) -> int:
+    pilot_started = time.monotonic()
     resolved_db_path = db_path if db_path is not None else _resolve_db_path()
     store = EventStore(resolved_db_path)
     if not allow_schema_migration:
@@ -110,6 +114,7 @@ def run_hook(
             configured_root = _configured_workspace_root(
                 envelope.get("cwd"),
                 resolved_db_path,
+                activated_root=activated_workspace_root,
             )
             raw_mcp_workspace = resolve_workspace(
                 envelope.get("cwd"),
@@ -127,6 +132,7 @@ def run_hook(
             configured_root = _configured_workspace_root(
                 envelope.get("cwd"),
                 resolved_db_path,
+                activated_root=activated_workspace_root,
             )
             raw_mcp_workspace = resolve_workspace(
                 envelope.get("cwd"),
@@ -208,6 +214,7 @@ def run_hook(
     configured_root = _configured_workspace_root(
         payload_cwd if isinstance(payload_cwd, str) else None,
         resolved_db_path,
+        activated_root=activated_workspace_root,
     )
     event = normalize_event(
         phase,
@@ -251,6 +258,7 @@ def run_hook(
         )
         if bounded_input_guard.disposition == "deny":
             print(json.dumps(bounded_input_guard.hook_output, ensure_ascii=False))
+            _record_pilot_input_rejection(store, event, bounded_input_guard.hook_output, pilot_started)
             return 0
         if bounded_input_guard.disposition == "bypass":
             return 0
@@ -271,6 +279,28 @@ def run_hook(
     enabled_pre_tool_adapters = _enabled_pre_tool_adapters(
         effective_runtime_settings
     )
+    if phase == "stop" and effective_runtime_settings.enabled(PILOT_RECORDING_KEY):
+        from hook_monitor.runtime.pilot_recording import recover_pending_pilot
+
+        try:
+            recover_pending_pilot(store.db_path)
+        except Exception:
+            print("ToolUseProxy: 操作評価の再保存を完了できませんでした。", file=sys.stderr)
+        try:
+            from hook_monitor.runtime.pilot_stop import compare_on_stop
+
+            compare_on_stop(store.db_path, event=event,
+                            codex_home=Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))))
+        except Exception:
+            print("ToolUseProxy: 操作評価の比較を完了できませんでした。", file=sys.stderr)
+        try:
+            from hook_monitor.runtime.pilot_outbox import enqueue_comparisons, start_pending_worker
+
+            enqueue_comparisons(store.db_path)
+            if event.workspace_root:
+                start_pending_worker(store.db_path, workspace_root=Path(event.workspace_root))
+        except Exception:
+            print("ToolUseProxy: 改善提案の送信待ち処理を完了できませんでした。", file=sys.stderr)
     if (
         phase == "pre_tool_use"
         and event_pre_tool_adapter in enabled_pre_tool_adapters
@@ -283,6 +313,7 @@ def run_hook(
         )
         if bounded_input_guard.disposition == "deny":
             print(json.dumps(bounded_input_guard.hook_output, ensure_ascii=False))
+            _record_pilot_input_rejection(store, event, bounded_input_guard.hook_output, pilot_started)
             return 0
         if bounded_input_guard.disposition == "bypass":
             return 0
@@ -391,6 +422,9 @@ def run_hook(
     ) in enabled_pre_tool_adapters:
         if not _runtime_policy_workspace_enabled(event):
             return 0
+        from hook_monitor.runtime.pilot_recording import PilotPolicyFacts
+
+        pilot_facts = PilotPolicyFacts()
         try:
             hook_output = evaluate_pre_tool_hook_policy(
                 store,
@@ -407,10 +441,39 @@ def run_hook(
                 ),
                 externality_decision=externality_decision,
                 recovery_externality_decision=recovery_externality_decision,
+                pilot_facts=pilot_facts,
             )
         except Exception:  # pragma: no cover - defensive hook boundary
-            _emit_pre_tool_safety_stop("pre_tool_policy_failed")
-            return 0
+            from hook_monitor.runtime.pilot_models import ReasonCode
+
+            pilot_facts.eligible = True
+            pilot_facts.completed = False
+            pilot_facts.reason = ReasonCode.POLICY_SAFETY_FAILURE
+            hook_output = inactive_hook_output(
+                "pre_tool_use", _inactive_message("pre_tool_policy_failed"),
+                deny_pre_tool=True,
+            )
+        if effective_runtime_settings.enabled(PILOT_RECORDING_KEY):
+            from hook_monitor.runtime.pilot_recording import record_completed_policy
+
+            recorded = record_completed_policy(
+                store.db_path,
+                workspace_id=event.workspace_id or "",
+                event_id=event.event_id,
+                effective_settings={
+                    key: value.effective_value
+                    for key, value in effective_runtime_settings.settings.items()
+                },
+                adapter=event_pre_tool_adapter,
+                externality_state=(externality_decision.state if externality_decision else None),
+                hook_output=hook_output,
+                started=pilot_started,
+                facts=pilot_facts,
+            )
+            if not recorded:
+                print("ToolUseProxy: 操作評価を保存できませんでした。", file=sys.stderr)
+            if recorded and hook_output:
+                _append_pilot_review_prompt(store.db_path, event, hook_output)
         if hook_output:
             print(json.dumps(hook_output, ensure_ascii=False))
         return 0
@@ -435,11 +498,61 @@ def run_hook(
     return 0
 
 
+def _append_pilot_review_prompt(
+    path: Path, event: NormalizedEvent, output: dict[str, object],
+) -> None:
+    try:
+        from hook_monitor.runtime.pilot_review import review_prompt
+
+        prompt = review_prompt(path, workspace_id=event.workspace_id or "", event_id=event.event_id)
+        details = output.get("hookSpecificOutput")
+        if prompt and isinstance(details, dict):
+            context = "\n".join(filter(None, (details.get("additionalContext"), prompt)))
+            details["additionalContext"] = context
+    except Exception:
+        print("ToolUseProxy: 停止確認の案内を追加できませんでした。", file=sys.stderr)
+
+
+def _record_pilot_input_rejection(
+    store: EventStore, event: NormalizedEvent, output: dict[str, object], started: float,
+) -> None:
+    """Best effort only after identity is validated; never parse rejected values."""
+    try:
+        settings = _effective_runtime_settings(store, event)
+    except Exception:
+        # The early input gate also runs before any database exists. Do not
+        # create one or claim recording was enabled when settings are unknown.
+        return
+    try:
+        from hook_monitor.runtime.pilot_recording import PilotPolicyFacts, record_completed_policy
+        from hook_monitor.runtime.pilot_models import ReasonCode
+
+        if not settings.enabled(PILOT_RECORDING_KEY):
+            return
+        if not record_completed_policy(
+            store.db_path, workspace_id=event.workspace_id or "", event_id=event.event_id,
+            effective_settings={key: value.effective_value for key, value in settings.settings.items()},
+            adapter=pre_tool_adapter(event.tool_name), externality_state=None,
+            hook_output=output, started=started,
+            facts=PilotPolicyFacts(eligible=True, reason=ReasonCode.POLICY_SAFETY_FAILURE),
+        ):
+            print("ToolUseProxy: 操作評価を保存できませんでした。", file=sys.stderr)
+    except Exception:
+        print("ToolUseProxy: 操作評価を保存できませんでした。", file=sys.stderr)
+
+
 def _resolve_db_path() -> Path:
     return resolve_runtime_paths().db_path
 
 
-def _configured_workspace_root(cwd: str | None, db_path: Path) -> str | None:
+def _configured_workspace_root(
+    cwd: str | None, db_path: Path, *, activated_root: str | None = None,
+) -> str | None:
+    if activated_root is not None:
+        # A stale automatic child registration or a global environment variable
+        # must not replace the project explicitly selected by the Plugin gate.
+        direct = resolve_workspace(cwd)
+        return None if direct.canonical_root == activated_root else activated_root
     explicit_root = os.environ.get(WORKSPACE_ROOT_ENV)
     if explicit_root is not None:
         return explicit_root

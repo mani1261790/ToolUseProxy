@@ -152,6 +152,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _run_setup(args)
         if args.command == "config":
             return _run_config(args)
+        if args.command == "pilot":
+            from tooluseproxy.pilot_cli import run_pilot
+
+            return run_pilot(args)
         if args.command == "protect":
             return _run_protect(args)
         if args.command == "externality":
@@ -537,6 +541,9 @@ def _build_parser() -> argparse.ArgumentParser:
     uninstall_apply.add_argument("--data-dir", type=Path, required=True)
     uninstall_apply.add_argument("--confirmation-token", required=True)
     uninstall_apply.add_argument("--json", action="store_true")
+    from tooluseproxy.pilot_cli import add_pilot_parser
+
+    add_pilot_parser(subparsers)
     return parser
 
 
@@ -719,6 +726,9 @@ def _run_setup_apply(args: argparse.Namespace) -> int:
             if manifest_created:
                 metadata = os.lstat(manifest_path)
                 manifest_binding = (metadata.st_dev, metadata.st_ino)
+            from tooluseproxy.integrations.activation import save_workspace_activations
+
+            save_workspace_activations(paths.db_path, workspace.canonical_root)
 
         def rollback_manifest() -> None:
             if manifest_created and manifest_binding is not None:
