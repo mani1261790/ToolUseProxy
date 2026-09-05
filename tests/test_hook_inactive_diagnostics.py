@@ -230,43 +230,48 @@ class HookInactiveDiagnosticTest(unittest.TestCase):
     def test_missing_plugin_environment_uses_phase_specific_json(
         self,
     ) -> None:
-        environment = {
-            "PATH": os.environ.get("PATH", ""),
-        }
-        for phase, hook_event in PHASES:
-            result = subprocess.run(
-                ["/bin/sh", str(HOOK_LAUNCHER), phase],
-                cwd=REPO_ROOT,
-                env=environment,
-                input=self._payload(hook_event),
-                capture_output=True,
-                text=True,
-                check=True,
-            )
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            workspace = Path(temporary_directory)
+            self._mark_legacy_workspace_as_configured(workspace)
+            environment = {
+                "PATH": os.environ.get("PATH", ""),
+            }
+            for phase, hook_event in PHASES:
+                result = subprocess.run(
+                    ["/bin/sh", str(HOOK_LAUNCHER), phase],
+                    cwd=workspace,
+                    env=environment,
+                    input=self._payload(hook_event),
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                )
 
-            output = json.loads(result.stdout)
-            message = self._diagnostic_message(output, hook_event)
-            self.assertEqual(
-                (
-                    "ToolUseProxy Pluginの設定を読み込めないため、"
-                    "保護機能は動作していません。"
-                    "（技術情報: plugin_environment）"
-                ),
-                message,
-            )
-            self.assertNotIn(PROTECTED_SENTINEL, result.stdout)
-            self.assertEqual("", result.stderr)
-            if hook_event == "PreToolUse":
-                self._assert_pre_tool_denied(output)
-            else:
-                self._assert_nonblocking(output, hook_event)
+                output = json.loads(result.stdout)
+                message = self._diagnostic_message(output, hook_event)
+                self.assertEqual(
+                    (
+                        "ToolUseProxy Pluginの設定を読み込めないため、"
+                        "保護機能は動作していません。"
+                        "（技術情報: plugin_environment）"
+                    ),
+                    message,
+                )
+                self.assertNotIn(PROTECTED_SENTINEL, result.stdout)
+                self.assertEqual("", result.stderr)
+                if hook_event == "PreToolUse":
+                    self._assert_pre_tool_denied(output)
+                else:
+                    self._assert_nonblocking(output, hook_event)
 
     @unittest.skipIf(os.name == "nt", "POSIX launcher test")
     def test_missing_python_uses_phase_specific_json_without_stdin(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
-            data_dir = Path(temporary_directory) / "data"
+            workspace = Path(temporary_directory)
+            self._mark_legacy_workspace_as_configured(workspace)
+            data_dir = workspace / "data"
             environment = {
                 "PATH": "",
                 "PLUGIN_ROOT": str(REPO_ROOT),
@@ -275,7 +280,7 @@ class HookInactiveDiagnosticTest(unittest.TestCase):
             for phase, hook_event in PHASES:
                 result = subprocess.run(
                     ["/bin/sh", str(HOOK_LAUNCHER), phase],
-                    cwd=REPO_ROOT,
+                    cwd=workspace,
                     env=environment,
                     input=self._payload(hook_event),
                     capture_output=True,
@@ -308,6 +313,7 @@ class HookInactiveDiagnosticTest(unittest.TestCase):
     ) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
+            self._mark_legacy_workspace_as_configured(root)
             fake_python = root / "python"
             fake_python.write_text(
                 "#!/bin/sh\n"
@@ -326,7 +332,7 @@ class HookInactiveDiagnosticTest(unittest.TestCase):
             for phase, hook_event in PHASES:
                 result = subprocess.run(
                     ["/bin/sh", str(HOOK_LAUNCHER), phase],
-                    cwd=REPO_ROOT,
+                    cwd=root,
                     env=environment,
                     input=self._payload(hook_event),
                     capture_output=True,
@@ -352,6 +358,13 @@ class HookInactiveDiagnosticTest(unittest.TestCase):
                 "tool_input": {"value": PROTECTED_SENTINEL},
                 "last_assistant_message": PROTECTED_SENTINEL,
             }
+        )
+
+    @staticmethod
+    def _mark_legacy_workspace_as_configured(workspace: Path) -> None:
+        (workspace / "protected_sources.json").write_text(
+            '{"version": 1, "sources": []}\n',
+            encoding="utf-8",
         )
 
     @staticmethod
