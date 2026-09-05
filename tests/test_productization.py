@@ -137,12 +137,12 @@ class RuntimePathsTest(unittest.TestCase):
             root = Path(temporary_directory)
             codex_home = root / "codex-home"
             plugin_root = (
-                codex_home / "plugins" / "cache" / "tooluseproxy" / "tooluseproxy" / "0.1.0-alpha.12"
+                codex_home / "plugins" / "cache" / "tooluseproxy" / "tooluseproxy" / "0.1.0-alpha.13"
             )
             manifest_dir = plugin_root / ".codex-plugin"
             manifest_dir.mkdir(parents=True)
             (manifest_dir / "plugin.json").write_text(
-                json.dumps({"name": "tooluseproxy", "version": "0.1.0-alpha.12"}),
+                json.dumps({"name": "tooluseproxy", "version": "0.1.0-alpha.13"}),
                 encoding="utf-8",
             )
 
@@ -751,19 +751,11 @@ class ProductCliTest(unittest.TestCase):
                 text=True,
                 check=True,
             )
-            output = json.loads(result.stdout)
-            self.assertEqual(
-                "PreToolUse",
-                output["hookSpecificOutput"]["hookEventName"],
-            )
-            self.assertIn(
-                "database_missing",
-                output["hookSpecificOutput"]["additionalContext"],
-            )
+            self.assertEqual("", result.stdout)
             self.assertEqual("", result.stderr)
-            self.assertFalse((data_dir / "events.db").exists())
+            self.assertFalse(data_dir.exists())
 
-    def test_product_hook_fails_open_before_using_an_incomplete_schema(self) -> None:
+    def test_product_hook_fails_closed_when_workspace_registry_is_incomplete(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
             data_dir = root / "data"
@@ -808,9 +800,10 @@ class ProductCliTest(unittest.TestCase):
                 output["hookSpecificOutput"]["hookEventName"],
             )
             self.assertIn(
-                "schema_incomplete",
+                "runtime_error",
                 output["hookSpecificOutput"]["additionalContext"],
             )
+            self.assertEqual("deny", output["hookSpecificOutput"]["permissionDecision"])
             self.assertNotIn("Traceback", result.stdout)
             self.assertEqual("", result.stderr)
             self.assertEqual(before, db_path.read_bytes())
@@ -956,7 +949,7 @@ class PluginBundleTest(unittest.TestCase):
             root = Path(temporary_directory)
             codex_home = root / "codex-home"
             plugin_root = (
-                codex_home / "plugins" / "cache" / "tooluseproxy" / "tooluseproxy" / "0.1.0-alpha.12"
+                codex_home / "plugins" / "cache" / "tooluseproxy" / "tooluseproxy" / "0.1.0-alpha.13"
             )
             plugin_root.mkdir(parents=True)
             for directory in (".codex-plugin", "hook_monitor", "hooks", "tooluseproxy"):
@@ -1153,16 +1146,7 @@ class PluginBundleTest(unittest.TestCase):
                 text=True,
                 check=True,
             )
-            inactive_output = json.loads(inactive.stdout)
-            inactive_context = inactive_output["hookSpecificOutput"]["additionalContext"]
-            self.assertEqual(
-                "PreToolUse",
-                inactive_output["hookSpecificOutput"]["hookEventName"],
-            )
-            self.assertIn("database_missing", inactive_context)
-            self.assertNotIn(str(cli_launcher), inactive_context)
-            self.assertNotIn(str(data_dir), inactive_context)
-            self.assertNotIn("手動で準備する場合のコマンド", inactive_context)
+            self.assertEqual("", inactive.stdout)
             self.assertEqual("", inactive.stderr)
             self.assertFalse((data_dir / "events.db").exists())
 
@@ -1721,9 +1705,12 @@ class PluginBundleTest(unittest.TestCase):
             self.assertIsNotNone(runtime_analysis[1])
 
     @unittest.skipIf(os.name == "nt", "POSIX launcher test")
-    def test_plugin_hook_fails_open_when_python_is_unavailable(self) -> None:
+    def test_unconfigured_plugin_hook_is_silent_when_python_is_unavailable(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
-            data_dir = Path(temporary_directory) / "plugin-data"
+            root = Path(temporary_directory)
+            data_dir = root / "plugin-data"
+            workspace = root / "unconfigured"
+            workspace.mkdir()
             environment = {
                 "PATH": "",
                 "PLUGIN_ROOT": str(REPO_ROOT),
@@ -1731,25 +1718,89 @@ class PluginBundleTest(unittest.TestCase):
             }
             result = subprocess.run(
                 ["/bin/sh", str(REPO_ROOT / "hooks" / "run_hook.sh"), "stop"],
+                cwd=workspace,
                 env=environment,
                 input="{}",
                 capture_output=True,
                 text=True,
                 check=True,
             )
-            output = json.loads(result.stdout)
-            self.assertEqual(
-                {
-                    "systemMessage": (
-                        "Python 3.11または3.12が見つからないため、"
-                        "ToolUseProxyの保護機能は動作していません。"
-                        "（技術情報: python_missing）"
-                    )
-                },
-                output,
-            )
+            self.assertEqual("", result.stdout)
             self.assertEqual("", result.stderr)
             self.assertFalse((data_dir / "events.db").exists())
+
+    @unittest.skipIf(os.name == "nt", "POSIX launcher test")
+    def test_configured_plugin_hook_warns_when_python_is_unavailable(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            workspace = root / "workspace"
+            data_dir = root / "plugin-data"
+            workspace.mkdir()
+            with redirect_stdout(io.StringIO()):
+                self.assertEqual(0, cli_main([
+                    "init", "--workspace", str(workspace),
+                    "--data-dir", str(data_dir),
+                ]))
+            (workspace / "protected_sources.json").unlink()
+            environment = {
+                "PATH": "",
+                "PLUGIN_ROOT": str(REPO_ROOT),
+                "PLUGIN_DATA": str(data_dir),
+            }
+            result = subprocess.run(
+                ["/bin/sh", str(REPO_ROOT / "hooks" / "run_hook.sh"), "pre-tool-use"],
+                cwd=workspace,
+                env=environment,
+                input="{}",
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            output = json.loads(result.stdout)["hookSpecificOutput"]
+            self.assertEqual("deny", output["permissionDecision"])
+            self.assertIn("python_missing", output["additionalContext"])
+            self.assertEqual("", result.stderr)
+
+    @unittest.skipIf(os.name == "nt", "POSIX launcher test")
+    def test_plugin_startup_failure_respects_workspace_activation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            enabled = root / "enabled"
+            unrelated = root / "unrelated"
+            data_dir = root / "plugin-data"
+            enabled.mkdir()
+            unrelated.mkdir()
+            with redirect_stdout(io.StringIO()):
+                self.assertEqual(0, cli_main([
+                    "init", "--workspace", str(enabled),
+                    "--data-dir", str(data_dir),
+                ]))
+            fake_python = root / "fake-python"
+            fake_python.write_text(
+                "#!/bin/sh\n[ \"$1\" = \"-c\" ] && exit 0\nexit 1\n",
+                encoding="utf-8",
+            )
+            fake_python.chmod(0o700)
+            environment = {
+                "PATH": "",
+                "PLUGIN_ROOT": str(REPO_ROOT),
+                "PLUGIN_DATA": str(data_dir),
+                "TOOLUSEPROXY_PYTHON": str(fake_python),
+            }
+            inactive = subprocess.run(
+                ["/bin/sh", str(REPO_ROOT / "hooks" / "run_hook.sh"), "pre-tool-use"],
+                cwd=unrelated, env=environment, input="{}",
+                capture_output=True, text=True, check=True,
+            )
+            active = subprocess.run(
+                ["/bin/sh", str(REPO_ROOT / "hooks" / "run_hook.sh"), "pre-tool-use"],
+                cwd=enabled, env=environment, input="{}",
+                capture_output=True, text=True, check=True,
+            )
+            self.assertEqual("", inactive.stdout)
+            active_output = json.loads(active.stdout)["hookSpecificOutput"]
+            self.assertEqual("deny", active_output["permissionDecision"])
+            self.assertIn("runtime_start_failed", active_output["additionalContext"])
 
     @unittest.skipIf(os.name == "nt", "POSIX launcher test")
     def test_plugin_hook_fails_open_when_payload_is_invalid(self) -> None:

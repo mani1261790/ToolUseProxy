@@ -5,9 +5,17 @@ import hashlib
 import io
 import json
 import os
+import sys
 from pathlib import Path
+from types import SimpleNamespace
 
-from hook_monitor.runtime.runner import inactive_hook_output, run_hook
+from hook_monitor.runtime.parser import inspect_top_level_json_strings
+from hook_monitor.runtime.runner import (
+    PRE_TOOL_RAW_JSON_MAX_BYTES, inactive_hook_output, run_hook,
+)
+from tooluseproxy.integrations.activation import (
+    enabled_workspace_root, require_workspace_registration,
+)
 from tooluseproxy import __version__
 from tooluseproxy.paths import (
     prepare_data_directory,
@@ -90,29 +98,20 @@ def run_codex_hook(
     except KeyError:
         raise ValueError(f"unsupported Codex hook phase: {phase}") from None
     captured = io.StringIO()
+    original_stdin = sys.stdin
     try:
         paths = resolve_runtime_paths(db_path=db_path, data_dir=data_dir)
-        if (
-            runtime_phase in {"session_start", "subagent_start"}
-            and not paths.db_path.is_file()
-        ):
-            hook_event = (
-                "SessionStart"
-                if runtime_phase == "session_start"
-                else "SubagentStart"
-            )
-            print(
-                json.dumps(
-                    {
-                        "hookSpecificOutput": {
-                            "hookEventName": hook_event,
-                            "additionalContext": HOSTED_TOOL_BOUNDARY_CONTEXT,
-                        }
-                    },
-                    ensure_ascii=False,
-                )
-            )
+        prefix = original_stdin.buffer.read(PRE_TOOL_RAW_JSON_MAX_BYTES + 1)
+        envelope, _ = inspect_top_level_json_strings(prefix, frozenset({"cwd"}))
+        workspace_root = enabled_workspace_root(paths.db_path, envelope.get("cwd"))
+        if workspace_root is None:
             return 0
+        # Replay exactly the original bytes. The runtime retains its own bounded
+        # PreToolUse parser; PostToolUse/Stop may consume the remaining stream.
+        sys.stdin = SimpleNamespace(buffer=_ReplayInput(prefix, original_stdin.buffer))
+        if not paths.db_path.is_file():
+            raise ValueError("enabled workspace database is missing")
+        require_workspace_registration(paths.db_path, workspace_root)
         prepare_data_directory(paths)
         attestation = _runtime_attestation()
         try:
@@ -122,6 +121,7 @@ def run_codex_hook(
                     db_path=paths.db_path,
                     allow_schema_migration=False,
                     runtime_attestation=attestation,
+                    activated_workspace_root=workspace_root,
                 )
         finally:
             secure_database_permissions(paths.db_path)
@@ -184,6 +184,22 @@ def run_codex_hook(
             json.dumps(output, ensure_ascii=False)
         )
         return 0
+    finally:
+        sys.stdin = original_stdin
+
+
+class _ReplayInput:
+    def __init__(self, prefix: bytes, remainder: object) -> None:
+        self.prefix = io.BytesIO(prefix)
+        self.remainder = remainder
+
+    def read(self, size: int = -1) -> bytes:
+        first = self.prefix.read(size)
+        if size < 0:
+            return first + self.remainder.read()
+        if len(first) == size:
+            return first
+        return first + self.remainder.read(size - len(first))
 
 
 def _validated_hook_output(

@@ -104,7 +104,7 @@ if TYPE_CHECKING:
 
 
 DEFAULT_DB_PATH = Path(".tooluseproxy/events.db")
-CURRENT_SCHEMA_VERSION = 7
+CURRENT_SCHEMA_VERSION = 11
 RUNTIME_REQUIRED_TABLES = frozenset(
     {
         "analysis_cursors",
@@ -1534,6 +1534,18 @@ class EventStore:
 
             initialize_externality_shadow_schema(conn)
             initialize_externality_rule_schema(conn)
+            from hook_monitor.runtime.pilot_storage import initialize_pilot_schema
+
+            initialize_pilot_schema(conn)
+            from hook_monitor.runtime.pilot_review import initialize_pilot_review_schema
+
+            initialize_pilot_review_schema(conn)
+            from hook_monitor.runtime.pilot_stop import initialize_pilot_stop_schema
+
+            initialize_pilot_stop_schema(conn)
+            from hook_monitor.runtime.pilot_outbox import initialize_pilot_outbox_schema
+
+            initialize_pilot_outbox_schema(conn)
             self._backfill_event_sequence_numbers(conn)
             self._backfill_event_workspaces(conn)
             self._backfill_tool_operation_outcomes(conn)
@@ -9344,6 +9356,9 @@ class EventStore:
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             self._upsert_workspace(conn, workspace)
+            from tooluseproxy.integrations.activation import save_workspace_activations
+
+            save_workspace_activations(self.db_path, workspace.canonical_root)
 
     def apply_workspace_runtime_settings_profile(
         self,

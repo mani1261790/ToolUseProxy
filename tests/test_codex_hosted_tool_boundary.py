@@ -9,6 +9,7 @@ from pathlib import Path
 from hook_monitor.runtime.storage import EventStore
 from hook_monitor.runtime.workspace import resolve_workspace
 from tooluseproxy.integrations.codex import codex_enforcement_coverage
+from tooluseproxy.integrations.activation import save_workspace_activations
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -16,6 +17,12 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 def test_session_start_injects_value_free_hosted_tool_boundary(tmp_path: Path) -> None:
     data_dir = tmp_path / "plugin-data"
+    data_dir.mkdir()
+    database = data_dir / "events.db"
+    store = EventStore(database)
+    store.initialize()
+    store.register_workspace(resolve_workspace(str(tmp_path)))
+    save_workspace_activations(database)
     sentinel = "MUST.NOT.APPEAR.IN.SESSION.CONTEXT.71D1"
     result = subprocess.run(
         [
@@ -28,7 +35,8 @@ def test_session_start_injects_value_free_hosted_tool_boundary(tmp_path: Path) -
             str(data_dir),
         ],
         cwd=REPO_ROOT,
-        input=json.dumps({"hook_event_name": "SessionStart", "secret": sentinel}),
+        input=json.dumps({"hook_event_name": "SessionStart", "secret": sentinel,
+                          "cwd": str(tmp_path)}),
         capture_output=True,
         text=True,
         check=True,
@@ -43,7 +51,6 @@ def test_session_start_injects_value_free_hosted_tool_boundary(tmp_path: Path) -
     assert "実行前に検査・遮断できません" in context
     assert "hosted toolを呼ばず" in context
     assert sentinel not in result.stdout
-    assert not data_dir.exists()
 
 
 def test_session_start_records_current_runtime_attestation_when_configured(
@@ -170,6 +177,12 @@ def test_plugin_registers_session_start_before_tool_hooks() -> None:
 
 
 def test_subagent_start_repeats_the_same_hosted_tool_boundary(tmp_path: Path) -> None:
+    database = tmp_path / "plugin-data" / "events.db"
+    database.parent.mkdir()
+    store = EventStore(database)
+    store.initialize()
+    store.register_workspace(resolve_workspace(str(tmp_path)))
+    save_workspace_activations(database)
     result = subprocess.run(
         [
             sys.executable,
@@ -181,7 +194,7 @@ def test_subagent_start_repeats_the_same_hosted_tool_boundary(tmp_path: Path) ->
             str(tmp_path / "plugin-data"),
         ],
         cwd=REPO_ROOT,
-        input=json.dumps({"hook_event_name": "SubagentStart"}),
+        input=json.dumps({"hook_event_name": "SubagentStart", "cwd": str(tmp_path)}),
         capture_output=True,
         text=True,
         check=True,

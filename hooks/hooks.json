@@ -8,8 +8,7 @@
             "type": "command",
             "command": "sh \"${PLUGIN_ROOT}/hooks/run_hook.sh\" session-start",
             "commandWindows": "\"%PLUGIN_ROOT%\\hooks\\run_hook.cmd\" session-start",
-            "timeout": 10,
-            "statusMessage": "ToolUseProxyの保護範囲を確認しています"
+            "timeout": 10
           }
         ]
       }
@@ -21,8 +20,7 @@
             "type": "command",
             "command": "sh \"${PLUGIN_ROOT}/hooks/run_hook.sh\" subagent-start",
             "commandWindows": "\"%PLUGIN_ROOT%\\hooks\\run_hook.cmd\" subagent-start",
-            "timeout": 10,
-            "statusMessage": "SubagentへToolUseProxyの保護範囲を伝えています"
+            "timeout": 10
           }
         ]
       }
@@ -35,8 +33,7 @@
             "type": "command",
             "command": "sh \"${PLUGIN_ROOT}/hooks/run_hook.sh\" pre-tool-use",
             "commandWindows": "\"%PLUGIN_ROOT%\\hooks\\run_hook.cmd\" pre-tool-use",
-            "timeout": 10,
-            "statusMessage": "送信前に保護対象が含まれていないか確認しています"
+            "timeout": 10
           }
         ]
       }
@@ -49,8 +46,7 @@
             "type": "command",
             "command": "sh \"${PLUGIN_ROOT}/hooks/run_hook.sh\" post-tool-use",
             "commandWindows": "\"%PLUGIN_ROOT%\\hooks\\run_hook.cmd\" post-tool-use",
-            "timeout": 10,
-            "statusMessage": "ツールの実行記録をこの端末に保存しています"
+            "timeout": 10
           }
         ]
       }
@@ -62,8 +58,7 @@
             "type": "command",
             "command": "sh \"${PLUGIN_ROOT}/hooks/run_hook.sh\" stop",
             "commandWindows": "\"%PLUGIN_ROOT%\\hooks\\run_hook.cmd\" stop",
-            "timeout": 10,
-            "statusMessage": "回答に保護対象が含まれていないか確認しています"
+            "timeout": 10
           }
         ]
       }

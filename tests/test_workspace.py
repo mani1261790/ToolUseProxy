@@ -295,6 +295,7 @@ class WorkspaceIdentityTest(unittest.TestCase):
             nested.mkdir(parents=True)
             db_path = Path(temporary_directory) / "events.db"
             EventStore(db_path).initialize()
+            EventStore(db_path).register_workspace(resolve_workspace(str(root)))
             payload = {
                 "session_id": "session-runner-workspace",
                 "turn_id": "turn-runner-workspace",
@@ -343,7 +344,7 @@ class WorkspaceIdentityTest(unittest.TestCase):
         self.assertEqual("configured_root", row[4])
         self.assertEqual(row[0], row[5])
 
-    def test_unresolved_configured_root_denies_pre_and_keeps_post_advisory(
+    def test_global_root_variable_does_not_enable_an_unconfigured_project(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -415,28 +416,9 @@ class WorkspaceIdentityTest(unittest.TestCase):
 
         self.assertEqual(0, pre.returncode, pre.stderr)
         self.assertEqual(0, post.returncode, post.stderr)
-        pre_output = json.loads(pre.stdout)
-        self.assertEqual(
-            "deny",
-            pre_output["hookSpecificOutput"]["permissionDecision"],
-        )
-        self.assertIn(
-            "workspace_identity_unavailable",
-            pre_output["hookSpecificOutput"]["additionalContext"],
-        )
-        self.assertEqual(1, len(event_rows))
-        self.assertTrue(all(row[0] == "workspace_root_path_missing" for row in event_rows))
-        self.assertTrue(all((row[1] or "").startswith("ws_cfg_v1_") for row in event_rows))
-        stored_payload = json.loads(event_rows[0][2])
-        runtime_attestation = stored_payload.pop("_tooluseproxy_runtime")
-        self.assertEqual(
-            {"plugin_version", "runtime_version", "hooks_sha256"},
-            set(runtime_attestation),
-        )
-        self.assertEqual(
-            {**base_payload, "tool_response": {"exit_code": 0}},
-            stored_payload,
-        )
+        self.assertEqual("", pre.stdout)
+        self.assertEqual("", post.stdout)
+        self.assertEqual([], event_rows)
         self.assertIsNone(operation)
         self.assertEqual(0, outcome_count)
         self.assertEqual(0, snapshot_count)

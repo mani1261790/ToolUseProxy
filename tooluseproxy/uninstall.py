@@ -27,6 +27,7 @@ _MARKER_BYTES = (
 ).encode("utf-8")
 _DATABASE_SIDECAR_NAMES = (
     DATABASE_FILENAME,
+    f"{DATABASE_FILENAME}.workspaces",
     f"{DATABASE_FILENAME}-journal",
     f"{DATABASE_FILENAME}-shm",
     f"{DATABASE_FILENAME}-wal",

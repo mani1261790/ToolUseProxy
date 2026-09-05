@@ -1,6 +1,6 @@
 # プライバシーとデータ保持
 
-ToolUseProxy `0.1.0-alpha.12`のlocal runtimeが扱うデータ、保存場所、保持期間、削除時の境界を説明します。ToolUseProxyはCodexとは別のlocal Hook processとして動作し、既定ではtelemetry、remote embedding、外部API、network送信を行いません。実験的なExternality Judgeだけは、利用者がproviderを明示し、Hook外workerを実行した場合に限り、値非保持の構造要約を選択済みproviderへ送ります。
+ToolUseProxy `0.1.0-alpha.13`のlocal runtimeが扱うデータ、保存場所、保持期間、削除時の境界を説明します。ToolUseProxyはCodexとは別のlocal Hook processとして動作し、既定ではtelemetry、remote embedding、外部API、network送信を行いません。実験的なExternality Judgeだけは、利用者がproviderを明示し、Hook外workerを実行した場合に限り、値非保持の構造要約を選択済みproviderへ送ります。
 
 ## 保存するデータ
 
@@ -16,12 +16,13 @@ ToolUseProxyは情報流を再構築するため、次のデータをlocal SQLit
 | candidate / review | 候補path、selector、rule、confidence、再検証用hash / stat、review状態 | agent向け出力には値を出さないが、pathやdictionary-test可能なhashは機密になり得る |
 | Externality Judge評価 | event / workspace / sessionの内部ID、構造要約hash、Codex model名のhash、closed verdict、件数、時間、値を含まないfailure code | raw command、source code、URL、host、path、protected source identity、model名を保存しない。ToolUseProxyはAPI keyを受け取らない |
 | migration backup | SQLiteや`protected_sources.json`の更新前backup | 元データと同じ機密性を持つ |
+| 利用projectの印 | 明示的に初期設定したworkspaceの絶対path | `events.db.workspaces/`へprojectごとに保存し、未設定projectをHookの対象外にするためだけに使う |
 
 候補scanの外向きJSONとreview監査にはsource本文やsecret値を含めません。ただし、これはSQLite全体がhash-onlyまたは匿名化済みという意味ではありません。通常のHook payload、artifact、source chunk、analysis snapshotには平文が残り得ます。
 
 ## 保存場所
 
-Codex Pluginでは、Codexが渡す`PLUGIN_DATA`の下に`events.db`と必要なbackupを保存します。明示的な`--data-dir`、`--db`、`TOOLUSEPROXY_DATA_DIR`、`TOOLUSEPROXY_DB_PATH`を指定した場合は、その場所を優先します。
+Codex Pluginでは、Codexが渡す`PLUGIN_DATA`の下に`events.db`、利用projectの印を分けて置く`events.db.workspaces/`、必要なbackupを保存します。明示的な`--data-dir`、`--db`、`TOOLUSEPROXY_DATA_DIR`、`TOOLUSEPROXY_DB_PATH`を指定した場合は、その場所を優先します。
 
 通常packageの既定値は次の通りです。
 
@@ -73,9 +74,9 @@ Pluginのdisable、remove、marketplace remove、package uninstallはlocal data�
 5. `tooluseproxy uninstall plan --data-dir <DATA_DIR> --json`を実行し、管理file数、byte数、管理外entry数をreviewする
 6. 出力された現在内容固有のtokenを`tooluseproxy uninstall apply --data-dir <DATA_DIR> --confirmation-token <TOKEN> --json`へ明示的に渡す
 
-`init`はdata directoryへ値を含まないprivateな識別markerを作成します。既存directoryにmarkerがない場合はToolUseProxy SQLite schemaを識別できた場合だけ削除planを作ります。`apply`はmarker、`events.db`とSQLite sidecar、migration backup、`manifest-backups`だけを管理対象として削除します。管理外entryは削除せずdata directoryを残します。plan後に管理dataの内容が変化した場合、tokenは無効になり再planが必要です。symlinkやgroup / otherから読めるdata directoryは拒否します。
+`init`はdata directoryへ値を含まないprivateな識別markerを作成します。既存directoryにmarkerがない場合はToolUseProxy SQLite schemaを識別できた場合だけ削除planを作ります。`apply`はmarker、`events.db`とSQLite sidecar、`events.db.workspaces/`、migration backup、`manifest-backups`だけを管理対象として削除します。管理外entryは削除せずdata directoryを残します。plan後に管理dataの内容が変化した場合、tokenは無効になり再planが必要です。symlinkやgroup / otherから読めるdata directoryは拒否します。
 
-複数workspaceが同じdatabaseを共有している場合、uninstallは全workspaceの履歴を削除します。現在の`0.1.0-alpha.12`にはworkspace単位の完全なerase command、secure erase、外部backup追跡、復元不能性の保証はありません。SSD、filesystem snapshot、backup serviceには削除後もcopyが残る可能性があります。
+複数workspaceが同じdatabaseを共有している場合、uninstallは全workspaceの履歴を削除します。現在の`0.1.0-alpha.13`にはworkspace単位の完全なerase command、secure erase、外部backup追跡、復元不能性の保証はありません。SSD、filesystem snapshot、backup serviceには削除後もcopyが残る可能性があります。
 
 ## 共有時の注意
 
