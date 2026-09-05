@@ -14,7 +14,7 @@ ToolUseProxy is licensed under the [Apache License 2.0](LICENSE).
 
 ## What it does
 
-- Records Codex `PreToolUse`, `PostToolUse`, and `Stop` events in local SQLite storage.
+- Records Codex `PreToolUse`, `PostToolUse`, and `Stop` events in local SQLite storage only for explicitly enabled workspaces.
 - Builds lineage from user-approved protected sources to tool inputs and final answers.
 - Suggests `.env` and JSON protected-source entries without displaying their values.
 - Requires explicit approval before changing `protected_sources.json`.

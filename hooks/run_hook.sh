@@ -6,10 +6,10 @@ workspace_may_be_enabled() {
     candidate=$(pwd -P 2>/dev/null) || return 1
     activation_dir=${PLUGIN_DATA:-}/events.db.workspaces
     if [ -n "${PLUGIN_DATA:-}" ] && [ -d "$activation_dir" ]; then
-        has_complete_marker=0
+        has_any_marker=0
         for marker in "$activation_dir"/ws_v1_*.json; do
             if [ -f "$marker" ]; then
-                has_complete_marker=1
+                has_any_marker=1
                 break
             fi
         done
@@ -32,12 +32,18 @@ workspace_may_be_enabled() {
             candidate=${candidate%/*}
             [ -n "$candidate" ] || candidate=/
         done
-        [ "$has_complete_marker" -eq 1 ] && return 1
+        [ -f "$activation_dir/migration-v1.complete" ] && return 1
+        # A partial old-install migration cannot identify every configured
+        # root safely. Fail closed until setup publishes the completion marker.
+        [ "$has_any_marker" -eq 1 ] && return 0
         candidate=$(pwd -P 2>/dev/null) || return 1
     fi
     # Compatibility with releases that predate activation markers.
     while :; do
         [ -f "$candidate/protected_sources.json" ] && return 0
+        if [ -e "$candidate/.git" ] || [ -L "$candidate/.git" ]; then
+            return 1
+        fi
         [ "$candidate" = "/" ] && return 1
         candidate=${candidate%/*}
         [ -n "$candidate" ] || candidate=/

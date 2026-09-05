@@ -54,10 +54,10 @@ python3.11 scripts/rehearse_plugin_lifecycle.py \
 1. alpha.1をinstallし、schema v1 DBへsynthetic eventを記録
 2. PluginをremoveしてHook codeを無効化し、marketplace削除前後でdata保持を確認
 3. alpha.13候補をinstallし、旧schemaに対するHookがDDLやevent書込みをせず安全停止することを確認
-4. Hook外の明示`init --codex`でv1 backupを作り、schema v7へupgrade
+4. Hook外の明示`init --codex`でv1 backupを作り、alpha.13の現行schema v11まで一度にupgradeして、v8からv11までの表も確認
 5. baseline event、workspace登録、runtime activeを確認し、workspace runtime設定を保存してupgrade後eventを記録
 6. alpha.13候補のcodeをremoveしてdataを保持し、同じversionを再installしてruntime設定のrevisionと有効値が残ることを確認
-7. alpha.1をinstallし、schema v7を旧runtimeがinactiveとして拒否してDBを変更しないことを確認
+7. alpha.1をinstallし、schema v11を旧runtimeがinactiveとして拒否してDBを変更しないことを確認
 8. pre-migration v1 backupを別のrollback data directoryへSQLite backup APIでimport
 9. alpha.1 runtimeがactiveになり、baseline eventを保持し、backup後のalpha.13候補eventとruntime設定を含まないことを確認
 10. Plugin / marketplaceをremoveし、両data directoryをcurrent artifactの`uninstall plan / apply`で明示削除

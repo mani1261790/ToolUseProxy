@@ -56,7 +56,7 @@ def record_completed_policy(
     """Return false on evaluation failure; never modify the caller's decision."""
     item = None
     try:
-        if not facts.eligible:
+        if not facts.eligible or effective_settings.get("pilot-recording") is not True:
             return True
         output = hook_output.get("hookSpecificOutput", {})
         blocked = isinstance(output, dict) and output.get("permissionDecision") == "deny"

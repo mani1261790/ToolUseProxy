@@ -9,7 +9,8 @@ import pytest
 from hook_monitor.runtime.storage import EventStore
 from hook_monitor.runtime.workspace import resolve_workspace
 from tooluseproxy.integrations.activation import (
-    activation_directory, activation_path, save_workspace_activations,
+    activation_directory, activation_migration_complete_path, activation_path,
+    save_workspace_activations,
 )
 from tooluseproxy.integrations.codex import CODEX_HOOK_PHASES, run_codex_hook
 
@@ -157,11 +158,34 @@ def test_enrollment_updates_keep_previous_projects(tmp_path):
     database = tmp_path / "events.db"
     store = EventStore(database)
     store.initialize()
-    store.register_workspace(resolve_workspace(str(first)))
-    store.register_workspace(resolve_workspace(str(second)))
+    store.register_workspace(resolve_workspace(str(first), discovered_by="init"))
+    store.register_workspace(resolve_workspace(str(second), discovered_by="init"))
     assert enabled_workspace_root(database, str(first)) == str(first)
     assert enabled_workspace_root(database, str(second)) == str(second)
     assert activation_path(database, str(first)).stat().st_mode & 0o777 == 0o600
+
+
+def test_partial_marker_migration_keeps_database_fallback_per_project(tmp_path):
+    from tooluseproxy.integrations.activation import enabled_workspace_root
+
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    database = tmp_path / "events.db"
+    store = EventStore(database)
+    store.initialize()
+    store.register_workspace(resolve_workspace(str(first), discovered_by="init"))
+    store.register_workspace(resolve_workspace(str(second), discovered_by="init"))
+
+    activation_path(database, str(second)).unlink()
+    activation_migration_complete_path(database).unlink()
+    assert activation_path(database, str(first)).is_file()
+    assert enabled_workspace_root(database, str(second)) == str(second)
+
+    save_workspace_activations(database)
+    assert activation_path(database, str(second)).is_file()
+    assert activation_migration_complete_path(database).is_file()
 
 
 def test_automatic_child_registration_cannot_replace_enabled_parent(tmp_path, monkeypatch, capsys):

@@ -75,6 +75,13 @@ class PilotIssueTest(unittest.TestCase):
         self.report = {
             "comparison": {"detector_version": "pilot-v1-" + "a" * 48,
                            "observation_count": 40, "project_count": 2},
+            "totals": {"review": {
+                "not_needed": 35,
+                "pending": 1,
+                "correct_block": 1,
+                "unnecessary_block": 2,
+                "unable_to_judge": 1,
+            }},
             "problem_groups": [{"cause": "unidentified", "reason_code": "public_flow_absent",
                                 "tool_family": "shell", "problem_count": 1,
                                 "project_count": 1, "symptom": symptoms}],
@@ -141,6 +148,8 @@ class PilotIssueTest(unittest.TestCase):
         self.client.uncertain, self.client.effect = False, True
         self.assertEqual("pending", self.sync()["status"])
         self.assertEqual(1, self.client.creates)
+        self.assertEqual(1, self.sync()["sent"])
+        self.assertEqual(2, self.client.creates)
 
     def test_missing_auth_preserves_pending_and_later_retries(self):
         self.add_comparison(1)

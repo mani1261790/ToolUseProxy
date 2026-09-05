@@ -25,6 +25,7 @@ BASELINE_COMMIT = "22974427ab62e55a00d21af164d8fc837cb5e8b7"
 BASELINE_PLUGIN_VERSION = "0.1.0-alpha.1"
 BASELINE_PYTHON_VERSION = "0.1.0a1"
 BASELINE_SCHEMA_VERSION = 1
+CURRENT_RELEASE_SCHEMA_VERSION = 11
 SYNTHETIC_MARKER = "LIFECYCLE.CANARY.8B4E2D91"
 
 
@@ -241,7 +242,7 @@ def rehearse_lifecycle(
         ):
             raise LifecycleFailure(stage, "migration_backup_invalid")
         current_schema_version = _schema_version(database)
-        if current_schema_version <= BASELINE_SCHEMA_VERSION:
+        if current_schema_version != CURRENT_RELEASE_SCHEMA_VERSION:
             raise LifecycleFailure(stage, "database_not_upgraded")
         if "baseline-event" not in _event_tool_use_ids(database):
             raise LifecycleFailure(stage, "upgrade_lost_baseline_data")

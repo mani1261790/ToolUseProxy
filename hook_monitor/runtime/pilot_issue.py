@@ -7,7 +7,9 @@ import json
 import re
 from dataclasses import asdict, dataclass
 
-from hook_monitor.runtime.pilot_models import CauseCategory, ProblemSymptom, ReasonCode, ToolFamily
+from hook_monitor.runtime.pilot_models import (
+    CauseCategory, ProblemSymptom, ReasonCode, ReviewState, ToolFamily,
+)
 
 CAUSE_LABELS = {
     CauseCategory.EXTERNALITY: "外部への操作かどうかの判断",
@@ -41,6 +43,7 @@ class PilotProposal:
     tool_family: ToolFamily
     project_count: int
     operation_count: int
+    stop_confirmation_count: int
     problem_count: int | None
     symptoms: dict[str, int]
     problem_project_count: int | None = None
@@ -57,6 +60,9 @@ class PilotProposal:
                 raise ValueError("proposal classifications must be closed enums")
         _count(self.project_count)
         _count(self.operation_count)
+        _count(self.stop_confirmation_count)
+        if self.stop_confirmation_count > self.operation_count:
+            raise ValueError("stop confirmations cannot exceed comparison operations")
         _count(self.problem_count, unknown=True)
         _count(self.problem_project_count, unknown=True)
         if self.problem_project_count is not None and self.problem_project_count > self.project_count:
@@ -93,7 +99,9 @@ def proposal_document(item: PilotProposal) -> tuple[str, str]:
              f"- 判定方式: {item.detector_version}",
              f"- 対象プロジェクト数: {item.project_count}",
              f"- この問題を確認したプロジェクト数: {item.problem_project_count if item.problem_project_count is not None else '不明'}",
-             f"- 比較対象の操作数: {item.operation_count}", f"- この問題の件数: {count}",
+             f"- 比較対象の操作数: {item.operation_count}",
+             f"- 停止確認済みの件数: {item.stop_confirmation_count}",
+             f"- この問題の件数: {count}",
              f"- 原因分類: {CAUSE_LABELS[item.cause]}", f"- 理由番号: {item.reason.value}", ""]
     for symptom in ProblemSymptom:
         unknown_symptom = item.problem_count is None and (
@@ -116,8 +124,21 @@ def validate_document(item: PilotProposal, *, title: str, body: str) -> None:
 
 def proposals_for_comparison(comparison_id: str, report: dict) -> tuple[PilotProposal, ...]:
     comparison = report["comparison"]
+    review_counts = report["totals"]["review"]
+    if set(review_counts) != {str(item) for item in ReviewState}:
+        raise ValueError("comparison review counts must use the complete closed set")
+    stop_confirmation_count = sum(
+        review_counts[str(state)]
+        for state in (
+            ReviewState.CORRECT_BLOCK,
+            ReviewState.UNNECESSARY_BLOCK,
+            ReviewState.UNABLE_TO_JUDGE,
+        )
+    )
     common = dict(comparison_id=comparison_id, detector_version=comparison["detector_version"],
-                  operation_count=comparison["observation_count"], project_count=comparison["project_count"])
+                  operation_count=comparison["observation_count"],
+                  stop_confirmation_count=stop_confirmation_count,
+                  project_count=comparison["project_count"])
     items = []
     for group in report["problem_groups"]:
         items.append(PilotProposal(**common, kind="detection", cause=CauseCategory(group["cause"]),

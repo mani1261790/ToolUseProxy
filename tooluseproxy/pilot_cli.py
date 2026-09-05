@@ -117,7 +117,9 @@ def run_pilot(args: argparse.Namespace) -> int:
                 request_id=args.request_id, cause=CauseCategory(args.cause),
                 previous_id=args.previous_id,
                 reproduced=command == "reproduce-miss",
-                artificial_reproduction_confirmed=command == "reproduce-miss",
+                artificial_reproduction_confirmed=getattr(
+                    args, "artificial_reproduction_confirmed", False
+                ),
             )
             payload = {"problem_event_id": item.problem_event_id, "symptom": item.symptom}
     except (ValueError, OSError, sqlite3.Error) as error:

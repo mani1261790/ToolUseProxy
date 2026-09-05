@@ -36,7 +36,7 @@ ToolUseProxyは、次の3段階で外部流出を調べます。
 - file read / writeやtool I/Oから、保護情報の到達経路を補助的に推定する
 - Hookから見える全ローカルToolを`PreToolUse`で確認し、保護情報が外部へ渡る可能性がある入力を実行前に止める
 - final answerにcriticalな候補がある場合、`Stop`で再確認を求める
-- 判定根拠と監査記録をworkspaceごとのlocal SQLiteへ保存する
+- ToolUseProxyを明示的に有効にしたworkspaceだけで、判定根拠と監査記録をworkspaceごとのlocal SQLiteへ保存する
 
 ## 5分で試す
 
@@ -53,7 +53,7 @@ codex plugin add tooluseproxy@tooluseproxy
 
 これはCodex環境に対して1回だけ行います。Pluginは複数projectで使えますが、保護設定と監査dataはprojectごとに分離されます。
 
-開発版では、インストールしただけの未設定projectに初期化案内・保護指示を出さず、操作も記録・停止しません。下記の依頼で有効にしたprojectだけが対象です。この修正はまだ公開alphaへ反映していません。
+インストールしただけの未設定projectには初期化案内・保護指示を出さず、操作も記録・停止しません。下記の依頼で有効にしたprojectだけが対象です。
 
 ### 2. 5つのHookを確認する
 

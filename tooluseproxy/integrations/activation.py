@@ -14,6 +14,7 @@ from hook_monitor.runtime.workspace import make_workspace_id, resolve_workspace
 ACTIVATION_DIRECTORY_SUFFIX = ".workspaces"
 ACTIVATION_MARKER_VERSION = 1
 ACTIVATION_MARKER_MAX_BYTES = 4096
+ACTIVATION_MIGRATION_COMPLETE = "migration-v1.complete"
 
 
 def activation_directory(database: Path) -> Path:
@@ -22,6 +23,10 @@ def activation_directory(database: Path) -> Path:
 
 def activation_path(database: Path, root: str) -> Path:
     return activation_directory(database) / f"{make_workspace_id(root)}.json"
+
+
+def activation_migration_complete_path(database: Path) -> Path:
+    return activation_directory(database) / ACTIVATION_MIGRATION_COMPLETE
 
 
 def _registered_roots(database: Path) -> list[str]:
@@ -93,9 +98,11 @@ def enabled_workspace_root(database: Path, cwd: str | None) -> str | None:
         marked = _marked_workspace_root(database, execution.canonical_root)
         if marked is not None:
             return marked
-        # Directory creation and first marker publication are separate system
-        # calls. Until one complete marker exists, retain the legacy DB check.
-        if any(directory.glob("ws_v1_*.json")):
+        # A marker for another root does not prove that migration of this root
+        # completed. Suppress the legacy DB fallback only after the complete
+        # marker has been durably published.
+        completion = activation_migration_complete_path(database)
+        if completion.is_file() and not completion.is_symlink():
             return None
     if not database.exists():
         return None
@@ -159,6 +166,28 @@ def _save_marker(database: Path, root: str) -> None:
             os.unlink(temporary)
 
 
+def _save_migration_complete(database: Path) -> None:
+    directory = activation_directory(database)
+    descriptor, temporary = tempfile.mkstemp(prefix=".migration-", dir=directory)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            stream.write(f"{ACTIVATION_MARKER_VERSION}\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, activation_migration_complete_path(database))
+        if os.name == "posix":
+            directory_descriptor = os.open(
+                directory, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+            )
+            try:
+                os.fsync(directory_descriptor)
+            finally:
+                os.close(directory_descriptor)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
 def save_workspace_activations(database: Path, root: str | None = None) -> None:
     """Persist explicit enrollments independently, without a shared-file race."""
     roots = set(_registered_roots(database))
@@ -166,3 +195,4 @@ def save_workspace_activations(database: Path, root: str | None = None) -> None:
         roots.add(root)
     for registered_root in sorted(roots):
         _save_marker(database, registered_root)
+    _save_migration_complete(database)

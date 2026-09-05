@@ -265,6 +265,26 @@ class HookInactiveDiagnosticTest(unittest.TestCase):
                     self._assert_nonblocking(output, hook_event)
 
     @unittest.skipIf(os.name == "nt", "POSIX launcher test")
+    def test_legacy_parent_does_not_activate_nested_repository(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            parent = Path(temporary_directory)
+            self._mark_legacy_workspace_as_configured(parent)
+            nested = parent / "nested"
+            nested.mkdir()
+            (nested / ".git").mkdir()
+            result = subprocess.run(
+                ["/bin/sh", str(HOOK_LAUNCHER), "session-start"],
+                cwd=nested,
+                env={"PATH": os.environ.get("PATH", "")},
+                input=self._payload("SessionStart"),
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+        self.assertEqual("", result.stdout)
+        self.assertEqual("", result.stderr)
+
+    @unittest.skipIf(os.name == "nt", "POSIX launcher test")
     def test_missing_python_uses_phase_specific_json_without_stdin(
         self,
     ) -> None:

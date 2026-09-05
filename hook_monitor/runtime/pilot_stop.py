@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -12,7 +13,7 @@ from hook_monitor.runtime.models import NormalizedEvent
 from hook_monitor.runtime.pilot_aggregate import build_pilot_comparisons
 from hook_monitor.runtime.pilot_coverage import read_task_coverage
 from hook_monitor.runtime.pilot_review import comparison_inputs
-from hook_monitor.runtime.pilot_models import ToolFamily
+from hook_monitor.runtime.pilot_models import PILOT_COMPARISON_THRESHOLD, ToolFamily
 
 
 def initialize_pilot_stop_schema(conn: sqlite3.Connection) -> None:
@@ -46,7 +47,7 @@ def _connect(path: Path, *, readonly: bool = False) -> sqlite3.Connection:
 def compare_on_stop(path: Path, *, event: NormalizedEvent, codex_home: Path) -> tuple[str, ...]:
     if not event.workspace_id or not event.workspace_root or not event.session_id:
         return ()
-    with _connect(path, readonly=True) as conn:
+    with closing(_connect(path, readonly=True)) as conn:
         hook_ids = {hashlib.sha256(row[0].encode()).hexdigest() for row in conn.execute(
             "SELECT tool_use_id FROM events WHERE workspace_id = ? AND session_id = ? "
             "AND phase = 'pre_tool_use' AND tool_use_id IS NOT NULL",
@@ -59,7 +60,7 @@ def compare_on_stop(path: Path, *, event: NormalizedEvent, codex_home: Path) -> 
     )
     now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
     created = []
-    with _connect(path) as conn:
+    with closing(_connect(path)) as connection, connection as conn:
         # Every evaluator/reviewer uses SQLite writes. Holding this reservation
         # makes the following multi-project reads a stable snapshot and avoids
         # duplicate rounds even if two Stop hooks arrive together.
@@ -70,13 +71,15 @@ def compare_on_stop(path: Path, *, event: NormalizedEvent, codex_home: Path) -> 
         ))
         ready = conn.execute("""SELECT detector_version FROM (
             SELECT o.detector_version, o.workspace_id, COUNT(*) AS available,
-                20 * (1 + COALESCE((SELECT MAX(round_number) FROM pilot_comparisons c
+                ? * (1 + COALESCE((SELECT MAX(round_number) FROM pilot_comparisons c
                                    WHERE c.detector_version = o.detector_version), 0)) AS required
             FROM pilot_observations o WHERE study_cohort = 'pilot' AND record_state != 'incomplete'
                 AND (review_state != 'pending' OR EXISTS
                      (SELECT 1 FROM pilot_reviews r WHERE r.observation_id = o.observation_id))
             GROUP BY o.detector_version, o.workspace_id
-        ) WHERE available >= required GROUP BY detector_version HAVING COUNT(*) >= 2""").fetchall()
+        ) WHERE available >= required GROUP BY detector_version HAVING COUNT(*) >= 2""",
+            (PILOT_COMPARISON_THRESHOLD,),
+        ).fetchall()
         if not ready:
             return ()
         workspaces = [row[0] for row in conn.execute(
@@ -141,7 +144,7 @@ def _coverage_summary(conn: sqlite3.Connection, participants: set[str]) -> dict:
 
 
 def list_comparisons(path: Path) -> tuple[dict, ...]:
-    with _connect(path, readonly=True) as conn:
+    with closing(_connect(path, readonly=True)) as conn:
         return tuple({"comparison_id": row[0], "report": json.loads(row[1])}
                      for row in conn.execute("SELECT comparison_id, report_json FROM pilot_comparisons "
                                              "ORDER BY recorded_at, comparison_id"))

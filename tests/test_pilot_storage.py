@@ -97,12 +97,25 @@ class PilotStorageTest(unittest.TestCase):
         ))
         self.assertEqual((), list_pilot_observations(self.path, workspace_id=self.item.workspace_id))
 
+    def test_eligible_external_operation_is_not_recorded_without_opt_in(self) -> None:
+        self.assertTrue(record_completed_policy(
+            self.path, workspace_id=self.item.workspace_id, event_id="external",
+            effective_settings={}, adapter="bash", externality_state="known_external",
+            hook_output={}, started=time.monotonic(),
+            facts=PilotPolicyFacts(eligible=True, completed=True),
+        ))
+        self.assertEqual((), list_pilot_observations(
+            self.path, workspace_id=self.item.workspace_id
+        ))
+        self.assertFalse((self.path.parent / "events.db.pilot-pending").exists())
+
     def test_failed_sqlite_write_is_recovered_once_without_raw_values(self) -> None:
         with patch("hook_monitor.runtime.pilot_recording.store_pilot_observation",
                    side_effect=sqlite3.OperationalError("locked")):
             self.assertFalse(record_completed_policy(
                 self.path, workspace_id=self.item.workspace_id, event_id="private-identifier",
-                effective_settings={}, adapter="bash", externality_state="known_external",
+                effective_settings={"pilot-recording": True}, adapter="bash",
+                externality_state="known_external",
                 hook_output={}, started=time.monotonic(),
                 facts=PilotPolicyFacts(eligible=True, completed=True),
             ))
@@ -125,7 +138,8 @@ class PilotStorageTest(unittest.TestCase):
                    side_effect=sqlite3.OperationalError("locked")):
             record_completed_policy(
                 self.path, workspace_id=self.item.workspace_id, event_id="failed-policy",
-                effective_settings={}, adapter="bash", externality_state=None,
+                effective_settings={"pilot-recording": True}, adapter="bash",
+                externality_state=None,
                 hook_output={"hookSpecificOutput": {"permissionDecision": "deny"}},
                 started=time.monotonic(), facts=PilotPolicyFacts(eligible=True, completed=False),
             )

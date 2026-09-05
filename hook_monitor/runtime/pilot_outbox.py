@@ -8,6 +8,7 @@ import os
 import re
 import subprocess
 import sys
+from contextlib import closing
 from dataclasses import asdict
 from pathlib import Path
 
@@ -48,7 +49,9 @@ def initialize_pilot_outbox_schema(conn: sqlite3.Connection) -> None:
 
 def enqueue_comparisons(path: Path) -> int:
     inserted = 0
-    with sqlite3.connect(path.resolve().as_uri() + "?mode=rw", uri=True, timeout=0.01) as conn:
+    with closing(sqlite3.connect(
+        path.resolve().as_uri() + "?mode=rw", uri=True, timeout=0.01
+    )) as connection, connection as conn:
         conn.execute("BEGIN IMMEDIATE")
         rows = conn.execute("SELECT comparison_id, report_json FROM pilot_comparisons c "
                             "WHERE NOT EXISTS (SELECT 1 FROM pilot_issue_preparations p "
@@ -77,7 +80,9 @@ def configure_sync(path: Path, *, repository: str, enabled: bool) -> None:
         r"[A-Za-z0-9][A-Za-z0-9_-]{0,38}/[A-Za-z0-9][A-Za-z0-9_.-]{0,99}", repository
     ):
         raise ValueError("invalid synchronization configuration")
-    with sqlite3.connect(path.resolve().as_uri() + "?mode=rw", uri=True, timeout=1) as conn:
+    with closing(sqlite3.connect(
+        path.resolve().as_uri() + "?mode=rw", uri=True, timeout=1
+    )) as connection, connection as conn:
         # A destination with existing bindings cannot silently redirect them.
         if conn.execute("SELECT 1 FROM pilot_issue_bindings WHERE repository != ? LIMIT 1",
                         (repository,)).fetchone():
@@ -88,7 +93,9 @@ def configure_sync(path: Path, *, repository: str, enabled: bool) -> None:
 
 
 def sync_configuration(path: Path) -> tuple[str, bool]:
-    with sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=0.01) as conn:
+    with closing(sqlite3.connect(
+        path.resolve().as_uri() + "?mode=ro", uri=True, timeout=0.01
+    )) as conn:
         row = conn.execute("SELECT repository, enabled FROM pilot_issue_config WHERE singleton=1").fetchone()
     repository = os.environ.get("TOOLUSEPROXY_PILOT_ISSUE_REPOSITORY", row[0] if row else "")
     configured = os.environ.get("TOOLUSEPROXY_PILOT_ISSUE_SYNC")
@@ -103,7 +110,9 @@ def start_pending_worker(path: Path, *, workspace_root: Path) -> bool:
         r"[A-Za-z0-9][A-Za-z0-9_-]{0,38}/[A-Za-z0-9][A-Za-z0-9_.-]{0,99}", repository
     ):
         return False
-    with sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=0.01) as conn:
+    with closing(sqlite3.connect(
+        path.resolve().as_uri() + "?mode=ro", uri=True, timeout=0.01
+    )) as conn:
         if conn.execute("SELECT 1 FROM pilot_issue_outbox WHERE state='pending' LIMIT 1").fetchone() is None:
             return False
     entrypoint = Path(__file__).resolve().parents[2] / "tooluseproxy_plugin.py"
