@@ -100,8 +100,8 @@ for python in "${TOOLUSEPROXY_PYTHON:-}" python3.12 python3.11 python3; do
         continue
     fi
     if output=$(
-        "$python" "$PLUGIN_ROOT/tooluseproxy_plugin.py" \
-            hook "$phase" --data-dir "$PLUGIN_DATA" 2>/dev/null
+        "$python" "$PLUGIN_ROOT/tooluseproxy_hook_watchdog.py" \
+            "$phase" --data-dir "$PLUGIN_DATA" 2>/dev/null
     ); then
         if [ -n "$output" ]; then
             printf '%s\n' "$output"

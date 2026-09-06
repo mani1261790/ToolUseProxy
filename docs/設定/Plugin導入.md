@@ -25,14 +25,14 @@ alphaのthreat modelは、Pluginやcoding agentの無承認manifest変更、stal
 
 ## 現在versionと更新
 
-`0.1.0-alpha.14`は現在の検証済みpublic alphaです。alpha.13の未設定project無出力・無記録と安全側停止を維持したまま、固定のIssue番号を使う単独の`gh issue view`の不要な停止を減らします。変数、複数command、Issue更新、保護対象を含む引数、解析失敗は従来どおり停止します。LLM providerと実project試行記録は既定offです。
+`0.1.0-alpha.15`は現在の検証済みpublic alphaです。alpha.14の固定`gh issue view`判定と未設定project無出力・無記録を維持し、PreToolUseの内部処理が7秒を超えた場合はCodex側の打ち切りより先に安全な停止を返します。実運用で大きくなったDBでは現在のsession用索引を明示して、無関係なevent走査を避けます。LLM providerと実project試行記録は既定offです。
 
 Codex CLIはPluginごとの自動更新commandではなく、登録済みGit marketplaceを明示的に更新する`codex plugin marketplace upgrade`を提供します。moving refを登録している場合、更新されたmarketplace snapshotからinstall済みPluginも置き換わります。ToolUseProxyは次の2方式を分けます。
 
 | 方式 | `--ref` | 用途 | 更新 |
 | --- | --- | --- | --- |
 | public alpha更新チャンネル | `public-alpha` | 通常のdogfood / pilot | `marketplace upgrade`で明示更新 |
-| immutable version固定 | `v0.1.0-alpha.14` | 再現実験、監査、rollback | tagは動かないため自動的に別versionへ進まない |
+| immutable version固定 | `v0.1.0-alpha.15` | 再現実験、監査、rollback | tagは動かないため自動的に別versionへ進まない |
 
 `public-alpha`はreview済み・CI green・公開済みのalpha release commitだけへfast-forwardする保護branchです。開発途中の`main`を実行元にはしません。更新は自動ではなく、ユーザーがcommandを実行した時だけ行われます。
 
@@ -52,10 +52,10 @@ codex plugin add tooluseproxy@tooluseproxy
 versionを固定する場合は最初のcommandを次に置き換えます。
 
 ```bash
-codex plugin marketplace add mani1261790/ToolUseProxy --ref v0.1.0-alpha.14
+codex plugin marketplace add mani1261790/ToolUseProxy --ref v0.1.0-alpha.15
 ```
 
-install後はCodexが表示するPlugin source、version、5つのHook definition（SessionStart / SubagentStart / PreToolUse / PostToolUse / Stop）を確認してtrustします。ToolUseProxyはこのreviewを迂回しません。以前trustしたHookでも、matcher、command、sourceなどの定義が変わると`modified`になり、再reviewが必要です。更新後はCodexを完全に終了して起動し直し、新しいタスクでcurrent-invocation healthを確認します。alpha.14のrelease artifact、checksum、SBOM、release notesはGitHub pre-releaseに公開します。
+install後はCodexが表示するPlugin source、version、5つのHook definition（SessionStart / SubagentStart / PreToolUse / PostToolUse / Stop）を確認してtrustします。ToolUseProxyはこのreviewを迂回しません。以前trustしたHookでも、matcher、command、sourceなどの定義が変わると`modified`になり、再reviewが必要です。更新後はCodexを完全に終了して起動し直し、新しいタスクでcurrent-invocation healthを確認します。alpha.15のrelease artifact、checksum、SBOM、release notesはGitHub pre-releaseに公開します。
 
 ### CLIで更新する
 
@@ -326,7 +326,7 @@ sh "<PLUGIN_ROOT>/hooks/run_cli.sh" uninstall apply \
 
 削除対象はSQLite database / sidecar、migration backup、manifest backupだけです。管理外fileは残し、plan後に内容が変わった場合はstale tokenを拒否します。workspace manifestやprotected source本体、symlink先、package codeは削除しません。secure eraseやfilesystem snapshotの削除は保証しません。
 
-alpha.1およびstale alpha.8からalpha.14へのupgrade / safe rollback手順は[Pluginライフサイクル](../運用/Pluginライフサイクル.md)を参照してください。alpha.12 fresh Desktopとalpha.13の未設定・設定済みCodex CLI実経路はmacOSで確認済みです。Linux / Windowsと将来version間の反復は引き続きpublic alphaの検証課題です。
+alpha.1およびstale alpha.8からalpha.15へのupgrade / safe rollback手順は[Pluginライフサイクル](../運用/Pluginライフサイクル.md)を参照してください。alpha.12 fresh Desktop、alpha.13の未設定・設定済みCodex CLI実経路、alpha.15の判定時間切れ停止はmacOSで確認済みです。Linux / Windowsと将来version間の反復は引き続きpublic alphaの検証課題です。
 
 pre-release候補で実際のHook trust、agent説明、実tool invocationを検証するときは、通常workspaceや実secretを使わず、[Pluginドッグフードのmanual Phase B](../運用/Pluginドッグフード.md#manual-phase-b)を実行します。prepare出力はlocal pathを含むため公開せず、raw値とpathを除外したverify結果だけをrelease evidenceとして扱います。
 

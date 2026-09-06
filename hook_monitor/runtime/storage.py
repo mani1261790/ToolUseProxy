@@ -2170,6 +2170,7 @@ class EventStore:
             clause,
             params,
             outcome_through_sequence_no=through_sequence_no,
+            event_index="idx_events_workspace_session_sequence",
         )
 
     def list_tool_operations_for_workspace(
@@ -2237,6 +2238,7 @@ class EventStore:
             clause,
             params,
             outcome_through_sequence_no=through_sequence_no,
+            event_index="idx_events_workspace_session_sequence",
         )
 
     def list_tool_operations_for_post_event(
@@ -2278,7 +2280,11 @@ class EventStore:
         params: tuple[object, ...],
         *,
         outcome_through_sequence_no: int | None = None,
+        event_index: str | None = None,
     ) -> list[ToolOperation]:
+        event_source = "events AS e"
+        if event_index is not None:
+            event_source += f" INDEXED BY {event_index}"
         with self._connect() as conn:
             rows = conn.execute(
                 f"""
@@ -2301,7 +2307,7 @@ class EventStore:
                     o.outcome,
                     o.outcome_evidence
                 FROM tool_operations AS o
-                JOIN events AS e ON e.event_id = o.event_id
+                JOIN {event_source} ON e.event_id = o.event_id
                 {where_clause}
                 ORDER BY e.sequence_no, o.operation_index, o.operation_id
                 """,
@@ -6472,7 +6478,7 @@ class EventStore:
             WHERE w.workspace_id = ?
               AND EXISTS (
                   SELECT 1
-                  FROM events AS e
+                  FROM events AS e INDEXED BY idx_events_workspace_session_sequence
                   WHERE e.workspace_id = w.workspace_id
                     AND e.workspace_status = 'ready'
                     AND e.session_id = ?
@@ -9009,7 +9015,11 @@ class EventStore:
         if through_sequence_no is not None:
             clause += " AND e.sequence_no <= ?"
             params += (through_sequence_no,)
-        return self._list_artifact_contexts_where(clause, params)
+        return self._list_artifact_contexts_where(
+            clause,
+            params,
+            event_index="idx_events_workspace_session_sequence",
+        )
 
     def list_artifact_contexts_for_tool_uses(
         self,
@@ -9053,7 +9063,11 @@ class EventStore:
         if through_sequence_no is not None:
             clause += " AND e.sequence_no <= ?"
             params += (through_sequence_no,)
-        return self._list_artifact_contexts_where(clause, params)
+        return self._list_artifact_contexts_where(
+            clause,
+            params,
+            event_index="idx_events_workspace_session_sequence",
+        )
 
     def list_artifact_contexts_by_fragment_ids(
         self,
@@ -9089,6 +9103,7 @@ class EventStore:
                       AND f.fragment_id IN ({placeholders})
                     """,
                     (workspace_id, session_id, *current_ids),
+                    event_index="idx_events_workspace_session_sequence",
                 )
             )
         return sorted(
@@ -9812,7 +9827,12 @@ class EventStore:
         self,
         where_clause: str,
         params: tuple[object, ...],
+        *,
+        event_index: str | None = None,
     ) -> list[ArtifactContext]:
+        event_source = "events AS e"
+        if event_index is not None:
+            event_source += f" INDEXED BY {event_index}"
         with self._connect() as conn:
             rows = conn.execute(
                 f"""
@@ -9844,7 +9864,7 @@ class EventStore:
                     e.workspace_status
                 FROM artifact_fragments AS f
                 JOIN artifacts AS a ON a.artifact_id = f.artifact_id
-                JOIN events AS e ON e.event_id = a.event_id
+                JOIN {event_source} ON e.event_id = a.event_id
                 {where_clause}
                 ORDER BY e.sequence_no, f.fragment_id
                 """,
