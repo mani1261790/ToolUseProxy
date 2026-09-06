@@ -225,11 +225,13 @@ class ExternalityRuleTest(unittest.TestCase):
             for command in commands
         ]
 
-        self.assertTrue(
-            all(
-                decision is not None and decision.state == "known_local"
-                for decision in decisions
-            )
+        self.assertEqual(
+            [],
+            [
+                (command, None if decision is None else decision.state)
+                for command, decision in zip(commands, decisions, strict=True)
+                if decision is None or decision.state != "known_local"
+            ],
         )
         with sqlite3.connect(self.db_path) as conn:
             count = conn.execute(
@@ -252,6 +254,89 @@ class ExternalityRuleTest(unittest.TestCase):
 
         assert decision is not None
         self.assertEqual("known_local", decision.state)
+
+    def test_valid_installed_plugin_local_management_is_known_local(self) -> None:
+        plugin_root = self.root / "plugin"
+        launcher = plugin_root / "hooks" / "run_cli.sh"
+        launcher.parent.mkdir(parents=True)
+        launcher.write_text("#!/bin/sh\n", encoding="utf-8")
+        data_dir = self.db_path.parent
+        revision = "a" * 64
+        candidate_id = "b" * 32
+        commands = (
+            f"sh {launcher} init --codex --workspace {self.root} --data-dir {data_dir} --json",
+            f"sh {launcher} doctor --workspace {self.root} --data-dir {data_dir} --json",
+            f"sh {launcher} status --workspace {self.root} --data-dir {data_dir} --json",
+            f"sh {launcher} config show --workspace {self.root} --data-dir {data_dir} --json",
+            f"sh {launcher} config set pre-tool-policy on --expected-revision {revision} "
+            f"--workspace {self.root} --data-dir {data_dir} --json",
+            f"sh {launcher} protect scan --workspace {self.root} --data-dir {data_dir} --json",
+            f"sh {launcher} protect suggest --path README.md --whole-file "
+            f"--workspace {self.root} --data-dir {data_dir} --json",
+            f"sh {launcher} protect approve {candidate_id} --candidate-revision c1_{revision} "
+            f"--expected-manifest-sha256 {revision} --workspace {self.root} "
+            f"--data-dir {data_dir} --json",
+            f"sh {launcher} protect reject {candidate_id} --candidate-revision c1_{revision} "
+            f"--workspace {self.root} --data-dir {data_dir} --json",
+            f"sh {launcher} protect migrate plan --workspace {self.root} "
+            f"--data-dir {data_dir} --json",
+            f"sh {launcher} pilot pending --workspace {self.root} "
+            f"--data-dir {data_dir} --json",
+            f"sh {launcher} externality review-list --data-dir {data_dir} --json",
+            f"sh {launcher} externality approve job-id --expected-revision {revision} "
+            f"--data-dir {data_dir} --json",
+            f"sh {launcher} trace --db {self.db_path} --latest --format json",
+            f"sh {launcher} uninstall plan --data-dir {data_dir} --json",
+        )
+
+        decisions = [
+            prepare_externality_hook_decision(
+                self.db_path,
+                self._event(command),
+                workspace_root=self.root,
+                trusted_plugin_root=plugin_root,
+            )
+            for command in commands
+        ]
+
+        self.assertEqual(
+            [],
+            [
+                (command, None if decision is None else decision.state)
+                for command, decision in zip(commands, decisions, strict=True)
+                if decision is None or decision.state != "known_local"
+            ],
+        )
+
+    def test_plugin_commands_with_external_effects_are_not_self_trusted(self) -> None:
+        plugin_root = self.root / "plugin"
+        launcher = plugin_root / "hooks" / "run_cli.sh"
+        launcher.parent.mkdir(parents=True)
+        launcher.write_text("#!/bin/sh\n", encoding="utf-8")
+        commands = (
+            f"sh {launcher} externality process --data-dir {self.db_path.parent} --json",
+            f"sh {launcher} pilot sync --workspace {self.root} "
+            f"--data-dir {self.db_path.parent} --json",
+        )
+
+        decisions = [
+            prepare_externality_hook_decision(
+                self.db_path,
+                self._event(command),
+                workspace_root=self.root,
+                trusted_plugin_root=plugin_root,
+            )
+            for command in commands
+        ]
+
+        self.assertEqual(
+            [],
+            [
+                command
+                for command, decision in zip(commands, decisions, strict=True)
+                if decision is None or decision.state == "known_local"
+            ],
+        )
 
     def test_static_recovery_does_not_trust_execution_capable_sed_program(
         self,
@@ -336,11 +421,13 @@ class ExternalityRuleTest(unittest.TestCase):
             for command in commands
         ]
 
-        self.assertTrue(
-            all(
-                decision is not None and decision.state != "known_local"
-                for decision in decisions
-            )
+        self.assertEqual(
+            [],
+            [
+                command
+                for command, decision in zip(commands, decisions, strict=True)
+                if decision is None or decision.state == "known_local"
+            ],
         )
 
     def test_multiline_sourced_curl_is_immediate_external_without_expansion(

@@ -8717,6 +8717,52 @@ class InformationFlowTest(unittest.TestCase):
         self.assertEqual("", stdout)
         self.assertEqual("", stderr)
 
+    def test_pre_tool_runner_allows_valid_local_management_when_source_is_missing(
+        self,
+    ) -> None:
+        workspace = self._write_runtime_source_config().resolve()
+        (workspace / "private.py").unlink()
+        context = resolve_workspace(str(workspace), str(workspace), discovered_by="test")
+        self.store.register_workspace(context)
+        assert context.workspace_id is not None
+        initial = self.store.get_workspace_runtime_settings(context.workspace_id)
+        self.store.update_workspace_runtime_setting(
+            context.workspace_id,
+            setting_key=PRE_TOOL_POLICY_KEY,
+            value=True,
+            expected_revision=initial.revision,
+        )
+        plugin_root = Path(self.temporary_directory.name) / "plugin"
+        launcher = plugin_root / "hooks" / "run_cli.sh"
+        launcher.parent.mkdir(parents=True)
+        launcher.write_text("#!/bin/sh\n", encoding="utf-8")
+        command = (
+            f"sh {launcher} config show --workspace {workspace} "
+            f"--data-dir {self.db_path.parent} --json"
+        )
+
+        exit_code, stdout, stderr = self._run_hook_in_process(
+            "pre_tool_use",
+            {
+                "session_id": "session-missing-source-config",
+                "turn_id": "turn-missing-source-config",
+                "tool_use_id": "bash-missing-source-config",
+                "tool_name": "Bash",
+                "cwd": str(workspace),
+                "tool_input": {"command": command},
+            },
+            {
+                "PLUGIN_ROOT": str(plugin_root),
+                "TOOLUSEPROXY_DB_PATH": str(self.db_path),
+                "TOOLUSEPROXY_PRE_TOOL_POLICY": "1",
+                "TOOLUSEPROXY_EXTERNALITY_PROTECTION": "1",
+            },
+        )
+
+        self.assertEqual(0, exit_code)
+        self.assertEqual("", stdout)
+        self.assertEqual("", stderr)
+
     def test_pre_tool_runner_allows_local_recovery_for_invalid_manifest(
         self,
     ) -> None:

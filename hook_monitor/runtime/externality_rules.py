@@ -5,8 +5,9 @@ import json
 import re
 import shlex
 import sqlite3
-from contextlib import contextmanager
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from dataclasses import dataclass
+from io import StringIO
 from pathlib import Path
 from typing import Iterator, Literal, Mapping
 
@@ -216,16 +217,8 @@ def _trusted_local_recovery_operation(
     plugin_root: Path | None,
     workspace_root: Path,
     plugin_data: Path,
-) -> Literal[
-    "apply",
-    "verify",
-    "status",
-    "reconcile_plan",
-    "reconcile_apply",
-    "remove_plan",
-    "remove_apply",
-] | None:
-    """Recognize only fixed, revision-bound local recovery commands."""
+) -> str | None:
+    """Recognize only valid local commands from the installed Plugin CLI."""
 
     if plugin_root is None:
         return None
@@ -399,7 +392,170 @@ def _trusted_local_recovery_operation(
         and tokens[-len(suffix) :] == suffix
     ):
         return "apply"
-    return None
+    return _parsed_local_management_operation(
+        command,
+        tokens=tokens,
+        launcher=launcher,
+        workspace_root=workspace_root,
+        plugin_data=plugin_data,
+    )
+
+
+def _parsed_local_management_operation(
+    command: str,
+    *,
+    tokens: list[str],
+    launcher: str,
+    workspace_root: Path,
+    plugin_data: Path,
+) -> str | None:
+    """Use the real CLI grammar, then enforce workspace and data boundaries."""
+
+    if any(character in command for character in ";&|<>\r\n`") or "$(" in command:
+        return None
+    if len(tokens) < 3 or tokens[:2] != ["sh", launcher]:
+        return None
+    if tokens[2] == "trace":
+        explicit_dbs = _separate_option_values(tokens[3:], "--db")
+        if explicit_dbs is None or len(explicit_dbs) != 1:
+            return None
+        try:
+            if Path(explicit_dbs[0]).resolve().parent != plugin_data.resolve():
+                return None
+        except (OSError, RuntimeError, TypeError, ValueError):
+            return None
+        return "trace"
+    try:
+        # Imported lazily so the Hook runtime can finish importing before the
+        # CLI asks it to classify a command that launches that same CLI.
+        from tooluseproxy.cli import _build_parser
+
+        captured = StringIO()
+        with redirect_stdout(captured), redirect_stderr(captured):
+            arguments = _build_parser().parse_args(tokens[2:])
+    except (SystemExit, ValueError):
+        return None
+
+    command_name = arguments.command
+    if command_name == "setup":
+        # The fixed setup profiles above intentionally keep stricter semantic
+        # checks than argparse alone can express.
+        return None
+    if command_name == "protect":
+        if arguments.protect_command == "migrate":
+            if arguments.migration_command == "apply" and (
+                re.fullmatch(r"m1_[0-9a-f]{64}", arguments.migration_revision)
+                is None
+                or _REVISION_PATTERN.fullmatch(
+                    arguments.expected_manifest_sha256
+                )
+                is None
+            ):
+                return None
+        elif arguments.protect_command == "reconcile":
+            if arguments.reconciliation_command == "apply" and (
+                _RECONCILIATION_REVISION_PATTERN.fullmatch(
+                    arguments.reconciliation_revision
+                )
+                is None
+                or _REVISION_PATTERN.fullmatch(
+                    arguments.expected_manifest_sha256
+                )
+                is None
+            ):
+                return None
+        elif arguments.protect_command == "remove":
+            if not _is_normalized_relative_path(arguments.path):
+                return None
+            if arguments.removal_command == "apply" and (
+                _REMOVAL_REVISION_PATTERN.fullmatch(arguments.removal_revision)
+                is None
+                or _REVISION_PATTERN.fullmatch(
+                    arguments.expected_manifest_sha256
+                )
+                is None
+            ):
+                return None
+    if command_name in {
+        "init",
+        "doctor",
+        "status",
+        "setup",
+        "config",
+        "protect",
+        "pilot",
+    }:
+        if command_name == "pilot" and arguments.pilot_command == "sync":
+            return None
+        if "--workspace" not in tokens[2:]:
+            return None
+        try:
+            if Path(arguments.workspace).resolve() != workspace_root.resolve():
+                return None
+        except (OSError, RuntimeError, TypeError, ValueError):
+            return None
+    elif command_name == "externality":
+        if arguments.externality_command == "process":
+            return None
+    elif command_name == "uninstall":
+        pass
+    elif command_name == "trace":
+        # Trace only reads local SQLite state. Its nested parser owns the
+        # remaining arguments, and shell metacharacters were already rejected.
+        pass
+    else:
+        return None
+
+    cli_tokens = tokens[2:]
+    explicit_data_dirs = _separate_option_values(cli_tokens, "--data-dir")
+    explicit_dbs = _separate_option_values(cli_tokens, "--db")
+    if explicit_data_dirs is None or explicit_dbs is None:
+        return None
+    if explicit_data_dirs:
+        try:
+            if Path(explicit_data_dirs[0]).resolve() != plugin_data.resolve():
+                return None
+        except (OSError, RuntimeError, TypeError, ValueError):
+            return None
+    if explicit_dbs:
+        try:
+            if Path(explicit_dbs[0]).resolve().parent != plugin_data.resolve():
+                return None
+        except (OSError, RuntimeError, TypeError, ValueError):
+            return None
+    if command_name == "uninstall" and not explicit_data_dirs:
+        return None
+
+    subcommand = next(
+        (
+            value
+            for value in (
+                getattr(arguments, "setup_command", None),
+                getattr(arguments, "config_command", None),
+                getattr(arguments, "protect_command", None),
+                getattr(arguments, "externality_command", None),
+                getattr(arguments, "uninstall_command", None),
+                getattr(arguments, "pilot_command", None),
+            )
+            if isinstance(value, str)
+        ),
+        None,
+    )
+    return command_name if subcommand is None else f"{command_name}_{subcommand}"
+
+
+def _separate_option_values(tokens: list[str], option: str) -> list[str] | None:
+    if any(token.startswith(f"{option}=") for token in tokens):
+        return None
+    indexes = [index for index, token in enumerate(tokens) if token == option]
+    if len(indexes) > 1:
+        return None
+    if not indexes:
+        return []
+    index = indexes[0]
+    if index + 1 >= len(tokens):
+        return None
+    return [tokens[index + 1]]
 
 
 def _is_normalized_relative_path(value: str) -> bool:

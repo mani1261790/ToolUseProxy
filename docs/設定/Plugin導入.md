@@ -299,7 +299,9 @@ sh "<PLUGIN_ROOT>/hooks/run_cli.sh" protect remove apply \
   --json
 ```
 
-適用は選んだ登録だけを外し、元ファイル、ほかの登録、保護リストの未知の項目を残します。更新前の保護リストは専用保存領域へ非公開で保存します。確認後に保護リストが変わった場合や、別のpath・改変した確認番号を渡した場合は変更しません。元ファイルが既に見つからない場合でも、この正規の解除命令はToolUseProxy自身に止められません。任意の追加shell命令、別project、別の実行ファイル、外部通信を伴うToolUseProxy操作は、この自己操作の扱いには含めません。
+適用は選んだ登録だけを外し、元ファイル、ほかの登録、保護リストの未知の項目を残します。更新前の保護リストは専用保存領域へ非公開で保存します。確認後に保護リストが変わった場合や、別のpath・改変した確認番号を渡した場合は変更しません。元ファイルが既に見つからない場合でも、この正規の解除命令はToolUseProxy自身に止められません。
+
+ToolUseProxyは、導入済みPluginの正規launcherから実行され、現在のCLI構文検査に合格し、同じprojectと専用保存領域を指すローカル管理操作を自己操作として区別します。初期化、状態確認、設定、保護対象の管理、local評価記録、trace、管理データ削除が対象です。任意の追加shell命令、別project、別の実行ファイル、不正な引数は対象外です。`externality process`と`pilot sync`はToolUseProxyのcommandであっても外部通信を行い得るため、自己操作を理由にlocal扱いしません。利用者確認や変更前の照合は別の安全条件として維持します。
 
 workspace探索は明示的なoffline `protect scan`に限定し、`init`やHook中では実行しません。候補ごとの明示判断をまとめて反映できますが、無承認の自動登録やscanの上限引き上げoptionはありません。legacy manifestはruntime読み取り互換を維持しますが、scanはsource fileを読む前に値のない`manifest_schema_legacy`で終了します。coding agentは`protect migrate plan`を提示せずに独断でv2へ変更しません。
 

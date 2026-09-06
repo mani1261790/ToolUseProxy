@@ -40,6 +40,7 @@ ToolUseProxyは、次の3段階で外部流出を調べます。
 - Hookから見える全ローカルToolを`PreToolUse`で確認し、保護情報が外部へ渡る可能性がある入力を実行前に止める
 - final answerにcriticalな候補がある場合、`Stop`で再確認を求める
 - ToolUseProxyを明示的に有効にしたworkspaceだけで、判定根拠と監査記録をworkspaceごとのlocal SQLiteへ保存する
+- 正規のローカル管理操作をToolUseProxy自身の外部送信として誤停止せず、通信を行う管理操作は別に判定する
 
 ## 5分で試す
 
