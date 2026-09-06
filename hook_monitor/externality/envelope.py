@@ -243,6 +243,10 @@ def _analyze_segment(
         return
     if program == "git":
         state.executable_classes.add("remote_vcs_client")
+        # Only list locally configured remotes. Do not infer locality for
+        # remote show/update/add, global overrides, aliases, or dynamic argv.
+        if arguments in (["remote"], ["remote", "-v"], ["remote", "--verbose"]):
+            return
         if arguments[:1] == ["push"]:
             state.capabilities.add("remote_vcs_write")
         else:

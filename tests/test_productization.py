@@ -137,12 +137,12 @@ class RuntimePathsTest(unittest.TestCase):
             root = Path(temporary_directory)
             codex_home = root / "codex-home"
             plugin_root = (
-                codex_home / "plugins" / "cache" / "tooluseproxy" / "tooluseproxy" / "0.1.0-alpha.15"
+                codex_home / "plugins" / "cache" / "tooluseproxy" / "tooluseproxy" / "0.1.0-alpha.16"
             )
             manifest_dir = plugin_root / ".codex-plugin"
             manifest_dir.mkdir(parents=True)
             (manifest_dir / "plugin.json").write_text(
-                json.dumps({"name": "tooluseproxy", "version": "0.1.0-alpha.15"}),
+                json.dumps({"name": "tooluseproxy", "version": "0.1.0-alpha.16"}),
                 encoding="utf-8",
             )
 
@@ -949,7 +949,7 @@ class PluginBundleTest(unittest.TestCase):
             root = Path(temporary_directory)
             codex_home = root / "codex-home"
             plugin_root = (
-                codex_home / "plugins" / "cache" / "tooluseproxy" / "tooluseproxy" / "0.1.0-alpha.15"
+                codex_home / "plugins" / "cache" / "tooluseproxy" / "tooluseproxy" / "0.1.0-alpha.16"
             )
             plugin_root.mkdir(parents=True)
             for directory in (".codex-plugin", "hook_monitor", "hooks", "tooluseproxy"):
