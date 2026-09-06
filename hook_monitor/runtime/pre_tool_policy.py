@@ -18,6 +18,7 @@ from hook_monitor.analysis.adapters.mcp_profiles import (
 from hook_monitor.analysis.github_cli_payload import (
     verified_read_only_github_issue_view_segments,
 )
+from hook_monitor.analysis.function_payload_evidence import verify_literal_function_payload
 from hook_monitor.analysis.leak_detection import LeakFinding, detect_leaks
 from hook_monitor.analysis.mcp_payload_evidence import (
     verify_mcp_payload_against_sources,
@@ -514,13 +515,26 @@ def evaluate_pre_tool_hook_policy(
         and current_adapter == "function"
         and runtime_result.source_chunks
     ):
+        try:
+            verification = verify_literal_function_payload(
+                current_event.tool_name, current_event.raw_payload.get("tool_input"),
+                runtime_result.source_chunks,
+            )
+            verified_sink_node_ids = frozenset(
+                sink.node_id for sink in current_sinks
+            ) if verification.status == "safe" else frozenset()
+            if pilot_facts is not None and verification.status == "safe":
+                pilot_facts.resolution = PayloadResolution.DIRECT
+                pilot_facts.evidence = EvidenceSource.DIRECT
+        except Exception:
+            verified_sink_node_ids = frozenset()
         conservative_decisions = build_unverified_external_sink_decisions(
             sink_candidates=tuple(current_sinks),
             analysis_run_id=runtime_result.analysis_run.analysis_run_id,
             protected_source_node_ids=tuple(
                 chunk.chunk_id for chunk in runtime_result.source_chunks
             ),
-            verified_sink_node_ids=frozenset(),
+            verified_sink_node_ids=verified_sink_node_ids,
         )
         conservative_selected = select_strongest_decision(
             conservative_decisions,
