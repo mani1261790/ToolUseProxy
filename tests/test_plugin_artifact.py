@@ -75,6 +75,7 @@ class PluginArtifactTest(unittest.TestCase):
             self.assertIn("tooluseproxy/hooks/run_cli.sh", names)
             self.assertIn("tooluseproxy/hooks/run_hook.sh", names)
             self.assertIn("tooluseproxy/skills/tooluseproxy-setup/SKILL.md", names)
+            self.assertIn("tooluseproxy/tooluseproxy_hook_watchdog.py", names)
             self.assertIn("tooluseproxy/tooluseproxy/__main__.py", names)
             self.assertIn("tooluseproxy/hook_monitor/runtime/runner.py", names)
             self.assertIn("tooluseproxy/tooluseproxy/integrations/activation.py", names)
