@@ -148,6 +148,8 @@ whether state changes:
 - protected-source migration apply: `ToolUseProxyの操作確認｜行うこと：保護対象リストを新しい形式へ更新します｜変更されるもの：リストの形式と専用保存領域のバックアップ｜外部通信：ありません｜確認が必要な理由：更新前の状態を安全に保存するためです｜この内容で実行してよいですか？`
 - unavailable-source reconciliation plan: `ToolUseProxyの操作確認｜行うこと：見つからない保護対象の登録をまとめて確認します｜変更されるもの：ありません｜外部通信：ありません｜確認が必要な理由：専用保存領域と保護リストを読み取るためです｜この内容で実行してよいですか？`
 - unavailable-source reconciliation apply: `ToolUseProxyの操作確認｜行うこと：表示した見つからない登録を保護リストから外します｜変更されるもの：保護リストと更新前のバックアップ｜外部通信：ありません｜確認が必要な理由：元ファイルを変えずに古い登録だけを整理するためです｜この内容で実行してよいですか？`
+- protected-source removal plan: `ToolUseProxyの操作確認｜行うこと：指定した保護対象1件を解除できるか確認します｜変更されるもの：ありません｜外部通信：ありません｜確認が必要な理由：専用保存領域と保護リストを読み取るためです｜この内容で実行してよいですか？`
+- protected-source removal apply: `ToolUseProxyの操作確認｜行うこと：表示した保護対象1件の登録を外します｜変更されるもの：保護リストと更新前のバックアップ｜外部通信：ありません｜確認が必要な理由：元ファイルを変えずに選んだ登録だけを外すためです｜この内容で実行してよいですか？`
 - removal without data deletion: `ToolUseProxyの操作確認｜行うこと：このプロジェクトでの利用を止めます｜変更されるもの：Pluginの有効状態だけ｜外部通信：ありません｜確認が必要な理由：新しい記録を止めるためです｜この内容で実行してよいですか？`
 - managed-data deletion: `ToolUseProxyの操作確認｜行うこと：表示したToolUseProxyデータを削除します｜変更されるもの：表示した管理対象データ｜外部通信：ありません｜確認が必要な理由：削除すると元に戻せないためです｜この内容で実行してよいですか？`
 
@@ -452,6 +454,20 @@ do not report missing initial output as a command failure.
    After a Plugin update, never reuse a pending candidate ID, opaque revision, or approval command created by an older protected-source detector. If approve, reject, or ignore returns `candidate_detector_stale`, treat it as a version boundary rather than a transient error: do not retry the cached command, run `protect scan`, present the current detector's new proposal, and obtain new explicit approval. Old reject/ignore decisions do not suppress a new detector version. Already-approved manifest entries remain registered. Only an exact retry for a candidate already in `approving` or `approved` may cross the version boundary to recover an interrupted durable approval.
 
    Run the whole `protect scan / suggest / review / approve / reject / ignore` workflow only on POSIX (macOS/Linux); it is not supported on Windows yet. Neither `init` nor a Hook runs the scanner implicitly.
+
+   If the user asks to stop protecting one already registered file, never edit
+   `protected_sources.json` directly and never use uninstall. Create the exact
+   read-only plan with `protect remove plan --path <workspace-relative-path>
+   --workspace <workspace-root> --json`. Show the selected relative path, say
+   that the source file and all other registrations remain unchanged, and wait
+   for explicit approval. Then pass the same path plus the unchanged removal
+   revision and manifest hash to `protect remove apply`. A stale plan or a
+   different path must fail closed. After success, report that only the
+   registration was removed; do not say that the file was deleted. This exact
+   local management command is allowed to recover even when the selected source
+   file is already unavailable, but appended shell commands, another launcher,
+   another workspace, malformed revisions, and external ToolUseProxy commands
+   are not trusted as self-operations.
 
 10. Use `status --hook-probe-token <fresh-probe-token>` to verify the database,
     schema v2 manifest, settings, and current-invocation Hook delivery.
