@@ -95,6 +95,7 @@ from hook_monitor.runtime.externality_rules import (
     ExternalityHookDecision,
     ExternalityRuleMatch,
     conservative_function_tool_decision,
+    classify_static_externality_hook_decision,
 )
 from hook_monitor.runtime.runner import _capture_post_tool_evidence, run_hook
 from hook_monitor.runtime.settings import (
@@ -9275,6 +9276,58 @@ class InformationFlowTest(unittest.TestCase):
         self.assertIsNone(pre_tool_adapter("Read"))
         self.assertIsNone(pre_tool_adapter("Grep"))
         self.assertIsNone(pre_tool_adapter("Glob"))
+
+    def test_git_remote_listing_in_local_sequence_allows_exact_profile(self) -> None:
+        workspace = self._write_runtime_source_config()
+        event = self._record(
+            "pre_tool_use", "git-remote-local", "Bash",
+            tool_input={"command": "pwd; rg -n public README.md; git remote -v"},
+            cwd=str(workspace),
+        )
+        externality = classify_static_externality_hook_decision(event, workspace_root=workspace)
+        output = evaluate_pre_tool_hook_policy(
+            self.store, workspace, current_event=event,
+            sink_payload_exact_enforcement_enabled=True,
+            externality_decision=externality,
+        )
+        self.assertEqual({}, output)
+
+    def test_public_question_function_allows_bounded_literal_input_under_exact_profile(self) -> None:
+        workspace = self._write_runtime_source_config()
+        event = self._record(
+            "pre_tool_use", "question-public", "request_user_input_async",
+            tool_input={"questions": [{"title": "Run the public tests?", "options": ["Yes", "No"]}]},
+            cwd=str(workspace),
+        )
+        output = evaluate_pre_tool_hook_policy(
+            self.store, workspace, current_event=event,
+            sink_payload_exact_enforcement_enabled=True,
+            externality_decision=conservative_function_tool_decision(event.tool_name),
+            enabled_adapters=frozenset({"function"}),
+        )
+        self.assertEqual({}, output)
+
+    def test_question_function_does_not_allow_protected_or_unknown_input(self) -> None:
+        workspace = self._write_runtime_source_config()
+        for index, payload in enumerate((
+            {"questions": [{"title": SECRET}]},
+            {"questions": [{"title": "Public question", "options": [SECRET]}]},
+            {"questions": [{"title": "Public question"}], "command": "load_private_file()"},
+            {"questions": [{"title": {"file": "private.py"}}]},
+        )):
+            with self.subTest(index=index):
+                event = self._record(
+                    "pre_tool_use", f"question-unsafe-{index}", "request_user_input_async",
+                    tool_input=payload, cwd=str(workspace),
+                )
+                output = evaluate_pre_tool_hook_policy(
+                    self.store, workspace, current_event=event,
+                    sink_payload_exact_enforcement_enabled=True,
+                    externality_decision=conservative_function_tool_decision(event.tool_name),
+                    enabled_adapters=frozenset({"function"}),
+                )
+                self.assertEqual("deny", output["hookSpecificOutput"]["permissionDecision"])
+                self.assertNotIn(SECRET, json.dumps(output))
 
     def test_unverified_function_tool_fails_closed_under_exact_profile(self) -> None:
         workspace = self._write_runtime_source_config()
