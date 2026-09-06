@@ -52,6 +52,8 @@ def test_normal_onboarding_does_not_require_internal_path_diagnostics() -> None:
     assert "--whole-file" in skill
     assert "protect reconcile plan" in skill
     assert "protect reconcile apply" in skill
+    assert "protect remove plan" in skill
+    assert "protect remove apply" in skill
     assert "do not ask the user to open the Plugin diagnostics" in skill
     assert "do not ask the user to paste `database_missing`" in skill
     assert "do not depend on a Hook diagnostic" in skill
@@ -60,6 +62,8 @@ def test_normal_onboarding_does_not_require_internal_path_diagnostics() -> None:
     assert "Plugin is installed but this workspace is not\nprotected yet" in skill
     assert "番号付きでまとめて説明" in readme
     assert "コピーして貼り直す必要はありません" in quickstart
+    assert "README.mdを保護対象から外して" in readme
+    assert "README.mdを保護対象から外して" in quickstart
     assert "ToolUseProxyが外部送信を実行前に止めました" in quickstart
     assert "結果：外部操作は実行されていません" in quickstart
     assert "貼り直しを要求しません" in plugin_guide
@@ -93,7 +97,7 @@ def test_approval_templates_stay_short_and_self_contained() -> None:
         if line.startswith("- ") and "`ToolUseProxyの操作確認｜" in line
     ]
 
-    assert len(templates) == 13
+    assert len(templates) == 15
     labels = (
         "｜行うこと：",
         "｜変更されるもの：",

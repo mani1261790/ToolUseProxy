@@ -75,11 +75,13 @@ from tooluseproxy.protected_sources import (
     ProtectedSourceRegistrationError,
     approve_protected_source,
     approve_protected_source_batch,
+    apply_protected_source_removal,
     apply_protected_source_manifest_migration,
     apply_unavailable_source_reconciliation,
     ignore_protected_source_candidate,
     lock_protected_source_workspace,
     plan_protected_source_manifest_migration,
+    plan_protected_source_removal,
     plan_unavailable_source_reconciliation,
     reject_protected_source_candidate,
     scan_protected_sources,
@@ -484,6 +486,33 @@ def _build_parser() -> argparse.ArgumentParser:
     reconciliation_apply.add_argument("--workspace", type=Path, default=Path.cwd())
     reconciliation_apply.add_argument("--json", action="store_true")
     _add_runtime_path_arguments(reconciliation_apply)
+
+    remove = protect_subparsers.add_parser(
+        "remove",
+        help="Plan or explicitly remove one protected source registration.",
+    )
+    remove_subparsers = remove.add_subparsers(
+        dest="removal_command",
+        required=True,
+    )
+    removal_plan = remove_subparsers.add_parser(
+        "plan",
+        help="Create a value-free plan for one registered workspace-relative path.",
+    )
+    removal_plan.add_argument("--path", required=True)
+    removal_plan.add_argument("--workspace", type=Path, default=Path.cwd())
+    removal_plan.add_argument("--json", action="store_true")
+    _add_runtime_path_arguments(removal_plan)
+    removal_apply = remove_subparsers.add_parser(
+        "apply",
+        help="Apply one explicitly reviewed protected source removal.",
+    )
+    removal_apply.add_argument("--path", required=True)
+    removal_apply.add_argument("--removal-revision", required=True)
+    removal_apply.add_argument("--expected-manifest-sha256", required=True)
+    removal_apply.add_argument("--workspace", type=Path, default=Path.cwd())
+    removal_apply.add_argument("--json", action="store_true")
+    _add_runtime_path_arguments(removal_apply)
 
     trace = subparsers.add_parser("trace", help="Show source lineage for a stored analysis run.")
     trace.add_argument("arguments", nargs=argparse.REMAINDER)
@@ -1841,6 +1870,25 @@ def _run_protect(args: argparse.Namespace) -> int:
                     backup_root=paths.data_dir,
                 )
             payload = reconciliation.to_public_payload()
+        elif args.protect_command == "remove":
+            assert workspace.workspace_id is not None
+            if args.removal_command == "plan":
+                removal = plan_protected_source_removal(
+                    workspace_path,
+                    workspace_id=workspace.workspace_id,
+                    relative_path=args.path,
+                    backup_root=paths.data_dir,
+                )
+            else:
+                removal = apply_protected_source_removal(
+                    workspace_path,
+                    workspace_id=workspace.workspace_id,
+                    relative_path=args.path,
+                    removal_revision=args.removal_revision,
+                    expected_manifest_sha256=args.expected_manifest_sha256,
+                    backup_root=paths.data_dir,
+                )
+            payload = removal.to_public_payload()
         else:  # pragma: no cover - argparse constrains this branch
             raise _ProtectCliError(
                 "unsupported_protect_command",
@@ -1863,6 +1911,7 @@ def _run_protect(args: argparse.Namespace) -> int:
     except ValueError:
         migration_command = args.protect_command == "migrate"
         reconciliation_command = args.protect_command == "reconcile"
+        removal_command = args.protect_command == "remove"
         scan_command = args.protect_command == "scan"
         _render_protect_error(
             (
@@ -1871,7 +1920,11 @@ def _run_protect(args: argparse.Namespace) -> int:
                 else (
                     "reconciliation_state_conflict"
                     if reconciliation_command
-                    else "candidate_state_conflict"
+                    else (
+                        "removal_state_conflict"
+                        if removal_command
+                        else "candidate_state_conflict"
+                    )
                 )
             ),
             (
@@ -1881,9 +1934,13 @@ def _run_protect(args: argparse.Namespace) -> int:
                     "protected source manifest changed; create a new reconciliation plan"
                     if reconciliation_command
                     else (
-                    "protected source candidate state changed; run scan again"
-                    if scan_command
-                    else "protected source candidate state changed; run suggest again"
+                        "protected source manifest changed; create a new removal plan"
+                        if removal_command
+                        else (
+                            "protected source candidate state changed; run scan again"
+                            if scan_command
+                            else "protected source candidate state changed; run suggest again"
+                        )
                     )
                 )
             ),
@@ -2760,6 +2817,10 @@ def _render_protect_payload(payload: dict[str, Any], *, as_json: bool) -> None:
         "reconciliation_kind",
         "reconciliation_id",
         "reconciliation_revision",
+        "removal_kind",
+        "removal_id",
+        "removal_revision",
+        "path",
         "unavailable_source_count",
         "unavailable_sources",
         "remaining_source_count",
