@@ -109,7 +109,7 @@ adapterにない未知のcallは、raw commandやpathなどを含まない構造
 
    現在の開発対象です。直接一致とfile-backed payloadは実用可能ですが、動的shell、Git object、archive、言い換え・要約、多段変換、未知の外部通信候補には改善余地があります。安全に判定できないprotected flowは引き続き実行前denyし、そのうえでpublicな処理のfalse blockを減らします。
 
-進行中の中心Issueは[実project pilot #99](https://github.com/mani1261790/ToolUseProxy/issues/99)と[Sink-first比較 #36](https://github.com/mani1261790/ToolUseProxy/issues/36)です。
+実project pilot #99は完了しました。現在はそこで最多だった不要な停止を[#114](https://github.com/mani1261790/ToolUseProxy/issues/114)で修正し、公開版と実projectでの再確認を進めています。その後、[Sink-first比較 #36](https://github.com/mani1261790/ToolUseProxy/issues/36)ほかの検出精度Issueを順に進めます。
 
 ## 現在地
 

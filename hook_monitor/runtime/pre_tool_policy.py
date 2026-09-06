@@ -15,6 +15,9 @@ from hook_monitor.analysis.adapters.mcp_profiles import (
     MCP_TOOL_NAME_MAX_BYTES,
     inspect_mcp_input,
 )
+from hook_monitor.analysis.github_cli_payload import (
+    verified_read_only_github_issue_view_segments,
+)
 from hook_monitor.analysis.leak_detection import LeakFinding, detect_leaks
 from hook_monitor.analysis.mcp_payload_evidence import (
     verify_mcp_payload_against_sources,
@@ -405,16 +408,28 @@ def evaluate_pre_tool_hook_policy(
                     analysis_run_id=runtime_result.analysis_run.analysis_run_id,
                     protected_source_node_ids=protected_source_node_ids,
                 )
+            verified_sink_node_ids = _verified_external_sink_ids(
+                payload_evidence,
+                tuple(current_sinks),
+                tuple(exact_decisions),
+            )
+            github_verified_sink_ids = _verified_read_only_github_sink_ids(
+                current_event=current_event,
+                runtime_result=runtime_result,
+                current_sinks=tuple(current_sinks),
+            )
+            verified_sink_node_ids = frozenset(
+                set(verified_sink_node_ids) | set(github_verified_sink_ids)
+            )
+            if pilot_facts is not None and github_verified_sink_ids:
+                pilot_facts.resolution = PayloadResolution.DIRECT
+                pilot_facts.evidence = EvidenceSource.DIRECT
             exact_decisions.extend(
                 build_unverified_external_sink_decisions(
                     sink_candidates=tuple(current_sinks),
                     analysis_run_id=runtime_result.analysis_run.analysis_run_id,
                     protected_source_node_ids=protected_source_node_ids,
-                    verified_sink_node_ids=_verified_external_sink_ids(
-                        payload_evidence,
-                        tuple(current_sinks),
-                        tuple(exact_decisions),
-                    ),
+                    verified_sink_node_ids=verified_sink_node_ids,
                 )
             )
             exact_selected = select_strongest_decision(
@@ -721,6 +736,32 @@ def _inspect_bash_sink_payload(
         workspace_id=current_event.workspace_id,
         sink_node_ids_by_segment=sink_node_ids_by_segment,
         source_chunks=runtime_result.source_chunks,
+    )
+
+
+def _verified_read_only_github_sink_ids(
+    *,
+    current_event: NormalizedEvent,
+    runtime_result: RuntimeAnalysisResult,
+    current_sinks: tuple[SinkCandidate, ...],
+) -> frozenset[str]:
+    tool_input = current_event.raw_payload.get("tool_input")
+    if not isinstance(tool_input, dict) or current_event.workspace_id is None:
+        return frozenset()
+    command = shell_command_from_input(current_event.tool_name, tool_input)
+    if command is None:
+        return frozenset()
+    verified_segments = verified_read_only_github_issue_view_segments(
+        command,
+        workspace_id=current_event.workspace_id,
+        source_chunks=runtime_result.source_chunks,
+    )
+    return frozenset(
+        sink.node_id
+        for sink in current_sinks
+        if sink.metadata.get("segment_index") in verified_segments
+        and sink.metadata.get("basis")
+        in {"unknown_pending", "static_external", "approved_rule"}
     )
 
 
