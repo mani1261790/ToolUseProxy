@@ -65,7 +65,7 @@ project単位では、trustedなrepositoryの`.codex/hooks.json`へ次のよう�
           {
             "type": "command",
             "command": "TOOLUSEPROXY_WORKSPACE_ROOT=/absolute/path/to/workspace python3 /absolute/path/to/ToolUseProxy/hooks/monitor_pre_tool.py",
-            "timeout": 5
+            "timeout": 15
           }
         ]
       }
@@ -77,7 +77,7 @@ project単位では、trustedなrepositoryの`.codex/hooks.json`へ次のよう�
           {
             "type": "command",
             "command": "TOOLUSEPROXY_WORKSPACE_ROOT=/absolute/path/to/workspace python3 /absolute/path/to/ToolUseProxy/hooks/monitor_post_tool.py",
-            "timeout": 5
+            "timeout": 10
           }
         ]
       }
@@ -88,7 +88,7 @@ project単位では、trustedなrepositoryの`.codex/hooks.json`へ次のよう�
           {
             "type": "command",
             "command": "TOOLUSEPROXY_WORKSPACE_ROOT=/absolute/path/to/workspace python3 /absolute/path/to/ToolUseProxy/hooks/monitor_stop.py",
-            "timeout": 5
+            "timeout": 10
           }
         ]
       }

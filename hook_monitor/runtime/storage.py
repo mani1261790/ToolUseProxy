@@ -351,6 +351,11 @@ _PROTECTED_SOURCE_CANDIDATE_REVIEW_SELECT_COLUMNS = """
     recorded_at
 """
 RUNTIME_REQUIRED_INDEXES = {
+    "idx_events_workspace_session_sequence": (
+        "events",
+        False,
+        ("workspace_id", "session_id", "sequence_no", "event_id"),
+    ),
     "idx_protected_source_candidates_workspace_suppression": (
         "protected_source_candidates",
         True,
@@ -2157,9 +2162,10 @@ class EventStore:
         clause = """
             WHERE e.workspace_id = ?
               AND e.workspace_status = 'ready'
+              AND e.session_id = ?
               AND o.session_id = ?
         """
-        params: tuple[object, ...] = (workspace_id, session_id)
+        params: tuple[object, ...] = (workspace_id, session_id, session_id)
         if after_sequence_no is not None:
             clause += " AND e.sequence_no > ?"
             params += (after_sequence_no,)
@@ -2223,11 +2229,13 @@ class EventStore:
         clause = f"""
             WHERE e.workspace_id = ?
               AND e.workspace_status = 'ready'
+              AND e.session_id = ?
               AND o.session_id = ?
               AND o.tool_use_id IN ({placeholders})
         """
         params: tuple[object, ...] = (
             workspace_id,
+            session_id,
             session_id,
             *sorted(tool_use_ids),
         )

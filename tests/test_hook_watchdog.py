@@ -72,7 +72,7 @@ def test_pre_tool_host_timeout_exceeds_internal_deadline() -> None:
     hooks = json.loads((REPO_ROOT / "hooks" / "hooks.json").read_text(encoding="utf-8"))
     pre_tool_timeout = hooks["hooks"]["PreToolUse"][0]["hooks"][0]["timeout"]
 
-    assert pre_tool_timeout > 7
+    assert pre_tool_timeout == 15
 
 
 def test_both_launchers_invoke_the_watchdog() -> None:
