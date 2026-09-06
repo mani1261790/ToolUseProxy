@@ -51,6 +51,7 @@ def externality_policy_adapter_result(
     edges = []
     for context in sorted(selected, key=lambda item: item.fragment.fragment_id):
         sink_type, label, matched_pattern = _risk_identity(risk.basis)
+        segment_index = _bash_segment_index(context.fragment.json_pointer)
         sink = make_sink_candidate(
             sink_type=sink_type,
             label=label,
@@ -63,6 +64,11 @@ def externality_policy_adapter_result(
                 "envelope_sha256": risk.envelope_sha256,
                 "verdict": risk.verdict,
                 "basis": risk.basis,
+                **(
+                    {"segment_index": segment_index}
+                    if segment_index is not None
+                    else {}
+                ),
                 **(
                     {"review_revision": risk.review_revision}
                     if risk.review_revision is not None
@@ -83,6 +89,16 @@ def externality_policy_adapter_result(
             )
         )
     return AdapterResult(tuple(edges), (), tuple(sinks))
+
+
+def _bash_segment_index(json_pointer: str) -> int | None:
+    marker = "/@bash-segments/"
+    if marker not in json_pointer:
+        return None
+    suffix = json_pointer.rsplit(marker, 1)[1]
+    if not suffix.isdigit():
+        return None
+    return int(suffix)
 
 
 def _risk_identity(basis: str) -> tuple[str, str, str]:

@@ -52,6 +52,19 @@ resolver v2が扱うのは、staticな`curl --data-binary @relative-file`と`--d
 - NUL、stdin、dynamic operand、workspace外、`..`を拒否
 - shell、subprocess、curl、networkを実行しない
 
+## 公開GitHub Issueの読み取り
+
+Issue #114では、保護対象があるprojectで公開Issueを読む`gh issue view`が、外部へ送る内容を確定できないため不要に停止する問題を修正した。許可するのは、次をすべて満たす単独commandだけとする。
+
+- `gh issue view`である
+- Issue番号が固定の数値である
+- optionは`--comments`、許可した`--json`項目、固定の`--repo owner/name`だけである
+- 引数全体が8 KiB以下である
+- 現在のworkspaceのprotected sourceがIssue番号やrepository名に含まれない
+- 外部性解析自体は成功している
+
+変数、command substitution、pipe、複数command、redirect、未知のoption、Issue更新、外部性解析失敗は安全と推測しない。これらは送信内容未解決のままとし、protected flowがあれば従来どおり実行前に停止する。判定時にGitHubやshellを実行せず、command本文や読み取ったIssue内容も新しく保存しない。
+
 POSIXではworkspace directoryからcomponentごとにdirectory FDを開き、`O_DIRECTORY`と`O_NOFOLLOW`を使って親directoryを辿ります。leafも同じdirectory FDから`O_NOFOLLOW`で開き、読み取り前後のdevice、inode、size、mtimeを確認します。親pathの名前が途中で差し替えられても、既に開いたdirectory FDからworkspace外へ解決し直しません。
 
 component-safe openを提供できないplatformではfile-backed resolutionを`component_safe_open_unavailable`としてunsupportedにします。現在のWindows supportはexperimentalであり、POSIXと同じ保護を提供したとは扱いません。
