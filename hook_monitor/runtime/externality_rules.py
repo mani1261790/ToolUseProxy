@@ -37,6 +37,8 @@ GENERIC_FUNCTION_EXTERNALITY_CONTRACT = b"generic-function-externality-v1"
 TRUSTED_SETUP_PROFILE_CONTRACT = b"trusted-tooluseproxy-setup-profile-v2"
 _REVISION_PATTERN = re.compile(r"[0-9a-f]{64}")
 _RECONCILIATION_REVISION_PATTERN = re.compile(r"r1_[0-9a-f]{64}")
+_REMOVAL_REVISION_PATTERN = re.compile(r"d1_[0-9a-f]{64}")
+_RELATIVE_PATH_PATTERN = re.compile(r"[^\x00\r\n]+")
 
 
 @dataclass(frozen=True)
@@ -220,6 +222,8 @@ def _trusted_local_recovery_operation(
     "status",
     "reconcile_plan",
     "reconcile_apply",
+    "remove_plan",
+    "remove_apply",
 ] | None:
     """Recognize only fixed, revision-bound local recovery commands."""
 
@@ -244,6 +248,55 @@ def _trusted_local_recovery_operation(
         "--json",
     ]:
         return "reconcile_plan"
+    removal_plan_prefix = [
+        "sh",
+        launcher,
+        "protect",
+        "remove",
+        "plan",
+        "--path",
+    ]
+    removal_suffixes = (
+        ["--workspace", workspace, "--data-dir", data_dir, "--json"],
+        ["--workspace", workspace, "--json"],
+    )
+    if any(
+        len(tokens) == len(removal_plan_prefix) + 1 + len(suffix)
+        and tokens[: len(removal_plan_prefix)] == removal_plan_prefix
+        and _is_normalized_relative_path(tokens[len(removal_plan_prefix)])
+        and tokens[len(removal_plan_prefix) + 1 :] == suffix
+        for suffix in removal_suffixes
+    ):
+        return "remove_plan"
+    removal_apply_prefix = [
+        "sh",
+        launcher,
+        "protect",
+        "remove",
+        "apply",
+        "--path",
+    ]
+    for suffix in removal_suffixes:
+        expected_length = len(removal_apply_prefix) + 1 + 4 + len(suffix)
+        if (
+            len(tokens) == expected_length
+            and tokens[: len(removal_apply_prefix)] == removal_apply_prefix
+            and _is_normalized_relative_path(
+                tokens[len(removal_apply_prefix)]
+            )
+            and tokens[len(removal_apply_prefix) + 1]
+            == "--removal-revision"
+            and _REMOVAL_REVISION_PATTERN.fullmatch(
+                tokens[len(removal_apply_prefix) + 2]
+            )
+            and tokens[len(removal_apply_prefix) + 3]
+            == "--expected-manifest-sha256"
+            and _REVISION_PATTERN.fullmatch(
+                tokens[len(removal_apply_prefix) + 4]
+            )
+            and tokens[len(removal_apply_prefix) + 5 :] == suffix
+        ):
+            return "remove_apply"
     reconciliation_prefix = [
         "sh",
         launcher,
@@ -347,6 +400,18 @@ def _trusted_local_recovery_operation(
     ):
         return "apply"
     return None
+
+
+def _is_normalized_relative_path(value: str) -> bool:
+    if _RELATIVE_PATH_PATTERN.fullmatch(value) is None:
+        return False
+    candidate = Path(value)
+    return (
+        not candidate.is_absolute()
+        and bool(candidate.parts)
+        and all(part not in {".", ".."} for part in candidate.parts)
+        and candidate.as_posix() == value
+    )
 
 
 def initialize_externality_rule_schema(conn: sqlite3.Connection) -> None:

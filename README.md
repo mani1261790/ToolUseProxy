@@ -4,13 +4,13 @@ ToolUseProxyは、AI coding agentがローカルの非公開情報を外部へ�
 
 たとえば、未公開コード、研究ノート、`.env`、設計方針などを`protected source`として登録します。ToolUseProxyはCodexのtool useをローカルで観測し、外部送信候補へ保護情報が到達していないかを確認します。
 
-本プロジェクトは[SecHack365](https://sechack365.nict.go.jp/)での研究・開発成果物です。この版は`0.1.0-alpha.17`です。既知の質問表示と固定の`git remote`一覧表示の不要な停止を減らし、alpha.16で見つかった「質問の複数項目に分割された保護文字列」の見落としを修正しました。各項目だけでなく表示順に連結した内容も照合します。未知の関数、動的な命令、外部送信は安全側の判断を維持します。alpha.15の7秒の内部制限と大きなDB向けの索引も維持しています。研究用public alphaであり、完成したDLP製品ではありません。
+本プロジェクトは[SecHack365](https://sechack365.nict.go.jp/)での研究・開発成果物です。この版は`0.1.0-alpha.18`です。保護対象を1件だけ安全に解除する操作を追加し、その正規操作がToolUseProxy自身に止められないようにしました。元ファイル、ほかの登録、設定は残り、更新前の保護リストを専用領域へ保存します。既知の不要な停止の修正、質問の複数項目に分割された保護文字列の照合、7秒の内部制限も維持しています。研究用public alphaであり、完成したDLP製品ではありません。
 
 研究用の固定実通信試験は配布ZIP・wheel・sdistから除外しています。Git経由の更新では開発用ファイルもコピーされますが、通常の監視処理からは読み込まず、自動起動しません。
 
 Codex Pluginとしての導入、Hook配送確認、実行前停止、更新・削除はalpha.12で一区切りです。現在の開発テーマは、ToolUseProxy本体の検出精度です。実projectでfalse blockと見逃し候補を集め、sink payloadの解決、外部性判定、semantic、lineageのどこを改善すべきかを測ります。
 
-> **以前の版から更新する場合:** `alpha.17`へ更新し、Codexを完全に終了して起動し直した後、新しいタスクで動作を確認してください。Hook定義が変更された場合は5 Hookを改めて確認します。`alpha.12`以前には、Pluginを利用しないprojectにも初期化案内が出る旧問題もあります。
+> **以前の版から更新する場合:** `alpha.18`へ更新し、Codexを完全に終了して起動し直した後、新しいタスクで動作を確認してください。Hook定義が変更された場合は5 Hookを改めて確認します。`alpha.12`以前には、Pluginを利用しないprojectにも初期化案内が出る旧問題もあります。
 
 - [5分クイックスタート](QUICKSTART.md)
 - [詳しいPlugin導入ガイド](docs/設定/Plugin導入.md)
@@ -34,6 +34,7 @@ ToolUseProxyは、次の3段階で外部流出を調べます。
 現在利用できる主な機能は次のとおりです。
 
 - `.env`、JSON、Markdownなどを、利用者の明示承認後だけ保護対象へ登録する
+- 登録済みの保護対象を1件だけ解除し、元ファイルとほかの設定は残す
 - protected sourceと送信payloadをexact、substring、token、shingleで比較する
 - file read / writeやtool I/Oから、保護情報の到達経路を補助的に推定する
 - Hookから見える全ローカルToolを`PreToolUse`で確認し、保護情報が外部へ渡る可能性がある入力を実行前に止める
@@ -76,6 +77,8 @@ Codexに表示されるsourceが`Plugin - tooluseproxy@tooluseproxy`で、`Sessi
 > 守った方がよいファイルを探して
 
 これも固定フレーズではありません。最大10件の候補について「どのファイルの何を守るか」「何を止められるか」「元ファイルを変更しないこと」を番号付きでまとめて説明します。「全部守る」「1と3は守る、2は見送る」のように一度に判断でき、ToolUseProxyが未判断の候補を無断で登録することはありません。
+
+登録済みの1件だけを外したい場合は、たとえば「README.mdを保護対象から外して」と依頼できます。変更前に対象と残る登録を確認し、了承後に登録だけを外します。README.md本体、ほかの保護対象、ToolUseProxyの設定は削除しません。
 
 安全な試し方、更新、削除、data保持は[5分クイックスタート](QUICKSTART.md)にまとめています。
 
@@ -120,7 +123,7 @@ adapterにない未知のcallは、raw commandやpathなどを含まない構造
 | Codex対応 | alpha.12で完了 | Plugin導入、workspace setup、protected source登録、現在のHook配送確認、実行前deny、update / rollback / removeを実証済み |
 | Trace / Detect | 中核実装済み・精度改善中 | tool I/O、file operation、内容対応から観測可能なprovenanceを再構成。実project pilotでfalse blockと見逃し候補を測定 |
 | Stop | 対応範囲内で実証済み | Hookから見えるローカルtoolを実行前判定し、protected flowの既知external / unknownをdeny。Stop再確認も提供 |
-| Plugin配布 | alpha.17 | 未設定projectの無影響確認、判定時間切れ時の実行前停止、current-invocation照合、lifecycle、artifact、full testのrelease gateを通過したcommitだけを`public-alpha`へ配信 |
+| Plugin配布 | alpha.18 | 未設定projectの無影響確認、判定時間切れ時の実行前停止、current-invocation照合、lifecycle、artifact、full testのrelease gateを通過したcommitだけを`public-alpha`へ配信 |
 | 外部性判定 | local保護は通常setupで有効 | adapter、bounded static analysis、未確認external payloadのfail-closed、Codex-only background judge、人間review済みrule。LLM providerは既定off |
 | 実network観測 | 評価専用 | Codex network proxyのOTLP eventは実行後かつtool単位join不能のため、production blockには不採用 |
 | hosted tool境界 | 緩和のみ | SessionStart / SubagentStartでprotected contentをhosted toolへ渡さないdeveloper contextを注入。Hook非可視のため技術的遮断ではない |

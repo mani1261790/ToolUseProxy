@@ -44,6 +44,8 @@ MANIFEST_MIGRATION_WRITER_VERSION = "protected-source-manifest-migration-v1"
 MANIFEST_MIGRATION_FORMATTING_POLICY = "utf8_2_space_lf"
 MANIFEST_RECONCILIATION_KIND = "protected_sources_unavailable_reconciliation"
 MANIFEST_RECONCILIATION_WRITER_VERSION = "protected-source-reconciliation-v1"
+MANIFEST_REMOVAL_KIND = "protected_source_registration_removal"
+MANIFEST_REMOVAL_WRITER_VERSION = "protected-source-removal-v1"
 MANIFEST_BACKUP_DIRECTORY = "manifest-backups"
 PROTECTED_SOURCE_SCANNER_VERSION = "protected-source-scan-v1"
 
@@ -355,6 +357,9 @@ _ERROR_MESSAGES = {
     "manifest_reconciliation_not_required": "all registered protected sources are available",
     "manifest_reconciliation_revision_invalid": "manifest reconciliation revision does not match the reviewed plan",
     "manifest_reconciliation_conflict": "protected_sources.json changed after the reconciliation plan was created",
+    "manifest_removal_source_missing": "the selected protected source is not registered",
+    "manifest_removal_revision_invalid": "manifest removal revision does not match the reviewed plan",
+    "manifest_removal_conflict": "protected_sources.json changed after the removal plan was created",
     "scan_limits_invalid": "protected source scan limits are invalid",
 }
 
@@ -792,6 +797,69 @@ class ProtectedSourceReconciliationResult:
             "reconciliation_kind": MANIFEST_RECONCILIATION_KIND,
             "reconciliation_id": self.reconciliation_id,
             "removed_source_count": self.removed_source_count,
+            "remaining_source_count": self.remaining_source_count,
+            "manifest_sha256": self.manifest_sha256,
+            "backup_relative_path": self.backup_relative_path,
+            "source_file_changes": 0,
+        }
+
+
+@dataclass(frozen=True)
+class ProtectedSourceRemovalPlan:
+    removal_id: str
+    removal_revision: str
+    source_id: str
+    relative_path: str
+    source_count: int
+    remaining_source_count: int
+    manifest_sha256: str
+    result_manifest_sha256: str
+    backup_relative_path: str
+    encoded_manifest: bytes | None = field(default=None, repr=False, compare=False)
+
+    def to_public_payload(self) -> dict[str, object]:
+        return {
+            "schema_version": REGISTRATION_SCHEMA_VERSION,
+            "status": "review_required",
+            "removal_kind": MANIFEST_REMOVAL_KIND,
+            "removal_id": self.removal_id,
+            "removal_revision": self.removal_revision,
+            "source_id": self.source_id,
+            "path": self.relative_path,
+            "source_count": self.source_count,
+            "remaining_source_count": self.remaining_source_count,
+            "manifest_sha256": self.manifest_sha256,
+            "result_manifest_sha256": self.result_manifest_sha256,
+            "backup_relative_path": self.backup_relative_path,
+            "source_file_changes": 0,
+            "review_required": True,
+            "changes": [
+                "remove_selected_registration",
+                "preserve_other_registrations",
+                "leave_source_files_unchanged",
+                "create_private_exact_byte_backup",
+            ],
+        }
+
+
+@dataclass(frozen=True)
+class ProtectedSourceRemovalResult:
+    status: Literal["removed", "already_removed"]
+    removal_id: str
+    source_id: str
+    relative_path: str
+    remaining_source_count: int
+    manifest_sha256: str
+    backup_relative_path: str
+
+    def to_public_payload(self) -> dict[str, object]:
+        return {
+            "schema_version": REGISTRATION_SCHEMA_VERSION,
+            "status": self.status,
+            "removal_kind": MANIFEST_REMOVAL_KIND,
+            "removal_id": self.removal_id,
+            "source_id": self.source_id,
+            "path": self.relative_path,
             "remaining_source_count": self.remaining_source_count,
             "manifest_sha256": self.manifest_sha256,
             "backup_relative_path": self.backup_relative_path,
@@ -1281,6 +1349,147 @@ def apply_unavailable_source_reconciliation(
             status="already_reconciled",
             reconciliation_id=original_plan.reconciliation_id,
             removed_source_count=len(original_plan.unavailable_sources),
+            remaining_source_count=original_plan.remaining_source_count,
+            manifest_sha256=manifest_binding.sha256,
+            backup_relative_path=backup_relative_path,
+        )
+
+
+def plan_protected_source_removal(
+    workspace_root: Path,
+    *,
+    workspace_id: str,
+    relative_path: str,
+    backup_root: Path,
+) -> ProtectedSourceRemovalPlan:
+    """Plan removal of exactly one registered source without reading its content."""
+
+    _validate_migration_workspace_id(workspace_id)
+    _validate_private_backup_root(backup_root)
+    normalized_path = _normalize_relative_path(relative_path)
+    with lock_protected_source_workspace(workspace_root) as workspace_lock:
+        root_fd, root_path, root_stat = _require_workspace_lock(
+            workspace_root,
+            workspace_lock,
+        )
+        manifest_text, manifest_binding = _read_manifest_text(
+            root_fd,
+            root_stat.st_dev,
+        )
+        plan = _build_protected_source_removal_plan(
+            root_path,
+            workspace_id=workspace_id,
+            relative_path=normalized_path,
+            manifest_text=manifest_text,
+            manifest_binding=manifest_binding,
+        )
+        _verify_workspace_path(root_path, root_stat)
+        _, confirmed_binding = _read_manifest_text(root_fd, root_stat.st_dev)
+        if confirmed_binding != manifest_binding:
+            _raise("manifest_removal_conflict")
+        return replace(plan, encoded_manifest=None)
+
+
+def apply_protected_source_removal(
+    workspace_root: Path,
+    *,
+    workspace_id: str,
+    relative_path: str,
+    removal_revision: str,
+    expected_manifest_sha256: str,
+    backup_root: Path,
+) -> ProtectedSourceRemovalResult:
+    """Apply or recover one exactly reviewed protected-source removal."""
+
+    _validate_migration_workspace_id(workspace_id)
+    _validate_removal_revision(removal_revision)
+    if (
+        not isinstance(expected_manifest_sha256, str)
+        or _HEX_SHA256.fullmatch(expected_manifest_sha256) is None
+    ):
+        _raise("manifest_removal_conflict")
+    _validate_private_backup_root(backup_root)
+    normalized_path = _normalize_relative_path(relative_path)
+    with lock_protected_source_workspace(workspace_root) as workspace_lock:
+        root_fd, root_path, root_stat = _require_workspace_lock(
+            workspace_root,
+            workspace_lock,
+        )
+        manifest_text, manifest_binding = _read_manifest_text(
+            root_fd,
+            root_stat.st_dev,
+        )
+        backup_relative_path = _removal_backup_relative_path(
+            workspace_id,
+            expected_manifest_sha256,
+        )
+        if hmac.compare_digest(manifest_binding.sha256, expected_manifest_sha256):
+            plan = _build_protected_source_removal_plan(
+                root_path,
+                workspace_id=workspace_id,
+                relative_path=normalized_path,
+                manifest_text=manifest_text,
+                manifest_binding=manifest_binding,
+            )
+            _verify_reviewed_removal(plan, removal_revision)
+            assert plan.encoded_manifest is not None
+            _ensure_manifest_backup(
+                backup_root,
+                plan.backup_relative_path,
+                manifest_text.encode("utf-8"),
+            )
+            installed_sha256 = _install_migrated_manifest(
+                root_fd,
+                root_path,
+                root_stat,
+                workspace_id=workspace_id,
+                initial_binding=manifest_binding,
+                encoded=plan.encoded_manifest,
+            )
+            return ProtectedSourceRemovalResult(
+                status="removed",
+                removal_id=plan.removal_id,
+                source_id=plan.source_id,
+                relative_path=plan.relative_path,
+                remaining_source_count=plan.remaining_source_count,
+                manifest_sha256=installed_sha256,
+                backup_relative_path=plan.backup_relative_path,
+            )
+
+        try:
+            backup_text, backup_binding = _read_manifest_backup(
+                backup_root,
+                backup_relative_path,
+                missing_code="manifest_backup_missing",
+            )
+        except ProtectedSourceRegistrationError as exc:
+            if exc.code == "manifest_backup_missing":
+                _raise("manifest_removal_conflict")
+            raise
+        if not hmac.compare_digest(backup_binding.sha256, expected_manifest_sha256):
+            _raise("manifest_backup_conflict")
+        original_plan = _build_protected_source_removal_plan(
+            root_path,
+            workspace_id=workspace_id,
+            relative_path=normalized_path,
+            manifest_text=backup_text,
+            manifest_binding=backup_binding,
+        )
+        _verify_reviewed_removal(original_plan, removal_revision)
+        if not hmac.compare_digest(
+            manifest_binding.sha256,
+            original_plan.result_manifest_sha256,
+        ):
+            _raise("manifest_removal_conflict")
+        try:
+            os.fsync(root_fd)
+        except OSError:
+            _raise("manifest_durability_unknown")
+        return ProtectedSourceRemovalResult(
+            status="already_removed",
+            removal_id=original_plan.removal_id,
+            source_id=original_plan.source_id,
+            relative_path=original_plan.relative_path,
             remaining_source_count=original_plan.remaining_source_count,
             manifest_sha256=manifest_binding.sha256,
             backup_relative_path=backup_relative_path,
@@ -3354,6 +3563,127 @@ def _verify_reviewed_reconciliation(
         _raise("manifest_reconciliation_revision_invalid")
 
 
+def _build_protected_source_removal_plan(
+    root_path: Path,
+    *,
+    workspace_id: str,
+    relative_path: str,
+    manifest_text: str,
+    manifest_binding: FileBinding,
+) -> ProtectedSourceRemovalPlan:
+    manifest, schema_version, _ = _parse_manifest_for_migration(
+        manifest_text,
+        root_path,
+        validate_source_paths=False,
+    )
+    if schema_version != CURRENT_MANIFEST_SCHEMA_VERSION:
+        _raise("manifest_schema_legacy")
+    raw_sources = manifest.get("sources")
+    assert isinstance(raw_sources, list)
+    selected: dict[str, object] | None = None
+    remaining: list[object] = []
+    for raw_source in raw_sources:
+        assert isinstance(raw_source, dict)
+        source_path = raw_source.get("path")
+        assert isinstance(source_path, str)
+        normalized_source_path = _normalized_reconciliation_path(root_path, source_path)
+        if normalized_source_path == relative_path:
+            if selected is not None:
+                _raise("manifest_duplicate_path")
+            selected = raw_source
+        else:
+            remaining.append(raw_source)
+    if selected is None:
+        _raise("manifest_removal_source_missing")
+    source_id = selected.get("id")
+    assert isinstance(source_id, str) and source_id.strip()
+    updated = dict(manifest)
+    updated["sources"] = remaining
+    encoded = _encode_manifest(updated)
+    _parse_manifest_for_migration(
+        encoded.decode("utf-8"),
+        root_path,
+        validate_source_paths=False,
+    )
+    result_manifest_sha256 = hashlib.sha256(encoded).hexdigest()
+    backup_relative_path = _removal_backup_relative_path(
+        workspace_id,
+        manifest_binding.sha256,
+    )
+    removal_id, removal_revision = _removal_commitment(
+        workspace_id=workspace_id,
+        source_id=source_id,
+        relative_path=relative_path,
+        manifest_sha256=manifest_binding.sha256,
+        result_manifest_sha256=result_manifest_sha256,
+        backup_relative_path=backup_relative_path,
+    )
+    return ProtectedSourceRemovalPlan(
+        removal_id=removal_id,
+        removal_revision=removal_revision,
+        source_id=source_id,
+        relative_path=relative_path,
+        source_count=len(raw_sources),
+        remaining_source_count=len(remaining),
+        manifest_sha256=manifest_binding.sha256,
+        result_manifest_sha256=result_manifest_sha256,
+        backup_relative_path=backup_relative_path,
+        encoded_manifest=encoded,
+    )
+
+
+def _removal_backup_relative_path(workspace_id: str, manifest_sha256: str) -> str:
+    namespace = hashlib.sha256(
+        (MANIFEST_REMOVAL_WRITER_VERSION + "\0" + workspace_id).encode("utf-8")
+    ).hexdigest()
+    return (
+        f"{MANIFEST_BACKUP_DIRECTORY}/{namespace}/"
+        f"protected_sources.removal.{manifest_sha256}.json"
+    )
+
+
+def _removal_commitment(
+    *,
+    workspace_id: str,
+    source_id: str,
+    relative_path: str,
+    manifest_sha256: str,
+    result_manifest_sha256: str,
+    backup_relative_path: str,
+) -> tuple[str, str]:
+    digest = hashlib.sha256(
+        _canonical_json_bytes(
+            {
+                "operation": MANIFEST_REMOVAL_KIND,
+                "writer_version": MANIFEST_REMOVAL_WRITER_VERSION,
+                "workspace_id": workspace_id,
+                "source_id": source_id,
+                "path": relative_path,
+                "manifest_sha256": manifest_sha256,
+                "result_manifest_sha256": result_manifest_sha256,
+                "backup_relative_path": backup_relative_path,
+            }
+        )
+    ).hexdigest()
+    return digest[:32], f"d1_{digest}"
+
+
+def _validate_removal_revision(revision: str) -> None:
+    if (
+        not isinstance(revision, str)
+        or re.fullmatch(r"d1_[0-9a-f]{64}", revision) is None
+    ):
+        _raise("manifest_removal_revision_invalid")
+
+
+def _verify_reviewed_removal(
+    plan: ProtectedSourceRemovalPlan,
+    revision: str,
+) -> None:
+    if not hmac.compare_digest(plan.removal_revision, revision):
+        _raise("manifest_removal_revision_invalid")
+
+
 def _encode_migrated_manifest(
     manifest: Mapping[str, object],
     *,
@@ -3907,7 +4237,7 @@ def _open_private_backup_namespace(
         or re.fullmatch(
             (
                 r"protected_sources\."
-                r"(?:schema-v1|reconciliation)\."
+                r"(?:schema-v1|reconciliation|removal)\."
                 r"[0-9a-f]{64}\.json"
             ),
             parts[2],

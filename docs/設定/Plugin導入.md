@@ -275,6 +275,32 @@ sh "<PLUGIN_ROOT>/hooks/run_cli.sh" protect review \
 
 一括reviewはworkspace lockを取得し、全candidate revision、各sourceのidentity・内容・selector解決、共有manifest hashを変更前に再検証します。1件でもstale、重複、未知、または不正なら全transactionをrollbackし、一部だけ反映しません。承認対象を`proposed`から`approving`へ予約した後、manifestはbatch全体に対して1回だけatomic replaceし、reject / ignoreを含む全判断を同じtransactionで確定します。途中停止やdurability不明では、同じdecision集合、revision、manifest SHA-256をそのまま再実行します。sourceまたはmanifestが提案後に変わっていれば登録せず、batch全体を再scanまたは再提案します。`reject` / `ignore`は同じ内容・検出versionの再提示を抑止します。CLIは任意entryをreview時に受け取らないため、agentが提案JSONを書き換えて登録することはできません。workspace lockが直列化するのはToolUseProxyの協調writer同士であり、同一UIDの非協調editorとの完全なfilesystem CASは保証外です。review成功後は、元のscan結果が`remaining_candidate_count > 0`または`scan_complete: false`の場合だけ新しい`protect scan`へ進み、それ以外は完了です。`continuation_required`だけを再scan判断に使いません。明示pathの`suggest`は指定されたbatchのreview成功で完了し、別のpathも守る場合だけ新しいsuggestを行います。登録workflowは現在POSIX（macOS/Linux）のみ対応し、Windowsでは`protect scan / suggest / review / approve / reject / ignore`を未対応とします。1件用commandは互換fallbackであり、通常UXでは一括reviewを使います。
 
+### 保護対象を1件だけ解除する
+
+登録済みのファイルを守る対象から外すときは、保護リストを直接編集したり、全設定を削除したりしません。まず対象の相対pathを指定して変更内容を確認します。この確認では何も変更しません。
+
+```bash
+sh "<PLUGIN_ROOT>/hooks/run_cli.sh" protect remove plan \
+  --path README.md \
+  --workspace "$PWD" \
+  --data-dir "<PLUGIN_DATA>" \
+  --json
+```
+
+表示されたpath、残る登録数、`source_file_changes: 0`を確認し、利用者がその1件の解除を明示した後だけ、出力された値を変更せず適用します。
+
+```bash
+sh "<PLUGIN_ROOT>/hooks/run_cli.sh" protect remove apply \
+  --path README.md \
+  --removal-revision <REMOVAL_REVISION> \
+  --expected-manifest-sha256 <MANIFEST_SHA256> \
+  --workspace "$PWD" \
+  --data-dir "<PLUGIN_DATA>" \
+  --json
+```
+
+適用は選んだ登録だけを外し、元ファイル、ほかの登録、保護リストの未知の項目を残します。更新前の保護リストは専用保存領域へ非公開で保存します。確認後に保護リストが変わった場合や、別のpath・改変した確認番号を渡した場合は変更しません。元ファイルが既に見つからない場合でも、この正規の解除命令はToolUseProxy自身に止められません。任意の追加shell命令、別project、別の実行ファイル、外部通信を伴うToolUseProxy操作は、この自己操作の扱いには含めません。
+
 workspace探索は明示的なoffline `protect scan`に限定し、`init`やHook中では実行しません。候補ごとの明示判断をまとめて反映できますが、無承認の自動登録やscanの上限引き上げoptionはありません。legacy manifestはruntime読み取り互換を維持しますが、scanはsource fileを読む前に値のない`manifest_schema_legacy`で終了します。coding agentは`protect migrate plan`を提示せずに独断でv2へ変更しません。
 
 ## package CLIの開発install

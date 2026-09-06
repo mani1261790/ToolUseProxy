@@ -1,6 +1,6 @@
 # サポート範囲と既知の制限
 
-ToolUseProxy `0.1.0-alpha.17`は研究用public alphaです。未設定projectでは案内・記録・停止を行わず、明示設定済みprojectだけでHookを動かします。固定の公開Issue読み取り、既知の質問表示、固定のGit接続先一覧の不要な停止を減らし、判定が7秒以内に完了しない場合もCodex側の制限時間より先に安全な停止を返します。本番環境向けのSLA、security certification、完全なDLP、全toolの遮断保証は提供しません。
+ToolUseProxy `0.1.0-alpha.18`は研究用public alphaです。未設定projectでは案内・記録・停止を行わず、明示設定済みprojectだけでHookを動かします。固定の公開Issue読み取り、既知の質問表示、固定のGit接続先一覧の不要な停止を減らし、判定が7秒以内に完了しない場合もCodex側の制限時間より先に安全な停止を返します。本番環境向けのSLA、security certification、完全なDLP、全toolの遮断保証は提供しません。
 
 ## 実行環境
 
@@ -15,7 +15,7 @@ ToolUseProxy `0.1.0-alpha.17`は研究用public alphaです。未設定project�
 
 macOS Python 3.12はGitHub CI run `29672165132`でartifact build、nested venv、wheel install、CLI / relocated Plugin smokeを検証しました。localのuv-managed Python 3.12では`venv`内`ensurepip`が`SIGABRT`する環境事例があり、ToolUseProxy codeより前のPython配布環境問題として区別します。
 
-Windowsでは既存manifestのruntime読み取りとlauncherを将来互換のため維持しますが、`protect scan / suggest / review / approve / reject / ignore`とmanifest migration applyはalphaでは未対応です。成功したように見せず、CLIの明示エラーとして扱います。
+Windowsでは既存manifestのruntime読み取りとlauncherを将来互換のため維持しますが、`protect scan / suggest / review / approve / reject / ignore / remove`とmanifest migration applyはalphaでは未対応です。成功したように見せず、CLIの明示エラーとして扱います。
 
 POSIX launcherもpackage metadataと同じPython 3.11 / 3.12だけを選びます。`TOOLUSEPROXY_PYTHON`や`python3`が3.13以降または3.10以前を指す場合は実行せず、別の対応runtimeを探した後にPreToolUseを安全停止します。PostToolUse / Stopは診断だけを返します。
 
@@ -48,6 +48,7 @@ Codex Plugin APIやHook payloadはToolUseProxyとは別に変更され得ます�
 | `init / doctor / status / trace` | alpha対応 | migrationは通常Hook内では行わない |
 | protected source候補scan | POSIX対応 | bounded offline scan。上限到達時は完全探索と主張しない |
 | candidate batch review | POSIX対応 | 最大10件のvalue-free proposalをまとめて提示し、候補ごとの明示判断を一度に反映。1件用commandも互換維持 |
+| protected source個別解除 | POSIX対応 | 相対pathを指定した確認と適用の2段階。元ファイル、ほかの登録、設定を残し、更新前リストを非公開backupへ保存 |
 | Hook-visible local toolのPreToolUse deny | 通常setupで有効 | 既知adapterを精密判定し、外部payloadを安全に確認できない場合は保護sourceがあるworkspaceで保守的にdeny。package既定値自体はoff |
 | current-invocation health | alpha.12対応 | 毎回新しいopaque tokenでverification command自身のPreToolUse、解析run、Plugin版、Hook定義hashを同じsessionへ照合。設定だけなら`configured_unverified`、このcommandへの配送確認済みなら`active` |
 | Stop final-answer review | alpha対応 | critical findingを`continue_review`で差し戻す |

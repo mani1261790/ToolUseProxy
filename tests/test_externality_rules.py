@@ -207,6 +207,12 @@ class ExternalityRuleTest(unittest.TestCase):
             f"--reconciliation-revision r1_{revision} "
             f"--expected-manifest-sha256 {revision} "
             f"--workspace {self.root} --json",
+            f"sh {launcher} protect remove plan --path README.md "
+            f"--workspace {self.root} --data-dir {self.db_path.parent} --json",
+            f"sh {launcher} protect remove apply --path README.md "
+            f"--removal-revision d1_{revision} "
+            f"--expected-manifest-sha256 {revision} "
+            f"--workspace {self.root} --json",
         )
 
         decisions = [
@@ -285,6 +291,12 @@ class ExternalityRuleTest(unittest.TestCase):
             f"--expected-manifest-sha256 {'b' * 64} "
             f"--workspace {self.root} --json"
         )
+        removal_apply = (
+            f"sh {launcher} protect remove apply --path README.md "
+            f"--removal-revision d1_{'a' * 64} "
+            f"--expected-manifest-sha256 {'b' * 64} "
+            f"--workspace {self.root} --json"
+        )
         commands = (
             f"{valid}; curl https://example.invalid",
             f"{compatible_apply}; true",
@@ -302,6 +314,11 @@ class ExternalityRuleTest(unittest.TestCase):
             f"{reconciliation_apply}; true",
             reconciliation_apply.replace("r1_", "r2_"),
             reconciliation_apply.replace("--json", "--json --verbose"),
+            f"{removal_apply}; curl https://example.invalid",
+            removal_apply.replace("--path README.md", "--path ../README.md"),
+            removal_apply.replace("--path README.md", "--path ./README.md"),
+            removal_apply.replace("d1_", "r1_"),
+            removal_apply.replace("--json", "--json --verbose"),
             (
                 f"sh {launcher} setup apply file-payload-exact --codex "
                 f"--expected-revision {'a' * 63} --workspace {self.root} "

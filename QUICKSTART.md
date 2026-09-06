@@ -1,6 +1,6 @@
 # ToolUseProxy 5分クイックスタート
 
-この手順では、検証済みの公開alphaを保護branch `public-alpha`からインストールします。開発中の変更を含む`main`は、通常利用のインストール元にしないでください。この版は`0.1.0-alpha.17`です。
+この手順では、検証済みの公開alphaを保護branch `public-alpha`からインストールします。開発中の変更を含む`main`は、通常利用のインストール元にしないでください。この版は`0.1.0-alpha.18`です。
 
 ## 1. 必要なもの
 
@@ -26,12 +26,12 @@ MarketplaceとPluginのインストールは、Codex環境ごとに1回だけで
 特定versionへ固定する場合は、1つ目のコマンドで`public-alpha`の代わりにimmutable tagを指定します。
 
 ```bash
-codex plugin marketplace add mani1261790/ToolUseProxy --ref v0.1.0-alpha.17
+codex plugin marketplace add mani1261790/ToolUseProxy --ref v0.1.0-alpha.18
 ```
 
 ## 3. 5つのHookを確認してTrustする
 
-以前の版を使っていた場合は、先に`codex plugin marketplace upgrade tooluseproxy`を実行し、`codex plugin list --json`で`0.1.0-alpha.17`になったことを確認してください。更新後はCodexを完全に終了して起動し直し、新しいタスクを始めます。画面上の版表示だけでは、実行中タスクが新しいHookを読み込んだ証拠になりません。
+以前の版を使っていた場合は、先に`codex plugin marketplace upgrade tooluseproxy`を実行し、`codex plugin list --json`で`0.1.0-alpha.18`になったことを確認してください。更新後はCodexを完全に終了して起動し直し、新しいタスクを始めます。画面上の版表示だけでは、実行中タスクが新しいHookを読み込んだ証拠になりません。
 
 Codexが表示するHookを、次の条件と照合してください。
 
@@ -87,6 +87,8 @@ ToolUseProxyが必要な初期設定と安全確認を案内します。操作�
 - 選択肢：「守る」「今回は見送る」「今後は候補に出さない」
 
 候補の値、file preview、source hash、ユーザーのabsolute pathは表示しません。「全部守る」「1と3は守る、2は見送る」のように自然な言葉でまとめて回答できます。判断が曖昧な候補があれば、その番号だけを確認してから一括反映します。初期設定や候補探しだけでは保護対象に登録されません。
+
+登録済みのファイルを1件だけ外す場合は「README.mdを保護対象から外して」のように依頼します。ToolUseProxyは対象、残る登録数、元ファイルを変更しないことを先に示します。了承後にその登録だけを外し、全設定の削除や保護リストの直接編集は行いません。
 
 既にpathが分かっているMarkdownなどの文書は、例えば「研究計画と研究方針のMarkdownを全文守りたい」のように依頼できます。ToolUseProxyは本文を表示せず、最大10件の対象pathと「全文を守る」ことをまとめて示します。明示的に「守る」と判断したファイルだけを、一度の操作で登録します。
 
