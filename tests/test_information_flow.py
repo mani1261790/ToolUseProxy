@@ -8959,6 +8959,115 @@ class InformationFlowTest(unittest.TestCase):
             )
         )
 
+    def test_exact_profile_allows_literal_read_only_github_issue_view(self) -> None:
+        workspace = self._write_runtime_source_config()
+        event = self._record(
+            "pre_tool_use",
+            "github-issue-view-public",
+            "Bash",
+            tool_input={
+                "command": "gh issue view 26 --json number,state,title,updatedAt"
+            },
+            cwd=str(workspace),
+        )
+
+        output = evaluate_pre_tool_hook_policy(
+            self.store,
+            workspace,
+            current_event=event,
+            sink_payload_exact_enforcement_enabled=True,
+            externality_decision=ExternalityHookDecision("a" * 64, "queued"),
+        )
+
+        self.assertEqual({}, output)
+        self.assertEqual([], self.store.list_policy_decisions())
+        assert event.workspace_id is not None
+        sinks = self.store.list_sink_candidates_for_session(
+            "session-1", workspace_id=event.workspace_id
+        )
+        github_sinks = [
+            sink
+            for sink in sinks
+            if sink.metadata.get("basis") == "unknown_pending"
+        ]
+        self.assertEqual(1, len(github_sinks))
+        self.assertEqual(0, github_sinks[0].metadata.get("segment_index"))
+
+    def test_exact_profile_keeps_dynamic_github_issue_view_fail_closed(self) -> None:
+        workspace = self._write_runtime_source_config()
+        event = self._record(
+            "pre_tool_use",
+            "github-issue-view-dynamic",
+            "Bash",
+            tool_input={"command": 'gh issue view "$ISSUE" --json number'},
+            cwd=str(workspace),
+        )
+
+        output = evaluate_pre_tool_hook_policy(
+            self.store,
+            workspace,
+            current_event=event,
+            sink_payload_exact_enforcement_enabled=True,
+            externality_decision=ExternalityHookDecision("b" * 64, "queued"),
+        )
+
+        self.assertEqual(
+            "deny", output["hookSpecificOutput"]["permissionDecision"]
+        )
+        self.assertIn(
+            "送信内容を安全に確認しきれなかった",
+            output["hookSpecificOutput"]["permissionDecisionReason"],
+        )
+        self.assertNotIn(SECRET, json.dumps(output))
+
+    def test_exact_profile_keeps_github_issue_mutation_fail_closed(self) -> None:
+        workspace = self._write_runtime_source_config()
+        event = self._record(
+            "pre_tool_use",
+            "github-issue-edit",
+            "Bash",
+            tool_input={"command": "gh issue edit 26 --title public"},
+            cwd=str(workspace),
+        )
+
+        output = evaluate_pre_tool_hook_policy(
+            self.store,
+            workspace,
+            current_event=event,
+            sink_payload_exact_enforcement_enabled=True,
+            externality_decision=ExternalityHookDecision("c" * 64, "queued"),
+        )
+
+        self.assertEqual(
+            "deny", output["hookSpecificOutput"]["permissionDecision"]
+        )
+        self.assertNotIn(SECRET, json.dumps(output))
+
+    def test_exact_profile_keeps_externality_analysis_failure_fail_closed(self) -> None:
+        workspace = self._write_runtime_source_config()
+        event = self._record(
+            "pre_tool_use",
+            "github-issue-view-analysis-failed",
+            "Bash",
+            tool_input={"command": "gh issue view 26 --json number"},
+            cwd=str(workspace),
+        )
+
+        output = evaluate_pre_tool_hook_policy(
+            self.store,
+            workspace,
+            current_event=event,
+            sink_payload_exact_enforcement_enabled=True,
+            externality_decision=ExternalityHookDecision(
+                "d" * 64, "analysis_failed"
+            ),
+        )
+
+        self.assertEqual(
+            "deny", output["hookSpecificOutput"]["permissionDecision"]
+        )
+        self.assertNotIn(SECRET, json.dumps(output))
+
     def test_static_externality_blocks_protected_flow_without_adapter_match(
         self,
     ) -> None:
