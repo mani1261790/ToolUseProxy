@@ -10,7 +10,7 @@ from hook_monitor.analysis.mcp_payload_evidence import (
 from hook_monitor.runtime.models import SourceChunk
 
 
-FUNCTION_PAYLOAD_CONTRACT_VERSION = "literal-question-payload-v1"
+FUNCTION_PAYLOAD_CONTRACT_VERSION = "literal-question-payload-v2-rendered"
 
 
 def verify_literal_function_payload(
@@ -31,12 +31,14 @@ def verify_literal_function_payload(
     questions = payload["questions"]
     if not isinstance(questions, list) or not 1 <= len(questions) <= 16:
         return unsupported
+    displayed: list[str] = []
     for question in questions:
         if (
             not isinstance(question, dict) or not {"title"} <= set(question) <= {"title", "options"}
             or not isinstance(question["title"], str) or not question["title"].strip()
         ):
             return unsupported
+        displayed.append(question["title"])
         if "options" in question:
             options = question["options"]
             if (
@@ -44,4 +46,13 @@ def verify_literal_function_payload(
                 or any(not isinstance(item, str) or not item.strip() for item in options)
             ):
                 return unsupported
-    return verify_mcp_payload_against_sources(payload, source_chunks)
+            displayed.extend(options)
+    # Keep every original key and scalar, and also compare the complete display
+    # in order. Per-scalar comparisons alone miss short fragments distributed
+    # across titles/options. These additional views are comparison-only: they
+    # never change the tool input and retain the same byte/field/time limits.
+    # Preserve duplicates and question order; a set or sorted view is unsafe.
+    comparison_payload = {
+        "questions": [*questions, "".join(displayed), "\n".join(displayed)],
+    }
+    return verify_mcp_payload_against_sources(comparison_payload, source_chunks)

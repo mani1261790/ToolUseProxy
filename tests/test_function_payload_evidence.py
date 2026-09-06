@@ -1,4 +1,6 @@
+import copy
 import hashlib
+from dataclasses import replace
 
 import pytest
 
@@ -52,3 +54,24 @@ def test_unknown_tools_not_allowed_even_with_question_shaped_input(tool):
 ])
 def test_every_displayed_text_compared(question):
     assert verify_literal_function_payload("request_user_input_async", {"questions": [question]}, (CHUNK,)).status == "matched"
+
+
+@pytest.mark.parametrize("secret,questions", [
+    ("SYNTHETIC", [{"title": "SYN", "options": ["THE", "TIC"]}]),
+    ("SYNTHETIC", [{"title": "SYN"}, {"title": "THE", "options": ["TIC"]}]),
+    ("XYXYXY", [{"title": "XY", "options": ["XY", "XY"]}]),
+    ("ZZYYXX", [{"title": "ZZ", "options": ["YY", "XX"]}]),
+    ("SYN\nTHE\nTIC", [{"title": "SYN", "options": ["THE", "TIC"]}]),
+])
+def test_complete_display_is_checked_in_order_without_deduplication(secret, questions):
+    chunk = replace(CHUNK, text=secret, normalized_text=secret,
+                    text_hash=hashlib.sha256(secret.encode()).hexdigest())
+    payload = {"questions": questions}
+    before = copy.deepcopy(payload)
+    assert verify_literal_function_payload("request_user_input_async", payload, (chunk,)).status == "matched"
+    assert payload == before
+
+
+def test_combined_display_limits_fail_closed():
+    payload = {"questions": [{"title": "a" * 12000}]}
+    assert verify_literal_function_payload("request_user_input_async", payload, (CHUNK,)).status == "unsupported"
