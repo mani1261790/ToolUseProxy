@@ -33,7 +33,7 @@
             "type": "command",
             "command": "sh \"${PLUGIN_ROOT}/hooks/run_hook.sh\" pre-tool-use",
             "commandWindows": "\"%PLUGIN_ROOT%\\hooks\\run_hook.cmd\" pre-tool-use",
-            "timeout": 10
+            "timeout": 15
           }
         ]
       }

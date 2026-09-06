@@ -23,6 +23,7 @@ FIXED_FILES = (
     "hooks/run_hook.cmd",
     "hooks/run_hook.sh",
     "skills/tooluseproxy-setup/SKILL.md",
+    "tooluseproxy_hook_watchdog.py",
     "tooluseproxy_plugin.py",
 )
 MARKETPLACE_DOCUMENTATION_FILES = (

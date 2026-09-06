@@ -137,12 +137,12 @@ class RuntimePathsTest(unittest.TestCase):
             root = Path(temporary_directory)
             codex_home = root / "codex-home"
             plugin_root = (
-                codex_home / "plugins" / "cache" / "tooluseproxy" / "tooluseproxy" / "0.1.0-alpha.14"
+                codex_home / "plugins" / "cache" / "tooluseproxy" / "tooluseproxy" / "0.1.0-alpha.15"
             )
             manifest_dir = plugin_root / ".codex-plugin"
             manifest_dir.mkdir(parents=True)
             (manifest_dir / "plugin.json").write_text(
-                json.dumps({"name": "tooluseproxy", "version": "0.1.0-alpha.14"}),
+                json.dumps({"name": "tooluseproxy", "version": "0.1.0-alpha.15"}),
                 encoding="utf-8",
             )
 
@@ -949,7 +949,7 @@ class PluginBundleTest(unittest.TestCase):
             root = Path(temporary_directory)
             codex_home = root / "codex-home"
             plugin_root = (
-                codex_home / "plugins" / "cache" / "tooluseproxy" / "tooluseproxy" / "0.1.0-alpha.14"
+                codex_home / "plugins" / "cache" / "tooluseproxy" / "tooluseproxy" / "0.1.0-alpha.15"
             )
             plugin_root.mkdir(parents=True)
             for directory in (".codex-plugin", "hook_monitor", "hooks", "tooluseproxy"):
@@ -962,6 +962,10 @@ class PluginBundleTest(unittest.TestCase):
             shutil.copy2(
                 REPO_ROOT / "tooluseproxy_plugin.py",
                 plugin_root / "tooluseproxy_plugin.py",
+            )
+            shutil.copy2(
+                REPO_ROOT / "tooluseproxy_hook_watchdog.py",
+                plugin_root / "tooluseproxy_hook_watchdog.py",
             )
             workspace = root / "research-project"
             workspace.mkdir()
@@ -1081,6 +1085,10 @@ class PluginBundleTest(unittest.TestCase):
             shutil.copy2(
                 REPO_ROOT / "tooluseproxy_plugin.py",
                 plugin_root / "tooluseproxy_plugin.py",
+            )
+            shutil.copy2(
+                REPO_ROOT / "tooluseproxy_hook_watchdog.py",
+                plugin_root / "tooluseproxy_hook_watchdog.py",
             )
             workspace = root / "workspace with space"
             workspace.mkdir()

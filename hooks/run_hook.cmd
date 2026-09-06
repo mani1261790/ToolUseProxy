@@ -32,7 +32,7 @@ exit /b 0
 
 :run_python312
 set "hook_output=%TEMP%\tooluseproxy-hook-%RANDOM%-%RANDOM%.tmp"
-py -3.12 "%PLUGIN_ROOT%\tooluseproxy_plugin.py" hook "%phase%" --data-dir "%PLUGIN_DATA%" >"%hook_output%" 2>nul
+py -3.12 "%PLUGIN_ROOT%\tooluseproxy_hook_watchdog.py" "%phase%" --data-dir "%PLUGIN_DATA%" >"%hook_output%" 2>nul
 if errorlevel 1 goto runtime_start_failed
 type "%hook_output%"
 del /q "%hook_output%" >nul 2>nul
@@ -40,7 +40,7 @@ exit /b 0
 
 :run_python311
 set "hook_output=%TEMP%\tooluseproxy-hook-%RANDOM%-%RANDOM%.tmp"
-py -3.11 "%PLUGIN_ROOT%\tooluseproxy_plugin.py" hook "%phase%" --data-dir "%PLUGIN_DATA%" >"%hook_output%" 2>nul
+py -3.11 "%PLUGIN_ROOT%\tooluseproxy_hook_watchdog.py" "%phase%" --data-dir "%PLUGIN_DATA%" >"%hook_output%" 2>nul
 if errorlevel 1 goto runtime_start_failed
 type "%hook_output%"
 del /q "%hook_output%" >nul 2>nul

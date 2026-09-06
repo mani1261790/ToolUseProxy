@@ -4,11 +4,11 @@ ToolUseProxyは、AI coding agentがローカルの非公開情報を外部へ�
 
 たとえば、未公開コード、研究ノート、`.env`、設計方針などを`protected source`として登録します。ToolUseProxyはCodexのtool useをローカルで観測し、外部送信候補へ保護情報が到達していないかを確認します。
 
-本プロジェクトは[SecHack365](https://sechack365.nict.go.jp/)での研究・開発成果物です。現在の検証済みreleaseは`0.1.0-alpha.14`です。alpha.14では、alpha.13の未設定project無影響を維持しつつ、固定のIssue番号を使う単独の`gh issue view`を公開情報の読み取りとして確定し、不要な停止を減らします。変数、複数command、Issue更新、保護対象を含む引数、解析失敗は従来どおり安全側で停止します。研究用public alphaであり、完成したDLP製品ではありません。
+本プロジェクトは[SecHack365](https://sechack365.nict.go.jp/)での研究・開発成果物です。現在の検証済みreleaseは`0.1.0-alpha.15`です。alpha.15では、alpha.14の固定`gh issue view`判定を維持しつつ、PreToolUseの内部処理を7秒で打ち切って安全な停止を返す監視役を追加しました。また、実運用で大きくなったDBでも現在のsessionだけを索引から読むようにし、不要な全体走査を避けます。研究用public alphaであり、完成したDLP製品ではありません。
 
 Codex Pluginとしての導入、Hook配送確認、実行前停止、更新・削除はalpha.12で一区切りです。現在の開発テーマは、ToolUseProxy本体の検出精度です。実projectでfalse blockと見逃し候補を集め、sink payloadの解決、外部性判定、semantic、lineageのどこを改善すべきかを測ります。
 
-> **以前の版から更新する場合:** `alpha.13`以前からは`alpha.14`へ更新し、Codexを完全に終了して起動し直した後、5 Hookを改めて確認してください。`alpha.12`以前には、Pluginを利用しないprojectにも初期化案内が出る旧問題もあります。
+> **以前の版から更新する場合:** `alpha.14`以前からは`alpha.15`へ更新し、Codexを完全に終了して起動し直した後、5 Hookを改めて確認してください。`alpha.12`以前には、Pluginを利用しないprojectにも初期化案内が出る旧問題もあります。
 
 - [5分クイックスタート](QUICKSTART.md)
 - [詳しいPlugin導入ガイド](docs/設定/Plugin導入.md)
@@ -118,7 +118,7 @@ adapterにない未知のcallは、raw commandやpathなどを含まない構造
 | Codex対応 | alpha.12で完了 | Plugin導入、workspace setup、protected source登録、現在のHook配送確認、実行前deny、update / rollback / removeを実証済み |
 | Trace / Detect | 中核実装済み・精度改善中 | tool I/O、file operation、内容対応から観測可能なprovenanceを再構成。実project pilotでfalse blockと見逃し候補を測定 |
 | Stop | 対応範囲内で実証済み | Hookから見えるローカルtoolを実行前判定し、protected flowの既知external / unknownをdeny。Stop再確認も提供 |
-| Plugin配布 | alpha.14公開 | 未設定projectの無影響確認、current-invocation照合、lifecycle、artifact、full testのrelease gateを通過したcommitだけを`public-alpha`へ配信 |
+| Plugin配布 | alpha.15公開 | 未設定projectの無影響確認、判定時間切れ時の実行前停止、current-invocation照合、lifecycle、artifact、full testのrelease gateを通過したcommitだけを`public-alpha`へ配信 |
 | 外部性判定 | local保護は通常setupで有効 | adapter、bounded static analysis、未確認external payloadのfail-closed、Codex-only background judge、人間review済みrule。LLM providerは既定off |
 | 実network観測 | 評価専用 | Codex network proxyのOTLP eventは実行後かつtool単位join不能のため、production blockには不採用 |
 | hosted tool境界 | 緩和のみ | SessionStart / SubagentStartでprotected contentをhosted toolへ渡さないdeveloper contextを注入。Hook非可視のため技術的遮断ではない |
