@@ -1,6 +1,6 @@
 # サポート範囲と既知の制限
 
-ToolUseProxy `0.1.0-alpha.13`は現在の検証済みpublic alphaです。未設定projectでは案内・記録・停止を行わず、明示設定済みprojectだけでHookを動かします。設定済みprojectではalpha.12の現在task照合と安全側の停止を維持します。本番環境向けのSLA、security certification、完全なDLP、全toolの遮断保証は提供しません。
+ToolUseProxy `0.1.0-alpha.14`は現在の検証済みpublic alphaです。未設定projectでは案内・記録・停止を行わず、明示設定済みprojectだけでHookを動かします。設定済みprojectでは固定の公開Issue読み取りの不要な停止を減らし、判断不能な場合の安全側停止を維持します。本番環境向けのSLA、security certification、完全なDLP、全toolの遮断保証は提供しません。
 
 ## 実行環境
 
