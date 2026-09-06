@@ -9312,6 +9312,7 @@ class InformationFlowTest(unittest.TestCase):
         for index, payload in enumerate((
             {"questions": [{"title": SECRET}]},
             {"questions": [{"title": "Public question", "options": [SECRET]}]},
+            {"questions": [{"title": SECRET[:3], "options": [SECRET[i:i + 3] for i in range(3, len(SECRET), 3)]}]},
             {"questions": [{"title": "Public question"}], "command": "load_private_file()"},
             {"questions": [{"title": {"file": "private.py"}}]},
         )):
