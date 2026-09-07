@@ -379,6 +379,11 @@ _PROTECTED_SOURCE_CANDIDATE_REVIEW_SELECT_COLUMNS = """
     recorded_at
 """
 RUNTIME_REQUIRED_INDEXES = {
+    "idx_content_similarity_features_content": (
+        "content_similarity_features",
+        False,
+        ("text_hash", "profile_version", "feature"),
+    ),
     "idx_content_similarity_features_lookup": (
         "content_similarity_features",
         False,
@@ -388,6 +393,11 @@ RUNTIME_REQUIRED_INDEXES = {
         "artifact_fragments",
         False,
         ("text_hash",),
+    ),
+    "idx_fragment_exact_fragment": (
+        "fragment_exact_index",
+        False,
+        ("fragment_id",),
     ),
     "idx_events_workspace_session_sequence": (
         "events",
@@ -1500,12 +1510,28 @@ class EventStore:
             )
             conn.execute(
                 """
+                CREATE INDEX IF NOT EXISTS idx_content_similarity_features_content
+                ON content_similarity_features (
+                    text_hash,
+                    profile_version,
+                    feature
+                )
+                """
+            )
+            conn.execute(
+                """
                 CREATE INDEX IF NOT EXISTS idx_content_similarity_features_lookup
                 ON content_similarity_features (
                     profile_version,
                     feature,
                     text_hash
                 )
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_fragment_exact_fragment
+                ON fragment_exact_index (fragment_id)
                 """
             )
             conn.execute(
@@ -6840,6 +6866,19 @@ class EventStore:
                     """,
                     (workspace_id, *edge_ids),
                 )
+            content_hashes = [
+                row[0]
+                for row in conn.execute(
+                    """
+                    SELECT DISTINCT fragment.text_hash
+                    FROM fragment_exact_index AS indexed
+                    JOIN artifact_fragments AS fragment
+                      ON fragment.fragment_id = indexed.fragment_id
+                    WHERE indexed.workspace_id = ? AND indexed.session_id = ?
+                    """,
+                    (workspace_id, session_id),
+                ).fetchall()
+            ]
             conn.execute(
                 """
                 DELETE FROM fragment_exact_index
@@ -6847,18 +6886,25 @@ class EventStore:
                 """,
                 (workspace_id, session_id),
             )
-            conn.execute(
-                """
-                DELETE FROM content_similarity_features
-                WHERE NOT EXISTS (
-                    SELECT 1
-                    FROM artifact_fragments AS fragment
-                    JOIN fragment_exact_index AS indexed
-                      ON indexed.fragment_id = fragment.fragment_id
-                    WHERE fragment.text_hash = content_similarity_features.text_hash
+            for start in range(0, len(content_hashes), 300):
+                current_hashes = content_hashes[start : start + 300]
+                placeholders = ",".join("?" for _ in current_hashes)
+                conn.execute(
+                    f"""
+                    DELETE FROM content_similarity_features
+                    WHERE text_hash IN ({placeholders})
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM artifact_fragments AS fragment
+                          JOIN fragment_exact_index AS indexed
+                            INDEXED BY idx_fragment_exact_fragment
+                            ON indexed.fragment_id = fragment.fragment_id
+                          WHERE fragment.text_hash =
+                                content_similarity_features.text_hash
+                      )
+                    """,
+                    current_hashes,
                 )
-                """
-            )
             conn.execute(
                 """
                 DELETE FROM runtime_lineage_state
@@ -8840,27 +8886,39 @@ class EventStore:
                 query_feature_count = len(shingles)
                 ranked_rows = conn.execute(
                     """
-                    WITH matching_contents AS (
+                    WITH scoped_contents AS MATERIALIZED (
+                        SELECT DISTINCT fragment.text_hash AS text_hash
+                        FROM fragment_exact_index AS scoped
+                        JOIN artifact_fragments AS fragment
+                          ON fragment.fragment_id = scoped.fragment_id
+                        WHERE scoped.workspace_id = ?1
+                          AND scoped.session_id = ?2
+                          AND scoped.sequence_no < ?3
+                    ),
+                    matching_contents AS MATERIALIZED (
                         SELECT
                             indexed.text_hash AS text_hash,
-                            COUNT(*) AS overlap_count
-                        FROM similarity_query_features AS query
+                            SUM(
+                                CASE WHEN query.feature IS NULL THEN 0 ELSE 1 END
+                            ) AS overlap_count,
+                            COUNT(*) AS candidate_feature_count
+                        FROM scoped_contents AS scoped_content
                         JOIN content_similarity_features AS indexed
-                          INDEXED BY idx_content_similarity_features_lookup
-                          ON indexed.profile_version = ?8
-                         AND indexed.feature = query.feature
+                          INDEXED BY idx_content_similarity_features_content
+                          ON indexed.text_hash = scoped_content.text_hash
+                         AND indexed.profile_version = ?8
+                        LEFT JOIN similarity_query_features AS query
+                          ON query.feature = indexed.feature
                         GROUP BY indexed.text_hash
+                        HAVING SUM(
+                            CASE WHEN query.feature IS NULL THEN 0 ELSE 1 END
+                        ) > 0
                     ),
                     candidate_stats AS (
                         SELECT
                             scoped.fragment_id AS fragment_id,
                             overlap.overlap_count AS overlap_count,
-                            (
-                                SELECT COUNT(*)
-                                FROM content_similarity_features AS candidate
-                                WHERE candidate.profile_version = ?8
-                                  AND candidate.text_hash = overlap.text_hash
-                            ) AS candidate_feature_count,
+                            overlap.candidate_feature_count AS candidate_feature_count,
                             content.normalized_text AS normalized_text
                         FROM matching_contents AS overlap
                         JOIN artifact_fragments AS fragment

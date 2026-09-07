@@ -281,6 +281,79 @@ class StorageDeduplicationTest(unittest.TestCase):
                     ).fetchone()[0],
                 )
 
+    def test_session_cleanup_keeps_shared_features_until_last_reference(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            db_path = root / "events.db"
+            store = EventStore(db_path)
+            store.initialize()
+            selected = []
+            for session_id in ("session-a", "session-b"):
+                event = normalize_event(
+                    "pre_tool_use",
+                    {
+                        "session_id": session_id,
+                        "tool_use_id": f"tool-{session_id}",
+                        "tool_name": "Search",
+                        "cwd": str(root),
+                        "tool_input": {"query": "same shared searchable content"},
+                    },
+                )
+                artifacts = build_artifacts(event)
+                store.record(event, artifacts, build_fragments(artifacts))
+                context = next(
+                    item
+                    for item in store.list_artifact_contexts_for_session(session_id)
+                    if item.fragment.text == "same shared searchable content"
+                )
+                assert context.workspace_id is not None
+                prepared = prepare_similarity_text(
+                    context.fragment.text,
+                    normalized_text=context.fragment.normalized_text,
+                )
+                store.upsert_fragment_shingles(
+                    session_id,
+                    [context],
+                    {context.fragment.fragment_id: set(prepared.candidate_features)},
+                    workspace_id=context.workspace_id,
+                )
+                selected.append((context, len(prepared.candidate_features)))
+
+            workspace_id = selected[0][0].workspace_id
+            assert workspace_id is not None
+            text_hash = selected[0][0].fragment.text_hash
+            expected_count = selected[0][1]
+            store.clear_runtime_analysis_for_session(
+                "session-a",
+                workspace_id=workspace_id,
+            )
+            with sqlite3.connect(db_path) as conn:
+                self.assertEqual(
+                    expected_count,
+                    conn.execute(
+                        """
+                        SELECT COUNT(*) FROM content_similarity_features
+                        WHERE text_hash = ?
+                        """,
+                        (text_hash,),
+                    ).fetchone()[0],
+                )
+            store.clear_runtime_analysis_for_session(
+                "session-b",
+                workspace_id=workspace_id,
+            )
+            with sqlite3.connect(db_path) as conn:
+                self.assertEqual(
+                    0,
+                    conn.execute(
+                        """
+                        SELECT COUNT(*) FROM content_similarity_features
+                        WHERE text_hash = ?
+                        """,
+                        (text_hash,),
+                    ).fetchone()[0],
+                )
+
     @staticmethod
     def _create_v11_database(db_path: Path, *, text: str, row_count: int) -> None:
         text_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
