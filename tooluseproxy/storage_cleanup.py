@@ -6,6 +6,7 @@ import os
 import re
 import shutil
 import sqlite3
+from contextlib import closing
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -763,7 +764,7 @@ def apply_storage_cleanup(
 
     requested = Path(os.path.abspath(os.fspath(db_path.expanduser())))
     try:
-        with _write_connection(requested) as conn:
+        with closing(_write_connection(requested)) as connection, connection as conn:
             _create_cleanup_temp_tables(conn)
             conn.execute("BEGIN IMMEDIATE")
             inventory = _retention_candidates(conn, cutoff_at)

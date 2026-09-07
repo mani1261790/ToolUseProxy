@@ -325,7 +325,7 @@ sh "<PLUGIN_ROOT>/hooks/run_cli.sh" storage cleanup apply \
   --json
 ```
 
-結果の`remaining`が0でなければ、返された`next_plan_revision`を次の`--plan-revision`へ指定して続けられます。利用者の実DBへ初めて適用する作業は#159で行い、最初に表示した計画を確認するまでは実行しません。
+結果の`remaining.session_count`または`remaining.unscoped_event_count`が0でなければ、返された`next_plan_revision`を次の`--plan-revision`へ指定して続けられます。利用者の実DBへ初めて適用する作業は#159で行い、最初に表示した計画を確認するまでは実行しません。
 
 workspace探索は明示的なoffline `protect scan`に限定し、`init`やHook中では実行しません。候補ごとの明示判断をまとめて反映できますが、無承認の自動登録やscanの上限引き上げoptionはありません。legacy manifestはruntime読み取り互換を維持しますが、scanはsource fileを読む前に値のない`manifest_schema_legacy`で終了します。coding agentは`protect migrate plan`を提示せずに独断でv2へ変更しません。
 
