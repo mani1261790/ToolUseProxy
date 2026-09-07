@@ -479,6 +479,7 @@ class StorageCleanupPlanTest(unittest.TestCase):
         result = apply_storage_cleanup(
             self.db_path,
             cutoff_at=first.cutoff_at,
+            reviewed_at=first.reviewed_at,
             expected_plan_revision=first.plan_revision,
             batch_size=1,
         )
@@ -527,6 +528,7 @@ class StorageCleanupPlanTest(unittest.TestCase):
         resumed = apply_storage_cleanup(
             self.db_path,
             cutoff_at=first.cutoff_at,
+            reviewed_at=result.next_reviewed_at,
             expected_plan_revision=result.next_plan_revision,
             batch_size=2,
         )
@@ -577,6 +579,7 @@ class StorageCleanupPlanTest(unittest.TestCase):
         result = apply_storage_cleanup(
             self.db_path,
             cutoff_at=plan.cutoff_at,
+            reviewed_at=plan.reviewed_at,
             expected_plan_revision=plan.plan_revision,
             batch_size=1,
         )
@@ -680,6 +683,7 @@ class StorageCleanupPlanTest(unittest.TestCase):
         result = apply_storage_cleanup(
             self.db_path,
             cutoff_at=plan.cutoff_at,
+            reviewed_at=plan.reviewed_at,
             expected_plan_revision=plan.plan_revision,
             batch_size=1,
         )
@@ -780,6 +784,7 @@ class StorageCleanupPlanTest(unittest.TestCase):
                 apply_storage_cleanup(
                     self.db_path,
                     cutoff_at=plan.cutoff_at,
+                    reviewed_at=plan.reviewed_at,
                     expected_plan_revision=plan.plan_revision,
                 )
         self.assertEqual("storage_plan_changed", caught.exception.code)
@@ -809,6 +814,7 @@ class StorageCleanupPlanTest(unittest.TestCase):
                 apply_storage_cleanup(
                     self.db_path,
                     cutoff_at=plan.cutoff_at,
+                    reviewed_at=plan.reviewed_at,
                     expected_plan_revision=plan.plan_revision,
                 )
         with sqlite3.connect(self.db_path) as conn:
@@ -828,6 +834,44 @@ class StorageCleanupPlanTest(unittest.TestCase):
 
     def test_cli_apply_is_value_free_and_requires_the_exact_plan(self) -> None:
         plan = plan_storage_cleanup(self.db_path)
+        database_before_rejections = self.db_path.read_bytes()
+        plan_started = datetime.fromisoformat(
+            plan.cutoff_at.replace("Z", "+00:00")
+        ) + timedelta(days=STORAGE_RETENTION_DAYS)
+        expired_cutoff = (
+            datetime.fromisoformat(plan.cutoff_at.replace("Z", "+00:00"))
+            - timedelta(minutes=10)
+        ).isoformat(timespec="seconds").replace("+00:00", "Z")
+        invalid_reviews = (
+            (plan.cutoff_at, plan_started - timedelta(seconds=1)),
+            (expired_cutoff, datetime.now(UTC) - timedelta(minutes=6)),
+            (plan.cutoff_at, datetime.now(UTC) + timedelta(minutes=1)),
+        )
+        for invalid_cutoff, invalid_review_time in invalid_reviews:
+            with self.subTest(invalid_review_time=invalid_review_time):
+                invalid_text = invalid_review_time.isoformat(timespec="seconds").replace(
+                    "+00:00", "Z"
+                )
+                with redirect_stdout(StringIO()):
+                    invalid_exit = tooluseproxy_main(
+                        [
+                            "storage",
+                            "cleanup",
+                            "apply",
+                            "--cutoff-at",
+                            invalid_cutoff,
+                            "--reviewed-at",
+                            invalid_text,
+                            "--plan-revision",
+                            plan.plan_revision,
+                            "--data-dir",
+                            str(self.data_dir),
+                            "--json",
+                        ]
+                    )
+                self.assertEqual(1, invalid_exit)
+                self.assertEqual(database_before_rejections, self.db_path.read_bytes())
+
         stdout = StringIO()
         with redirect_stdout(stdout):
             exit_code = tooluseproxy_main(
@@ -855,6 +899,30 @@ class StorageCleanupPlanTest(unittest.TestCase):
         self.assertFalse(payload["protected_manifest_read"])
         self.assertNotIn(str(self.data_dir), stdout.getvalue())
         self.assertNotIn("SYNTHETIC_OLD_VALUE", stdout.getvalue())
+
+        continuation_stdout = StringIO()
+        with redirect_stdout(continuation_stdout):
+            continuation_exit = tooluseproxy_main(
+                [
+                    "storage",
+                    "cleanup",
+                    "apply",
+                    "--cutoff-at",
+                    plan.cutoff_at,
+                    "--reviewed-at",
+                    payload["next_reviewed_at"],
+                    "--plan-revision",
+                    payload["next_plan_revision"],
+                    "--batch-size",
+                    "1",
+                    "--data-dir",
+                    str(self.data_dir),
+                    "--json",
+                ]
+            )
+        self.assertEqual(0, continuation_exit)
+        continuation = json.loads(continuation_stdout.getvalue())
+        self.assertEqual(1, continuation["deleted"]["session_count"])
 
         with redirect_stdout(StringIO()):
             stale_exit = tooluseproxy_main(

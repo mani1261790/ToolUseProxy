@@ -123,7 +123,7 @@ def enable_automatic_cleanup(
     observed = _utc_now(now)
     plan_time = _plan_time_from_cutoff(cutoff_at)
     try:
-        validate_storage_cleanup_review(
+        reviewed = validate_storage_cleanup_review(
             cutoff_at=cutoff_at,
             reviewed_at=reviewed_at,
             now=observed,
@@ -135,7 +135,11 @@ def enable_automatic_cleanup(
             else "automatic_cleanup_plan_review_time_invalid"
         )
         raise AutomaticCleanupError(code) from exc
-    plan = plan_storage_cleanup(db_path, now=plan_time)
+    plan = plan_storage_cleanup(
+        db_path,
+        now=plan_time,
+        reviewed_at=reviewed,
+    )
     if plan.plan_revision != expected_plan_revision:
         raise AutomaticCleanupError("automatic_cleanup_plan_changed")
     data_dir = db_path.parent
@@ -355,6 +359,7 @@ def run_automatic_cleanup(
                 result = apply_storage_cleanup(
                     db_path,
                     cutoff_at=initial_plan.cutoff_at,
+                    reviewed_at=initial_plan.reviewed_at,
                     expected_plan_revision=initial_plan.plan_revision,
                     batch_size=STORAGE_CLEANUP_DEFAULT_BATCH_SIZE,
                     cancel_check=lambda: (

@@ -115,11 +115,29 @@ class AutomaticCleanupTest(unittest.TestCase):
             expired.exception.code,
         )
 
+        with self.assertRaises(AutomaticCleanupError) as mismatched_review_time:
+            enable_automatic_cleanup(
+                self.db_path,
+                cutoff_at=plan.cutoff_at,
+                reviewed_at="2026-09-07T12:10:00Z",
+                expected_plan_revision=plan.plan_revision,
+                now=self.now + timedelta(minutes=14),
+            )
+        self.assertEqual(
+            "automatic_cleanup_plan_changed",
+            mismatched_review_time.exception.code,
+        )
+
+        slow_plan = plan_storage_cleanup(
+            self.db_path,
+            now=self.now,
+            reviewed_at=self.now + timedelta(minutes=10),
+        )
         enabled_after_slow_plan = enable_automatic_cleanup(
             self.db_path,
-            cutoff_at=plan.cutoff_at,
-            reviewed_at="2026-09-07T12:10:00Z",
-            expected_plan_revision=plan.plan_revision,
+            cutoff_at=slow_plan.cutoff_at,
+            reviewed_at=slow_plan.reviewed_at,
+            expected_plan_revision=slow_plan.plan_revision,
             now=self.now + timedelta(minutes=14),
         )
         self.assertTrue(enabled_after_slow_plan["enabled"])
@@ -275,6 +293,7 @@ class AutomaticCleanupTest(unittest.TestCase):
             apply_storage_cleanup(
                 self.db_path,
                 cutoff_at=plan.cutoff_at,
+                reviewed_at=plan.reviewed_at,
                 expected_plan_revision=plan.plan_revision,
                 cancel_check=lambda: True,
             )

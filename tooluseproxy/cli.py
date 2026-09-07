@@ -736,6 +736,7 @@ def _run_storage(args: argparse.Namespace) -> int:
         payload = apply_storage_cleanup(
             paths.db_path,
             cutoff_at=args.cutoff_at,
+            reviewed_at=args.reviewed_at,
             expected_plan_revision=args.plan_revision,
             batch_size=args.batch_size,
         ).to_payload()
