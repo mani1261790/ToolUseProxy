@@ -290,6 +290,15 @@ class ExternalityRuleTest(unittest.TestCase):
             f"sh {launcher} storage cleanup apply "
             f"--cutoff-at 2026-08-08T12:00:00Z --plan-revision sc3_{revision} "
             f"--batch-size 20 --data-dir {data_dir} --json",
+            f"sh {launcher} storage cleanup auto status "
+            f"--data-dir {data_dir} --json",
+            f"sh {launcher} storage cleanup auto enable "
+            f"--cutoff-at 2026-08-08T12:00:00Z --plan-revision sc3_{revision} "
+            f"--data-dir {data_dir} --json",
+            f"sh {launcher} storage cleanup auto disable "
+            f"--data-dir {data_dir} --json",
+            f"sh {launcher} storage cleanup auto run "
+            f"--data-dir {data_dir} --json",
             f"sh {launcher} uninstall plan --data-dir {data_dir} --json",
         )
 
@@ -310,6 +319,17 @@ class ExternalityRuleTest(unittest.TestCase):
                 for command, decision in zip(commands, decisions, strict=True)
                 if decision is None or decision.state != "known_local"
             ],
+        )
+        automatic_decisions = decisions[16:20]
+        self.assertEqual(
+            4,
+            len(
+                {
+                    decision.envelope_sha256
+                    for decision in automatic_decisions
+                    if decision is not None
+                }
+            ),
         )
 
     def test_plugin_commands_with_external_effects_are_not_self_trusted(self) -> None:
@@ -363,6 +383,11 @@ class ExternalityRuleTest(unittest.TestCase):
             valid.replace(str(data_dir), "/tmp/other"),
             valid.replace(str(launcher), str(self.root / "other" / "run_cli.sh")),
             valid.replace("--json", "--json --verbose"),
+            f"sh {launcher} storage cleanup auto enable "
+            f"--cutoff-at 2026-08-08T12:00:00Z "
+            f"--plan-revision sc2_{'a' * 64} --data-dir {data_dir} --json",
+            f"sh {launcher} storage cleanup auto run "
+            f"--data-dir /tmp/other --json",
         )
 
         decisions = [

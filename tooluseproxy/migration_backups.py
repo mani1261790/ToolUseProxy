@@ -12,7 +12,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator
 
 from hook_monitor.runtime.storage import CURRENT_SCHEMA_VERSION
 
@@ -326,6 +326,7 @@ def delete_verified_migration_backups(
     now: datetime,
     expected_inventory_digest: str,
     limit: int,
+    cancel_check: Callable[[], bool] | None = None,
 ) -> MigrationBackupDeleteResult:
     """Delete a bounded, unchanged set of verified backup files."""
 
@@ -347,6 +348,8 @@ def delete_verified_migration_backups(
         records = _state_records(state)
         completed = True
         for name in inventory.eligible_names[:limit]:
+            if cancel_check is not None and cancel_check():
+                raise MigrationBackupError("migration_backup_cleanup_cancelled")
             backup = database.parent / name
             try:
                 metadata = backup.stat()

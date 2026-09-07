@@ -10,7 +10,7 @@ from contextlib import closing
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from hook_monitor.runtime.storage import CURRENT_SCHEMA_VERSION
 from tooluseproxy.migration_backups import (
@@ -699,7 +699,7 @@ def plan_storage_cleanup(
     cutoff_at = cutoff.isoformat(timespec="seconds").replace("+00:00", "Z")
 
     try:
-        with _read_only_connection(requested) as conn:
+        with closing(_read_only_connection(requested)) as conn:
             conn.execute("BEGIN")
             schema_version = int(conn.execute("PRAGMA user_version").fetchone()[0])
             if schema_version != CURRENT_SCHEMA_VERSION:
@@ -721,7 +721,6 @@ def plan_storage_cleanup(
                     "SELECT COALESCE(MAX(recorded_at), '') FROM events"
                 ).fetchone()[0]
             )
-            database_stat = requested.stat()
     except StorageCleanupPlanError:
         raise
     except sqlite3.Error as exc:
@@ -735,6 +734,14 @@ def plan_storage_cleanup(
         )
     except MigrationBackupError as exc:
         raise StorageCleanupPlanError(exc.code) from exc
+    # Closing any of the read-only SQLite connections above may checkpoint an
+    # already committed WAL. Bind the plan to the stable post-close files so
+    # that physical housekeeping is not mistaken for a logical change
+    # immediately after the plan is returned.
+    try:
+        database_stat = requested.stat()
+    except OSError as exc:
+        raise StorageCleanupPlanError("storage_database_unavailable") from exc
     wal_bytes = _regular_file_size(Path(f"{requested}-wal"))
     allocated_bytes = page_size * page_count
     free_page_bytes = page_size * freelist_count
@@ -810,6 +817,7 @@ def apply_storage_cleanup(
     cutoff_at: str,
     expected_plan_revision: str,
     batch_size: int = STORAGE_CLEANUP_DEFAULT_BATCH_SIZE,
+    cancel_check: Callable[[], bool] | None = None,
 ) -> StorageCleanupApplyResult:
     if type(batch_size) is not int or not 1 <= batch_size <= STORAGE_CLEANUP_MAX_BATCH_SIZE:
         raise StorageCleanupPlanError("storage_cleanup_batch_size_invalid")
@@ -824,6 +832,8 @@ def apply_storage_cleanup(
     requested = Path(os.path.abspath(os.fspath(db_path.expanduser())))
     try:
         with closing(_write_connection(requested)) as connection, connection as conn:
+            if cancel_check is not None:
+                conn.set_progress_handler(lambda: int(cancel_check()), 1000)
             _create_cleanup_temp_tables(conn)
             conn.execute("BEGIN IMMEDIATE")
             inventory = _retention_candidates(conn, cutoff_at)
@@ -890,8 +900,11 @@ def apply_storage_cleanup(
                 now=plan_time,
                 expected_inventory_digest=backup_inventory.inventory_digest,
                 limit=STORAGE_CLEANUP_DEFAULT_BATCH_SIZE,
+                cancel_check=cancel_check,
             )
-        except MigrationBackupError:
+        except MigrationBackupError as exc:
+            if exc.code == "migration_backup_cleanup_cancelled":
+                raise StorageCleanupPlanError(exc.code) from exc
             backup_cleanup_status = "skipped_safely"
         else:
             deleted_backup_count = deletion.deleted_count

@@ -327,6 +327,34 @@ sh "<PLUGIN_ROOT>/hooks/run_cli.sh" storage cleanup apply \
 
 結果の`remaining.session_count`または`remaining.unscoped_event_count`が0でなければ、返された`next_plan_revision`を次の`--plan-revision`へ指定して続けられます。利用者の実DBへ初めて適用する作業は#159で行い、最初に表示した計画を確認するまでは実行しません。
 
+確認済みの計画を基に、以後のタスク終了後に自動整理を予約する場合は次を実行します。初期状態では無効であり、この命令を実行するまでは実データを自動削除しません。計画は作成から5分以内で、DBが変わっていない必要があります。
+
+```sh
+sh "<PLUGIN_ROOT>/hooks/run_cli.sh" storage cleanup auto enable \
+  --cutoff-at "<PLAN_CUTOFF_AT>" \
+  --plan-revision "<PLAN_REVISION>" \
+  --data-dir "<PLUGIN_DATA>" \
+  --json
+```
+
+Hookはタスク終了時に予約だけを行い、容量計測や削除を待ちません。別処理は前回開始から24時間に1回まで、既定20作業単位を整理します。DB使用中、別の整理中、監視処理の直後は何も削除せず延期します。2 GiB以上は注意、4 GiB以上は要対応として状態へ残しますが、容量を理由に30日以内の記録を消したり、記録・保護を止めたりしません。
+
+状態は通常の`status`に含まれる`automatic_cleanup`、または次の専用命令で確認できます。保存本文、絶対path、接続先は表示しません。
+
+```sh
+sh "<PLUGIN_ROOT>/hooks/run_cli.sh" storage cleanup auto status \
+  --data-dir "<PLUGIN_DATA>" \
+  --json
+```
+
+自動整理だけを止める場合は次を使います。既存のDB、記録、設定、保護対象登録は削除しません。
+
+```sh
+sh "<PLUGIN_ROOT>/hooks/run_cli.sh" storage cleanup auto disable \
+  --data-dir "<PLUGIN_DATA>" \
+  --json
+```
+
 更新前退避の7日間は、退避作成と現在版の動作確認のうち遅い時刻から数えます。現在版の動作確認は、現在のタスクから監視処理へ届いた証拠を伴う`setup verify`が成功したときだけ記録されます。設定だけを調べる確認では記録しません。この記録が変えるのは退避の整理可否だけで、保護リスト、保護対象ファイル、操作内容は変更しません。
 
 workspace探索は明示的なoffline `protect scan`に限定し、`init`やHook中では実行しません。候補ごとの明示判断をまとめて反映できますが、無承認の自動登録やscanの上限引き上げoptionはありません。legacy manifestはruntime読み取り互換を維持しますが、scanはsource fileを読む前に値のない`manifest_schema_legacy`で終了します。coding agentは`protect migrate plan`を提示せずに独断でv2へ変更しません。

@@ -16,6 +16,14 @@ from tooluseproxy.migration_backups import (
     MIGRATION_BACKUP_LOCK_FILENAME,
     MIGRATION_BACKUP_STATE_FILENAME,
 )
+from tooluseproxy.automatic_cleanup import (
+    AUTOMATIC_CLEANUP_DEFER_FILENAME,
+    AUTOMATIC_CLEANUP_LOCK_FILENAME,
+    AUTOMATIC_CLEANUP_REQUEST_FILENAME,
+    AUTOMATIC_CLEANUP_STATE_FILENAME,
+    RUNTIME_ACTIVITY_FILENAME,
+    automatic_cleanup_uninstall_guard,
+)
 
 
 UNINSTALL_SCHEMA_VERSION = 1
@@ -180,14 +188,32 @@ def apply_managed_data_deletion(
     if not hmac.compare_digest(plan.confirmation_token, confirmation_token):
         raise UninstallError("managed data changed after review; create a new uninstall plan")
 
-    for root in plan.managed_roots:
-        metadata = os.lstat(root)
-        if stat.S_ISREG(metadata.st_mode):
-            root.unlink()
-        elif stat.S_ISDIR(metadata.st_mode):
-            shutil.rmtree(root)
-        else:
-            raise UninstallError("managed data type changed after review")
+    automatic_lock = plan.data_dir / AUTOMATIC_CLEANUP_LOCK_FILENAME
+    with automatic_cleanup_uninstall_guard(plan.data_dir) as acquired:
+        if not acquired:
+            raise UninstallError("automatic cleanup is running; retry uninstall later")
+        locked_plan = plan_managed_data_deletion(plan.data_dir)
+        if not hmac.compare_digest(
+            locked_plan.confirmation_token or "",
+            confirmation_token,
+        ):
+            raise UninstallError(
+                "managed data changed after review; create a new uninstall plan"
+            )
+        for root in locked_plan.managed_roots:
+            if root == automatic_lock:
+                continue
+            metadata = os.lstat(root)
+            if stat.S_ISREG(metadata.st_mode):
+                root.unlink()
+            elif stat.S_ISDIR(metadata.st_mode):
+                shutil.rmtree(root)
+            else:
+                raise UninstallError("managed data type changed after review")
+
+    # The state and request are already gone, so a worker acquiring the lock
+    # after this point exits disabled without recreating managed data.
+    automatic_lock.unlink(missing_ok=True)
 
     data_directory_removed = False
     try:
@@ -222,6 +248,11 @@ def _is_managed_root(name: str) -> bool:
         or name in {
             MIGRATION_BACKUP_LOCK_FILENAME,
             MIGRATION_BACKUP_STATE_FILENAME,
+            AUTOMATIC_CLEANUP_DEFER_FILENAME,
+            AUTOMATIC_CLEANUP_LOCK_FILENAME,
+            AUTOMATIC_CLEANUP_REQUEST_FILENAME,
+            AUTOMATIC_CLEANUP_STATE_FILENAME,
+            RUNTIME_ACTIVITY_FILENAME,
         }
         or name == MANIFEST_BACKUP_DIRECTORY
         or _MIGRATION_BACKUP_PATTERN.fullmatch(name) is not None
