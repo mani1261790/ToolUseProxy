@@ -4,13 +4,13 @@ ToolUseProxy is a local-first research implementation for tracing information fl
 
 This project is a research and development outcome of [SecHack365](https://sechack365.nict.go.jp/).
 
-This version is `0.1.0-alpha.19`. It deduplicates stored analysis text and can incrementally clean detailed operation records older than 30 days and eligible pre-migration database backups older than seven days. Automatic cleanup is disabled until the user reviews a fresh plan. Protected-source registrations, settings, user evaluations, improvement feedback, and records newer than 30 days are not deleted merely to reduce storage. The alpha.18 protected-source removal and trusted self-management boundary remain in place. It is a research alpha, not a complete DLP system.
+This version is `0.1.0-alpha.20`. It deduplicates stored analysis text and can incrementally clean detailed operation records older than 30 days and eligible pre-migration database backups older than seven days. Even for a large database, the five-minute review window starts after plan rendering completes. Automatic cleanup is disabled until the user reviews a fresh plan. Protected-source registrations, settings, user evaluations, improvement feedback, and records newer than 30 days are not deleted merely to reduce storage. The alpha.18 protected-source removal and trusted self-management boundary remain in place. It is a research alpha, not a complete DLP system.
 
 Synthetic fixed-network evaluation is excluded from release ZIP, wheel, and sdist artifacts. Git-based marketplace updates also copy development files, but the normal Hook runtime does not import or automatically run this evaluation code.
 
 The Codex Plugin integration milestone is complete for the supported alpha.12 scope. Current development focuses on ToolUseProxy's core detection quality: measuring real-project false blocks and misses, expanding sink payload resolution, and evaluating externality, semantics, lineage, and session boundaries. Follow the [current implementation order](docs/運用/実装タスク.md) and [Issue #99](https://github.com/mani1261790/ToolUseProxy/issues/99).
 
-After upgrading to alpha.19, fully restart Codex and verify behavior in a new task. Review all five Hooks again if their definitions changed. Before enabling cleanup on real data, review a fresh cleanup plan. Alpha.12 and earlier could show initialization diagnostics in projects where ToolUseProxy had never been enabled.
+After upgrading to alpha.20, fully restart Codex and verify behavior in a new task. Review all five Hooks again if their definitions changed. Before enabling cleanup on real data, review a fresh cleanup plan. Alpha.12 and earlier could show initialization diagnostics in projects where ToolUseProxy had never been enabled.
 
 ToolUseProxy is licensed under the [Apache License 2.0](LICENSE).
 
@@ -46,7 +46,7 @@ codex plugin marketplace upgrade tooluseproxy
 codex plugin list --json
 ```
 
-Use the immutable `v0.1.0-alpha.19` tag instead of `public-alpha` when reproducible version pinning matters. A pinned tag does not move when the marketplace is upgraded. Review the exact Hook definitions after installation or an update before trusting them, then fully restart Codex and begin a new task. A changed matcher, command, or source invalidates the earlier trust decision; a Hook with `trustStatus: modified` must be reviewed again. Then follow the [Japanese five-minute quickstart](QUICKSTART.md) to initialize ToolUseProxy and review protected-source proposals in batches of up to ten.
+Use the immutable `v0.1.0-alpha.20` tag instead of `public-alpha` when reproducible version pinning matters. A pinned tag does not move when the marketplace is upgraded. Review the exact Hook definitions after installation or an update before trusting them, then fully restart Codex and begin a new task. A changed matcher, command, or source invalidates the earlier trust decision; a Hook with `trustStatus: modified` must be reviewed again. Then follow the [Japanese five-minute quickstart](QUICKSTART.md) to initialize ToolUseProxy and review protected-source proposals in batches of up to ten.
 
 On Codex Desktop for macOS, alpha.12 passed a fresh August 31 run with all 35 checks true. The run verified two scoped command approvals, one public side effect, zero static or dynamic protected side effects, two pre-execution blocks, and zero raw protected-value exposures. Remove, same-version reinstall with managed-state reuse, final Remove, and cleanup also passed. Desktop task history records local shell calls as `exec_command`, while the canonical Hook matcher name is `Bash`; value-free markers, the Hook database, stable definition hashes, and task records remain the evidence boundary. Linux and Windows Desktop are not established by this result.
 

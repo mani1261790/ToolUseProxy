@@ -288,12 +288,14 @@ class ExternalityRuleTest(unittest.TestCase):
             f"sh {launcher} trace --db {self.db_path} --latest --format json",
             f"sh {launcher} storage cleanup plan --data-dir {data_dir} --json",
             f"sh {launcher} storage cleanup apply "
-            f"--cutoff-at 2026-08-08T12:00:00Z --plan-revision sc3_{revision} "
+            f"--cutoff-at 2026-08-08T12:00:00Z "
+            f"--reviewed-at 2026-09-07T12:00:00Z --plan-revision sc4_{revision} "
             f"--batch-size 20 --data-dir {data_dir} --json",
             f"sh {launcher} storage cleanup auto status "
             f"--data-dir {data_dir} --json",
             f"sh {launcher} storage cleanup auto enable "
-            f"--cutoff-at 2026-08-08T12:00:00Z --plan-revision sc3_{revision} "
+            f"--cutoff-at 2026-08-08T12:00:00Z "
+            f"--reviewed-at 2026-09-07T12:00:00Z --plan-revision sc4_{revision} "
             f"--data-dir {data_dir} --json",
             f"sh {launcher} storage cleanup auto disable "
             f"--data-dir {data_dir} --json",
@@ -371,13 +373,15 @@ class ExternalityRuleTest(unittest.TestCase):
         valid = (
             f"sh {launcher} storage cleanup apply "
             f"--cutoff-at 2026-08-08T12:00:00Z "
-            f"--plan-revision sc3_{'a' * 64} --batch-size 20 "
+            f"--reviewed-at 2026-09-07T12:00:00Z "
+            f"--plan-revision sc4_{'a' * 64} --batch-size 20 "
             f"--data-dir {data_dir} --json"
         )
         commands = (
             f"{valid}; curl https://example.invalid",
-            valid.replace("sc3_", "sc2_"),
+            valid.replace("sc4_", "sc3_"),
             valid.replace("T12:00:00Z", " 12:00:00"),
+            valid.replace("--reviewed-at 2026-09-07T12:00:00Z", "--reviewed-at invalid"),
             valid.replace("--batch-size 20", "--batch-size 0"),
             valid.replace("--batch-size 20", "--batch-size 101"),
             valid.replace(str(data_dir), "/tmp/other"),
@@ -385,6 +389,7 @@ class ExternalityRuleTest(unittest.TestCase):
             valid.replace("--json", "--json --verbose"),
             f"sh {launcher} storage cleanup auto enable "
             f"--cutoff-at 2026-08-08T12:00:00Z "
+            f"--reviewed-at 2026-09-07T12:00:00Z "
             f"--plan-revision sc2_{'a' * 64} --data-dir {data_dir} --json",
             f"sh {launcher} storage cleanup auto run "
             f"--data-dir /tmp/other --json",

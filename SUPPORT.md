@@ -1,6 +1,6 @@
 # サポート範囲と既知の制限
 
-ToolUseProxy `0.1.0-alpha.19`は研究用public alphaです。未設定projectでは案内・記録・停止を行わず、明示設定済みprojectだけでHookを動かします。固定の公開Issue読み取り、既知の質問表示、固定のGit接続先一覧の不要な停止を減らし、判定が7秒以内に完了しない場合もCodex側の制限時間より先に安全な停止を返します。本番環境向けのSLA、security certification、完全なDLP、全toolの遮断保証は提供しません。
+ToolUseProxy `0.1.0-alpha.20`は研究用public alphaです。未設定projectでは案内・記録・停止を行わず、明示設定済みprojectだけでHookを動かします。固定の公開Issue読み取り、既知の質問表示、固定のGit接続先一覧の不要な停止を減らし、判定が7秒以内に完了しない場合もCodex側の制限時間より先に安全な停止を返します。本番環境向けのSLA、security certification、完全なDLP、全toolの遮断保証は提供しません。
 
 ## 実行環境
 

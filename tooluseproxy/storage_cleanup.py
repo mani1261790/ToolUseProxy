@@ -21,10 +21,11 @@ from tooluseproxy.migration_backups import (
 )
 
 
-STORAGE_CLEANUP_PLAN_SCHEMA_VERSION = 3
+STORAGE_CLEANUP_PLAN_SCHEMA_VERSION = 4
 STORAGE_RETENTION_DAYS = 30
 STORAGE_CLEANUP_DEFAULT_BATCH_SIZE = 20
 STORAGE_CLEANUP_MAX_BATCH_SIZE = 100
+STORAGE_CLEANUP_REVIEW_WINDOW = timedelta(minutes=5)
 STORAGE_WARNING_BYTES = 2 * 1024 * 1024 * 1024
 STORAGE_ACTION_BYTES = 4 * 1024 * 1024 * 1024
 _TEMPORARY_SPACE_MARGIN_BYTES = 16 * 1024 * 1024
@@ -500,6 +501,7 @@ class StorageCategoryUsage:
 @dataclass(frozen=True)
 class StorageCleanupPlan:
     cutoff_at: str
+    reviewed_at: str
     database_logical_bytes: int
     database_allocated_bytes: int
     database_free_page_bytes: int
@@ -537,6 +539,7 @@ class StorageCleanupPlan:
             "action": "storage_cleanup",
             "retention_days": STORAGE_RETENTION_DAYS,
             "cutoff_at": self.cutoff_at,
+            "reviewed_at": self.reviewed_at,
             "thresholds": {
                 "warning_bytes": STORAGE_WARNING_BYTES,
                 "action_bytes": STORAGE_ACTION_BYTES,
@@ -637,6 +640,7 @@ class StorageCleanupApplyResult:
     remaining_session_count: int
     remaining_unscoped_event_count: int
     next_plan_revision: str
+    next_reviewed_at: str
 
     def to_payload(self) -> dict[str, Any]:
         return {
@@ -673,6 +677,7 @@ class StorageCleanupApplyResult:
             "protected_manifest_read": False,
             "network_used": False,
             "next_plan_revision": self.next_plan_revision,
+            "next_reviewed_at": self.next_reviewed_at,
         }
 
 
@@ -772,8 +777,11 @@ def plan_storage_cleanup(
         cutoff_at=cutoff_at,
         retention=retention,
     )
+    reviewed_time = observed_now if now is not None else datetime.now(UTC)
+    reviewed_at = reviewed_time.isoformat(timespec="seconds").replace("+00:00", "Z")
     return StorageCleanupPlan(
         cutoff_at=cutoff_at,
+        reviewed_at=reviewed_at,
         database_logical_bytes=database_stat.st_size,
         database_allocated_bytes=allocated_bytes,
         database_free_page_bytes=free_page_bytes,
@@ -821,7 +829,7 @@ def apply_storage_cleanup(
 ) -> StorageCleanupApplyResult:
     if type(batch_size) is not int or not 1 <= batch_size <= STORAGE_CLEANUP_MAX_BATCH_SIZE:
         raise StorageCleanupPlanError("storage_cleanup_batch_size_invalid")
-    if re.fullmatch(r"sc3_[0-9a-f]{64}", expected_plan_revision) is None:
+    if re.fullmatch(r"sc4_[0-9a-f]{64}", expected_plan_revision) is None:
         raise StorageCleanupPlanError("storage_plan_revision_invalid")
     cutoff = _parse_cleanup_cutoff(cutoff_at)
     plan_time = cutoff + timedelta(days=STORAGE_RETENTION_DAYS)
@@ -928,6 +936,7 @@ def apply_storage_cleanup(
         remaining_session_count=next_plan.eligible_session_count,
         remaining_unscoped_event_count=next_plan.eligible_unscoped_event_count,
         next_plan_revision=next_plan.plan_revision,
+        next_reviewed_at=next_plan.reviewed_at,
     )
 
 
@@ -1023,7 +1032,7 @@ def _storage_cleanup_plan_revision(
             "inventory_digest": backup_inventory.inventory_digest,
         },
     }
-    return "sc3_" + hashlib.sha256(
+    return "sc4_" + hashlib.sha256(
         json.dumps(
             commitment,
             ensure_ascii=False,
@@ -1044,6 +1053,27 @@ def _parse_cleanup_cutoff(value: str) -> datetime:
     except ValueError as exc:
         raise StorageCleanupPlanError("storage_cutoff_invalid") from exc
     return parsed.astimezone(UTC)
+
+
+def validate_storage_cleanup_review(
+    *,
+    cutoff_at: str,
+    reviewed_at: str,
+    now: datetime | None = None,
+) -> None:
+    """Require five usable minutes after a cleanup plan finished rendering."""
+
+    cutoff = _parse_cleanup_cutoff(cutoff_at)
+    reviewed = _parse_cleanup_cutoff(reviewed_at)
+    plan_started = cutoff + timedelta(days=STORAGE_RETENTION_DAYS)
+    observed = now or datetime.now(UTC)
+    if observed.tzinfo is None:
+        raise StorageCleanupPlanError("storage_plan_time_timezone_required")
+    observed = observed.astimezone(UTC)
+    if reviewed < plan_started or reviewed > observed:
+        raise StorageCleanupPlanError("storage_plan_review_time_invalid")
+    if observed - reviewed > STORAGE_CLEANUP_REVIEW_WINDOW:
+        raise StorageCleanupPlanError("storage_plan_expired")
 
 
 def _write_connection(path: Path) -> sqlite3.Connection:

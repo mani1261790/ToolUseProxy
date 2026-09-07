@@ -99,7 +99,11 @@ from tooluseproxy.uninstall import (
     ensure_data_directory_marker,
     plan_managed_data_deletion,
 )
-from tooluseproxy.storage_cleanup import apply_storage_cleanup, plan_storage_cleanup
+from tooluseproxy.storage_cleanup import (
+    apply_storage_cleanup,
+    plan_storage_cleanup,
+    validate_storage_cleanup_review,
+)
 from tooluseproxy.automatic_cleanup import (
     disable_automatic_cleanup,
     enable_automatic_cleanup,
@@ -612,6 +616,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Delete one bounded batch from an explicitly reviewed cleanup plan.",
     )
     storage_cleanup_apply.add_argument("--cutoff-at", required=True)
+    storage_cleanup_apply.add_argument("--reviewed-at", required=True)
     storage_cleanup_apply.add_argument("--plan-revision", required=True)
     storage_cleanup_apply.add_argument("--batch-size", type=int, default=20)
     storage_cleanup_apply.add_argument("--json", action="store_true")
@@ -635,6 +640,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Enable future runs after validating an explicitly reviewed plan.",
     )
     storage_cleanup_auto_enable.add_argument("--cutoff-at", required=True)
+    storage_cleanup_auto_enable.add_argument("--reviewed-at", required=True)
     storage_cleanup_auto_enable.add_argument("--plan-revision", required=True)
     storage_cleanup_auto_enable.add_argument("--json", action="store_true")
     _add_runtime_path_arguments(storage_cleanup_auto_enable)
@@ -723,6 +729,10 @@ def _run_storage(args: argparse.Namespace) -> int:
     if args.storage_cleanup_command == "plan":
         payload = plan_storage_cleanup(paths.db_path).to_payload()
     elif args.storage_cleanup_command == "apply":
+        validate_storage_cleanup_review(
+            cutoff_at=args.cutoff_at,
+            reviewed_at=args.reviewed_at,
+        )
         payload = apply_storage_cleanup(
             paths.db_path,
             cutoff_at=args.cutoff_at,
@@ -738,6 +748,7 @@ def _run_storage(args: argparse.Namespace) -> int:
             payload = enable_automatic_cleanup(
                 paths.db_path,
                 cutoff_at=args.cutoff_at,
+                reviewed_at=args.reviewed_at,
                 expected_plan_revision=args.plan_revision,
             )
         elif args.storage_cleanup_auto_command == "disable":

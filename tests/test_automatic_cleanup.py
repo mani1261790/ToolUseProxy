@@ -65,6 +65,7 @@ class AutomaticCleanupTest(unittest.TestCase):
         return enable_automatic_cleanup(
             self.db_path,
             cutoff_at=plan.cutoff_at,
+            reviewed_at=plan.reviewed_at,
             expected_plan_revision=plan.plan_revision,
             now=self.now,
         )
@@ -93,7 +94,8 @@ class AutomaticCleanupTest(unittest.TestCase):
             enable_automatic_cleanup(
                 self.db_path,
                 cutoff_at=plan.cutoff_at,
-                expected_plan_revision="sc3_" + "0" * 64,
+                reviewed_at=plan.reviewed_at,
+                expected_plan_revision="sc4_" + "0" * 64,
                 now=self.now,
             )
         self.assertEqual(
@@ -104,6 +106,7 @@ class AutomaticCleanupTest(unittest.TestCase):
             enable_automatic_cleanup(
                 self.db_path,
                 cutoff_at=plan.cutoff_at,
+                reviewed_at=plan.reviewed_at,
                 expected_plan_revision=plan.plan_revision,
                 now=self.now + timedelta(minutes=6),
             )
@@ -111,6 +114,15 @@ class AutomaticCleanupTest(unittest.TestCase):
             "automatic_cleanup_plan_expired",
             expired.exception.code,
         )
+
+        enabled_after_slow_plan = enable_automatic_cleanup(
+            self.db_path,
+            cutoff_at=plan.cutoff_at,
+            reviewed_at="2026-09-07T12:10:00Z",
+            expected_plan_revision=plan.plan_revision,
+            now=self.now + timedelta(minutes=14),
+        )
+        self.assertTrue(enabled_after_slow_plan["enabled"])
 
         enabled = self._enable()
 
@@ -163,6 +175,7 @@ class AutomaticCleanupTest(unittest.TestCase):
         enable_automatic_cleanup(
             self.db_path,
             cutoff_at=plan.cutoff_at,
+            reviewed_at=plan.reviewed_at,
             expected_plan_revision=plan.plan_revision,
             now=started,
         )
@@ -493,6 +506,8 @@ class AutomaticCleanupTest(unittest.TestCase):
                 "enable",
                 "--cutoff-at",
                 plan.cutoff_at,
+                "--reviewed-at",
+                plan.reviewed_at,
                 "--plan-revision",
                 plan.plan_revision,
                 *common,
