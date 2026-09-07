@@ -86,10 +86,10 @@ class StorageCleanupPlanError(ValueError):
 
 @dataclass(frozen=True)
 class StorageCategoryUsage:
-    allocated_bytes: int
+    allocated_bytes: int | None
     row_count: int
 
-    def to_payload(self) -> dict[str, int]:
+    def to_payload(self) -> dict[str, int | None]:
         return {
             "allocated_bytes": self.allocated_bytes,
             "row_count": self.row_count,
@@ -110,7 +110,7 @@ class StorageCleanupPlan:
     eligible_incomplete_session_count: int
     eligible_unscoped_event_count: int
     candidate_rows: dict[str, int]
-    estimated_expired_reclaimable_bytes: int
+    estimated_expired_reclaimable_bytes: int | None
     temporary_space_required_bytes: int
     temporary_space_available_bytes: int
     plan_revision: str
@@ -140,6 +140,10 @@ class StorageCleanupPlan:
                 "database_free_page_bytes": self.database_free_page_bytes,
                 "migration_backup_count": self.migration_backup_count,
                 "migration_backup_bytes": self.migration_backup_bytes,
+                "category_byte_measurement_available": all(
+                    category.allocated_bytes is not None
+                    for category in self.categories.values()
+                ),
                 "categories": {
                     key: value.to_payload()
                     for key, value in sorted(self.categories.items())
@@ -155,7 +159,11 @@ class StorageCleanupPlan:
                 "estimated_reclaimable_bytes": (
                     self.estimated_expired_reclaimable_bytes
                 ),
-                "estimate_method": "proportional_owned_pages_v1",
+                "estimate_method": (
+                    "proportional_owned_pages_v1"
+                    if self.estimated_expired_reclaimable_bytes is not None
+                    else "unavailable"
+                ),
             },
             "compaction": {
                 "temporary_space_required_bytes": (
@@ -266,6 +274,7 @@ def plan_storage_cleanup(
             "freelist_count": freelist_count,
             "maximum_sequence": maximum_sequence,
             "maximum_recorded_at": maximum_recorded_at,
+            "wal_bytes": wal_bytes,
         },
         "retention_days": STORAGE_RETENTION_DAYS,
         "cutoff_at": cutoff_at,
@@ -332,7 +341,7 @@ def _table_row_counts(conn: sqlite3.Connection) -> dict[str, int]:
     return counts
 
 
-def _owned_page_bytes(conn: sqlite3.Connection) -> dict[str, int]:
+def _owned_page_bytes(conn: sqlite3.Connection) -> dict[str, int] | None:
     index_owners = {
         str(row[0]): str(row[1])
         for row in conn.execute(
@@ -348,8 +357,8 @@ def _owned_page_bytes(conn: sqlite3.Connection) -> dict[str, int]:
         rows = conn.execute(
             "SELECT name, pgsize FROM dbstat WHERE aggregate = TRUE"
         ).fetchall()
-    except sqlite3.Error as exc:
-        raise StorageCleanupPlanError("storage_page_classification_unavailable") from exc
+    except sqlite3.Error:
+        return None
     for object_name, size in rows:
         owner = index_owners.get(str(object_name), str(object_name))
         owned[owner] = owned.get(owner, 0) + int(size)
@@ -357,7 +366,7 @@ def _owned_page_bytes(conn: sqlite3.Connection) -> dict[str, int]:
 
 
 def _category_usage(
-    owner_bytes: dict[str, int],
+    owner_bytes: dict[str, int] | None,
     table_rows: dict[str, int],
 ) -> dict[str, StorageCategoryUsage]:
     totals: dict[str, list[int]] = {
@@ -367,7 +376,11 @@ def _category_usage(
         "durable_configuration": [0, 0],
         "other": [0, 0],
     }
-    for table, byte_count in owner_bytes.items():
+    tables = set(table_rows)
+    if owner_bytes is not None:
+        tables.update(owner_bytes)
+    for table in tables:
+        byte_count = 0 if owner_bytes is None else owner_bytes.get(table, 0)
         if table in _IMPROVEMENT_FEEDBACK_TABLES:
             category = "improvement_feedback"
         elif table in _DURABLE_CONFIGURATION_TABLES:
@@ -381,7 +394,10 @@ def _category_usage(
         totals[category][0] += byte_count
         totals[category][1] += table_rows.get(table, 0)
     return {
-        category: StorageCategoryUsage(values[0], values[1])
+        category: StorageCategoryUsage(
+            values[0] if owner_bytes is not None else None,
+            values[1],
+        )
         for category, values in totals.items()
     }
 
@@ -478,10 +494,12 @@ def _retention_candidates(
 
 
 def _estimate_reclaimable_bytes(
-    owner_bytes: dict[str, int],
+    owner_bytes: dict[str, int] | None,
     table_rows: dict[str, int],
     candidate_rows: dict[str, int],
-) -> int:
+) -> int | None:
+    if owner_bytes is None:
+        return None
     estimate = 0
     for table, candidates in candidate_rows.items():
         total = table_rows.get(table, 0)

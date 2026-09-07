@@ -8,9 +8,11 @@ from contextlib import redirect_stdout
 from datetime import UTC, datetime
 from io import StringIO
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 from hook_monitor.runtime.storage import EventStore
 from tooluseproxy.cli import main as tooluseproxy_main
+from tooluseproxy import storage_cleanup
 from tooluseproxy.storage_cleanup import (
     STORAGE_ACTION_BYTES,
     STORAGE_RETENTION_DAYS,
@@ -166,6 +168,7 @@ class StorageCleanupPlanTest(unittest.TestCase):
             ],
             0,
         )
+        self.assertTrue(payload["storage"]["category_byte_measurement_available"])
         self.assertTrue(payload["preserved"]["improvement_feedback"])
         self.assertTrue(payload["preserved"]["protected_source_registrations"])
         self.assertEqual(1, payload["storage"]["migration_backup_count"])
@@ -199,6 +202,45 @@ class StorageCleanupPlanTest(unittest.TestCase):
             conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         changed = plan_storage_cleanup(self.db_path, now=self.now)
         self.assertNotEqual(first.plan_revision, changed.plan_revision)
+
+    def test_revision_binds_wal_byte_inventory(self) -> None:
+        with patch.object(storage_cleanup, "_regular_file_size", return_value=0):
+            without_wal = plan_storage_cleanup(self.db_path, now=self.now)
+        with patch.object(storage_cleanup, "_regular_file_size", return_value=4096):
+            with_wal = plan_storage_cleanup(self.db_path, now=self.now)
+
+        self.assertNotEqual(without_wal.plan_revision, with_wal.plan_revision)
+        self.assertEqual(4096, with_wal.database_wal_bytes)
+
+    def test_plan_keeps_retention_candidates_when_page_measurement_is_unavailable(
+        self,
+    ) -> None:
+        with patch.object(storage_cleanup, "_owned_page_bytes", return_value=None):
+            payload = plan_storage_cleanup(self.db_path, now=self.now).to_payload()
+
+        self.assertEqual(2, payload["retention_candidates"]["eligible_session_count"])
+        self.assertEqual(4, payload["retention_candidates"]["rows"]["events"])
+        self.assertFalse(payload["storage"]["category_byte_measurement_available"])
+        self.assertIsNone(
+            payload["storage"]["categories"]["detailed_operation_records"][
+                "allocated_bytes"
+            ]
+        )
+        self.assertIsNone(
+            payload["retention_candidates"]["estimated_reclaimable_bytes"]
+        )
+        self.assertEqual(
+            "unavailable", payload["retention_candidates"]["estimate_method"]
+        )
+
+    def test_page_measurement_returns_unknown_when_dbstat_is_unavailable(self) -> None:
+        connection = MagicMock()
+        connection.execute.side_effect = [
+            [("events", "events")],
+            sqlite3.OperationalError("no such table: dbstat"),
+        ]
+
+        self.assertIsNone(storage_cleanup._owned_page_bytes(connection))
 
     def test_cli_plan_is_value_free_and_uses_fixed_thresholds(self) -> None:
         stdout = StringIO()
