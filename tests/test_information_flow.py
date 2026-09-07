@@ -8764,7 +8764,8 @@ class InformationFlowTest(unittest.TestCase):
                 "storage-cleanup",
                 f"sh {launcher} storage cleanup apply "
                 f"--cutoff-at 2026-08-08T12:00:00Z "
-                f"--plan-revision sc3_{'a' * 64} --batch-size 20 "
+                f"--reviewed-at 2026-09-07T12:00:00Z "
+                f"--plan-revision sc4_{'a' * 64} --batch-size 20 "
                 f"--data-dir {self.db_path.parent} --json",
             ),
         )

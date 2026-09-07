@@ -25,20 +25,20 @@ alphaのthreat modelは、Pluginやcoding agentの無承認manifest変更、stal
 
 ## 現在versionと更新
 
-`0.1.0-alpha.19`は現在の検証対象public alphaです。alpha.18までの固定`gh issue view`判定、未設定project無出力・無記録、判定時間切れ前の安全停止、個別の保護解除、正規管理操作の自己ブロック防止を維持します。さらに保存内容の重複を減らし、30日を過ぎた詳しい操作記録と安全条件を満たす更新前DB退避を少量ずつ整理できます。自動整理は初期状態で無効です。LLM providerと実project試行記録は既定offです。
+`0.1.0-alpha.20`は現在の検証対象public alphaです。alpha.18までの固定`gh issue view`判定、未設定project無出力・無記録、判定時間切れ前の安全停止、個別の保護解除、正規管理操作の自己ブロック防止を維持します。さらに保存内容の重複を減らし、30日を過ぎた詳しい操作記録と安全条件を満たす更新前DB退避を少量ずつ整理できます。大容量DBの変更前計画では、集計の開始時刻ではなく表示完了時刻から5分間を利用者確認に使えます。自動整理は初期状態で無効です。LLM providerと実project試行記録は既定offです。
 
 Codex CLIはPluginごとの自動更新commandではなく、登録済みGit marketplaceを明示的に更新する`codex plugin marketplace upgrade`を提供します。moving refを登録している場合、更新されたmarketplace snapshotからinstall済みPluginも置き換わります。ToolUseProxyは次の2方式を分けます。
 
 | 方式 | `--ref` | 用途 | 更新 |
 | --- | --- | --- | --- |
 | public alpha更新チャンネル | `public-alpha` | 通常のdogfood / pilot | `marketplace upgrade`で明示更新 |
-| immutable version固定 | `v0.1.0-alpha.19` | 再現実験、監査、rollback | tagは動かないため自動的に別versionへ進まない |
+| immutable version固定 | `v0.1.0-alpha.20` | 再現実験、監査、rollback | tagは動かないため自動的に別versionへ進まない |
 
 `public-alpha`はreview済み・CI green・公開済みのalpha release commitだけへfast-forwardする保護branchです。開発途中の`main`を実行元にはしません。更新は自動ではなく、ユーザーがcommandを実行した時だけ行われます。
 
 Codex Desktopも同じmarketplaceからPluginをinstallし、複数workspaceで利用できます。Plugin codeのinstallはCodex環境単位ですが、初期化、protected source、runtime設定、監査dataはworkspace単位です。新しいworkspaceを使うたびに、そのworkspaceでbundled setup skillを実行し、保護対象を個別にreviewします。2026-08-22のmacOS実機runでは、alpha.8の5 Hookのreview / trustと配送、public allow、file-backed protected payloadの実行前blockを確認しました。承認2回、public side effect 1、protected side effect 0、exact block 1、raw exposure 0で正式な`passed`です。2026-08-09のrunではdata migration、backup rollback、Disableなしの直接Removeも確認しました。Desktop task履歴のshell名`exec_command`とHook APIのcanonical名`Bash`は別namespaceであり、画面表示だけでなくHook trust、定義hash、値なしmarker、Hook DB、task記録を証拠にします。hosted Web SearchはPreToolUse / PostToolUse Hookの対象外です。
 
-SQLite schemaはalpha.19でv12です。旧版から更新してschema変更が必要な場合は、bundled setup skillの案内に従ってHook外で明示的なatomic setupを行います。更新前にはSQLite backupを作り、schema v12では重複する解析本文と検索用特徴を共有保存へ移します。更新後は変更されたHook definitionをreview・trustして新しいtaskを開始し、bundled skillのread-only verificationを実行してください。
+SQLite schemaはalpha.20でv12です。旧版から更新してschema変更が必要な場合は、bundled setup skillの案内に従ってHook外で明示的なatomic setupを行います。更新前にはSQLite backupを作り、schema v12では重複する解析本文と検索用特徴を共有保存へ移します。更新後は変更されたHook definitionをreview・trustして新しいtaskを開始し、bundled skillのread-only verificationを実行してください。
 
 ## install
 
@@ -52,10 +52,10 @@ codex plugin add tooluseproxy@tooluseproxy
 versionを固定する場合は最初のcommandを次に置き換えます。
 
 ```bash
-codex plugin marketplace add mani1261790/ToolUseProxy --ref v0.1.0-alpha.19
+codex plugin marketplace add mani1261790/ToolUseProxy --ref v0.1.0-alpha.20
 ```
 
-install後はCodexが表示するPlugin source、version、5つのHook definition（SessionStart / SubagentStart / PreToolUse / PostToolUse / Stop）を確認してtrustします。ToolUseProxyはこのreviewを迂回しません。以前trustしたHookでも、matcher、command、sourceなどの定義が変わると`modified`になり、再reviewが必要です。更新後はCodexを完全に終了して起動し直し、新しいタスクでcurrent-invocation healthを確認します。alpha.19のrelease artifact、checksum、SBOM、release notesはGitHub pre-releaseに公開します。
+install後はCodexが表示するPlugin source、version、5つのHook definition（SessionStart / SubagentStart / PreToolUse / PostToolUse / Stop）を確認してtrustします。ToolUseProxyはこのreviewを迂回しません。以前trustしたHookでも、matcher、command、sourceなどの定義が変わると`modified`になり、再reviewが必要です。更新後はCodexを完全に終了して起動し直し、新しいタスクでcurrent-invocation healthを確認します。alpha.20のrelease artifact、checksum、SBOM、release notesはGitHub pre-releaseに公開します。
 
 ### CLIで更新する
 
@@ -315,23 +315,25 @@ sh "<PLUGIN_ROOT>/hooks/run_cli.sh" storage cleanup plan \
 
 このcommandはDB、更新前退避、詳しい操作記録、再作成可能な検索データ、改善用フィードバック、長期設定を分けて容量と行数を返します。30日前の完全なsession、途中終了session、session番号のない古い操作を区別し、回収見込みとDB縮小に必要な一時空き容量も示します。更新前退避については、7日経過、現在版の動作確認、現在DBの整合性、新しい移行が進行中でないことを確認し、削除できる件数・容量と、待機理由ごとの件数を表示します。DB、保護リスト、元ファイルは変更せず、保護リストの内容、保存本文、絶対path、接続先を表示しません。大きいDBでは全pageの分類に時間がかかるため、Hook内では実行しません。詳しい契約は[保存容量と自動整理](../設計/保存容量と自動整理.md)を参照してください。
 
-削除は、計画に表示された境界時刻と確認番号をそのまま指定した場合だけ、既定20作業単位ずつ行います。計画後にDBが変わっていれば何も削除しません。
+削除は、計画に表示された境界時刻、表示完了時刻、確認番号をそのまま指定した場合だけ、既定20作業単位ずつ行います。5分の期限は計画の表示完了時刻から数えます。計画後にDBが変わっていれば何も削除しません。
 
 ```sh
 sh "<PLUGIN_ROOT>/hooks/run_cli.sh" storage cleanup apply \
   --cutoff-at "<PLAN_CUTOFF_AT>" \
+  --reviewed-at "<PLAN_REVIEWED_AT>" \
   --plan-revision "<PLAN_REVISION>" \
   --data-dir "<PLUGIN_DATA>" \
   --json
 ```
 
-結果の`remaining.session_count`または`remaining.unscoped_event_count`が0でなければ、返された`next_plan_revision`を次の`--plan-revision`へ指定して続けられます。利用者の実DBへ初めて適用する作業は#159で行い、最初に表示した計画を確認するまでは実行しません。
+結果の`remaining.session_count`または`remaining.unscoped_event_count`が0でなければ、返された`next_reviewed_at`と`next_plan_revision`を次の命令へ指定して続けられます。利用者の実DBへ初めて適用する作業は#159で行い、最初に表示した計画を確認するまでは実行しません。
 
-確認済みの計画を基に、以後のタスク終了後に自動整理を予約する場合は次を実行します。初期状態では無効であり、この命令を実行するまでは実データを自動削除しません。計画は作成から5分以内で、DBが変わっていない必要があります。
+確認済みの計画を基に、以後のタスク終了後に自動整理を予約する場合は次を実行します。初期状態では無効であり、この命令を実行するまでは実データを自動削除しません。計画の表示完了から5分以内で、DBが変わっていない必要があります。
 
 ```sh
 sh "<PLUGIN_ROOT>/hooks/run_cli.sh" storage cleanup auto enable \
   --cutoff-at "<PLAN_CUTOFF_AT>" \
+  --reviewed-at "<PLAN_REVIEWED_AT>" \
   --plan-revision "<PLAN_REVISION>" \
   --data-dir "<PLUGIN_DATA>" \
   --json
@@ -408,7 +410,7 @@ sh "<PLUGIN_ROOT>/hooks/run_cli.sh" uninstall apply \
 
 削除対象はSQLite database / sidecar、migration backup、manifest backupだけです。管理外fileは残し、plan後に内容が変わった場合はstale tokenを拒否します。workspace manifestやprotected source本体、symlink先、package codeは削除しません。secure eraseやfilesystem snapshotの削除は保証しません。
 
-alpha.1およびstale alpha.8からalpha.19へのupgrade / safe rollback手順は[Pluginライフサイクル](../運用/Pluginライフサイクル.md)を参照してください。alpha.12 fresh Desktop、alpha.13の未設定・設定済みCodex CLI実経路、alpha.15の判定時間切れ停止はmacOSで確認済みです。alpha.19では容量整理を含む現行schemaへの更新を隔離環境で検証します。Linux / Windowsと将来version間の反復は引き続きpublic alphaの検証課題です。
+alpha.1およびstale alpha.8からalpha.20へのupgrade / safe rollback手順は[Pluginライフサイクル](../運用/Pluginライフサイクル.md)を参照してください。alpha.12 fresh Desktop、alpha.13の未設定・設定済みCodex CLI実経路、alpha.15の判定時間切れ停止はmacOSで確認済みです。alpha.20では容量整理を含む現行schemaへの更新を隔離環境で検証します。Linux / Windowsと将来version間の反復は引き続きpublic alphaの検証課題です。
 
 pre-release候補で実際のHook trust、agent説明、実tool invocationを検証するときは、通常workspaceや実secretを使わず、[Pluginドッグフードのmanual Phase B](../運用/Pluginドッグフード.md#manual-phase-b)を実行します。prepare出力はlocal pathを含むため公開せず、raw値とpathを除外したverify結果だけをrelease evidenceとして扱います。
 
