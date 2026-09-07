@@ -100,6 +100,11 @@ from tooluseproxy.uninstall import (
     plan_managed_data_deletion,
 )
 from tooluseproxy.storage_cleanup import apply_storage_cleanup, plan_storage_cleanup
+from tooluseproxy.automatic_cleanup import (
+    disable_automatic_cleanup,
+    enable_automatic_cleanup,
+    run_automatic_cleanup,
+)
 
 
 MANIFEST_FILENAME = "protected_sources.json"
@@ -611,6 +616,40 @@ def _build_parser() -> argparse.ArgumentParser:
     storage_cleanup_apply.add_argument("--batch-size", type=int, default=20)
     storage_cleanup_apply.add_argument("--json", action="store_true")
     _add_runtime_path_arguments(storage_cleanup_apply)
+    storage_cleanup_auto = storage_cleanup_subparsers.add_parser(
+        "auto",
+        help="Manage the confirmed once-per-day cleanup worker.",
+    )
+    storage_cleanup_auto_subparsers = storage_cleanup_auto.add_subparsers(
+        dest="storage_cleanup_auto_command",
+        required=True,
+    )
+    storage_cleanup_auto_status = storage_cleanup_auto_subparsers.add_parser(
+        "status",
+        help="Show value-free automatic cleanup state.",
+    )
+    storage_cleanup_auto_status.add_argument("--json", action="store_true")
+    _add_runtime_path_arguments(storage_cleanup_auto_status)
+    storage_cleanup_auto_enable = storage_cleanup_auto_subparsers.add_parser(
+        "enable",
+        help="Enable future runs after validating an explicitly reviewed plan.",
+    )
+    storage_cleanup_auto_enable.add_argument("--cutoff-at", required=True)
+    storage_cleanup_auto_enable.add_argument("--plan-revision", required=True)
+    storage_cleanup_auto_enable.add_argument("--json", action="store_true")
+    _add_runtime_path_arguments(storage_cleanup_auto_enable)
+    storage_cleanup_auto_disable = storage_cleanup_auto_subparsers.add_parser(
+        "disable",
+        help="Disable future automatic cleanup without deleting stored data.",
+    )
+    storage_cleanup_auto_disable.add_argument("--json", action="store_true")
+    _add_runtime_path_arguments(storage_cleanup_auto_disable)
+    storage_cleanup_auto_run = storage_cleanup_auto_subparsers.add_parser(
+        "run",
+        help="Run the local worker when confirmation and the daily limit allow it.",
+    )
+    storage_cleanup_auto_run.add_argument("--json", action="store_true")
+    _add_runtime_path_arguments(storage_cleanup_auto_run)
     from tooluseproxy.pilot_cli import add_pilot_parser
 
     add_pilot_parser(subparsers)
@@ -690,6 +729,23 @@ def _run_storage(args: argparse.Namespace) -> int:
             expected_plan_revision=args.plan_revision,
             batch_size=args.batch_size,
         ).to_payload()
+    elif args.storage_cleanup_command == "auto":
+        from tooluseproxy.automatic_cleanup import automatic_cleanup_status
+
+        if args.storage_cleanup_auto_command == "status":
+            payload = automatic_cleanup_status(paths.data_dir)
+        elif args.storage_cleanup_auto_command == "enable":
+            payload = enable_automatic_cleanup(
+                paths.db_path,
+                cutoff_at=args.cutoff_at,
+                expected_plan_revision=args.plan_revision,
+            )
+        elif args.storage_cleanup_auto_command == "disable":
+            payload = disable_automatic_cleanup(paths.data_dir)
+        elif args.storage_cleanup_auto_command == "run":
+            payload = run_automatic_cleanup(paths.db_path).to_payload()
+        else:  # pragma: no cover - argparse requires a known subcommand
+            raise ValueError("unsupported automatic cleanup command")
     else:
         raise ValueError("unsupported storage command")
     _render(payload, as_json=args.json)
@@ -1676,6 +1732,8 @@ def _run_status(args: argparse.Namespace) -> int:
     current_invocation_active = bool(
         configured and runtime_enforcement["hook_delivery_verified"]
     )
+    from tooluseproxy.automatic_cleanup import automatic_cleanup_status
+
     payload = {
         "status": (
             "active"
@@ -1696,6 +1754,7 @@ def _run_status(args: argparse.Namespace) -> int:
         "runtime_settings": runtime_settings,
         "runtime_enforcement": runtime_enforcement,
         "plugin_artifact": plugin_artifact,
+        "automatic_cleanup": automatic_cleanup_status(paths.data_dir),
         "enforcement_coverage": codex_enforcement_coverage(),
     }
     _render(payload, as_json=args.json)

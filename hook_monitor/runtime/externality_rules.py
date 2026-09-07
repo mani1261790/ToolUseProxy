@@ -513,6 +513,17 @@ def _parsed_local_management_operation(
             or not 1 <= arguments.batch_size <= 100
         ):
             return None
+        if arguments.storage_cleanup_command == "auto":
+            auto_command = arguments.storage_cleanup_auto_command
+            if auto_command == "enable" and (
+                _STORAGE_CLEANUP_REVISION_PATTERN.fullmatch(
+                    arguments.plan_revision
+                )
+                is None
+                or _STORAGE_CUTOFF_PATTERN.fullmatch(arguments.cutoff_at)
+                is None
+            ):
+                return None
     elif command_name == "trace":
         # Trace only reads local SQLite state. Its nested parser owns the
         # remaining arguments, and shell metacharacters were already rejected.
@@ -553,6 +564,7 @@ def _parsed_local_management_operation(
                 getattr(arguments, "uninstall_command", None),
                 getattr(arguments, "pilot_command", None),
                 getattr(arguments, "storage_cleanup_command", None),
+                getattr(arguments, "storage_cleanup_auto_command", None),
             )
             if isinstance(value, str)
         ),

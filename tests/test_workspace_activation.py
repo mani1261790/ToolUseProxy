@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 import gc
+from datetime import UTC, datetime
 
 import pytest
 
@@ -13,6 +14,9 @@ from tooluseproxy.integrations.activation import (
     save_workspace_activations,
 )
 from tooluseproxy.integrations.codex import CODEX_HOOK_PHASES, run_codex_hook
+from tooluseproxy import automatic_cleanup
+from tooluseproxy.automatic_cleanup import enable_automatic_cleanup
+from tooluseproxy.storage_cleanup import plan_storage_cleanup
 
 
 def invoke(monkeypatch, capsys, database, cwd, phase):
@@ -290,3 +294,55 @@ def test_activation_directory_creation_without_marker_keeps_legacy_protection(
     assert "WebSearch" in invoke(
         monkeypatch, capsys, database, tmp_path, "session-start"
     )
+
+
+def test_enabled_stop_only_reserves_detached_cleanup(
+    tmp_path, monkeypatch, capsys,
+):
+    database = tmp_path / "events.db"
+    store = EventStore(database)
+    store.initialize()
+    store.register_workspace(resolve_workspace(str(tmp_path)))
+    now = datetime.now(UTC)
+    plan = plan_storage_cleanup(database, now=now)
+    enable_automatic_cleanup(
+        database,
+        cutoff_at=plan.cutoff_at,
+        expected_plan_revision=plan.plan_revision,
+        now=now,
+    )
+    launched = []
+
+    def record_launch(command, **options):
+        launched.append((command, options))
+        return object()
+
+    monkeypatch.setattr(automatic_cleanup.subprocess, "Popen", record_launch)
+
+    assert invoke(monkeypatch, capsys, database, tmp_path, "stop") == ""
+    assert len(launched) == 1
+    assert launched[0][0][-7:-3] == ["storage", "cleanup", "auto", "run"]
+    assert launched[0][1]["start_new_session"] is True
+    assert (
+        tmp_path / automatic_cleanup.AUTOMATIC_CLEANUP_REQUEST_FILENAME
+    ).is_file()
+    assert (tmp_path / automatic_cleanup.RUNTIME_ACTIVITY_FILENAME).is_file()
+    assert automatic_cleanup.automatic_cleanup_status(tmp_path)["status"] == "waiting"
+
+
+def test_pending_cleanup_notice_is_shown_once_at_next_session_start(
+    tmp_path, monkeypatch, capsys,
+):
+    database = tmp_path / "events.db"
+    store = EventStore(database)
+    store.initialize()
+    store.register_workspace(resolve_workspace(str(tmp_path)))
+    state = automatic_cleanup._empty_state()
+    state["notification_pending"] = "cleanup_failed"
+    automatic_cleanup._write_state(tmp_path, state)
+
+    first = invoke(monkeypatch, capsys, database, tmp_path, "session-start")
+    second = invoke(monkeypatch, capsys, database, tmp_path, "session-start")
+
+    assert "自動整理を完了できませんでした" in first
+    assert "自動整理を完了できませんでした" not in second

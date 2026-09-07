@@ -106,6 +106,18 @@ def run_codex_hook(
         workspace_root = enabled_workspace_root(paths.db_path, envelope.get("cwd"))
         if workspace_root is None:
             return 0
+        from tooluseproxy.automatic_cleanup import (
+            reserve_automatic_cleanup,
+            signal_runtime_activity,
+            take_automatic_cleanup_notice,
+        )
+
+        try:
+            signal_runtime_activity(paths.data_dir)
+        except Exception:
+            # Cleanup coordination is best effort and must never weaken or stop
+            # the protection path.
+            pass
         # Replay exactly the original bytes. The runtime retains its own bounded
         # PreToolUse parser; PostToolUse/Stop may consume the remaining stream.
         sys.stdin = SimpleNamespace(buffer=_ReplayInput(prefix, original_stdin.buffer))
@@ -125,6 +137,17 @@ def run_codex_hook(
                 )
         finally:
             secure_database_permissions(paths.db_path)
+        if runtime_phase == "stop":
+            reserve_automatic_cleanup(paths.db_path)
+        cleanup_notice = None
+        if runtime_phase == "session_start":
+            try:
+                cleanup_notice = take_automatic_cleanup_notice(paths.data_dir)
+            except Exception:
+                cleanup_notice = (
+                    "ToolUseProxyの自動整理状態を確認できませんでした。"
+                    " `tooluseproxy status`で状態を確認してください。"
+                )
         output = _validated_hook_output(captured.getvalue(), runtime_phase)
         if captured.getvalue().strip() and output is None:
             raise ValueError("Hook runtime returned an invalid output")
@@ -146,7 +169,11 @@ def run_codex_hook(
                     "hookEventName": hook_event,
                     "additionalContext": " ".join(
                         item
-                        for item in (prior_context, HOSTED_TOOL_BOUNDARY_CONTEXT)
+                        for item in (
+                            prior_context,
+                            HOSTED_TOOL_BOUNDARY_CONTEXT,
+                            cleanup_notice,
+                        )
                         if item
                     ),
                 }

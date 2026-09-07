@@ -16,6 +16,12 @@ from tooluseproxy.migration_backups import (
     MIGRATION_BACKUP_LOCK_FILENAME,
     MIGRATION_BACKUP_STATE_FILENAME,
 )
+from tooluseproxy.automatic_cleanup import (
+    AUTOMATIC_CLEANUP_LOCK_FILENAME,
+    AUTOMATIC_CLEANUP_REQUEST_FILENAME,
+    AUTOMATIC_CLEANUP_STATE_FILENAME,
+    RUNTIME_ACTIVITY_FILENAME,
+)
 
 
 UNINSTALL_SCHEMA_VERSION = 1
@@ -222,6 +228,10 @@ def _is_managed_root(name: str) -> bool:
         or name in {
             MIGRATION_BACKUP_LOCK_FILENAME,
             MIGRATION_BACKUP_STATE_FILENAME,
+            AUTOMATIC_CLEANUP_LOCK_FILENAME,
+            AUTOMATIC_CLEANUP_REQUEST_FILENAME,
+            AUTOMATIC_CLEANUP_STATE_FILENAME,
+            RUNTIME_ACTIVITY_FILENAME,
         }
         or name == MANIFEST_BACKUP_DIRECTORY
         or _MIGRATION_BACKUP_PATTERN.fullmatch(name) is not None

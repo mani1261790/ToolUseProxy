@@ -14,6 +14,12 @@ from tooluseproxy.migration_backups import (
     MIGRATION_BACKUP_LOCK_FILENAME,
     MIGRATION_BACKUP_STATE_FILENAME,
 )
+from tooluseproxy.automatic_cleanup import (
+    AUTOMATIC_CLEANUP_LOCK_FILENAME,
+    AUTOMATIC_CLEANUP_REQUEST_FILENAME,
+    AUTOMATIC_CLEANUP_STATE_FILENAME,
+    RUNTIME_ACTIVITY_FILENAME,
+)
 from tooluseproxy.uninstall import DATA_DIRECTORY_MARKER, ensure_data_directory_marker
 
 
@@ -64,6 +70,13 @@ class UninstallCliTest(unittest.TestCase):
                 '{"schema_version":1,"backups":{}}\n',
                 encoding="utf-8",
             )
+            for automatic_name in (
+                AUTOMATIC_CLEANUP_LOCK_FILENAME,
+                AUTOMATIC_CLEANUP_REQUEST_FILENAME,
+                AUTOMATIC_CLEANUP_STATE_FILENAME,
+                RUNTIME_ACTIVITY_FILENAME,
+            ):
+                (data_dir / automatic_name).write_bytes(b"managed")
             backup_dir = data_dir / "manifest-backups" / "workspace"
             backup_dir.mkdir(parents=True)
             (backup_dir / "protected_sources.json").write_text(
@@ -108,6 +121,13 @@ class UninstallCliTest(unittest.TestCase):
             self.assertFalse(
                 (data_dir / MIGRATION_BACKUP_LOCK_FILENAME).exists()
             )
+            for automatic_name in (
+                AUTOMATIC_CLEANUP_LOCK_FILENAME,
+                AUTOMATIC_CLEANUP_REQUEST_FILENAME,
+                AUTOMATIC_CLEANUP_STATE_FILENAME,
+                RUNTIME_ACTIVITY_FILENAME,
+            ):
+                self.assertFalse((data_dir / automatic_name).exists())
 
     def test_apply_rejects_stale_confirmation_without_deleting_data(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
