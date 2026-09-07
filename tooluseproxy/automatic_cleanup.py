@@ -28,6 +28,7 @@ from tooluseproxy.storage_cleanup import (
     StorageCleanupPlanError,
     apply_storage_cleanup,
     plan_storage_cleanup,
+    validate_storage_cleanup_review,
 )
 
 
@@ -113,6 +114,7 @@ def enable_automatic_cleanup(
     db_path: Path,
     *,
     cutoff_at: str,
+    reviewed_at: str,
     expected_plan_revision: str,
     now: datetime | None = None,
 ) -> dict[str, object]:
@@ -120,9 +122,24 @@ def enable_automatic_cleanup(
 
     observed = _utc_now(now)
     plan_time = _plan_time_from_cutoff(cutoff_at)
-    if abs((observed - plan_time).total_seconds()) > 300:
-        raise AutomaticCleanupError("automatic_cleanup_plan_expired")
-    plan = plan_storage_cleanup(db_path, now=plan_time)
+    try:
+        reviewed = validate_storage_cleanup_review(
+            cutoff_at=cutoff_at,
+            reviewed_at=reviewed_at,
+            now=observed,
+        )
+    except StorageCleanupPlanError as exc:
+        code = (
+            "automatic_cleanup_plan_expired"
+            if exc.code == "storage_plan_expired"
+            else "automatic_cleanup_plan_review_time_invalid"
+        )
+        raise AutomaticCleanupError(code) from exc
+    plan = plan_storage_cleanup(
+        db_path,
+        now=plan_time,
+        reviewed_at=reviewed,
+    )
     if plan.plan_revision != expected_plan_revision:
         raise AutomaticCleanupError("automatic_cleanup_plan_changed")
     data_dir = db_path.parent
@@ -135,6 +152,7 @@ def enable_automatic_cleanup(
                 "enabled": True,
                 "enabled_at": _format_time(observed),
                 "authorization_cutoff_at": cutoff_at,
+                "authorization_reviewed_at": reviewed_at,
                 "authorization_plan_revision": expected_plan_revision,
                 "status": "waiting",
                 "reason": None,
@@ -341,6 +359,7 @@ def run_automatic_cleanup(
                 result = apply_storage_cleanup(
                     db_path,
                     cutoff_at=initial_plan.cutoff_at,
+                    reviewed_at=initial_plan.reviewed_at,
                     expected_plan_revision=initial_plan.plan_revision,
                     batch_size=STORAGE_CLEANUP_DEFAULT_BATCH_SIZE,
                     cancel_check=lambda: (

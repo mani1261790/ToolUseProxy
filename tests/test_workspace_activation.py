@@ -308,6 +308,7 @@ def test_enabled_stop_only_reserves_detached_cleanup(
     enable_automatic_cleanup(
         database,
         cutoff_at=plan.cutoff_at,
+        reviewed_at=plan.reviewed_at,
         expected_plan_revision=plan.plan_revision,
         now=now,
     )
@@ -360,6 +361,7 @@ def test_failed_stop_reservation_is_saved_for_next_session_start(
     enable_automatic_cleanup(
         database,
         cutoff_at=plan.cutoff_at,
+        reviewed_at=plan.reviewed_at,
         expected_plan_revision=plan.plan_revision,
         now=now,
     )

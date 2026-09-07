@@ -39,7 +39,7 @@ TRUSTED_SETUP_PROFILE_CONTRACT = b"trusted-tooluseproxy-setup-profile-v2"
 _REVISION_PATTERN = re.compile(r"[0-9a-f]{64}")
 _RECONCILIATION_REVISION_PATTERN = re.compile(r"r1_[0-9a-f]{64}")
 _REMOVAL_REVISION_PATTERN = re.compile(r"d1_[0-9a-f]{64}")
-_STORAGE_CLEANUP_REVISION_PATTERN = re.compile(r"sc3_[0-9a-f]{64}")
+_STORAGE_CLEANUP_REVISION_PATTERN = re.compile(r"sc4_[0-9a-f]{64}")
 _STORAGE_CUTOFF_PATTERN = re.compile(
     r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z"
 )
@@ -510,6 +510,7 @@ def _parsed_local_management_operation(
             _STORAGE_CLEANUP_REVISION_PATTERN.fullmatch(arguments.plan_revision)
             is None
             or _STORAGE_CUTOFF_PATTERN.fullmatch(arguments.cutoff_at) is None
+            or _STORAGE_CUTOFF_PATTERN.fullmatch(arguments.reviewed_at) is None
             or not 1 <= arguments.batch_size <= 100
         ):
             return None
@@ -521,6 +522,8 @@ def _parsed_local_management_operation(
                 )
                 is None
                 or _STORAGE_CUTOFF_PATTERN.fullmatch(arguments.cutoff_at)
+                is None
+                or _STORAGE_CUTOFF_PATTERN.fullmatch(arguments.reviewed_at)
                 is None
             ):
                 return None
