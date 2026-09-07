@@ -8754,32 +8754,44 @@ class InformationFlowTest(unittest.TestCase):
         launcher = plugin_root / "hooks" / "run_cli.sh"
         launcher.parent.mkdir(parents=True)
         launcher.write_text("#!/bin/sh\n", encoding="utf-8")
-        command = (
-            f"sh {launcher} config show --workspace {workspace} "
-            f"--data-dir {self.db_path.parent} --json"
+        commands = (
+            (
+                "config",
+                f"sh {launcher} config show --workspace {workspace} "
+                f"--data-dir {self.db_path.parent} --json",
+            ),
+            (
+                "storage-cleanup",
+                f"sh {launcher} storage cleanup apply "
+                f"--cutoff-at 2026-08-08T12:00:00Z "
+                f"--plan-revision sc2_{'a' * 64} --batch-size 20 "
+                f"--data-dir {self.db_path.parent} --json",
+            ),
         )
 
-        exit_code, stdout, stderr = self._run_hook_in_process(
-            "pre_tool_use",
-            {
-                "session_id": "session-missing-source-config",
-                "turn_id": "turn-missing-source-config",
-                "tool_use_id": "bash-missing-source-config",
-                "tool_name": "Bash",
-                "cwd": str(workspace),
-                "tool_input": {"command": command},
-            },
-            {
-                "PLUGIN_ROOT": str(plugin_root),
-                "TOOLUSEPROXY_DB_PATH": str(self.db_path),
-                "TOOLUSEPROXY_PRE_TOOL_POLICY": "1",
-                "TOOLUSEPROXY_EXTERNALITY_PROTECTION": "1",
-            },
-        )
+        for label, command in commands:
+            with self.subTest(command=label):
+                exit_code, stdout, stderr = self._run_hook_in_process(
+                    "pre_tool_use",
+                    {
+                        "session_id": f"session-missing-source-{label}",
+                        "turn_id": f"turn-missing-source-{label}",
+                        "tool_use_id": f"bash-missing-source-{label}",
+                        "tool_name": "Bash",
+                        "cwd": str(workspace),
+                        "tool_input": {"command": command},
+                    },
+                    {
+                        "PLUGIN_ROOT": str(plugin_root),
+                        "TOOLUSEPROXY_DB_PATH": str(self.db_path),
+                        "TOOLUSEPROXY_PRE_TOOL_POLICY": "1",
+                        "TOOLUSEPROXY_EXTERNALITY_PROTECTION": "1",
+                    },
+                )
 
-        self.assertEqual(0, exit_code)
-        self.assertEqual("", stdout)
-        self.assertEqual("", stderr)
+                self.assertEqual(0, exit_code)
+                self.assertEqual("", stdout)
+                self.assertEqual("", stderr)
 
     def test_pre_tool_runner_allows_local_recovery_for_invalid_manifest(
         self,

@@ -93,7 +93,7 @@ from tooluseproxy.uninstall import (
     ensure_data_directory_marker,
     plan_managed_data_deletion,
 )
-from tooluseproxy.storage_cleanup import plan_storage_cleanup
+from tooluseproxy.storage_cleanup import apply_storage_cleanup, plan_storage_cleanup
 
 
 MANIFEST_FILENAME = "protected_sources.json"
@@ -596,6 +596,15 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     storage_cleanup_plan.add_argument("--json", action="store_true")
     _add_runtime_path_arguments(storage_cleanup_plan)
+    storage_cleanup_apply = storage_cleanup_subparsers.add_parser(
+        "apply",
+        help="Delete one bounded batch from an explicitly reviewed cleanup plan.",
+    )
+    storage_cleanup_apply.add_argument("--cutoff-at", required=True)
+    storage_cleanup_apply.add_argument("--plan-revision", required=True)
+    storage_cleanup_apply.add_argument("--batch-size", type=int, default=20)
+    storage_cleanup_apply.add_argument("--json", action="store_true")
+    _add_runtime_path_arguments(storage_cleanup_apply)
     from tooluseproxy.pilot_cli import add_pilot_parser
 
     add_pilot_parser(subparsers)
@@ -663,13 +672,20 @@ def _run_uninstall(args: argparse.Namespace) -> int:
 
 
 def _run_storage(args: argparse.Namespace) -> int:
-    if (
-        args.storage_command != "cleanup"
-        or args.storage_cleanup_command != "plan"
-    ):
+    if args.storage_command != "cleanup":
         raise ValueError("unsupported storage command")
     paths = resolve_runtime_paths(db_path=args.db, data_dir=args.data_dir)
-    payload = plan_storage_cleanup(paths.db_path).to_payload()
+    if args.storage_cleanup_command == "plan":
+        payload = plan_storage_cleanup(paths.db_path).to_payload()
+    elif args.storage_cleanup_command == "apply":
+        payload = apply_storage_cleanup(
+            paths.db_path,
+            cutoff_at=args.cutoff_at,
+            expected_plan_revision=args.plan_revision,
+            batch_size=args.batch_size,
+        ).to_payload()
+    else:
+        raise ValueError("unsupported storage command")
     _render(payload, as_json=args.json)
     return 0
 

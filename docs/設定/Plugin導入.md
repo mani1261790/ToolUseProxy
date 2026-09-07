@@ -315,6 +315,18 @@ sh "<PLUGIN_ROOT>/hooks/run_cli.sh" storage cleanup plan \
 
 このcommandはDB、更新前退避、詳しい操作記録、再作成可能な検索データ、改善用フィードバック、長期設定を分けて容量と行数を返します。30日前の完全なsession、途中終了session、session番号のない古い操作を区別し、回収見込みとDB縮小に必要な一時空き容量も示します。DB、保護リスト、元ファイルは変更せず、保護リストの内容、保存本文、絶対path、接続先を表示しません。大きいDBでは全pageの分類に時間がかかるため、Hook内では実行しません。詳しい契約は[保存容量と自動整理](../設計/保存容量と自動整理.md)を参照してください。
 
+削除は、計画に表示された境界時刻と確認番号をそのまま指定した場合だけ、既定20作業単位ずつ行います。計画後にDBが変わっていれば何も削除しません。
+
+```sh
+sh "<PLUGIN_ROOT>/hooks/run_cli.sh" storage cleanup apply \
+  --cutoff-at "<PLAN_CUTOFF_AT>" \
+  --plan-revision "<PLAN_REVISION>" \
+  --data-dir "<PLUGIN_DATA>" \
+  --json
+```
+
+結果の`remaining`が0でなければ、返された`next_plan_revision`を次の`--plan-revision`へ指定して続けられます。利用者の実DBへ初めて適用する作業は#159で行い、最初に表示した計画を確認するまでは実行しません。
+
 workspace探索は明示的なoffline `protect scan`に限定し、`init`やHook中では実行しません。候補ごとの明示判断をまとめて反映できますが、無承認の自動登録やscanの上限引き上げoptionはありません。legacy manifestはruntime読み取り互換を維持しますが、scanはsource fileを読む前に値のない`manifest_schema_legacy`で終了します。coding agentは`protect migrate plan`を提示せずに独断でv2へ変更しません。
 
 ## package CLIの開発install
