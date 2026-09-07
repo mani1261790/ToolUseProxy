@@ -59,6 +59,12 @@ from tooluseproxy.paths import (
     resolve_runtime_paths,
     secure_database_permissions,
 )
+from tooluseproxy.migration_backups import (
+    MigrationBackupError,
+    mark_migration_backups_verified,
+    migration_backup_lock,
+    record_migration_backup,
+)
 from tooluseproxy.runtime_probe import (
     hook_probe_token_is_valid,
     payload_contains_hook_probe_token,
@@ -92,6 +98,12 @@ from tooluseproxy.uninstall import (
     apply_managed_data_deletion,
     ensure_data_directory_marker,
     plan_managed_data_deletion,
+)
+from tooluseproxy.storage_cleanup import apply_storage_cleanup, plan_storage_cleanup
+from tooluseproxy.automatic_cleanup import (
+    disable_automatic_cleanup,
+    enable_automatic_cleanup,
+    run_automatic_cleanup,
 )
 
 
@@ -162,6 +174,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _run_protect(args)
         if args.command == "externality":
             return _run_externality(args)
+        if args.command == "storage":
+            return _run_storage(args)
         if args.command == "uninstall":
             return _run_uninstall(args)
         if args.command == "trace":
@@ -570,6 +584,72 @@ def _build_parser() -> argparse.ArgumentParser:
     uninstall_apply.add_argument("--data-dir", type=Path, required=True)
     uninstall_apply.add_argument("--confirmation-token", required=True)
     uninstall_apply.add_argument("--json", action="store_true")
+
+    storage = subparsers.add_parser(
+        "storage",
+        help="Review ToolUseProxy local storage without exposing recorded content.",
+    )
+    storage_subparsers = storage.add_subparsers(
+        dest="storage_command",
+        required=True,
+    )
+    storage_cleanup = storage_subparsers.add_parser(
+        "cleanup",
+        help="Review or apply the fixed local storage retention policy.",
+    )
+    storage_cleanup_subparsers = storage_cleanup.add_subparsers(
+        dest="storage_cleanup_command",
+        required=True,
+    )
+    storage_cleanup_plan = storage_cleanup_subparsers.add_parser(
+        "plan",
+        help="Measure storage and expired records without changing local data.",
+    )
+    storage_cleanup_plan.add_argument("--json", action="store_true")
+    _add_runtime_path_arguments(storage_cleanup_plan)
+    storage_cleanup_apply = storage_cleanup_subparsers.add_parser(
+        "apply",
+        help="Delete one bounded batch from an explicitly reviewed cleanup plan.",
+    )
+    storage_cleanup_apply.add_argument("--cutoff-at", required=True)
+    storage_cleanup_apply.add_argument("--plan-revision", required=True)
+    storage_cleanup_apply.add_argument("--batch-size", type=int, default=20)
+    storage_cleanup_apply.add_argument("--json", action="store_true")
+    _add_runtime_path_arguments(storage_cleanup_apply)
+    storage_cleanup_auto = storage_cleanup_subparsers.add_parser(
+        "auto",
+        help="Manage the confirmed once-per-day cleanup worker.",
+    )
+    storage_cleanup_auto_subparsers = storage_cleanup_auto.add_subparsers(
+        dest="storage_cleanup_auto_command",
+        required=True,
+    )
+    storage_cleanup_auto_status = storage_cleanup_auto_subparsers.add_parser(
+        "status",
+        help="Show value-free automatic cleanup state.",
+    )
+    storage_cleanup_auto_status.add_argument("--json", action="store_true")
+    _add_runtime_path_arguments(storage_cleanup_auto_status)
+    storage_cleanup_auto_enable = storage_cleanup_auto_subparsers.add_parser(
+        "enable",
+        help="Enable future runs after validating an explicitly reviewed plan.",
+    )
+    storage_cleanup_auto_enable.add_argument("--cutoff-at", required=True)
+    storage_cleanup_auto_enable.add_argument("--plan-revision", required=True)
+    storage_cleanup_auto_enable.add_argument("--json", action="store_true")
+    _add_runtime_path_arguments(storage_cleanup_auto_enable)
+    storage_cleanup_auto_disable = storage_cleanup_auto_subparsers.add_parser(
+        "disable",
+        help="Disable future automatic cleanup without deleting stored data.",
+    )
+    storage_cleanup_auto_disable.add_argument("--json", action="store_true")
+    _add_runtime_path_arguments(storage_cleanup_auto_disable)
+    storage_cleanup_auto_run = storage_cleanup_auto_subparsers.add_parser(
+        "run",
+        help="Run the local worker when confirmation and the daily limit allow it.",
+    )
+    storage_cleanup_auto_run.add_argument("--json", action="store_true")
+    _add_runtime_path_arguments(storage_cleanup_auto_run)
     from tooluseproxy.pilot_cli import add_pilot_parser
 
     add_pilot_parser(subparsers)
@@ -636,6 +716,42 @@ def _run_uninstall(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_storage(args: argparse.Namespace) -> int:
+    if args.storage_command != "cleanup":
+        raise ValueError("unsupported storage command")
+    paths = resolve_runtime_paths(db_path=args.db, data_dir=args.data_dir)
+    if args.storage_cleanup_command == "plan":
+        payload = plan_storage_cleanup(paths.db_path).to_payload()
+    elif args.storage_cleanup_command == "apply":
+        payload = apply_storage_cleanup(
+            paths.db_path,
+            cutoff_at=args.cutoff_at,
+            expected_plan_revision=args.plan_revision,
+            batch_size=args.batch_size,
+        ).to_payload()
+    elif args.storage_cleanup_command == "auto":
+        from tooluseproxy.automatic_cleanup import automatic_cleanup_status
+
+        if args.storage_cleanup_auto_command == "status":
+            payload = automatic_cleanup_status(paths.data_dir)
+        elif args.storage_cleanup_auto_command == "enable":
+            payload = enable_automatic_cleanup(
+                paths.db_path,
+                cutoff_at=args.cutoff_at,
+                expected_plan_revision=args.plan_revision,
+            )
+        elif args.storage_cleanup_auto_command == "disable":
+            payload = disable_automatic_cleanup(paths.data_dir)
+        elif args.storage_cleanup_auto_command == "run":
+            payload = run_automatic_cleanup(paths.db_path).to_payload()
+        else:  # pragma: no cover - argparse requires a known subcommand
+            raise ValueError("unsupported automatic cleanup command")
+    else:
+        raise ValueError("unsupported storage command")
+    _render(payload, as_json=args.json)
+    return 0
+
+
 def _run_init(args: argparse.Namespace) -> int:
     paths = resolve_runtime_paths(db_path=args.db, data_dir=args.data_dir)
     if args.codex and paths.source == "platform_default":
@@ -665,7 +781,9 @@ def _run_init(args: argparse.Namespace) -> int:
     if not paths.db_path.exists():
         _create_secure_empty_file(paths.db_path)
     store = EventStore(paths.db_path)
-    store.initialize()
+    store.initialize(
+        allow_content_migration=(backup_path is not None or args.import_db is not None)
+    )
     secure_database_permissions(paths.db_path)
 
     workspace = resolve_workspace(
@@ -732,7 +850,7 @@ def _run_setup_apply(args: argparse.Namespace) -> int:
         if not paths.db_path.exists():
             _create_secure_empty_file(paths.db_path)
         store = EventStore(paths.db_path)
-        store.initialize()
+        store.initialize(allow_content_migration=backup_path is not None)
         secure_database_permissions(paths.db_path)
 
         workspace = resolve_workspace(
@@ -1006,6 +1124,27 @@ def _run_setup_verify(args: argparse.Namespace) -> int:
             plugin_artifact=plugin_artifact,
             probe_token=args.hook_probe_token,
         )
+        backup_verification: dict[str, object] = {
+            "status": "not_verified",
+            "verified_backup_count": 0,
+        }
+        if ok and runtime_enforcement["hook_delivery_verified"]:
+            try:
+                verified_backup_count = mark_migration_backups_verified(
+                    paths.db_path,
+                    runtime_version=__version__,
+                )
+            except MigrationBackupError as exc:
+                backup_verification = {
+                    "status": "unavailable",
+                    "reason": exc.code,
+                    "verified_backup_count": 0,
+                }
+            else:
+                backup_verification = {
+                    "status": "verified",
+                    "verified_backup_count": verified_backup_count,
+                }
         payload = {
             "schema_version": SETUP_OUTPUT_SCHEMA_VERSION,
             "status": "configuration_passed" if ok else "needs_attention",
@@ -1031,6 +1170,7 @@ def _run_setup_verify(args: argparse.Namespace) -> int:
             "runtime_settings": settings_payload,
             "enforcement_coverage": codex_enforcement_coverage(),
             "plugin_artifact": plugin_artifact,
+            "migration_backups": backup_verification,
         }
     except (
         OSError,
@@ -1592,6 +1732,8 @@ def _run_status(args: argparse.Namespace) -> int:
     current_invocation_active = bool(
         configured and runtime_enforcement["hook_delivery_verified"]
     )
+    from tooluseproxy.automatic_cleanup import automatic_cleanup_status
+
     payload = {
         "status": (
             "active"
@@ -1612,6 +1754,7 @@ def _run_status(args: argparse.Namespace) -> int:
         "runtime_settings": runtime_settings,
         "runtime_enforcement": runtime_enforcement,
         "plugin_artifact": plugin_artifact,
+        "automatic_cleanup": automatic_cleanup_status(paths.data_dir),
         "enforcement_coverage": codex_enforcement_coverage(),
     }
     _render(payload, as_json=args.json)
@@ -3374,6 +3517,13 @@ def _create_secure_empty_file(path: Path) -> None:
 def _backup_database_before_upgrade(db_path: Path) -> Path | None:
     if not db_path.is_file():
         return None
+    with migration_backup_lock(db_path.parent, exclusive=True, create=True):
+        return _backup_database_before_upgrade_locked(db_path)
+
+
+def _backup_database_before_upgrade_locked(db_path: Path) -> Path | None:
+    if not db_path.is_file():
+        return None
     uri = f"{db_path.resolve().as_uri()}?mode=ro"
     with sqlite3.connect(uri, uri=True) as source_conn:
         row = source_conn.execute("PRAGMA user_version").fetchone()
@@ -3402,7 +3552,18 @@ def _backup_database_before_upgrade(db_path: Path) -> Path | None:
         except Exception:
             _remove_sqlite_files(backup_path)
             raise
-    secure_database_permissions(backup_path)
+    try:
+        secure_database_permissions(backup_path)
+        record_migration_backup(
+            backup_path,
+            source_schema_version=version,
+            target_schema_version=CURRENT_SCHEMA_VERSION,
+            runtime_version=__version__,
+            _lock_held=True,
+        )
+    except Exception:
+        _remove_sqlite_files(backup_path)
+        raise
     return backup_path
 
 

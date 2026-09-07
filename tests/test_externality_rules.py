@@ -286,6 +286,19 @@ class ExternalityRuleTest(unittest.TestCase):
             f"sh {launcher} externality approve job-id --expected-revision {revision} "
             f"--data-dir {data_dir} --json",
             f"sh {launcher} trace --db {self.db_path} --latest --format json",
+            f"sh {launcher} storage cleanup plan --data-dir {data_dir} --json",
+            f"sh {launcher} storage cleanup apply "
+            f"--cutoff-at 2026-08-08T12:00:00Z --plan-revision sc3_{revision} "
+            f"--batch-size 20 --data-dir {data_dir} --json",
+            f"sh {launcher} storage cleanup auto status "
+            f"--data-dir {data_dir} --json",
+            f"sh {launcher} storage cleanup auto enable "
+            f"--cutoff-at 2026-08-08T12:00:00Z --plan-revision sc3_{revision} "
+            f"--data-dir {data_dir} --json",
+            f"sh {launcher} storage cleanup auto disable "
+            f"--data-dir {data_dir} --json",
+            f"sh {launcher} storage cleanup auto run "
+            f"--data-dir {data_dir} --json",
             f"sh {launcher} uninstall plan --data-dir {data_dir} --json",
         )
 
@@ -307,6 +320,17 @@ class ExternalityRuleTest(unittest.TestCase):
                 if decision is None or decision.state != "known_local"
             ],
         )
+        automatic_decisions = decisions[16:20]
+        self.assertEqual(
+            4,
+            len(
+                {
+                    decision.envelope_sha256
+                    for decision in automatic_decisions
+                    if decision is not None
+                }
+            ),
+        )
 
     def test_plugin_commands_with_external_effects_are_not_self_trusted(self) -> None:
         plugin_root = self.root / "plugin"
@@ -317,6 +341,53 @@ class ExternalityRuleTest(unittest.TestCase):
             f"sh {launcher} externality process --data-dir {self.db_path.parent} --json",
             f"sh {launcher} pilot sync --workspace {self.root} "
             f"--data-dir {self.db_path.parent} --json",
+        )
+
+        decisions = [
+            prepare_externality_hook_decision(
+                self.db_path,
+                self._event(command),
+                workspace_root=self.root,
+                trusted_plugin_root=plugin_root,
+            )
+            for command in commands
+        ]
+
+        self.assertEqual(
+            [],
+            [
+                command
+                for command, decision in zip(commands, decisions, strict=True)
+                if decision is None or decision.state == "known_local"
+            ],
+        )
+
+    def test_storage_cleanup_apply_near_matches_are_not_self_trusted(self) -> None:
+        plugin_root = self.root / "plugin"
+        launcher = plugin_root / "hooks" / "run_cli.sh"
+        launcher.parent.mkdir(parents=True)
+        launcher.write_text("#!/bin/sh\n", encoding="utf-8")
+        data_dir = self.db_path.parent
+        valid = (
+            f"sh {launcher} storage cleanup apply "
+            f"--cutoff-at 2026-08-08T12:00:00Z "
+            f"--plan-revision sc3_{'a' * 64} --batch-size 20 "
+            f"--data-dir {data_dir} --json"
+        )
+        commands = (
+            f"{valid}; curl https://example.invalid",
+            valid.replace("sc3_", "sc2_"),
+            valid.replace("T12:00:00Z", " 12:00:00"),
+            valid.replace("--batch-size 20", "--batch-size 0"),
+            valid.replace("--batch-size 20", "--batch-size 101"),
+            valid.replace(str(data_dir), "/tmp/other"),
+            valid.replace(str(launcher), str(self.root / "other" / "run_cli.sh")),
+            valid.replace("--json", "--json --verbose"),
+            f"sh {launcher} storage cleanup auto enable "
+            f"--cutoff-at 2026-08-08T12:00:00Z "
+            f"--plan-revision sc2_{'a' * 64} --data-dir {data_dir} --json",
+            f"sh {launcher} storage cleanup auto run "
+            f"--data-dir /tmp/other --json",
         )
 
         decisions = [

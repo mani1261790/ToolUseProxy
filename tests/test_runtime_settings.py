@@ -930,6 +930,13 @@ class RuntimeSettingsCliTest(unittest.TestCase):
         workspace_id = str(applied["workspace_id"])
         observed_at = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S")
         database = data / "events.db"
+        legacy_backup = data / (
+            f"events.db.pre-migration-v{CURRENT_SCHEMA_VERSION - 1}.bak"
+        )
+        with sqlite3.connect(legacy_backup) as connection:
+            connection.execute(
+                f"PRAGMA user_version = {CURRENT_SCHEMA_VERSION - 1}"
+            )
         repo_root = Path(__file__).resolve().parents[1]
         plugin_version = json.loads(
             (repo_root / ".codex-plugin" / "plugin.json").read_text()
@@ -1060,6 +1067,10 @@ class RuntimeSettingsCliTest(unittest.TestCase):
         self.assertTrue(runtime["current_invocation_probe_verified"])
         self.assertFalse(runtime["hook_trust_verified"])
         self.assertTrue(runtime["evidence_is_value_free"])
+        self.assertEqual(
+            {"status": "verified", "verified_backup_count": 1},
+            verified["migration_backups"],
+        )
         self.assertNotIn(verify_probe_token, json.dumps(verified))
 
         with sqlite3.connect(database) as connection:

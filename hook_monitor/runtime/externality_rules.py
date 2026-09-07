@@ -39,6 +39,10 @@ TRUSTED_SETUP_PROFILE_CONTRACT = b"trusted-tooluseproxy-setup-profile-v2"
 _REVISION_PATTERN = re.compile(r"[0-9a-f]{64}")
 _RECONCILIATION_REVISION_PATTERN = re.compile(r"r1_[0-9a-f]{64}")
 _REMOVAL_REVISION_PATTERN = re.compile(r"d1_[0-9a-f]{64}")
+_STORAGE_CLEANUP_REVISION_PATTERN = re.compile(r"sc3_[0-9a-f]{64}")
+_STORAGE_CUTOFF_PATTERN = re.compile(
+    r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z"
+)
 _RELATIVE_PATH_PATTERN = re.compile(r"[^\x00\r\n]+")
 
 
@@ -499,6 +503,27 @@ def _parsed_local_management_operation(
             return None
     elif command_name == "uninstall":
         pass
+    elif command_name == "storage":
+        if arguments.storage_command != "cleanup":
+            return None
+        if arguments.storage_cleanup_command == "apply" and (
+            _STORAGE_CLEANUP_REVISION_PATTERN.fullmatch(arguments.plan_revision)
+            is None
+            or _STORAGE_CUTOFF_PATTERN.fullmatch(arguments.cutoff_at) is None
+            or not 1 <= arguments.batch_size <= 100
+        ):
+            return None
+        if arguments.storage_cleanup_command == "auto":
+            auto_command = arguments.storage_cleanup_auto_command
+            if auto_command == "enable" and (
+                _STORAGE_CLEANUP_REVISION_PATTERN.fullmatch(
+                    arguments.plan_revision
+                )
+                is None
+                or _STORAGE_CUTOFF_PATTERN.fullmatch(arguments.cutoff_at)
+                is None
+            ):
+                return None
     elif command_name == "trace":
         # Trace only reads local SQLite state. Its nested parser owns the
         # remaining arguments, and shell metacharacters were already rejected.
@@ -525,6 +550,8 @@ def _parsed_local_management_operation(
             return None
     if command_name == "uninstall" and not explicit_data_dirs:
         return None
+    if command_name == "storage" and not explicit_data_dirs and not explicit_dbs:
+        return None
 
     subcommand = next(
         (
@@ -536,6 +563,8 @@ def _parsed_local_management_operation(
                 getattr(arguments, "externality_command", None),
                 getattr(arguments, "uninstall_command", None),
                 getattr(arguments, "pilot_command", None),
+                getattr(arguments, "storage_cleanup_auto_command", None),
+                getattr(arguments, "storage_cleanup_command", None),
             )
             if isinstance(value, str)
         ),

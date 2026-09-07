@@ -320,8 +320,10 @@ class InformationFlowTest(unittest.TestCase):
             "idx_tool_operations_event",
             "idx_resource_snapshots_post_event",
             "idx_resource_versions_workspace_session",
+            "idx_fragment_exact_fragment",
             "idx_fragment_exact_lookup",
-            "idx_fragment_shingles_lookup",
+            "idx_content_similarity_features_content",
+            "idx_content_similarity_features_lookup",
             "idx_edge_scopes_session_sequence",
             "idx_analysis_runs_workspace_session",
         }
@@ -2822,9 +2824,11 @@ class InformationFlowTest(unittest.TestCase):
             sqlite_lengths = dict(
                 connection.execute(
                     """
-                    SELECT fragment_id, LENGTH(normalized_text)
-                    FROM artifact_fragments
-                    WHERE fragment_id IN (?, ?)
+                    SELECT fragment.fragment_id, LENGTH(content.normalized_text)
+                    FROM artifact_fragments AS fragment
+                    JOIN artifact_contents AS content
+                      ON content.text_hash = fragment.text_hash
+                    WHERE fragment.fragment_id IN (?, ?)
                     """,
                     tuple(context.fragment.fragment_id for context in candidates),
                 ).fetchall()
@@ -2889,7 +2893,13 @@ class InformationFlowTest(unittest.TestCase):
         )
         with sqlite3.connect(self.db_path) as connection:
             builtin_length = connection.execute(
-                "SELECT LENGTH(normalized_text) FROM artifact_fragments WHERE fragment_id = ?",
+                """
+                SELECT LENGTH(content.normalized_text)
+                FROM artifact_fragments AS fragment
+                JOIN artifact_contents AS content
+                  ON content.text_hash = fragment.text_hash
+                WHERE fragment.fragment_id = ?
+                """,
                 (previous.fragment.fragment_id,),
             ).fetchone()[0]
         self.assertEqual(3, builtin_length)
@@ -3106,8 +3116,12 @@ class InformationFlowTest(unittest.TestCase):
             stored_feature_rows = connection.execute(
                 """
                 SELECT COUNT(*)
-                FROM fragment_shingles
-                WHERE workspace_id = ? AND session_id = ?
+                FROM content_similarity_features AS feature
+                JOIN artifact_fragments AS fragment
+                  ON fragment.text_hash = feature.text_hash
+                JOIN fragment_exact_index AS indexed
+                  ON indexed.fragment_id = fragment.fragment_id
+                WHERE indexed.workspace_id = ? AND indexed.session_id = ?
                 """,
                 (generic[0].workspace_id, "session-1"),
             ).fetchone()[0]
@@ -3217,10 +3231,14 @@ class InformationFlowTest(unittest.TestCase):
             stored_counts = dict(
                 connection.execute(
                     """
-                    SELECT fragment_id, COUNT(*)
-                    FROM fragment_shingles
-                    WHERE workspace_id = ? AND session_id = ?
-                    GROUP BY fragment_id
+                    SELECT fragment.fragment_id, COUNT(*)
+                    FROM artifact_fragments AS fragment
+                    JOIN fragment_exact_index AS indexed
+                      ON indexed.fragment_id = fragment.fragment_id
+                    JOIN content_similarity_features AS feature
+                      ON feature.text_hash = fragment.text_hash
+                    WHERE indexed.workspace_id = ? AND indexed.session_id = ?
+                    GROUP BY fragment.fragment_id
                     """,
                     (workspace_id, "session-1"),
                 ).fetchall()
@@ -5915,11 +5933,11 @@ class InformationFlowTest(unittest.TestCase):
         with sqlite3.connect(self.db_path) as conn:
             conn.execute(
                 """
-                UPDATE artifact_fragments
+                UPDATE artifact_contents
                 SET text = 'mutated without a new event'
-                WHERE fragment_id = ?
+                WHERE text_hash = ?
                 """,
-                (fragments[0].fragment_id,),
+                (fragments[0].text_hash,),
             )
 
         self.assertEqual(sequence_no, self.store.get_event_sequence_no(event.event_id))
@@ -8736,32 +8754,44 @@ class InformationFlowTest(unittest.TestCase):
         launcher = plugin_root / "hooks" / "run_cli.sh"
         launcher.parent.mkdir(parents=True)
         launcher.write_text("#!/bin/sh\n", encoding="utf-8")
-        command = (
-            f"sh {launcher} config show --workspace {workspace} "
-            f"--data-dir {self.db_path.parent} --json"
+        commands = (
+            (
+                "config",
+                f"sh {launcher} config show --workspace {workspace} "
+                f"--data-dir {self.db_path.parent} --json",
+            ),
+            (
+                "storage-cleanup",
+                f"sh {launcher} storage cleanup apply "
+                f"--cutoff-at 2026-08-08T12:00:00Z "
+                f"--plan-revision sc3_{'a' * 64} --batch-size 20 "
+                f"--data-dir {self.db_path.parent} --json",
+            ),
         )
 
-        exit_code, stdout, stderr = self._run_hook_in_process(
-            "pre_tool_use",
-            {
-                "session_id": "session-missing-source-config",
-                "turn_id": "turn-missing-source-config",
-                "tool_use_id": "bash-missing-source-config",
-                "tool_name": "Bash",
-                "cwd": str(workspace),
-                "tool_input": {"command": command},
-            },
-            {
-                "PLUGIN_ROOT": str(plugin_root),
-                "TOOLUSEPROXY_DB_PATH": str(self.db_path),
-                "TOOLUSEPROXY_PRE_TOOL_POLICY": "1",
-                "TOOLUSEPROXY_EXTERNALITY_PROTECTION": "1",
-            },
-        )
+        for label, command in commands:
+            with self.subTest(command=label):
+                exit_code, stdout, stderr = self._run_hook_in_process(
+                    "pre_tool_use",
+                    {
+                        "session_id": f"session-missing-source-{label}",
+                        "turn_id": f"turn-missing-source-{label}",
+                        "tool_use_id": f"bash-missing-source-{label}",
+                        "tool_name": "Bash",
+                        "cwd": str(workspace),
+                        "tool_input": {"command": command},
+                    },
+                    {
+                        "PLUGIN_ROOT": str(plugin_root),
+                        "TOOLUSEPROXY_DB_PATH": str(self.db_path),
+                        "TOOLUSEPROXY_PRE_TOOL_POLICY": "1",
+                        "TOOLUSEPROXY_EXTERNALITY_PROTECTION": "1",
+                    },
+                )
 
-        self.assertEqual(0, exit_code)
-        self.assertEqual("", stdout)
-        self.assertEqual("", stderr)
+                self.assertEqual(0, exit_code)
+                self.assertEqual("", stdout)
+                self.assertEqual("", stderr)
 
     def test_pre_tool_runner_allows_local_recovery_for_invalid_manifest(
         self,
@@ -12189,10 +12219,10 @@ class InformationFlowTest(unittest.TestCase):
             sentinel_count = connection.execute(
                 """
                 SELECT COUNT(*)
-                FROM fragment_shingles
-                WHERE workspace_id = ? AND session_id = ? AND shingle = ?
+                FROM content_similarity_features
+                WHERE feature = ?
                 """,
-                (workspace_id, "session-1", "legacy-profile:sentinel"),
+                ("legacy-profile:sentinel",),
             ).fetchone()[0]
             stored_exact_keys = dict(
                 connection.execute(

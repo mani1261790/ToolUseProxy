@@ -1,6 +1,6 @@
 # サポート範囲と既知の制限
 
-ToolUseProxy `0.1.0-alpha.18`は研究用public alphaです。未設定projectでは案内・記録・停止を行わず、明示設定済みprojectだけでHookを動かします。固定の公開Issue読み取り、既知の質問表示、固定のGit接続先一覧の不要な停止を減らし、判定が7秒以内に完了しない場合もCodex側の制限時間より先に安全な停止を返します。本番環境向けのSLA、security certification、完全なDLP、全toolの遮断保証は提供しません。
+ToolUseProxy `0.1.0-alpha.19`は研究用public alphaです。未設定projectでは案内・記録・停止を行わず、明示設定済みprojectだけでHookを動かします。固定の公開Issue読み取り、既知の質問表示、固定のGit接続先一覧の不要な停止を減らし、判定が7秒以内に完了しない場合もCodex側の制限時間より先に安全な停止を返します。本番環境向けのSLA、security certification、完全なDLP、全toolの遮断保証は提供しません。
 
 ## 実行環境
 
@@ -55,6 +55,7 @@ Codex Plugin APIやHook payloadはToolUseProxyとは別に変更され得ます�
 | runtime redact / `updatedInput` | 未対応 | 複数Hook後の最終採用inputを証明できないため無効 |
 | Externality Protection | local判定は通常setupで有効 | Hookはlocal static/cache判定を行い、未確認external payloadを保守的にdeny。LLM providerは既定offで、明示的なHook外worker、人間review、workspace単位の完全一致cacheを使い、LLM分類を自動昇格しない |
 | remote embedding / telemetry | 非搭載 | Hook内network serviceなし。telemetryは送信しない |
+| storage cleanup | macOS / Linux alpha対応 | 30日超の詳しい操作記録と安全条件を満たす更新前DB退避だけを対象とし、初回計画の確認前は自動整理を無効にする |
 | explicit managed-data uninstall | macOS / Linux alpha対応 | Plugin removeは保持。`uninstall plan`のexact tokenを`apply`へ渡した場合だけ管理dataを削除 |
 
 ## 既知の制限
@@ -69,7 +70,7 @@ Codex Plugin APIやHook payloadはToolUseProxyとは別に変更され得ます�
 - lexical similarityは意味的な言い換えを一般には検知しない
 - candidate retrievalはartifact 50 / source 200の有限上限を持つ
 - local SQLiteにはraw Hook payloadやprotected source由来textが平文で残り得る
-- database、backup、trace exportの自動retention / secure eraseはない
+- 保護対象リストbackup、改善用フィードバック、利用者評価、設定、保護対象登録、trace exportに自動期限はない。詳しい操作記録は30日保持し、安全条件を満たす更新前DB退避は7日待機後に整理できるが、secure eraseは保証しない
 - moving marketplace refによるalpha.1およびstale alpha.8からalpha.12へのnative upgrade、immutable baselineからalpha.12へのlifecycle upgrade、backupを使うsafe rollback、Plugin / marketplace remove、data保持 / 明示uninstallはisolated Codex CLIで検証済み。fresh Desktop配送もmacOSで確認済み。Linux実Codex CLI、Windows実機、将来version間の反復は未完了
 - runtime policyは他のHookやtool自体をexclusiveに制御できず、ToolUseProxy単独で完全な外部送信防止を保証しない
 - Externality JudgeのCodex routeは事前probe合格と24時間以内のreceiptを要求する。実測latencyは約3.4〜6.3秒だが、この待ち時間はHook外workerに限定され、PreToolUseには入らない

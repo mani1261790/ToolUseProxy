@@ -10,6 +10,18 @@ from pathlib import Path
 
 from hook_monitor.runtime.storage import EventStore
 from tooluseproxy.cli import main as cli_main
+from tooluseproxy.migration_backups import (
+    MIGRATION_BACKUP_LOCK_FILENAME,
+    MIGRATION_BACKUP_STATE_FILENAME,
+)
+from tooluseproxy import automatic_cleanup
+from tooluseproxy.automatic_cleanup import (
+    AUTOMATIC_CLEANUP_DEFER_FILENAME,
+    AUTOMATIC_CLEANUP_LOCK_FILENAME,
+    AUTOMATIC_CLEANUP_REQUEST_FILENAME,
+    AUTOMATIC_CLEANUP_STATE_FILENAME,
+    RUNTIME_ACTIVITY_FILENAME,
+)
 from tooluseproxy.uninstall import DATA_DIRECTORY_MARKER, ensure_data_directory_marker
 
 
@@ -55,6 +67,19 @@ class UninstallCliTest(unittest.TestCase):
             (data_dir / "events.db").write_bytes(b"database")
             (data_dir / "events.db-wal").write_bytes(b"wal")
             (data_dir / "events.db.pre-migration-v3.bak").write_bytes(b"backup")
+            (data_dir / MIGRATION_BACKUP_LOCK_FILENAME).write_bytes(b"")
+            (data_dir / MIGRATION_BACKUP_STATE_FILENAME).write_text(
+                '{"schema_version":1,"backups":{}}\n',
+                encoding="utf-8",
+            )
+            for automatic_name in (
+                AUTOMATIC_CLEANUP_DEFER_FILENAME,
+                AUTOMATIC_CLEANUP_LOCK_FILENAME,
+                AUTOMATIC_CLEANUP_REQUEST_FILENAME,
+                AUTOMATIC_CLEANUP_STATE_FILENAME,
+                RUNTIME_ACTIVITY_FILENAME,
+            ):
+                (data_dir / automatic_name).write_bytes(b"managed")
             backup_dir = data_dir / "manifest-backups" / "workspace"
             backup_dir.mkdir(parents=True)
             (backup_dir / "protected_sources.json").write_text(
@@ -93,6 +118,57 @@ class UninstallCliTest(unittest.TestCase):
             self.assertEqual("retain me\n", unmanaged.read_text(encoding="utf-8"))
             self.assertFalse((data_dir / "events.db").exists())
             self.assertFalse((data_dir / "manifest-backups").exists())
+            self.assertFalse(
+                (data_dir / MIGRATION_BACKUP_STATE_FILENAME).exists()
+            )
+            self.assertFalse(
+                (data_dir / MIGRATION_BACKUP_LOCK_FILENAME).exists()
+            )
+            for automatic_name in (
+                AUTOMATIC_CLEANUP_DEFER_FILENAME,
+                AUTOMATIC_CLEANUP_LOCK_FILENAME,
+                AUTOMATIC_CLEANUP_REQUEST_FILENAME,
+                AUTOMATIC_CLEANUP_STATE_FILENAME,
+                RUNTIME_ACTIVITY_FILENAME,
+            ):
+                self.assertFalse((data_dir / automatic_name).exists())
+
+    def test_apply_refuses_to_overlap_an_active_automatic_cleanup(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            data_dir = Path(temporary_directory) / "plugin-data"
+            data_dir.mkdir(mode=0o700)
+            ensure_data_directory_marker(data_dir)
+            (data_dir / "events.db").write_bytes(b"database")
+            with automatic_cleanup._automatic_cleanup_lock(
+                data_dir,
+                blocking=False,
+            ) as acquired:
+                self.assertTrue(acquired)
+            planned = _run_cli(
+                ["uninstall", "plan", "--data-dir", str(data_dir), "--json"]
+            )
+            token = json.loads(planned[1])["confirmation_token"]
+
+            with automatic_cleanup._automatic_cleanup_lock(
+                data_dir,
+                blocking=False,
+            ) as acquired:
+                self.assertTrue(acquired)
+                applied = _run_cli(
+                    [
+                        "uninstall",
+                        "apply",
+                        "--data-dir",
+                        str(data_dir),
+                        "--confirmation-token",
+                        token,
+                        "--json",
+                    ]
+                )
+
+            self.assertEqual(1, applied[0])
+            self.assertIn("automatic cleanup is running", applied[2])
+            self.assertTrue((data_dir / "events.db").exists())
 
     def test_apply_rejects_stale_confirmation_without_deleting_data(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

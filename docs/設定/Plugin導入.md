@@ -16,7 +16,7 @@ ToolUseProxyのCodex Pluginは、repository全体ではなく、生成時にallo
 
 導入、候補登録、更新、削除を始める前に、次の4点を一続きの契約として確認してください。
 
-1. [プライバシーとデータ保持](../../PRIVACY.md): raw Hook payloadやprotected source chunkがlocal SQLiteへ平文で残り得て、自動expirationやsecure eraseがない
+1. [プライバシーとデータ保持](../../PRIVACY.md): raw Hook payloadやprotected source chunkがlocal SQLiteへ平文で残り得る。詳しい操作記録には30日保持の整理機能があるが、改善用フィードバック等は自動削除せず、secure eraseも保証しない
 2. [サポート範囲と既知の制限](../../SUPPORT.md): 初期化後のPreToolUse内部エラーはfail-closedで、Windowsの登録workflowはalpha未対応
 3. [Plugin upgrade / rollback rehearsal](../運用/Pluginライフサイクル.md): rollbackは新DBを旧runtimeでdowngradeせず、upgrade前backupを別data directoryへ復元する
 4. この文書の[disable / uninstall](#disable--uninstall): Plugin codeのremoveはdata削除を意味せず、exact planへの別の明示承認が必要
@@ -25,20 +25,20 @@ alphaのthreat modelは、Pluginやcoding agentの無承認manifest変更、stal
 
 ## 現在versionと更新
 
-`0.1.0-alpha.15`は現在の検証済みpublic alphaです。alpha.14の固定`gh issue view`判定と未設定project無出力・無記録を維持し、PreToolUseの内部処理が7秒を超えた場合はCodex側の打ち切りより先に安全な停止を返します。実運用で大きくなったDBでは現在のsession用索引を明示して、無関係なevent走査を避けます。LLM providerと実project試行記録は既定offです。
+`0.1.0-alpha.19`は現在の検証対象public alphaです。alpha.18までの固定`gh issue view`判定、未設定project無出力・無記録、判定時間切れ前の安全停止、個別の保護解除、正規管理操作の自己ブロック防止を維持します。さらに保存内容の重複を減らし、30日を過ぎた詳しい操作記録と安全条件を満たす更新前DB退避を少量ずつ整理できます。自動整理は初期状態で無効です。LLM providerと実project試行記録は既定offです。
 
 Codex CLIはPluginごとの自動更新commandではなく、登録済みGit marketplaceを明示的に更新する`codex plugin marketplace upgrade`を提供します。moving refを登録している場合、更新されたmarketplace snapshotからinstall済みPluginも置き換わります。ToolUseProxyは次の2方式を分けます。
 
 | 方式 | `--ref` | 用途 | 更新 |
 | --- | --- | --- | --- |
 | public alpha更新チャンネル | `public-alpha` | 通常のdogfood / pilot | `marketplace upgrade`で明示更新 |
-| immutable version固定 | `v0.1.0-alpha.15` | 再現実験、監査、rollback | tagは動かないため自動的に別versionへ進まない |
+| immutable version固定 | `v0.1.0-alpha.19` | 再現実験、監査、rollback | tagは動かないため自動的に別versionへ進まない |
 
 `public-alpha`はreview済み・CI green・公開済みのalpha release commitだけへfast-forwardする保護branchです。開発途中の`main`を実行元にはしません。更新は自動ではなく、ユーザーがcommandを実行した時だけ行われます。
 
 Codex Desktopも同じmarketplaceからPluginをinstallし、複数workspaceで利用できます。Plugin codeのinstallはCodex環境単位ですが、初期化、protected source、runtime設定、監査dataはworkspace単位です。新しいworkspaceを使うたびに、そのworkspaceでbundled setup skillを実行し、保護対象を個別にreviewします。2026-08-22のmacOS実機runでは、alpha.8の5 Hookのreview / trustと配送、public allow、file-backed protected payloadの実行前blockを確認しました。承認2回、public side effect 1、protected side effect 0、exact block 1、raw exposure 0で正式な`passed`です。2026-08-09のrunではdata migration、backup rollback、Disableなしの直接Removeも確認しました。Desktop task履歴のshell名`exec_command`とHook APIのcanonical名`Bash`は別namespaceであり、画面表示だけでなくHook trust、定義hash、値なしmarker、Hook DB、task記録を証拠にします。hosted Web SearchはPreToolUse / PostToolUse Hookの対象外です。
 
-SQLite schemaはalpha.8でv7です。Externality Protection用tableを追加するため、alpha.7から更新した場合はbundled setup skillの案内に従ってHook外で明示的なatomic setupを行います。更新後は変更されたHook definitionをreview・trustして新しいtaskを開始し、bundled skillのread-only verificationを実行してください。
+SQLite schemaはalpha.19でv12です。旧版から更新してschema変更が必要な場合は、bundled setup skillの案内に従ってHook外で明示的なatomic setupを行います。更新前にはSQLite backupを作り、schema v12では重複する解析本文と検索用特徴を共有保存へ移します。更新後は変更されたHook definitionをreview・trustして新しいtaskを開始し、bundled skillのread-only verificationを実行してください。
 
 ## install
 
@@ -52,10 +52,10 @@ codex plugin add tooluseproxy@tooluseproxy
 versionを固定する場合は最初のcommandを次に置き換えます。
 
 ```bash
-codex plugin marketplace add mani1261790/ToolUseProxy --ref v0.1.0-alpha.15
+codex plugin marketplace add mani1261790/ToolUseProxy --ref v0.1.0-alpha.19
 ```
 
-install後はCodexが表示するPlugin source、version、5つのHook definition（SessionStart / SubagentStart / PreToolUse / PostToolUse / Stop）を確認してtrustします。ToolUseProxyはこのreviewを迂回しません。以前trustしたHookでも、matcher、command、sourceなどの定義が変わると`modified`になり、再reviewが必要です。更新後はCodexを完全に終了して起動し直し、新しいタスクでcurrent-invocation healthを確認します。alpha.15のrelease artifact、checksum、SBOM、release notesはGitHub pre-releaseに公開します。
+install後はCodexが表示するPlugin source、version、5つのHook definition（SessionStart / SubagentStart / PreToolUse / PostToolUse / Stop）を確認してtrustします。ToolUseProxyはこのreviewを迂回しません。以前trustしたHookでも、matcher、command、sourceなどの定義が変わると`modified`になり、再reviewが必要です。更新後はCodexを完全に終了して起動し直し、新しいタスクでcurrent-invocation healthを確認します。alpha.19のrelease artifact、checksum、SBOM、release notesはGitHub pre-releaseに公開します。
 
 ### CLIで更新する
 
@@ -303,6 +303,60 @@ sh "<PLUGIN_ROOT>/hooks/run_cli.sh" protect remove apply \
 
 ToolUseProxyは、導入済みPluginの正規launcherから実行され、現在のCLI構文検査に合格し、同じprojectと専用保存領域を指すローカル管理操作を自己操作として区別します。初期化、状態確認、設定、保護対象の管理、local評価記録、trace、管理データ削除が対象です。任意の追加shell命令、別project、別の実行ファイル、不正な引数は対象外です。`externality process`と`pilot sync`はToolUseProxyのcommandであっても外部通信を行い得るため、自己操作を理由にlocal扱いしません。利用者確認や変更前の照合は別の安全条件として維持します。
 
+### 保存容量と削除予定を確認する
+
+詳しい操作記録は30日保持し、改善用フィードバック、project設定、保護対象登録、利用者判断は今回の自動整理から除外します。整理機能を適用する前に、次の読み取り専用commandで使用量と削除候補を確認します。
+
+```bash
+sh "<PLUGIN_ROOT>/hooks/run_cli.sh" storage cleanup plan \
+  --data-dir "<PLUGIN_DATA>" \
+  --json
+```
+
+このcommandはDB、更新前退避、詳しい操作記録、再作成可能な検索データ、改善用フィードバック、長期設定を分けて容量と行数を返します。30日前の完全なsession、途中終了session、session番号のない古い操作を区別し、回収見込みとDB縮小に必要な一時空き容量も示します。更新前退避については、7日経過、現在版の動作確認、現在DBの整合性、新しい移行が進行中でないことを確認し、削除できる件数・容量と、待機理由ごとの件数を表示します。DB、保護リスト、元ファイルは変更せず、保護リストの内容、保存本文、絶対path、接続先を表示しません。大きいDBでは全pageの分類に時間がかかるため、Hook内では実行しません。詳しい契約は[保存容量と自動整理](../設計/保存容量と自動整理.md)を参照してください。
+
+削除は、計画に表示された境界時刻と確認番号をそのまま指定した場合だけ、既定20作業単位ずつ行います。計画後にDBが変わっていれば何も削除しません。
+
+```sh
+sh "<PLUGIN_ROOT>/hooks/run_cli.sh" storage cleanup apply \
+  --cutoff-at "<PLAN_CUTOFF_AT>" \
+  --plan-revision "<PLAN_REVISION>" \
+  --data-dir "<PLUGIN_DATA>" \
+  --json
+```
+
+結果の`remaining.session_count`または`remaining.unscoped_event_count`が0でなければ、返された`next_plan_revision`を次の`--plan-revision`へ指定して続けられます。利用者の実DBへ初めて適用する作業は#159で行い、最初に表示した計画を確認するまでは実行しません。
+
+確認済みの計画を基に、以後のタスク終了後に自動整理を予約する場合は次を実行します。初期状態では無効であり、この命令を実行するまでは実データを自動削除しません。計画は作成から5分以内で、DBが変わっていない必要があります。
+
+```sh
+sh "<PLUGIN_ROOT>/hooks/run_cli.sh" storage cleanup auto enable \
+  --cutoff-at "<PLAN_CUTOFF_AT>" \
+  --plan-revision "<PLAN_REVISION>" \
+  --data-dir "<PLUGIN_DATA>" \
+  --json
+```
+
+Hookはタスク終了時に予約だけを行い、容量計測や削除を待ちません。別処理は前回開始から24時間に1回まで、既定20作業単位を整理します。DB使用中、別の整理中、監視処理の直後は何も削除せず延期します。2 GiB以上は注意、4 GiB以上は要対応として状態へ残しますが、容量を理由に30日以内の記録を消したり、記録・保護を止めたりしません。
+
+状態は通常の`status`に含まれる`automatic_cleanup`、または次の専用命令で確認できます。保存本文、絶対path、接続先は表示しません。
+
+```sh
+sh "<PLUGIN_ROOT>/hooks/run_cli.sh" storage cleanup auto status \
+  --data-dir "<PLUGIN_DATA>" \
+  --json
+```
+
+自動整理だけを止める場合は次を使います。既存のDB、記録、設定、保護対象登録は削除しません。
+
+```sh
+sh "<PLUGIN_ROOT>/hooks/run_cli.sh" storage cleanup auto disable \
+  --data-dir "<PLUGIN_DATA>" \
+  --json
+```
+
+更新前退避の7日間は、退避作成と現在版の動作確認のうち遅い時刻から数えます。現在版の動作確認は、現在のタスクから監視処理へ届いた証拠を伴う`setup verify`が成功したときだけ記録されます。設定だけを調べる確認では記録しません。この記録が変えるのは退避の整理可否だけで、保護リスト、保護対象ファイル、操作内容は変更しません。
+
 workspace探索は明示的なoffline `protect scan`に限定し、`init`やHook中では実行しません。候補ごとの明示判断をまとめて反映できますが、無承認の自動登録やscanの上限引き上げoptionはありません。legacy manifestはruntime読み取り互換を維持しますが、scanはsource fileを読む前に値のない`manifest_schema_legacy`で終了します。coding agentは`protect migrate plan`を提示せずに独断でv2へ変更しません。
 
 ## package CLIの開発install
@@ -354,7 +408,7 @@ sh "<PLUGIN_ROOT>/hooks/run_cli.sh" uninstall apply \
 
 削除対象はSQLite database / sidecar、migration backup、manifest backupだけです。管理外fileは残し、plan後に内容が変わった場合はstale tokenを拒否します。workspace manifestやprotected source本体、symlink先、package codeは削除しません。secure eraseやfilesystem snapshotの削除は保証しません。
 
-alpha.1およびstale alpha.8からalpha.15へのupgrade / safe rollback手順は[Pluginライフサイクル](../運用/Pluginライフサイクル.md)を参照してください。alpha.12 fresh Desktop、alpha.13の未設定・設定済みCodex CLI実経路、alpha.15の判定時間切れ停止はmacOSで確認済みです。Linux / Windowsと将来version間の反復は引き続きpublic alphaの検証課題です。
+alpha.1およびstale alpha.8からalpha.19へのupgrade / safe rollback手順は[Pluginライフサイクル](../運用/Pluginライフサイクル.md)を参照してください。alpha.12 fresh Desktop、alpha.13の未設定・設定済みCodex CLI実経路、alpha.15の判定時間切れ停止はmacOSで確認済みです。alpha.19では容量整理を含む現行schemaへの更新を隔離環境で検証します。Linux / Windowsと将来version間の反復は引き続きpublic alphaの検証課題です。
 
 pre-release候補で実際のHook trust、agent説明、実tool invocationを検証するときは、通常workspaceや実secretを使わず、[Pluginドッグフードのmanual Phase B](../運用/Pluginドッグフード.md#manual-phase-b)を実行します。prepare出力はlocal pathを含むため公開せず、raw値とpathを除外したverify結果だけをrelease evidenceとして扱います。
 
