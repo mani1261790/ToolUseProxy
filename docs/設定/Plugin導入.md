@@ -303,6 +303,18 @@ sh "<PLUGIN_ROOT>/hooks/run_cli.sh" protect remove apply \
 
 ToolUseProxyは、導入済みPluginの正規launcherから実行され、現在のCLI構文検査に合格し、同じprojectと専用保存領域を指すローカル管理操作を自己操作として区別します。初期化、状態確認、設定、保護対象の管理、local評価記録、trace、管理データ削除が対象です。任意の追加shell命令、別project、別の実行ファイル、不正な引数は対象外です。`externality process`と`pilot sync`はToolUseProxyのcommandであっても外部通信を行い得るため、自己操作を理由にlocal扱いしません。利用者確認や変更前の照合は別の安全条件として維持します。
 
+### 保存容量と削除予定を確認する
+
+詳しい操作記録は30日保持し、改善用フィードバック、project設定、保護対象登録、利用者判断は今回の自動整理から除外します。整理機能を適用する前に、次の読み取り専用commandで使用量と削除候補を確認します。
+
+```bash
+sh "<PLUGIN_ROOT>/hooks/run_cli.sh" storage cleanup plan \
+  --data-dir "<PLUGIN_DATA>" \
+  --json
+```
+
+このcommandはDB、更新前退避、詳しい操作記録、再作成可能な検索データ、改善用フィードバック、長期設定を分けて容量と行数を返します。30日前の完全なsession、途中終了session、session番号のない古い操作を区別し、回収見込みとDB縮小に必要な一時空き容量も示します。DB、保護リスト、元ファイルは変更せず、保護リストの内容、保存本文、絶対path、接続先を表示しません。大きいDBでは全pageの分類に時間がかかるため、Hook内では実行しません。詳しい契約は[保存容量と自動整理](../設計/保存容量と自動整理.md)を参照してください。
+
 workspace探索は明示的なoffline `protect scan`に限定し、`init`やHook中では実行しません。候補ごとの明示判断をまとめて反映できますが、無承認の自動登録やscanの上限引き上げoptionはありません。legacy manifestはruntime読み取り互換を維持しますが、scanはsource fileを読む前に値のない`manifest_schema_legacy`で終了します。coding agentは`protect migrate plan`を提示せずに独断でv2へ変更しません。
 
 ## package CLIの開発install

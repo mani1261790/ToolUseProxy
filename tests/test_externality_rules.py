@@ -286,6 +286,7 @@ class ExternalityRuleTest(unittest.TestCase):
             f"sh {launcher} externality approve job-id --expected-revision {revision} "
             f"--data-dir {data_dir} --json",
             f"sh {launcher} trace --db {self.db_path} --latest --format json",
+            f"sh {launcher} storage cleanup plan --data-dir {data_dir} --json",
             f"sh {launcher} uninstall plan --data-dir {data_dir} --json",
         )
 
