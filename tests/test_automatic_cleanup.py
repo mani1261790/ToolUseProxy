@@ -221,6 +221,39 @@ class AutomaticCleanupTest(unittest.TestCase):
         with sqlite3.connect(self.db_path) as conn:
             self.assertEqual(1, conn.execute("SELECT COUNT(*) FROM events").fetchone()[0])
 
+    def test_failed_activity_signal_creates_a_fail_safe_defer(self) -> None:
+        self._seed_old_sessions(1)
+        self._enable()
+        original_write = automatic_cleanup._atomic_write
+
+        def fail_activity(path, data, **options):
+            if path.name == automatic_cleanup.RUNTIME_ACTIVITY_FILENAME:
+                raise AutomaticCleanupError("injected_activity_failure")
+            return original_write(path, data, **options)
+
+        with patch.object(
+            automatic_cleanup,
+            "_atomic_write",
+            side_effect=fail_activity,
+        ):
+            with self.assertRaises(AutomaticCleanupError):
+                signal_runtime_activity(self.data_dir)
+
+        result = run_automatic_cleanup(
+            self.db_path,
+            now=self.now,
+            wait_for_quiet=False,
+        )
+        self.assertEqual("deferred", result.status)
+        self.assertEqual("runtime_signal_failed", result.reason)
+        with sqlite3.connect(self.db_path) as conn:
+            self.assertEqual(1, conn.execute("SELECT COUNT(*) FROM events").fetchone()[0])
+
+        signal_runtime_activity(self.data_dir)
+        self.assertFalse(
+            (self.data_dir / automatic_cleanup.AUTOMATIC_CLEANUP_DEFER_FILENAME).exists()
+        )
+
     def test_hook_signal_cancels_an_in_progress_deletion_transaction(self) -> None:
         self._seed_old_sessions(1)
         plan = plan_storage_cleanup(self.db_path, now=self.now)

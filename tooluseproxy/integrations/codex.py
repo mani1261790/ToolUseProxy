@@ -107,17 +107,21 @@ def run_codex_hook(
         if workspace_root is None:
             return 0
         from tooluseproxy.automatic_cleanup import (
+            record_automatic_cleanup_failure,
             reserve_automatic_cleanup,
             signal_runtime_activity,
             take_automatic_cleanup_notice,
         )
 
+        runtime_activity_signaled = True
         try:
             signal_runtime_activity(paths.data_dir)
         except Exception:
-            # Cleanup coordination is best effort and must never weaken or stop
-            # the protection path.
-            pass
+            runtime_activity_signaled = False
+            record_automatic_cleanup_failure(
+                paths.data_dir,
+                "runtime_activity_signal_failed",
+            )
         # Replay exactly the original bytes. The runtime retains its own bounded
         # PreToolUse parser; PostToolUse/Stop may consume the remaining stream.
         sys.stdin = SimpleNamespace(buffer=_ReplayInput(prefix, original_stdin.buffer))
@@ -138,7 +142,16 @@ def run_codex_hook(
         finally:
             secure_database_permissions(paths.db_path)
         if runtime_phase == "stop":
-            reserve_automatic_cleanup(paths.db_path)
+            if not runtime_activity_signaled:
+                record_automatic_cleanup_failure(
+                    paths.data_dir,
+                    "runtime_activity_signal_failed",
+                )
+            elif not reserve_automatic_cleanup(paths.db_path):
+                record_automatic_cleanup_failure(
+                    paths.data_dir,
+                    "cleanup_reservation_failed",
+                )
         cleanup_notice = None
         if runtime_phase == "session_start":
             try:

@@ -346,3 +346,32 @@ def test_pending_cleanup_notice_is_shown_once_at_next_session_start(
 
     assert "自動整理を完了できませんでした" in first
     assert "自動整理を完了できませんでした" not in second
+
+
+def test_failed_stop_reservation_is_saved_for_next_session_start(
+    tmp_path, monkeypatch, capsys,
+):
+    database = tmp_path / "events.db"
+    store = EventStore(database)
+    store.initialize()
+    store.register_workspace(resolve_workspace(str(tmp_path)))
+    now = datetime.now(UTC)
+    plan = plan_storage_cleanup(database, now=now)
+    enable_automatic_cleanup(
+        database,
+        cutoff_at=plan.cutoff_at,
+        expected_plan_revision=plan.plan_revision,
+        now=now,
+    )
+
+    def fail_launch(*args, **kwargs):
+        raise OSError("injected launch failure")
+
+    monkeypatch.setattr(automatic_cleanup.subprocess, "Popen", fail_launch)
+
+    assert invoke(monkeypatch, capsys, database, tmp_path, "stop") == ""
+    status = automatic_cleanup.automatic_cleanup_status(tmp_path)
+    assert status["reason"] == "cleanup_reservation_failed"
+    assert status["notification_pending"] is True
+    notice = invoke(monkeypatch, capsys, database, tmp_path, "session-start")
+    assert "自動整理を完了できませんでした" in notice

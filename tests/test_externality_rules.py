@@ -320,6 +320,17 @@ class ExternalityRuleTest(unittest.TestCase):
                 if decision is None or decision.state != "known_local"
             ],
         )
+        automatic_decisions = decisions[16:20]
+        self.assertEqual(
+            4,
+            len(
+                {
+                    decision.envelope_sha256
+                    for decision in automatic_decisions
+                    if decision is not None
+                }
+            ),
+        )
 
     def test_plugin_commands_with_external_effects_are_not_self_trusted(self) -> None:
         plugin_root = self.root / "plugin"

@@ -563,8 +563,8 @@ def _parsed_local_management_operation(
                 getattr(arguments, "externality_command", None),
                 getattr(arguments, "uninstall_command", None),
                 getattr(arguments, "pilot_command", None),
-                getattr(arguments, "storage_cleanup_command", None),
                 getattr(arguments, "storage_cleanup_auto_command", None),
+                getattr(arguments, "storage_cleanup_command", None),
             )
             if isinstance(value, str)
         ),

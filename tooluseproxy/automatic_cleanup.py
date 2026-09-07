@@ -34,6 +34,7 @@ from tooluseproxy.storage_cleanup import (
 AUTOMATIC_CLEANUP_STATE_FILENAME = "storage-cleanup-state.json"
 AUTOMATIC_CLEANUP_LOCK_FILENAME = "storage-cleanup-auto.lock"
 AUTOMATIC_CLEANUP_REQUEST_FILENAME = "storage-cleanup.request"
+AUTOMATIC_CLEANUP_DEFER_FILENAME = "storage-cleanup.defer"
 RUNTIME_ACTIVITY_FILENAME = "runtime-activity"
 AUTOMATIC_CLEANUP_STATE_SCHEMA_VERSION = 1
 AUTOMATIC_CLEANUP_INTERVAL = timedelta(hours=24)
@@ -170,11 +171,53 @@ def signal_runtime_activity(data_dir: Path) -> None:
     """Publish a tiny cancellation signal before an enabled Hook uses SQLite."""
 
     data_dir.mkdir(parents=True, exist_ok=True)
-    _atomic_write(
-        data_dir / RUNTIME_ACTIVITY_FILENAME,
-        (uuid.uuid4().hex + "\n").encode("ascii"),
-        sync_directory=False,
-    )
+    try:
+        _atomic_write(
+            data_dir / RUNTIME_ACTIVITY_FILENAME,
+            (uuid.uuid4().hex + "\n").encode("ascii"),
+            sync_directory=False,
+        )
+    except AutomaticCleanupError:
+        # Use a separate fail-safe marker so a failure limited to the normal
+        # activity channel still prevents a worker from deleting anything.
+        try:
+            _atomic_write(
+                data_dir / AUTOMATIC_CLEANUP_DEFER_FILENAME,
+                b"runtime_activity_signal_failed\n",
+                sync_directory=False,
+            )
+        except AutomaticCleanupError:
+            pass
+        raise
+    else:
+        try:
+            (data_dir / AUTOMATIC_CLEANUP_DEFER_FILENAME).unlink(missing_ok=True)
+        except OSError:
+            # A stale fail-safe marker only postpones cleanup.
+            pass
+
+
+def record_automatic_cleanup_failure(data_dir: Path, reason: str) -> None:
+    """Persist a value-free notice without delaying the protection path."""
+
+    try:
+        with _automatic_cleanup_lock(data_dir, blocking=False) as acquired:
+            if not acquired:
+                return
+            state = _load_state(data_dir, missing_ok=True)
+            if not state.get("enabled"):
+                return
+            state.update(
+                {
+                    "status": "deferred",
+                    "reason": reason,
+                    "last_deferred_at": _format_time(datetime.now(UTC)),
+                    "notification_pending": "cleanup_failed",
+                }
+            )
+            _write_state(data_dir, state)
+    except (OSError, AutomaticCleanupError):
+        pass
 
 
 def reserve_automatic_cleanup(db_path: Path) -> bool:
@@ -265,6 +308,8 @@ def run_automatic_cleanup(
         if wait_for_quiet:
             _wait_for_runtime_quiet(data_dir)
         activity_revision = _activity_revision(data_dir)
+        if _defer_requested(data_dir):
+            return _defer(state, data_dir, observed, "runtime_signal_failed")
         if not _runtime_is_quiet(data_dir):
             return _defer(state, data_dir, observed, "runtime_active")
         if not _database_is_idle(db_path):
@@ -300,6 +345,7 @@ def run_automatic_cleanup(
                     batch_size=STORAGE_CLEANUP_DEFAULT_BATCH_SIZE,
                     cancel_check=lambda: (
                         _activity_revision(data_dir) != activity_revision
+                        or _defer_requested(data_dir)
                     ),
                 )
                 deleted_sessions = result.deleted_session_count
@@ -310,14 +356,20 @@ def run_automatic_cleanup(
         except (OSError, sqlite3.Error, StorageCleanupPlanError) as exc:
             reason = (
                 "runtime_active"
-                if _activity_revision(data_dir) != activity_revision
+                if (
+                    _activity_revision(data_dir) != activity_revision
+                    or _defer_requested(data_dir)
+                )
                 else _safe_failure_code(exc)
             )
             if reason == "runtime_active":
                 return _defer(state, data_dir, observed, reason)
             return _fail(state, data_dir, observed, reason)
 
-        if _activity_revision(data_dir) != activity_revision:
+        if (
+            _activity_revision(data_dir) != activity_revision
+            or _defer_requested(data_dir)
+        ):
             return _finish(
                 state,
                 data_dir,
@@ -358,7 +410,10 @@ def run_automatic_cleanup(
                 data_dir=data_dir,
                 expected_activity_revision=activity_revision,
             )
-            if not compacted and _activity_revision(data_dir) != activity_revision:
+            if not compacted and (
+                _activity_revision(data_dir) != activity_revision
+                or _defer_requested(data_dir)
+            ):
                 return _defer(state, data_dir, observed, "runtime_active")
             if not compacted:
                 return _fail(state, data_dir, observed, "database_compaction_failed")
@@ -686,11 +741,19 @@ def _automatic_cleanup_lock(
     data_dir: Path,
     *,
     blocking: bool,
+    create: bool = True,
 ) -> Iterator[bool]:
     path = data_dir / AUTOMATIC_CLEANUP_LOCK_FILENAME
-    flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+    flags = os.O_RDWR | getattr(os, "O_NOFOLLOW", 0)
+    if create:
+        flags |= os.O_CREAT
     try:
         descriptor = os.open(path, flags, 0o600)
+    except FileNotFoundError:
+        if not create:
+            yield False
+            return
+        raise AutomaticCleanupError("automatic_cleanup_lock_unavailable") from None
     except OSError as exc:
         raise AutomaticCleanupError("automatic_cleanup_lock_unavailable") from exc
     with os.fdopen(descriptor, "r+b", closefd=True) as lock:
@@ -704,6 +767,24 @@ def _automatic_cleanup_lock(
         finally:
             if acquired:
                 _release_lock(lock)
+
+
+@contextmanager
+def automatic_cleanup_uninstall_guard(data_dir: Path) -> Iterator[bool]:
+    """Prevent cleanup workers from overlapping managed-data deletion."""
+
+    state_path = data_dir / AUTOMATIC_CLEANUP_STATE_FILENAME
+    request_path = data_dir / AUTOMATIC_CLEANUP_REQUEST_FILENAME
+    lock_path = data_dir / AUTOMATIC_CLEANUP_LOCK_FILENAME
+    if not state_path.exists() and not request_path.exists() and not lock_path.exists():
+        yield True
+        return
+    with _automatic_cleanup_lock(
+        data_dir,
+        blocking=False,
+        create=False,
+    ) as acquired:
+        yield acquired
 
 
 def _acquire_lock(lock: Any, *, blocking: bool) -> bool:
@@ -772,6 +853,7 @@ def _compact_database(
                 lambda: int(
                     _activity_revision(data_dir)
                     != expected_activity_revision
+                    or _defer_requested(data_dir)
                 ),
                 1000,
             )
@@ -811,6 +893,14 @@ def _runtime_is_quiet(data_dir: Path) -> bool:
     except OSError:
         return False
     return age >= RUNTIME_QUIET_SECONDS
+
+
+def _defer_requested(data_dir: Path) -> bool:
+    path = data_dir / AUTOMATIC_CLEANUP_DEFER_FILENAME
+    try:
+        return path.is_file() or path.is_symlink()
+    except OSError:
+        return True
 
 
 def _activity_revision(data_dir: Path) -> tuple[int, int, int] | None:

@@ -900,8 +900,11 @@ def apply_storage_cleanup(
                 now=plan_time,
                 expected_inventory_digest=backup_inventory.inventory_digest,
                 limit=STORAGE_CLEANUP_DEFAULT_BATCH_SIZE,
+                cancel_check=cancel_check,
             )
-        except MigrationBackupError:
+        except MigrationBackupError as exc:
+            if exc.code == "migration_backup_cleanup_cancelled":
+                raise StorageCleanupPlanError(exc.code) from exc
             backup_cleanup_status = "skipped_safely"
         else:
             deleted_backup_count = deletion.deleted_count
