@@ -1,6 +1,6 @@
 # プライバシーとデータ保持
 
-ToolUseProxy `0.1.0-alpha.18`のlocal runtimeが扱うデータ、保存場所、保持期間、削除時の境界を説明します。ToolUseProxyはCodexとは別のlocal Hook processとして動作し、既定ではtelemetry、remote embedding、外部API、network送信を行いません。実験的なExternality Judgeだけは、利用者がproviderを明示し、Hook外workerを実行した場合に限り、値非保持の構造要約を選択済みproviderへ送ります。
+ToolUseProxy `0.1.0-alpha.19`のlocal runtimeが扱うデータ、保存場所、保持期間、削除時の境界を説明します。ToolUseProxyはCodexとは別のlocal Hook processとして動作し、既定ではtelemetry、remote embedding、外部API、network送信を行いません。実験的なExternality Judgeだけは、利用者がproviderを明示し、Hook外workerを実行した場合に限り、値非保持の構造要約を選択済みproviderへ送ります。
 
 ## 保存するデータ
 
@@ -61,11 +61,13 @@ Codex自体や、Codexが呼び出す外部tool / MCP serverの通信は、上�
 
 ## 保持期間
 
-一般のevent、artifact、source chunk、graph、finding、candidate、backupに自動expirationはありません。明示的に削除するまで残ります。一部のredaction auditにはdry-runを既定とするcleanup scriptがありますが、database全体の自動retention policyではありません。
+詳しい操作記録は30日保持し、30日を過ぎた完全な作業単位だけを、変更前計画と安全条件に従って少量ずつ整理できます。30日以内の記録は容量だけを理由に削除しません。改善用フィードバック、利用者評価、設定、保護対象登録は今回の整理対象外です。更新前DB退避は、現在版の動作確認、7日経過、現在DBの整合性、改変なし、新しい移行なしをすべて満たす場合だけ整理できます。自動整理は初期状態では無効で、利用者が直前の計画を確認して明示的に有効化した後だけ、24時間に1回まで別処理で動きます。
+
+保護対象リストの変更前backupである`manifest-backups`には自動期限を設けません。一部のredaction auditにはdry-runを既定とするcleanup scriptがあります。secure erase、filesystem snapshot、外部backupの削除は保証しません。
 
 Pluginのdisable、remove、marketplace remove、package uninstallはlocal dataを自動削除しません。これは誤削除を防ぎ、監査やupgrade後の再利用を可能にするためのalpha既定です。
 
-`protect remove`は指定した1件を保護対象リストから外しますが、元ファイル、ほかの保護対象、監査DB、runtime設定は削除しません。適用前の保護対象リストは専用保存領域の`manifest-backups`へ残り、通常の自動期限はありません。これは保護登録の解除であり、元データの消去機能ではありません。
+`protect remove`は指定した1件を保護対象リストから外しますが、元ファイル、ほかの保護対象、監査DB、runtime設定は削除しません。適用前の保護対象リストは専用保存領域の`manifest-backups`へ残り、自動整理では削除しません。これは保護登録の解除であり、元データの消去機能ではありません。
 
 ## 削除手順
 
@@ -78,7 +80,7 @@ Pluginのdisable、remove、marketplace remove、package uninstallはlocal data�
 
 `init`はdata directoryへ値を含まないprivateな識別markerを作成します。既存directoryにmarkerがない場合はToolUseProxy SQLite schemaを識別できた場合だけ削除planを作ります。`apply`はmarker、`events.db`とSQLite sidecar、`events.db.workspaces/`、migration backup、`manifest-backups`だけを管理対象として削除します。管理外entryは削除せずdata directoryを残します。plan後に管理dataの内容が変化した場合、tokenは無効になり再planが必要です。symlinkやgroup / otherから読めるdata directoryは拒否します。
 
-複数workspaceが同じdatabaseを共有している場合、uninstallは全workspaceの履歴を削除します。現在の`0.1.0-alpha.18`にはworkspace単位の完全なerase command、secure erase、外部backup追跡、復元不能性の保証はありません。SSD、filesystem snapshot、backup serviceには削除後もcopyが残る可能性があります。
+複数workspaceが同じdatabaseを共有している場合、uninstallは全workspaceの履歴を削除します。現在の`0.1.0-alpha.19`にはworkspace単位の完全なerase command、secure erase、外部backup追跡、復元不能性の保証はありません。SSD、filesystem snapshot、backup serviceには削除後もcopyが残る可能性があります。
 
 ## 共有時の注意
 
