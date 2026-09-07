@@ -499,6 +499,8 @@ def _parsed_local_management_operation(
             return None
     elif command_name == "uninstall":
         pass
+    elif command_name == "storage":
+        pass
     elif command_name == "trace":
         # Trace only reads local SQLite state. Its nested parser owns the
         # remaining arguments, and shell metacharacters were already rejected.
@@ -525,6 +527,8 @@ def _parsed_local_management_operation(
             return None
     if command_name == "uninstall" and not explicit_data_dirs:
         return None
+    if command_name == "storage" and not explicit_data_dirs and not explicit_dbs:
+        return None
 
     subcommand = next(
         (
@@ -536,6 +540,7 @@ def _parsed_local_management_operation(
                 getattr(arguments, "externality_command", None),
                 getattr(arguments, "uninstall_command", None),
                 getattr(arguments, "pilot_command", None),
+                getattr(arguments, "storage_cleanup_command", None),
             )
             if isinstance(value, str)
         ),

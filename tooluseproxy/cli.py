@@ -93,6 +93,7 @@ from tooluseproxy.uninstall import (
     ensure_data_directory_marker,
     plan_managed_data_deletion,
 )
+from tooluseproxy.storage_cleanup import plan_storage_cleanup
 
 
 MANIFEST_FILENAME = "protected_sources.json"
@@ -162,6 +163,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _run_protect(args)
         if args.command == "externality":
             return _run_externality(args)
+        if args.command == "storage":
+            return _run_storage(args)
         if args.command == "uninstall":
             return _run_uninstall(args)
         if args.command == "trace":
@@ -570,6 +573,29 @@ def _build_parser() -> argparse.ArgumentParser:
     uninstall_apply.add_argument("--data-dir", type=Path, required=True)
     uninstall_apply.add_argument("--confirmation-token", required=True)
     uninstall_apply.add_argument("--json", action="store_true")
+
+    storage = subparsers.add_parser(
+        "storage",
+        help="Review ToolUseProxy local storage without exposing recorded content.",
+    )
+    storage_subparsers = storage.add_subparsers(
+        dest="storage_command",
+        required=True,
+    )
+    storage_cleanup = storage_subparsers.add_parser(
+        "cleanup",
+        help="Review or apply the fixed local storage retention policy.",
+    )
+    storage_cleanup_subparsers = storage_cleanup.add_subparsers(
+        dest="storage_cleanup_command",
+        required=True,
+    )
+    storage_cleanup_plan = storage_cleanup_subparsers.add_parser(
+        "plan",
+        help="Measure storage and expired records without changing local data.",
+    )
+    storage_cleanup_plan.add_argument("--json", action="store_true")
+    _add_runtime_path_arguments(storage_cleanup_plan)
     from tooluseproxy.pilot_cli import add_pilot_parser
 
     add_pilot_parser(subparsers)
@@ -632,6 +658,18 @@ def _run_uninstall(args: argparse.Namespace) -> int:
             args.data_dir,
             confirmation_token=args.confirmation_token,
         )
+    _render(payload, as_json=args.json)
+    return 0
+
+
+def _run_storage(args: argparse.Namespace) -> int:
+    if (
+        args.storage_command != "cleanup"
+        or args.storage_cleanup_command != "plan"
+    ):
+        raise ValueError("unsupported storage command")
+    paths = resolve_runtime_paths(db_path=args.db, data_dir=args.data_dir)
+    payload = plan_storage_cleanup(paths.db_path).to_payload()
     _render(payload, as_json=args.json)
     return 0
 
