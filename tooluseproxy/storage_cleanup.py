@@ -13,19 +13,21 @@ from pathlib import Path
 from typing import Any
 
 from hook_monitor.runtime.storage import CURRENT_SCHEMA_VERSION
+from tooluseproxy.migration_backups import (
+    MigrationBackupError,
+    MigrationBackupInventory,
+    delete_verified_migration_backups,
+    inventory_migration_backups,
+)
 
 
-STORAGE_CLEANUP_PLAN_SCHEMA_VERSION = 2
+STORAGE_CLEANUP_PLAN_SCHEMA_VERSION = 3
 STORAGE_RETENTION_DAYS = 30
 STORAGE_CLEANUP_DEFAULT_BATCH_SIZE = 20
 STORAGE_CLEANUP_MAX_BATCH_SIZE = 100
 STORAGE_WARNING_BYTES = 2 * 1024 * 1024 * 1024
 STORAGE_ACTION_BYTES = 4 * 1024 * 1024 * 1024
 _TEMPORARY_SPACE_MARGIN_BYTES = 16 * 1024 * 1024
-_MIGRATION_BACKUP_PATTERN = re.compile(
-    r"^events\.db\.pre-migration-v(?P<version>[0-9]+)\.bak(?:\.[0-9]+)?$"
-)
-
 _IMPROVEMENT_FEEDBACK_TABLES = frozenset(
     {
         "externality_approved_rules",
@@ -504,6 +506,14 @@ class StorageCleanupPlan:
     database_wal_bytes: int
     migration_backup_count: int
     migration_backup_bytes: int
+    migration_backup_eligible_count: int
+    migration_backup_eligible_bytes: int
+    migration_backup_recent_count: int
+    migration_backup_awaiting_verification_count: int
+    migration_backup_identity_mismatch_count: int
+    migration_backup_verification_current: bool
+    migration_backup_current_database_integrity_ok: bool
+    migration_backup_cleanup_blocked: bool
     categories: dict[str, StorageCategoryUsage]
     eligible_session_count: int
     eligible_incomplete_session_count: int
@@ -548,6 +558,25 @@ class StorageCleanupPlan:
                     key: value.to_payload()
                     for key, value in sorted(self.categories.items())
                 },
+            },
+            "migration_backups": {
+                "retention_days": 7,
+                "eligible_count": self.migration_backup_eligible_count,
+                "eligible_bytes": self.migration_backup_eligible_bytes,
+                "recent_count": self.migration_backup_recent_count,
+                "awaiting_verification_count": (
+                    self.migration_backup_awaiting_verification_count
+                ),
+                "identity_mismatch_count": (
+                    self.migration_backup_identity_mismatch_count
+                ),
+                "verification_current": (
+                    self.migration_backup_verification_current
+                ),
+                "current_database_integrity_ok": (
+                    self.migration_backup_current_database_integrity_ok
+                ),
+                "cleanup_blocked": self.migration_backup_cleanup_blocked,
             },
             "retention_candidates": {
                 "eligible_session_count": self.eligible_session_count,
@@ -602,6 +631,9 @@ class StorageCleanupApplyResult:
     deleted_incomplete_session_count: int
     deleted_unscoped_event_count: int
     deleted_rows: dict[str, int]
+    deleted_migration_backup_count: int
+    deleted_migration_backup_bytes: int
+    migration_backup_cleanup_status: str
     remaining_session_count: int
     remaining_unscoped_event_count: int
     next_plan_revision: str
@@ -622,6 +654,11 @@ class StorageCleanupApplyResult:
             "remaining": {
                 "session_count": self.remaining_session_count,
                 "unscoped_event_count": self.remaining_unscoped_event_count,
+            },
+            "migration_backups": {
+                "status": self.migration_backup_cleanup_status,
+                "deleted_count": self.deleted_migration_backup_count,
+                "deleted_bytes": self.deleted_migration_backup_bytes,
             },
             "preserved": {
                 "records_newer_than_cutoff": True,
@@ -690,7 +727,14 @@ def plan_storage_cleanup(
     except sqlite3.Error as exc:
         raise StorageCleanupPlanError("storage_database_read_failed") from exc
 
-    backup_count, backup_bytes = _migration_backup_usage(requested)
+    try:
+        backup_inventory = inventory_migration_backups(
+            requested,
+            now=observed_now,
+            require_integrity_check=True,
+        )
+    except MigrationBackupError as exc:
+        raise StorageCleanupPlanError(exc.code) from exc
     wal_bytes = _regular_file_size(Path(f"{requested}-wal"))
     allocated_bytes = page_size * page_count
     free_page_bytes = page_size * freelist_count
@@ -717,8 +761,7 @@ def plan_storage_cleanup(
         maximum_sequence=maximum_sequence,
         maximum_recorded_at=maximum_recorded_at,
         wal_bytes=wal_bytes,
-        backup_count=backup_count,
-        backup_bytes=backup_bytes,
+        backup_inventory=backup_inventory,
         cutoff_at=cutoff_at,
         retention=retention,
     )
@@ -728,8 +771,24 @@ def plan_storage_cleanup(
         database_allocated_bytes=allocated_bytes,
         database_free_page_bytes=free_page_bytes,
         database_wal_bytes=wal_bytes,
-        migration_backup_count=backup_count,
-        migration_backup_bytes=backup_bytes,
+        migration_backup_count=backup_inventory.total_count,
+        migration_backup_bytes=backup_inventory.total_bytes,
+        migration_backup_eligible_count=backup_inventory.eligible_count,
+        migration_backup_eligible_bytes=backup_inventory.eligible_bytes,
+        migration_backup_recent_count=backup_inventory.recent_count,
+        migration_backup_awaiting_verification_count=(
+            backup_inventory.awaiting_verification_count
+        ),
+        migration_backup_identity_mismatch_count=(
+            backup_inventory.identity_mismatch_count
+        ),
+        migration_backup_verification_current=(
+            backup_inventory.verification_current
+        ),
+        migration_backup_current_database_integrity_ok=(
+            backup_inventory.current_database_integrity_ok
+        ),
+        migration_backup_cleanup_blocked=backup_inventory.cleanup_blocked,
         categories=categories,
         eligible_session_count=len(retention.eligible_sessions),
         eligible_incomplete_session_count=(
@@ -754,7 +813,7 @@ def apply_storage_cleanup(
 ) -> StorageCleanupApplyResult:
     if type(batch_size) is not int or not 1 <= batch_size <= STORAGE_CLEANUP_MAX_BATCH_SIZE:
         raise StorageCleanupPlanError("storage_cleanup_batch_size_invalid")
-    if re.fullmatch(r"sc2_[0-9a-f]{64}", expected_plan_revision) is None:
+    if re.fullmatch(r"sc3_[0-9a-f]{64}", expected_plan_revision) is None:
         raise StorageCleanupPlanError("storage_plan_revision_invalid")
     cutoff = _parse_cleanup_cutoff(cutoff_at)
     plan_time = cutoff + timedelta(days=STORAGE_RETENTION_DAYS)
@@ -768,11 +827,20 @@ def apply_storage_cleanup(
             _create_cleanup_temp_tables(conn)
             conn.execute("BEGIN IMMEDIATE")
             inventory = _retention_candidates(conn, cutoff_at)
+            try:
+                backup_inventory = inventory_migration_backups(
+                    requested,
+                    now=plan_time,
+                    require_integrity_check=True,
+                )
+            except MigrationBackupError as exc:
+                raise StorageCleanupPlanError(exc.code) from exc
             locked_revision = _locked_cleanup_plan_revision(
                 requested,
                 conn,
                 cutoff_at=cutoff_at,
                 retention=inventory,
+                backup_inventory=backup_inventory,
             )
             if locked_revision != expected_plan_revision:
                 raise StorageCleanupPlanError("storage_plan_changed")
@@ -810,6 +878,30 @@ def apply_storage_cleanup(
     except sqlite3.Error as exc:
         raise StorageCleanupPlanError("storage_cleanup_write_failed") from exc
 
+    deleted_backup_count = 0
+    deleted_backup_bytes = 0
+    backup_cleanup_status = (
+        "blocked" if backup_inventory.cleanup_blocked else "nothing_to_delete"
+    )
+    if backup_inventory.eligible_count:
+        try:
+            deletion = delete_verified_migration_backups(
+                requested,
+                now=plan_time,
+                expected_inventory_digest=backup_inventory.inventory_digest,
+                limit=STORAGE_CLEANUP_DEFAULT_BATCH_SIZE,
+            )
+        except MigrationBackupError:
+            backup_cleanup_status = "skipped_safely"
+        else:
+            deleted_backup_count = deletion.deleted_count
+            deleted_backup_bytes = deletion.deleted_bytes
+            backup_cleanup_status = (
+                "applied"
+                if deletion.completed
+                else "partially_applied_safe_to_resume"
+            )
+
     next_plan = plan_storage_cleanup(requested, now=plan_time)
     return StorageCleanupApplyResult(
         cutoff_at=cutoff_at,
@@ -817,6 +909,9 @@ def apply_storage_cleanup(
         deleted_incomplete_session_count=deleted_incomplete,
         deleted_unscoped_event_count=len(selected_unscoped),
         deleted_rows=deleted_rows,
+        deleted_migration_backup_count=deleted_backup_count,
+        deleted_migration_backup_bytes=deleted_backup_bytes,
+        migration_backup_cleanup_status=backup_cleanup_status,
         remaining_session_count=next_plan.eligible_session_count,
         remaining_unscoped_event_count=next_plan.eligible_unscoped_event_count,
         next_plan_revision=next_plan.plan_revision,
@@ -829,6 +924,7 @@ def _locked_cleanup_plan_revision(
     *,
     cutoff_at: str,
     retention: _RetentionInventory,
+    backup_inventory: MigrationBackupInventory,
 ) -> str:
     database_stat = path.stat()
     schema_version = int(conn.execute("PRAGMA user_version").fetchone()[0])
@@ -841,7 +937,6 @@ def _locked_cleanup_plan_revision(
     maximum_recorded_at = str(
         conn.execute("SELECT COALESCE(MAX(recorded_at), '') FROM events").fetchone()[0]
     )
-    backup_count, backup_bytes = _migration_backup_usage(path)
     wal_bytes = _regular_file_size(Path(f"{path}-wal"))
     return _storage_cleanup_plan_revision(
         database_stat=database_stat,
@@ -852,8 +947,7 @@ def _locked_cleanup_plan_revision(
         maximum_sequence=maximum_sequence,
         maximum_recorded_at=maximum_recorded_at,
         wal_bytes=wal_bytes,
-        backup_count=backup_count,
-        backup_bytes=backup_bytes,
+        backup_inventory=backup_inventory,
         cutoff_at=cutoff_at,
         retention=retention,
     )
@@ -869,8 +963,7 @@ def _storage_cleanup_plan_revision(
     maximum_sequence: int,
     maximum_recorded_at: str,
     wal_bytes: int,
-    backup_count: int,
-    backup_bytes: int,
+    backup_inventory: MigrationBackupInventory,
     cutoff_at: str,
     retention: _RetentionInventory,
 ) -> str:
@@ -899,10 +992,25 @@ def _storage_cleanup_plan_revision(
         "eligible_unscoped_event_count": len(retention.eligible_unscoped_event_ids),
         "eligibility_digest": retention.eligibility_digest,
         "candidate_rows": retention.candidate_rows,
-        "migration_backup_count": backup_count,
-        "migration_backup_bytes": backup_bytes,
+        "migration_backups": {
+            "total_count": backup_inventory.total_count,
+            "total_bytes": backup_inventory.total_bytes,
+            "eligible_count": backup_inventory.eligible_count,
+            "eligible_bytes": backup_inventory.eligible_bytes,
+            "recent_count": backup_inventory.recent_count,
+            "awaiting_verification_count": (
+                backup_inventory.awaiting_verification_count
+            ),
+            "identity_mismatch_count": backup_inventory.identity_mismatch_count,
+            "verification_current": backup_inventory.verification_current,
+            "current_database_integrity_ok": (
+                backup_inventory.current_database_integrity_ok
+            ),
+            "cleanup_blocked": backup_inventory.cleanup_blocked,
+            "inventory_digest": backup_inventory.inventory_digest,
+        },
     }
-    return "sc2_" + hashlib.sha256(
+    return "sc3_" + hashlib.sha256(
         json.dumps(
             commitment,
             ensure_ascii=False,
@@ -1661,28 +1769,6 @@ def _estimate_reclaimable_bytes(
             continue
         estimate += owner_bytes.get(table, 0) * min(candidates, total) // total
     return estimate
-
-
-def _migration_backup_usage(db_path: Path) -> tuple[int, int]:
-    count = 0
-    byte_count = 0
-    try:
-        entries = list(db_path.parent.iterdir())
-    except OSError as exc:
-        raise StorageCleanupPlanError("storage_backup_inventory_failed") from exc
-    for entry in entries:
-        if _MIGRATION_BACKUP_PATTERN.fullmatch(entry.name) is None:
-            continue
-        if entry.is_symlink():
-            raise StorageCleanupPlanError("storage_backup_symlink")
-        try:
-            if not entry.is_file():
-                continue
-            byte_count += entry.stat().st_size
-        except OSError as exc:
-            raise StorageCleanupPlanError("storage_backup_inventory_failed") from exc
-        count += 1
-    return count, byte_count
 
 
 def _regular_file_size(path: Path) -> int:

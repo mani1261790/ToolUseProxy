@@ -10,6 +10,10 @@ from pathlib import Path
 
 from hook_monitor.runtime.storage import EventStore
 from tooluseproxy.cli import main as cli_main
+from tooluseproxy.migration_backups import (
+    MIGRATION_BACKUP_LOCK_FILENAME,
+    MIGRATION_BACKUP_STATE_FILENAME,
+)
 from tooluseproxy.uninstall import DATA_DIRECTORY_MARKER, ensure_data_directory_marker
 
 
@@ -55,6 +59,11 @@ class UninstallCliTest(unittest.TestCase):
             (data_dir / "events.db").write_bytes(b"database")
             (data_dir / "events.db-wal").write_bytes(b"wal")
             (data_dir / "events.db.pre-migration-v3.bak").write_bytes(b"backup")
+            (data_dir / MIGRATION_BACKUP_LOCK_FILENAME).write_bytes(b"")
+            (data_dir / MIGRATION_BACKUP_STATE_FILENAME).write_text(
+                '{"schema_version":1,"backups":{}}\n',
+                encoding="utf-8",
+            )
             backup_dir = data_dir / "manifest-backups" / "workspace"
             backup_dir.mkdir(parents=True)
             (backup_dir / "protected_sources.json").write_text(
@@ -93,6 +102,12 @@ class UninstallCliTest(unittest.TestCase):
             self.assertEqual("retain me\n", unmanaged.read_text(encoding="utf-8"))
             self.assertFalse((data_dir / "events.db").exists())
             self.assertFalse((data_dir / "manifest-backups").exists())
+            self.assertFalse(
+                (data_dir / MIGRATION_BACKUP_STATE_FILENAME).exists()
+            )
+            self.assertFalse(
+                (data_dir / MIGRATION_BACKUP_LOCK_FILENAME).exists()
+            )
 
     def test_apply_rejects_stale_confirmation_without_deleting_data(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

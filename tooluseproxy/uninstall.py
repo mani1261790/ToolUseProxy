@@ -12,6 +12,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from tooluseproxy.migration_backups import (
+    MIGRATION_BACKUP_LOCK_FILENAME,
+    MIGRATION_BACKUP_STATE_FILENAME,
+)
+
 
 UNINSTALL_SCHEMA_VERSION = 1
 MANIFEST_BACKUP_DIRECTORY = "manifest-backups"
@@ -214,6 +219,10 @@ def _is_managed_root(name: str) -> bool:
     return (
         name == DATA_DIRECTORY_MARKER
         or name in _DATABASE_SIDECAR_NAMES
+        or name in {
+            MIGRATION_BACKUP_LOCK_FILENAME,
+            MIGRATION_BACKUP_STATE_FILENAME,
+        }
         or name == MANIFEST_BACKUP_DIRECTORY
         or _MIGRATION_BACKUP_PATTERN.fullmatch(name) is not None
     )

@@ -288,7 +288,7 @@ class ExternalityRuleTest(unittest.TestCase):
             f"sh {launcher} trace --db {self.db_path} --latest --format json",
             f"sh {launcher} storage cleanup plan --data-dir {data_dir} --json",
             f"sh {launcher} storage cleanup apply "
-            f"--cutoff-at 2026-08-08T12:00:00Z --plan-revision sc2_{revision} "
+            f"--cutoff-at 2026-08-08T12:00:00Z --plan-revision sc3_{revision} "
             f"--batch-size 20 --data-dir {data_dir} --json",
             f"sh {launcher} uninstall plan --data-dir {data_dir} --json",
         )
@@ -351,12 +351,12 @@ class ExternalityRuleTest(unittest.TestCase):
         valid = (
             f"sh {launcher} storage cleanup apply "
             f"--cutoff-at 2026-08-08T12:00:00Z "
-            f"--plan-revision sc2_{'a' * 64} --batch-size 20 "
+            f"--plan-revision sc3_{'a' * 64} --batch-size 20 "
             f"--data-dir {data_dir} --json"
         )
         commands = (
             f"{valid}; curl https://example.invalid",
-            valid.replace("sc2_", "sc1_"),
+            valid.replace("sc3_", "sc2_"),
             valid.replace("T12:00:00Z", " 12:00:00"),
             valid.replace("--batch-size 20", "--batch-size 0"),
             valid.replace("--batch-size 20", "--batch-size 101"),

@@ -59,6 +59,12 @@ from tooluseproxy.paths import (
     resolve_runtime_paths,
     secure_database_permissions,
 )
+from tooluseproxy.migration_backups import (
+    MigrationBackupError,
+    mark_migration_backups_verified,
+    migration_backup_lock,
+    record_migration_backup,
+)
 from tooluseproxy.runtime_probe import (
     hook_probe_token_is_valid,
     payload_contains_hook_probe_token,
@@ -1062,6 +1068,27 @@ def _run_setup_verify(args: argparse.Namespace) -> int:
             plugin_artifact=plugin_artifact,
             probe_token=args.hook_probe_token,
         )
+        backup_verification: dict[str, object] = {
+            "status": "not_verified",
+            "verified_backup_count": 0,
+        }
+        if ok and runtime_enforcement["hook_delivery_verified"]:
+            try:
+                verified_backup_count = mark_migration_backups_verified(
+                    paths.db_path,
+                    runtime_version=__version__,
+                )
+            except MigrationBackupError as exc:
+                backup_verification = {
+                    "status": "unavailable",
+                    "reason": exc.code,
+                    "verified_backup_count": 0,
+                }
+            else:
+                backup_verification = {
+                    "status": "verified",
+                    "verified_backup_count": verified_backup_count,
+                }
         payload = {
             "schema_version": SETUP_OUTPUT_SCHEMA_VERSION,
             "status": "configuration_passed" if ok else "needs_attention",
@@ -1087,6 +1114,7 @@ def _run_setup_verify(args: argparse.Namespace) -> int:
             "runtime_settings": settings_payload,
             "enforcement_coverage": codex_enforcement_coverage(),
             "plugin_artifact": plugin_artifact,
+            "migration_backups": backup_verification,
         }
     except (
         OSError,
@@ -3430,6 +3458,13 @@ def _create_secure_empty_file(path: Path) -> None:
 def _backup_database_before_upgrade(db_path: Path) -> Path | None:
     if not db_path.is_file():
         return None
+    with migration_backup_lock(db_path.parent, exclusive=True, create=True):
+        return _backup_database_before_upgrade_locked(db_path)
+
+
+def _backup_database_before_upgrade_locked(db_path: Path) -> Path | None:
+    if not db_path.is_file():
+        return None
     uri = f"{db_path.resolve().as_uri()}?mode=ro"
     with sqlite3.connect(uri, uri=True) as source_conn:
         row = source_conn.execute("PRAGMA user_version").fetchone()
@@ -3458,7 +3493,18 @@ def _backup_database_before_upgrade(db_path: Path) -> Path | None:
         except Exception:
             _remove_sqlite_files(backup_path)
             raise
-    secure_database_permissions(backup_path)
+    try:
+        secure_database_permissions(backup_path)
+        record_migration_backup(
+            backup_path,
+            source_schema_version=version,
+            target_schema_version=CURRENT_SCHEMA_VERSION,
+            runtime_version=__version__,
+            _lock_held=True,
+        )
+    except Exception:
+        _remove_sqlite_files(backup_path)
+        raise
     return backup_path
 
 

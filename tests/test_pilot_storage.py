@@ -25,6 +25,7 @@ from hook_monitor.runtime.runner import run_hook
 from hook_monitor.runtime.pre_tool_policy import PreToolInputGuardResult
 from hook_monitor.runtime.workspace import resolve_workspace
 from tooluseproxy.cli import _backup_database_before_upgrade
+from tooluseproxy.migration_backups import MIGRATION_BACKUP_STATE_FILENAME
 from tests import test_pilot_aggregate as fixtures
 
 
@@ -157,6 +158,18 @@ class PilotStorageTest(unittest.TestCase):
             conn.execute("PRAGMA user_version = 7")
         backup = _backup_database_before_upgrade(self.path)
         self.assertIsNotNone(backup)
+        backup_state = json.loads(
+            (self.path.parent / MIGRATION_BACKUP_STATE_FILENAME).read_text(
+                encoding="utf-8"
+            )
+        )
+        backup_record = backup_state["backups"][backup.name]
+        self.assertEqual(7, backup_record["source_schema_version"])
+        self.assertEqual(
+            CURRENT_SCHEMA_VERSION,
+            backup_record["target_schema_version"],
+        )
+        self.assertIsNone(backup_record["verified_at"])
         store.initialize()
         store.require_runtime_schema()
 

@@ -5,12 +5,16 @@ import sqlite3
 import tempfile
 import unittest
 from contextlib import redirect_stdout
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from io import StringIO
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from hook_monitor.runtime.storage import EventStore
+from hook_monitor.runtime.storage import CURRENT_SCHEMA_VERSION, EventStore
+from tooluseproxy.migration_backups import (
+    mark_migration_backups_verified,
+    record_migration_backup,
+)
 from tooluseproxy.cli import main as tooluseproxy_main
 from tooluseproxy import storage_cleanup
 from tooluseproxy.storage_cleanup import (
@@ -337,11 +341,17 @@ class StorageCleanupPlanTest(unittest.TestCase):
         self.assertTrue(payload["preserved"]["protected_source_registrations"])
         self.assertEqual(1, payload["storage"]["migration_backup_count"])
         self.assertEqual(123, payload["storage"]["migration_backup_bytes"])
+        self.assertTrue(payload["migration_backups"]["cleanup_blocked"])
+        self.assertEqual(
+            1,
+            payload["migration_backups"]["awaiting_verification_count"],
+        )
+        self.assertEqual(0, payload["migration_backups"]["eligible_count"])
         self.assertEqual(0, payload["database_changes"])
         self.assertEqual(0, payload["source_file_changes"])
         self.assertFalse(payload["protected_manifest_read"])
         self.assertFalse(payload["network_used"])
-        self.assertRegex(payload["plan_revision"], r"^sc2_[0-9a-f]{64}$")
+        self.assertRegex(payload["plan_revision"], r"^sc3_[0-9a-f]{64}$")
         self.assertEqual(database_before, self.db_path.read_bytes())
         self.assertEqual(backup_before, self.backup.read_bytes())
         self.assertEqual(source_before, self.source.read_bytes())
@@ -506,6 +516,49 @@ class StorageCleanupPlanTest(unittest.TestCase):
                 [("PUBLIC_RECENT_VALUE",)],
                 conn.execute("SELECT text FROM artifact_contents").fetchall(),
             )
+
+    def test_apply_deletes_only_mature_verified_backup_and_keeps_runtime_db(
+        self,
+    ) -> None:
+        self.backup.unlink()
+        backup = self.data_dir / (
+            f"events.db.pre-migration-v{CURRENT_SCHEMA_VERSION - 1}.bak"
+        )
+        with sqlite3.connect(backup) as conn:
+            conn.execute(f"PRAGMA user_version = {CURRENT_SCHEMA_VERSION - 1}")
+            conn.execute("CREATE TABLE old_runtime (id INTEGER PRIMARY KEY)")
+        created_at = self.now - timedelta(days=9)
+        record_migration_backup(
+            backup,
+            source_schema_version=CURRENT_SCHEMA_VERSION - 1,
+            target_schema_version=CURRENT_SCHEMA_VERSION,
+            runtime_version="test-runtime",
+            now=created_at,
+        )
+        mark_migration_backups_verified(
+            self.db_path,
+            runtime_version="test-runtime",
+            now=self.now - timedelta(days=8),
+        )
+
+        plan = plan_storage_cleanup(self.db_path, now=self.now)
+        payload = plan.to_payload()
+        self.assertEqual(1, payload["migration_backups"]["eligible_count"])
+        self.assertGreater(payload["migration_backups"]["eligible_bytes"], 0)
+
+        result = apply_storage_cleanup(
+            self.db_path,
+            cutoff_at=plan.cutoff_at,
+            expected_plan_revision=plan.plan_revision,
+            batch_size=1,
+        )
+
+        self.assertEqual("applied", result.migration_backup_cleanup_status)
+        self.assertEqual(1, result.deleted_migration_backup_count)
+        self.assertFalse(backup.exists())
+        EventStore(self.db_path).require_runtime_schema()
+        with sqlite3.connect(self.db_path) as conn:
+            self.assertEqual("ok", conn.execute("PRAGMA quick_check").fetchone()[0])
 
     def test_pending_and_recent_dependent_work_skip_old_sessions(self) -> None:
         with sqlite3.connect(self.db_path) as conn:
