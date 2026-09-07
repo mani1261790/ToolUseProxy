@@ -23,6 +23,7 @@ from hook_monitor.analysis.adapters.mcp import parse_mcp_tool_name
 from hook_monitor.analysis.leak_detection import detect_leaks
 from hook_monitor.analysis.similarity import (
     SIMILARITY_MAX_CANDIDATE_FEATURES,
+    SIMILARITY_PROFILE_VERSION,
     SimilarityCandidateStats,
     rank_similarity_candidate_ids,
 )
@@ -104,7 +105,7 @@ if TYPE_CHECKING:
 
 
 DEFAULT_DB_PATH = Path(".tooluseproxy/events.db")
-CURRENT_SCHEMA_VERSION = 11
+CURRENT_SCHEMA_VERSION = 12
 RUNTIME_REQUIRED_TABLES = frozenset(
     {
         "analysis_cursors",
@@ -114,6 +115,7 @@ RUNTIME_REQUIRED_TABLES = frozenset(
         "analysis_run_nodes",
         "analysis_runs",
         "analysis_state",
+        "artifact_contents",
         "artifact_fragments",
         "artifacts",
         "event_payload_metadata",
@@ -123,7 +125,7 @@ RUNTIME_REQUIRED_TABLES = frozenset(
         "externality_rule_reviews",
         "flow_edges",
         "fragment_exact_index",
-        "fragment_shingles",
+        "content_similarity_features",
         "information_flow_edge_scopes",
         "information_flow_edges",
         "lineage_assignments",
@@ -181,6 +183,28 @@ RUNTIME_REQUIRED_COLUMNS = {
             "workspace_source",
             "workspace_namespace_id",
         }
+    ),
+    "artifact_contents": frozenset(
+        {"text_hash", "text", "normalized_text", "token_count"}
+    ),
+    "artifacts": frozenset(
+        {"artifact_id", "event_id", "role", "text_hash", "recorded_at"}
+    ),
+    "artifact_fragments": frozenset(
+        {
+            "fragment_id",
+            "artifact_id",
+            "json_pointer",
+            "semantic_role",
+            "text_hash",
+            "fragment_kind",
+            "parent_fragment_id",
+            "operation_id",
+            "recorded_at",
+        }
+    ),
+    "content_similarity_features": frozenset(
+        {"profile_version", "text_hash", "feature"}
     ),
     "protected_sources": frozenset(
         {
@@ -274,6 +298,10 @@ RUNTIME_REQUIRED_COLUMNS = {
         }
     ),
 }
+RUNTIME_FORBIDDEN_COLUMNS = {
+    "artifacts": frozenset({"text", "normalized_text", "token_count"}),
+    "artifact_fragments": frozenset({"text", "normalized_text", "token_count"}),
+}
 LEGACY_DERIVED_WORKSPACE_ID = "legacy_unscoped"
 WORKSPACE_ANALYSIS_INPUT_REVISION_VERSION = "workspace-analysis-input-v2"
 REDACTION_AUDIT_BUSY_TIMEOUT_MS = 10
@@ -351,6 +379,26 @@ _PROTECTED_SOURCE_CANDIDATE_REVIEW_SELECT_COLUMNS = """
     recorded_at
 """
 RUNTIME_REQUIRED_INDEXES = {
+    "idx_content_similarity_features_content": (
+        "content_similarity_features",
+        False,
+        ("text_hash", "profile_version", "feature"),
+    ),
+    "idx_content_similarity_features_lookup": (
+        "content_similarity_features",
+        False,
+        ("profile_version", "feature", "text_hash"),
+    ),
+    "idx_fragments_text_hash": (
+        "artifact_fragments",
+        False,
+        ("text_hash",),
+    ),
+    "idx_fragment_exact_fragment": (
+        "fragment_exact_index",
+        False,
+        ("fragment_id",),
+    ),
     "idx_events_workspace_session_sequence": (
         "events",
         False,
@@ -586,7 +634,7 @@ class EventStore:
         self.db_path = db_path
         self._redaction_audit_available: bool | None = None
 
-    def initialize(self) -> None:
+    def initialize(self, *, allow_content_migration: bool = False) -> None:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as conn:
             _enable_wal(conn)
@@ -727,16 +775,26 @@ class EventStore:
             )
             conn.execute(
                 """
+                CREATE TABLE IF NOT EXISTS artifact_contents (
+                    text_hash TEXT PRIMARY KEY,
+                    text TEXT NOT NULL,
+                    normalized_text TEXT NOT NULL,
+                    token_count INTEGER NOT NULL,
+                    recorded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            conn.execute(
+                """
                 CREATE TABLE IF NOT EXISTS artifacts (
                     artifact_id TEXT PRIMARY KEY,
                     event_id TEXT NOT NULL,
                     role TEXT NOT NULL,
-                    text TEXT NOT NULL,
                     text_hash TEXT NOT NULL,
-                    normalized_text TEXT NOT NULL,
-                    token_count INTEGER NOT NULL,
                     recorded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (event_id) REFERENCES events (event_id)
+                    FOREIGN KEY (event_id) REFERENCES events (event_id),
+                    FOREIGN KEY (text_hash)
+                        REFERENCES artifact_contents (text_hash)
                 )
                 """
             )
@@ -747,12 +805,11 @@ class EventStore:
                     artifact_id TEXT NOT NULL,
                     json_pointer TEXT NOT NULL,
                     semantic_role TEXT NOT NULL,
-                    text TEXT NOT NULL,
                     text_hash TEXT NOT NULL,
-                    normalized_text TEXT NOT NULL,
-                    token_count INTEGER NOT NULL,
                     recorded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (artifact_id) REFERENCES artifacts (artifact_id)
+                    FOREIGN KEY (artifact_id) REFERENCES artifacts (artifact_id),
+                    FOREIGN KEY (text_hash)
+                        REFERENCES artifact_contents (text_hash)
                 )
                 """
             )
@@ -773,6 +830,10 @@ class EventStore:
                 "artifact_fragments",
                 "operation_id",
                 "TEXT",
+            )
+            self._migrate_deduplicated_artifact_contents(
+                conn,
+                allowed=allow_content_migration,
             )
             conn.execute(
                 """
@@ -1102,14 +1163,12 @@ class EventStore:
             )
             conn.execute(
                 """
-                CREATE TABLE IF NOT EXISTS fragment_shingles (
-                    fragment_id TEXT NOT NULL,
-                    session_id TEXT NOT NULL,
-                    sequence_no INTEGER NOT NULL,
-                    shingle TEXT NOT NULL,
-                    PRIMARY KEY (fragment_id, shingle),
-                    FOREIGN KEY (fragment_id) REFERENCES artifact_fragments (fragment_id)
-                )
+                CREATE TABLE IF NOT EXISTS content_similarity_features (
+                    profile_version TEXT NOT NULL,
+                    text_hash TEXT NOT NULL,
+                    feature TEXT NOT NULL,
+                    PRIMARY KEY (profile_version, text_hash, feature)
+                ) WITHOUT ROWID
                 """
             )
             conn.execute(
@@ -1451,14 +1510,28 @@ class EventStore:
             )
             conn.execute(
                 """
-                CREATE INDEX IF NOT EXISTS idx_fragment_shingles_lookup
-                ON fragment_shingles (
-                    workspace_id,
-                    session_id,
-                    shingle,
-                    sequence_no,
-                    fragment_id
+                CREATE INDEX IF NOT EXISTS idx_content_similarity_features_content
+                ON content_similarity_features (
+                    text_hash,
+                    profile_version,
+                    feature
                 )
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_content_similarity_features_lookup
+                ON content_similarity_features (
+                    profile_version,
+                    feature,
+                    text_hash
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_fragment_exact_fragment
+                ON fragment_exact_index (fragment_id)
                 """
             )
             conn.execute(
@@ -1657,6 +1730,20 @@ class EventStore:
                 "schema_incomplete",
                 f"database schema is incomplete: {detail}",
             )
+        duplicated_content_columns = {
+            table: sorted(forbidden & columns.get(table, set()))
+            for table, forbidden in RUNTIME_FORBIDDEN_COLUMNS.items()
+            if forbidden & columns.get(table, set())
+        }
+        if duplicated_content_columns:
+            detail = "; ".join(
+                f"{table} still contains {', '.join(duplicated)}"
+                for table, duplicated in sorted(duplicated_content_columns.items())
+            )
+            raise SchemaCompatibilityError(
+                "schema_incomplete",
+                f"database schema still duplicates artifact content: {detail}",
+            )
         incomplete_constraints = sorted(
             table
             for table, required_fragments in (
@@ -1839,27 +1926,22 @@ class EventStore:
                 redaction_scope_sha256=redaction_scope_sha256,
                 post_input_observation=post_input_observation,
             )
+            self._store_artifact_contents(conn, [*artifacts, *(fragments or [])])
             conn.executemany(
                 """
                 INSERT OR REPLACE INTO artifacts (
                     artifact_id,
                     event_id,
                     role,
-                    text,
-                    text_hash,
-                    normalized_text,
-                    token_count
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    text_hash
+                ) VALUES (?, ?, ?, ?)
                 """,
                 [
                     (
                         artifact.artifact_id,
                         artifact.event_id,
                         artifact.role,
-                        artifact.text,
                         artifact.text_hash,
-                        artifact.normalized_text,
-                        artifact.token_count,
                     )
                     for artifact in artifacts
                 ],
@@ -1912,14 +1994,11 @@ class EventStore:
                         artifact_id,
                         json_pointer,
                         semantic_role,
-                        text,
                         text_hash,
-                        normalized_text,
-                        token_count,
                         fragment_kind,
                         parent_fragment_id,
                         operation_id
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     [
                         (
@@ -1927,10 +2006,7 @@ class EventStore:
                             fragment.artifact_id,
                             fragment.json_pointer,
                             fragment.semantic_role,
-                            fragment.text,
                             fragment.text_hash,
-                            fragment.normalized_text,
-                            fragment.token_count,
                             fragment.fragment_kind,
                             fragment.parent_fragment_id,
                             fragment.operation_id,
@@ -2958,8 +3034,51 @@ class EventStore:
             ],
         )
 
+    def _store_artifact_contents(
+        self,
+        conn: sqlite3.Connection,
+        items: list[ArtifactRecord | ArtifactFragment],
+    ) -> None:
+        contents: dict[str, tuple[str, str, int]] = {}
+        for item in items:
+            value = (item.text, item.normalized_text, item.token_count)
+            previous = contents.setdefault(item.text_hash, value)
+            if previous != value:
+                raise sqlite3.IntegrityError("artifact content hash collision")
+        if not contents:
+            return
+        conn.executemany(
+            """
+            INSERT OR IGNORE INTO artifact_contents (
+                text_hash, text, normalized_text, token_count
+            ) VALUES (?, ?, ?, ?)
+            """,
+            [
+                (text_hash, text, normalized_text, token_count)
+                for text_hash, (text, normalized_text, token_count) in contents.items()
+            ],
+        )
+        hashes = sorted(contents)
+        for start in range(0, len(hashes), 300):
+            current = hashes[start : start + 300]
+            placeholders = ",".join("?" for _ in current)
+            stored = {
+                row[0]: (row[1], row[2], row[3])
+                for row in conn.execute(
+                    f"""
+                    SELECT text_hash, text, normalized_text, token_count
+                    FROM artifact_contents
+                    WHERE text_hash IN ({placeholders})
+                    """,
+                    current,
+                ).fetchall()
+            }
+            if any(stored.get(text_hash) != contents[text_hash] for text_hash in current):
+                raise sqlite3.IntegrityError("artifact content hash collision")
+
     def upsert_artifact_fragments(self, fragments: list[ArtifactFragment]) -> None:
         with self._connect() as conn:
+            self._store_artifact_contents(conn, fragments)
             conn.executemany(
                 """
                 INSERT OR REPLACE INTO artifact_fragments (
@@ -2967,14 +3086,11 @@ class EventStore:
                     artifact_id,
                     json_pointer,
                     semantic_role,
-                    text,
                     text_hash,
-                    normalized_text,
-                    token_count,
                     fragment_kind,
                     parent_fragment_id,
                     operation_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
                     (
@@ -2982,10 +3098,7 @@ class EventStore:
                         fragment.artifact_id,
                         fragment.json_pointer,
                         fragment.semantic_role,
-                        fragment.text,
                         fragment.text_hash,
-                        fragment.normalized_text,
-                        fragment.token_count,
                         fragment.fragment_kind,
                         fragment.parent_fragment_id,
                         fragment.operation_id,
@@ -3000,6 +3113,7 @@ class EventStore:
     ) -> None:
         """Backfill generic fragments without replacing richer derived evidence."""
         with self._connect() as conn:
+            self._store_artifact_contents(conn, fragments)
             conn.executemany(
                 """
                 INSERT OR IGNORE INTO artifact_fragments (
@@ -3007,14 +3121,11 @@ class EventStore:
                     artifact_id,
                     json_pointer,
                     semantic_role,
-                    text,
                     text_hash,
-                    normalized_text,
-                    token_count,
                     fragment_kind,
                     parent_fragment_id,
                     operation_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
                     (
@@ -3022,10 +3133,7 @@ class EventStore:
                         fragment.artifact_id,
                         fragment.json_pointer,
                         fragment.semantic_role,
-                        fragment.text,
                         fragment.text_hash,
-                        fragment.normalized_text,
-                        fragment.token_count,
                         fragment.fragment_kind,
                         fragment.parent_fragment_id,
                         fragment.operation_id,
@@ -3870,10 +3978,10 @@ class EventStore:
                             f.artifact_id,
                             f.json_pointer,
                             f.semantic_role,
-                            f.text,
+                            content.text,
                             f.text_hash,
-                            f.normalized_text,
-                            f.token_count,
+                            content.normalized_text,
+                            content.token_count,
                             f.fragment_kind,
                             f.parent_fragment_id,
                             f.operation_id,
@@ -3892,6 +4000,8 @@ class EventStore:
                             e.workspace_execution_cwd,
                             e.workspace_status
                         FROM artifact_fragments AS f
+                        JOIN artifact_contents AS content
+                          ON content.text_hash = f.text_hash
                         JOIN artifacts AS a ON a.artifact_id = f.artifact_id
                         JOIN events AS e ON e.event_id = a.event_id
                         WHERE f.fragment_id IN ({placeholders})
@@ -6756,13 +6866,19 @@ class EventStore:
                     """,
                     (workspace_id, *edge_ids),
                 )
-            conn.execute(
-                """
-                DELETE FROM fragment_shingles
-                WHERE workspace_id = ? AND session_id = ?
-                """,
-                (workspace_id, session_id),
-            )
+            content_hashes = [
+                row[0]
+                for row in conn.execute(
+                    """
+                    SELECT DISTINCT fragment.text_hash
+                    FROM fragment_exact_index AS indexed
+                    JOIN artifact_fragments AS fragment
+                      ON fragment.fragment_id = indexed.fragment_id
+                    WHERE indexed.workspace_id = ? AND indexed.session_id = ?
+                    """,
+                    (workspace_id, session_id),
+                ).fetchall()
+            ]
             conn.execute(
                 """
                 DELETE FROM fragment_exact_index
@@ -6770,6 +6886,25 @@ class EventStore:
                 """,
                 (workspace_id, session_id),
             )
+            for start in range(0, len(content_hashes), 300):
+                current_hashes = content_hashes[start : start + 300]
+                placeholders = ",".join("?" for _ in current_hashes)
+                conn.execute(
+                    f"""
+                    DELETE FROM content_similarity_features
+                    WHERE text_hash IN ({placeholders})
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM artifact_fragments AS fragment
+                          JOIN fragment_exact_index AS indexed
+                            INDEXED BY idx_fragment_exact_fragment
+                            ON indexed.fragment_id = fragment.fragment_id
+                          WHERE fragment.text_hash =
+                                content_similarity_features.text_hash
+                      )
+                    """,
+                    current_hashes,
+                )
             conn.execute(
                 """
                 DELETE FROM runtime_lineage_state
@@ -8629,20 +8764,16 @@ class EventStore:
                 for exact_key in exact_keys_by_fragment.values()
             ):
                 raise ValueError("fragment exact keys must be non-empty strings")
-        rows = [
-            (
-                workspace_id,
-                session_id,
-                context.fragment.fragment_id,
-                context.sequence_no,
-                shingle,
-            )
-            for context in contexts
-            for shingle in shingles_by_fragment.get(
-                context.fragment.fragment_id,
-                set(),
-            )
-        ]
+        rows = sorted(
+            {
+                (SIMILARITY_PROFILE_VERSION, context.fragment.text_hash, feature)
+                for context in contexts
+                for feature in shingles_by_fragment.get(
+                    context.fragment.fragment_id,
+                    set(),
+                )
+            }
+        )
         exact_rows = [
             (
                 workspace_id,
@@ -8665,9 +8796,9 @@ class EventStore:
             if rows:
                 conn.executemany(
                     """
-                    INSERT OR IGNORE INTO fragment_shingles (
-                        workspace_id, session_id, fragment_id, sequence_no, shingle
-                    ) VALUES (?, ?, ?, ?, ?)
+                    INSERT OR IGNORE INTO content_similarity_features (
+                        profile_version, text_hash, feature
+                    ) VALUES (?, ?, ?)
                     """,
                     rows,
                 )
@@ -8755,47 +8886,56 @@ class EventStore:
                 query_feature_count = len(shingles)
                 ranked_rows = conn.execute(
                     """
-                    WITH overlap_counts AS (
+                    WITH scoped_contents AS MATERIALIZED (
+                        SELECT DISTINCT fragment.text_hash AS text_hash
+                        FROM fragment_exact_index AS scoped
+                        JOIN artifact_fragments AS fragment
+                          ON fragment.fragment_id = scoped.fragment_id
+                        WHERE scoped.workspace_id = ?1
+                          AND scoped.session_id = ?2
+                          AND scoped.sequence_no < ?3
+                    ),
+                    matching_contents AS MATERIALIZED (
                         SELECT
-                            indexed.fragment_id AS fragment_id,
-                            COUNT(*) AS overlap_count
-                        FROM similarity_query_features AS query
-                        JOIN fragment_shingles AS indexed
-                          INDEXED BY idx_fragment_shingles_lookup
-                          ON indexed.workspace_id = ?1
-                         AND indexed.session_id = ?2
-                         AND indexed.shingle = query.feature
-                        WHERE indexed.sequence_no < ?3
-                        GROUP BY indexed.fragment_id
+                            indexed.text_hash AS text_hash,
+                            SUM(
+                                CASE WHEN query.feature IS NULL THEN 0 ELSE 1 END
+                            ) AS overlap_count,
+                            COUNT(*) AS candidate_feature_count
+                        FROM scoped_contents AS scoped_content
+                        JOIN content_similarity_features AS indexed
+                          INDEXED BY idx_content_similarity_features_content
+                          ON indexed.text_hash = scoped_content.text_hash
+                         AND indexed.profile_version = ?8
+                        LEFT JOIN similarity_query_features AS query
+                          ON query.feature = indexed.feature
+                        GROUP BY indexed.text_hash
+                        HAVING SUM(
+                            CASE WHEN query.feature IS NULL THEN 0 ELSE 1 END
+                        ) > 0
                     ),
                     candidate_stats AS (
                         SELECT
-                            overlap.fragment_id AS fragment_id,
+                            scoped.fragment_id AS fragment_id,
                             overlap.overlap_count AS overlap_count,
-                            (
-                                SELECT COUNT(*)
-                                FROM fragment_shingles AS candidate
-                                WHERE candidate.workspace_id = ?1
-                                  AND candidate.session_id = ?2
-                                  AND candidate.fragment_id = overlap.fragment_id
-                            ) AS candidate_feature_count
-                        FROM overlap_counts AS overlap
-                    ),
-                    eligible_stats AS (
-                        SELECT
-                            stats.fragment_id AS fragment_id,
-                            stats.overlap_count AS overlap_count,
-                            stats.candidate_feature_count AS candidate_feature_count,
-                            fragment.normalized_text AS normalized_text
-                        FROM candidate_stats AS stats
+                            overlap.candidate_feature_count AS candidate_feature_count,
+                            content.normalized_text AS normalized_text
+                        FROM matching_contents AS overlap
                         JOIN artifact_fragments AS fragment
-                          ON fragment.fragment_id = stats.fragment_id
-                        WHERE tooluseproxy_text_length(fragment.normalized_text) >= ?4
+                          ON fragment.text_hash = overlap.text_hash
+                        JOIN artifact_contents AS content
+                          ON content.text_hash = fragment.text_hash
+                        JOIN fragment_exact_index AS scoped
+                          ON scoped.workspace_id = ?1
+                         AND scoped.session_id = ?2
+                         AND scoped.fragment_id = fragment.fragment_id
+                        WHERE scoped.sequence_no < ?3
+                          AND tooluseproxy_text_length(content.normalized_text) >= ?4
                     )
                     SELECT *
                     FROM (
                         SELECT *
-                        FROM eligible_stats
+                        FROM candidate_stats
                         -- Query and candidate feature counts are capped at 16384.
                         -- Distinct rational coverage scores are separated by more
                         -- than binary64 ULP, so REAL selects the same bounded top-K
@@ -8811,7 +8951,7 @@ class EventStore:
                     SELECT *
                     FROM (
                         SELECT *
-                        FROM eligible_stats
+                        FROM candidate_stats
                         ORDER BY
                             overlap_count DESC,
                             CAST(overlap_count AS REAL)
@@ -8828,6 +8968,7 @@ class EventStore:
                         query_feature_count,
                         limit,
                         limit,
+                        SIMILARITY_PROFILE_VERSION,
                     ),
                 ).fetchall()
                 # Each SQL objective is bounded independently. Deduplicate their
@@ -8928,9 +9069,12 @@ class EventStore:
         with self._connect() as conn:
             rows = conn.execute(
                 """
-                SELECT artifact_id, event_id, role, text, text_hash, normalized_text, token_count
-                FROM artifacts
-                ORDER BY recorded_at, artifact_id
+                SELECT a.artifact_id, a.event_id, a.role, content.text,
+                       a.text_hash, content.normalized_text, content.token_count
+                FROM artifacts AS a
+                JOIN artifact_contents AS content
+                  ON content.text_hash = a.text_hash
+                ORDER BY a.recorded_at, a.artifact_id
                 """
             ).fetchall()
         return [
@@ -8957,11 +9101,13 @@ class EventStore:
                     a.artifact_id,
                     a.event_id,
                     a.role,
-                    a.text,
+                    content.text,
                     a.text_hash,
-                    a.normalized_text,
-                    a.token_count
+                    content.normalized_text,
+                    content.token_count
                 FROM artifacts AS a
+                JOIN artifact_contents AS content
+                  ON content.text_hash = a.text_hash
                 JOIN events AS e ON e.event_id = a.event_id
                 WHERE e.workspace_id = ?
                   AND e.workspace_status = 'ready'
@@ -9206,9 +9352,11 @@ class EventStore:
             (
                 "artifacts",
                 """
-                SELECT a.artifact_id, a.event_id, a.role, a.text,
-                       a.text_hash, a.normalized_text, a.token_count
+                SELECT a.artifact_id, a.event_id, a.role, content.text,
+                       a.text_hash, content.normalized_text, content.token_count
                 FROM artifacts AS a
+                JOIN artifact_contents AS content
+                  ON content.text_hash = a.text_hash
                 JOIN events AS e ON e.event_id = a.event_id
                 WHERE e.workspace_id = ? AND e.workspace_status = 'ready'
                 ORDER BY a.artifact_id
@@ -9219,11 +9367,13 @@ class EventStore:
                 """
                 SELECT fragment.fragment_id, fragment.artifact_id,
                        fragment.json_pointer, fragment.semantic_role,
-                       fragment.text, fragment.text_hash,
-                       fragment.normalized_text, fragment.token_count,
+                       content.text, fragment.text_hash,
+                       content.normalized_text, content.token_count,
                        fragment.fragment_kind, fragment.parent_fragment_id,
                        fragment.operation_id
                 FROM artifact_fragments AS fragment
+                JOIN artifact_contents AS content
+                  ON content.text_hash = fragment.text_hash
                 JOIN artifacts AS a ON a.artifact_id = fragment.artifact_id
                 JOIN events AS e ON e.event_id = a.event_id
                 WHERE e.workspace_id = ? AND e.workspace_status = 'ready'
@@ -9849,10 +9999,10 @@ class EventStore:
                     f.artifact_id,
                     f.json_pointer,
                     f.semantic_role,
-                    f.text,
+                    content.text,
                     f.text_hash,
-                    f.normalized_text,
-                    f.token_count,
+                    content.normalized_text,
+                    content.token_count,
                     f.fragment_kind,
                     f.parent_fragment_id,
                     f.operation_id,
@@ -9871,6 +10021,8 @@ class EventStore:
                     e.workspace_execution_cwd,
                     e.workspace_status
                 FROM artifact_fragments AS f
+                JOIN artifact_contents AS content
+                  ON content.text_hash = f.text_hash
                 JOIN artifacts AS a ON a.artifact_id = f.artifact_id
                 JOIN {event_source} ON e.event_id = a.event_id
                 {where_clause}
@@ -9973,6 +10125,162 @@ class EventStore:
                 )
                 return
         self._create_protected_source_candidate_tables(conn)
+
+    def _migrate_deduplicated_artifact_contents(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        allowed: bool,
+    ) -> None:
+        """Move repeated artifact text into one hash-addressed content row."""
+        artifact_columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(artifacts)").fetchall()
+        }
+        fragment_columns = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(artifact_fragments)").fetchall()
+        }
+        legacy_content_columns = {"text", "normalized_text", "token_count"}
+        if not (artifact_columns & legacy_content_columns) and not (
+            fragment_columns & legacy_content_columns
+        ):
+            self._validate_deduplicated_artifact_contents(conn)
+            return
+        if not legacy_content_columns.issubset(artifact_columns) or not (
+            legacy_content_columns.issubset(fragment_columns)
+        ):
+            raise RuntimeError("artifact content schema is incomplete")
+        if not allowed:
+            raise SchemaCompatibilityError(
+                "schema_upgrade_required",
+                "artifact content migration requires a verified database backup",
+            )
+
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO artifact_contents (
+                text_hash, text, normalized_text, token_count
+            )
+            SELECT text_hash, text, normalized_text, token_count
+            FROM artifacts
+            """
+        )
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO artifact_contents (
+                text_hash, text, normalized_text, token_count
+            )
+            SELECT text_hash, text, normalized_text, token_count
+            FROM artifact_fragments
+            """
+        )
+        mismatch = conn.execute(
+            """
+            SELECT 1
+            FROM (
+                SELECT text_hash, text, normalized_text, token_count FROM artifacts
+                UNION ALL
+                SELECT text_hash, text, normalized_text, token_count
+                FROM artifact_fragments
+            ) AS legacy
+            LEFT JOIN artifact_contents AS content
+              ON content.text_hash = legacy.text_hash
+            WHERE content.text_hash IS NULL
+               OR content.text IS NOT legacy.text
+               OR content.normalized_text IS NOT legacy.normalized_text
+               OR content.token_count IS NOT legacy.token_count
+            LIMIT 1
+            """
+        ).fetchone()
+        if mismatch is not None:
+            raise RuntimeError("artifact content hash collision")
+
+        for temporary in ("artifacts_v12_new", "artifact_fragments_v12_new"):
+            if conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+                (temporary,),
+            ).fetchone() is not None:
+                raise RuntimeError("artifact content migration is incomplete")
+        conn.execute(
+            """
+            CREATE TABLE artifacts_v12_new (
+                artifact_id TEXT PRIMARY KEY,
+                event_id TEXT NOT NULL,
+                role TEXT NOT NULL,
+                text_hash TEXT NOT NULL,
+                recorded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (event_id) REFERENCES events (event_id),
+                FOREIGN KEY (text_hash) REFERENCES artifact_contents (text_hash)
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO artifacts_v12_new (
+                artifact_id, event_id, role, text_hash, recorded_at
+            )
+            SELECT artifact_id, event_id, role, text_hash, recorded_at
+            FROM artifacts
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE artifact_fragments_v12_new (
+                fragment_id TEXT PRIMARY KEY,
+                artifact_id TEXT NOT NULL,
+                json_pointer TEXT NOT NULL,
+                semantic_role TEXT NOT NULL,
+                text_hash TEXT NOT NULL,
+                recorded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                fragment_kind TEXT NOT NULL DEFAULT 'payload',
+                parent_fragment_id TEXT,
+                operation_id TEXT,
+                FOREIGN KEY (artifact_id) REFERENCES artifacts (artifact_id),
+                FOREIGN KEY (text_hash) REFERENCES artifact_contents (text_hash)
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO artifact_fragments_v12_new (
+                fragment_id, artifact_id, json_pointer, semantic_role,
+                text_hash, recorded_at, fragment_kind, parent_fragment_id,
+                operation_id
+            )
+            SELECT fragment_id, artifact_id, json_pointer, semantic_role,
+                   text_hash, recorded_at, fragment_kind, parent_fragment_id,
+                   operation_id
+            FROM artifact_fragments
+            """
+        )
+        conn.execute("DROP TABLE artifact_fragments")
+        conn.execute("DROP TABLE artifacts")
+        conn.execute("ALTER TABLE artifacts_v12_new RENAME TO artifacts")
+        conn.execute(
+            "ALTER TABLE artifact_fragments_v12_new RENAME TO artifact_fragments"
+        )
+        self._validate_deduplicated_artifact_contents(conn)
+
+    def _validate_deduplicated_artifact_contents(
+        self,
+        conn: sqlite3.Connection,
+    ) -> None:
+        missing = conn.execute(
+            """
+            SELECT 1
+            FROM (
+                SELECT text_hash FROM artifacts
+                UNION ALL
+                SELECT text_hash FROM artifact_fragments
+            ) AS reference
+            LEFT JOIN artifact_contents AS content
+              ON content.text_hash = reference.text_hash
+            WHERE content.text_hash IS NULL
+            LIMIT 1
+            """
+        ).fetchone()
+        if missing is not None:
+            raise RuntimeError("artifact content reference is missing")
 
     def _migrate_protected_source_candidate_state(
         self,
@@ -11400,6 +11708,7 @@ class EventStore:
             "runtime_lineage_state",
             "runtime_source_binding_edges",
             "fragment_shingles",
+            "content_similarity_features",
             "fragment_exact_index",
             "analysis_cursors",
             "resource_versions",
@@ -11502,14 +11811,12 @@ class EventStore:
         )
         conn.execute(
             """
-            CREATE TABLE fragment_shingles (
-                workspace_id TEXT NOT NULL,
-                session_id TEXT NOT NULL,
-                fragment_id TEXT NOT NULL,
-                sequence_no INTEGER NOT NULL,
-                shingle TEXT NOT NULL,
-                PRIMARY KEY (workspace_id, session_id, fragment_id, shingle)
-            )
+            CREATE TABLE content_similarity_features (
+                profile_version TEXT NOT NULL,
+                text_hash TEXT NOT NULL,
+                feature TEXT NOT NULL,
+                PRIMARY KEY (profile_version, text_hash, feature)
+            ) WITHOUT ROWID
             """
         )
         conn.execute(
@@ -11640,12 +11947,10 @@ class EventStore:
                 "status",
                 "updated_at",
             },
-            "fragment_shingles": {
-                "workspace_id",
-                "session_id",
-                "fragment_id",
-                "sequence_no",
-                "shingle",
+            "content_similarity_features": {
+                "profile_version",
+                "text_hash",
+                "feature",
             },
             "fragment_exact_index": {
                 "workspace_id",
@@ -11697,11 +12002,10 @@ class EventStore:
             "resource_versions": ("workspace_id", "node_id"),
             "sink_candidates": ("workspace_id", "node_id"),
             "analysis_cursors": ("workspace_id", "session_id"),
-            "fragment_shingles": (
-                "workspace_id",
-                "session_id",
-                "fragment_id",
-                "shingle",
+            "content_similarity_features": (
+                "profile_version",
+                "text_hash",
+                "feature",
             ),
             "fragment_exact_index": (
                 "workspace_id",
@@ -11738,7 +12042,10 @@ class EventStore:
                 or actual_key != expected_key
             ):
                 raise RuntimeError(f"workspace analysis schema mismatch: {table}")
-            if columns["workspace_id"][3] != 1:
+            if (
+                "workspace_id" in required_columns[table]
+                and columns["workspace_id"][3] != 1
+            ):
                 raise RuntimeError(
                     f"workspace analysis owner must be required: {table}"
                 )

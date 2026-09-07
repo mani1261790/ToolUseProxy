@@ -46,11 +46,10 @@ class WorkspaceIdentityTest(unittest.TestCase):
             "resource_versions": ("workspace_id", "node_id"),
             "sink_candidates": ("workspace_id", "node_id"),
             "analysis_cursors": ("workspace_id", "session_id"),
-            "fragment_shingles": (
-                "workspace_id",
-                "session_id",
-                "fragment_id",
-                "shingle",
+            "content_similarity_features": (
+                "profile_version",
+                "text_hash",
+                "feature",
             ),
             "fragment_exact_index": (
                 "workspace_id",
@@ -88,11 +87,12 @@ class WorkspaceIdentityTest(unittest.TestCase):
                                 key=lambda row: row[5],
                             )
                         )
-                        workspace_column = next(
-                            row for row in rows if row[1] == "workspace_id"
-                        )
                         self.assertEqual(expected_key, actual_key)
-                        self.assertEqual(1, workspace_column[3])
+                        if table != "content_similarity_features":
+                            workspace_column = next(
+                                row for row in rows if row[1] == "workspace_id"
+                            )
+                            self.assertEqual(1, workspace_column[3])
 
     def test_cwd_identity_is_stable_across_lexical_variants(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

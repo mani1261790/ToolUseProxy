@@ -84,19 +84,30 @@ class StorageCleanupPlanTest(unittest.TestCase):
             )
             conn.executemany(
                 """
+                INSERT INTO artifact_contents (
+                    text_hash, text, normalized_text, token_count
+                ) VALUES (?, ?, ?, 1)
+                """,
+                (
+                    ("a" * 64, "SYNTHETIC_OLD_VALUE", "synthetic_old_value"),
+                    ("b" * 64, "PUBLIC_RECENT_VALUE", "public_recent_value"),
+                    ("c" * 64, "SYNTHETIC_OLD_VALUE", "synthetic_old_value"),
+                ),
+            )
+            conn.executemany(
+                """
                 INSERT INTO artifacts (
-                    artifact_id, event_id, role, text, text_hash,
-                    normalized_text, token_count, recorded_at
-                ) VALUES (?, ?, 'tool_input', ?, ?, ?, 1, ?)
+                    artifact_id, event_id, role, text_hash, recorded_at
+                ) VALUES (?, ?, 'tool_input', ?, ?)
                 """,
                 (
                     (
-                        "artifact-old", "old-pre", "SYNTHETIC_OLD_VALUE",
-                        "a" * 64, "synthetic_old_value", "2026-07-01 00:00:00",
+                        "artifact-old", "old-pre", "a" * 64,
+                        "2026-07-01 00:00:00",
                     ),
                     (
-                        "artifact-new", "recent", "PUBLIC_RECENT_VALUE",
-                        "b" * 64, "public_recent_value", "2026-09-02 00:00:00",
+                        "artifact-new", "recent", "b" * 64,
+                        "2026-09-02 00:00:00",
                     ),
                 ),
             )
@@ -104,21 +115,21 @@ class StorageCleanupPlanTest(unittest.TestCase):
                 """
                 INSERT INTO artifact_fragments (
                     fragment_id, artifact_id, json_pointer, semantic_role,
-                    text, text_hash, normalized_text, token_count, recorded_at
+                    text_hash, recorded_at
                 ) VALUES (
                     'fragment-old', 'artifact-old', '/private', 'value',
-                    'SYNTHETIC_OLD_VALUE', ?, 'synthetic_old_value', 1,
-                    '2026-07-01 00:00:00'
+                    ?, '2026-07-01 00:00:00'
                 )
                 """,
                 ("c" * 64,),
             )
             conn.execute(
                 """
-                INSERT INTO fragment_shingles (
-                    workspace_id, session_id, fragment_id, sequence_no, shingle
-                ) VALUES ('ws-old', 'old-complete', 'fragment-old', 1, 'abcdef')
-                """
+                INSERT INTO content_similarity_features (
+                    profile_version, text_hash, feature
+                ) VALUES ('test-profile', ?, 'abcdef')
+                """,
+                ("c" * 64,),
             )
             conn.execute(
                 """
@@ -160,7 +171,6 @@ class StorageCleanupPlanTest(unittest.TestCase):
         self.assertEqual(4, rows["events"])
         self.assertEqual(1, rows["artifacts"])
         self.assertEqual(1, rows["artifact_fragments"])
-        self.assertEqual(1, rows["fragment_shingles"])
         self.assertEqual(1, rows["fragment_exact_index"])
         self.assertGreater(
             payload["storage"]["categories"]["improvement_feedback"][

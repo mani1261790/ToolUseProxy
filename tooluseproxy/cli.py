@@ -703,7 +703,9 @@ def _run_init(args: argparse.Namespace) -> int:
     if not paths.db_path.exists():
         _create_secure_empty_file(paths.db_path)
     store = EventStore(paths.db_path)
-    store.initialize()
+    store.initialize(
+        allow_content_migration=(backup_path is not None or args.import_db is not None)
+    )
     secure_database_permissions(paths.db_path)
 
     workspace = resolve_workspace(
@@ -770,7 +772,7 @@ def _run_setup_apply(args: argparse.Namespace) -> int:
         if not paths.db_path.exists():
             _create_secure_empty_file(paths.db_path)
         store = EventStore(paths.db_path)
-        store.initialize()
+        store.initialize(allow_content_migration=backup_path is not None)
         secure_database_permissions(paths.db_path)
 
         workspace = resolve_workspace(

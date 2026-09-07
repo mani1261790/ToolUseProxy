@@ -58,6 +58,7 @@ _DURABLE_CONFIGURATION_TABLES = frozenset(
 _REBUILDABLE_DETECTION_TABLES = frozenset(
     {
         "analysis_cursors",
+        "content_similarity_features",
         "fragment_exact_index",
         "fragment_shingles",
         "runtime_lineage_state",
@@ -68,7 +69,6 @@ _CORE_RETENTION_TABLES = (
     "events",
     "artifacts",
     "artifact_fragments",
-    "fragment_shingles",
     "fragment_exact_index",
     "tool_operations",
     "tool_operation_outcomes",
@@ -451,10 +451,6 @@ def _retention_candidates(
             JOIN events e ON e.event_id = a.event_id
             WHERE (e.session_id IS NULL AND julianday(e.recorded_at) < julianday(:cutoff))
                OR EXISTS (SELECT 1 FROM eligible x WHERE x.session_id = e.session_id AND x.workspace_id IS e.workspace_id)
-        """,
-        "fragment_shingles": """
-            SELECT COUNT(*) FROM fragment_shingles f
-            WHERE EXISTS (SELECT 1 FROM eligible x WHERE x.session_id = f.session_id AND x.workspace_id = f.workspace_id)
         """,
         "fragment_exact_index": """
             SELECT COUNT(*) FROM fragment_exact_index f
