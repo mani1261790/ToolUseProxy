@@ -726,15 +726,6 @@ def plan_storage_cleanup(
     except sqlite3.Error as exc:
         raise StorageCleanupPlanError("storage_database_read_failed") from exc
 
-    # Closing the last SQLite connection may checkpoint an already committed
-    # WAL. Bind the plan to the stable post-close files so that this physical
-    # housekeeping is not mistaken for a logical change immediately after the
-    # plan is returned.
-    try:
-        database_stat = requested.stat()
-    except OSError as exc:
-        raise StorageCleanupPlanError("storage_database_unavailable") from exc
-
     try:
         backup_inventory = inventory_migration_backups(
             requested,
@@ -743,6 +734,14 @@ def plan_storage_cleanup(
         )
     except MigrationBackupError as exc:
         raise StorageCleanupPlanError(exc.code) from exc
+    # Closing any of the read-only SQLite connections above may checkpoint an
+    # already committed WAL. Bind the plan to the stable post-close files so
+    # that physical housekeeping is not mistaken for a logical change
+    # immediately after the plan is returned.
+    try:
+        database_stat = requested.stat()
+    except OSError as exc:
+        raise StorageCleanupPlanError("storage_database_unavailable") from exc
     wal_bytes = _regular_file_size(Path(f"{requested}-wal"))
     allocated_bytes = page_size * page_count
     free_page_bytes = page_size * freelist_count

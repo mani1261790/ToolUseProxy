@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gc
 import json
 import sqlite3
 import tempfile
@@ -40,6 +41,9 @@ class AutomaticCleanupTest(unittest.TestCase):
         self.data_dir.mkdir(mode=0o700)
         self.db_path = self.data_dir / "events.db"
         EventStore(self.db_path).initialize()
+        # Match a completed Hook process: release SQLite connections left for
+        # cyclic garbage collection before reviewing a persisted plan.
+        gc.collect()
         self.now = datetime(2026, 9, 7, 12, 0, tzinfo=UTC)
 
     def tearDown(self) -> None:
