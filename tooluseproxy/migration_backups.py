@@ -213,6 +213,7 @@ def inventory_migration_backups(
     *,
     now: datetime,
     require_integrity_check: bool = True,
+    cancel_check: Callable[[], bool] | None = None,
     _lock_held: bool = False,
 ) -> MigrationBackupInventory:
     """Classify backup files without exposing their names or paths."""
@@ -221,7 +222,9 @@ def inventory_migration_backups(
     database = _regular_database_path(db_path)
     database_stat = database.stat()
     integrity_ok = (
-        _database_integrity_ok(database) if require_integrity_check else True
+        _database_integrity_ok(database, cancel_check=cancel_check)
+        if require_integrity_check
+        else True
     )
     if _lock_held:
         state = _load_state(database.parent, missing_ok=True)
@@ -338,6 +341,7 @@ def delete_verified_migration_backups(
             database,
             now=now,
             require_integrity_check=True,
+            cancel_check=cancel_check,
             _lock_held=True,
         )
         if inventory.inventory_digest != expected_inventory_digest:
@@ -475,11 +479,19 @@ def _regular_database_path(path: Path) -> Path:
     return requested
 
 
-def _database_integrity_ok(path: Path) -> bool:
+def _database_integrity_ok(
+    path: Path,
+    *,
+    cancel_check: Callable[[], bool] | None = None,
+) -> bool:
     try:
         with sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True) as conn:
+            if cancel_check is not None:
+                conn.set_progress_handler(lambda: int(cancel_check()), 1000)
             row = conn.execute("PRAGMA quick_check").fetchone()
-    except sqlite3.Error:
+    except sqlite3.Error as exc:
+        if cancel_check is not None and cancel_check():
+            raise MigrationBackupError("migration_backup_cleanup_cancelled") from exc
         return False
     return row is not None and row[0] == "ok"
 

@@ -5,14 +5,23 @@ import hashlib
 import io
 import json
 import os
+import sqlite3
 import sys
 from pathlib import Path
 from types import SimpleNamespace
 
-from hook_monitor.runtime.parser import inspect_top_level_json_strings
+from hook_monitor.runtime.externality_rules import (
+    classify_trusted_local_management_operation,
+)
+from hook_monitor.runtime.parser import (
+    HookPayloadError,
+    inspect_top_level_json_strings,
+    parse_hook_payload,
+)
 from hook_monitor.runtime.runner import (
     PRE_TOOL_RAW_JSON_MAX_BYTES, inactive_hook_output, run_hook,
 )
+from hook_monitor.runtime.storage import EventStore, SchemaCompatibilityError
 from tooluseproxy.integrations.activation import (
     enabled_workspace_root, require_workspace_registration,
 )
@@ -21,6 +30,10 @@ from tooluseproxy.paths import (
     prepare_data_directory,
     resolve_runtime_paths,
     secure_database_permissions,
+)
+from hook_monitor.runtime.tool_compat import (
+    is_enforced_shell_tool,
+    shell_command_from_input,
 )
 
 
@@ -122,6 +135,26 @@ def run_codex_hook(
                 paths.data_dir,
                 "runtime_activity_signal_failed",
             )
+        if (
+            runtime_phase == "pre_tool_use"
+            and _is_trusted_management_recovery(
+                prefix,
+                workspace_root=Path(workspace_root),
+                plugin_root=Path(
+                    os.environ.get(
+                        "PLUGIN_ROOT",
+                        Path(__file__).resolve().parents[2],
+                    )
+                ),
+                plugin_data=paths.data_dir,
+            )
+            and not _runtime_storage_ready(paths.db_path, workspace_root)
+        ):
+            # Recovery must remain possible even when the database is locked,
+            # missing, corrupt, or awaiting migration.  The command itself is
+            # still parsed by the real CLI and bound to this exact installed
+            # launcher, workspace, and data directory.
+            return 0
         # Replay exactly the original bytes. The runtime retains its own bounded
         # PreToolUse parser; PostToolUse/Stop may consume the remaining stream.
         sys.stdin = SimpleNamespace(buffer=_ReplayInput(prefix, original_stdin.buffer))
@@ -226,6 +259,52 @@ def run_codex_hook(
         return 0
     finally:
         sys.stdin = original_stdin
+
+
+def _is_trusted_management_recovery(
+    raw_payload: bytes,
+    *,
+    workspace_root: Path,
+    plugin_root: Path,
+    plugin_data: Path,
+) -> bool:
+    if len(raw_payload) > PRE_TOOL_RAW_JSON_MAX_BYTES:
+        return False
+    try:
+        payload = parse_hook_payload(raw_payload)
+    except HookPayloadError:
+        return False
+    tool_name = payload.get("tool_name")
+    if not isinstance(tool_name, str) or not is_enforced_shell_tool(tool_name):
+        return False
+    command = shell_command_from_input(tool_name, payload.get("tool_input"))
+    if command is None:
+        return False
+    return (
+        classify_trusted_local_management_operation(
+            command,
+            plugin_root=plugin_root,
+            workspace_root=workspace_root,
+            plugin_data=plugin_data,
+        )
+        is not None
+    )
+
+
+def _runtime_storage_ready(db_path: Path, workspace_root: str) -> bool:
+    try:
+        EventStore(db_path).require_runtime_schema()
+        require_workspace_registration(db_path, workspace_root)
+        connection = sqlite3.connect(db_path, timeout=0, isolation_level=None)
+        try:
+            connection.execute("PRAGMA busy_timeout = 0")
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute("ROLLBACK")
+        finally:
+            connection.close()
+    except (OSError, sqlite3.Error, SchemaCompatibilityError, ValueError):
+        return False
+    return True
 
 
 class _ReplayInput:
