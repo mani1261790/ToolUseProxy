@@ -61,7 +61,7 @@ routeは`off`または`codex`だけです。fallback、`auto`、別providerは�
 
 ## Hookとbackground workerの分離
 
-workspace runtime setting `externality-protection`を明示的に有効化した場合だけ、PreToolUseでlocal判定を行います。このsettingは既存の`file-payload-exact` setup profileには含めません。
+workspace runtime setting `externality-protection`を明示的に有効化した場合だけ、PreToolUseでlocal判定を行います。現在の`file-payload-exact` setup profileはこのlocal保護を有効にしますが、Hook外でCodexを使う判定処理のprovider設定や起動は含めません。
 
 Hook内では外部通信もLLM実行も行いません。既存adapter、bounded static analysis、承認済み完全一致cacheだけを参照します。adapterとstatic analysisの両方がunknownで、承認済みruleもない場合は、closed enumとbounded countだけのenvelopeをSQLiteへ重複排除して保存し、そのcallを保守的なexternal sink候補として現在の情報流graphへ追加します。protected lineageが到達した場合だけ実行前denyし、public callやprotected flowのないunknown callは分類待ちでも実行を妨げません。
 
