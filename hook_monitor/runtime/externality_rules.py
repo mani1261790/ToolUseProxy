@@ -447,10 +447,24 @@ def _parsed_local_management_operation(
         return None
 
     command_name = arguments.command
+    parsed_operation: str | None = None
     if command_name == "setup":
-        # The fixed setup profiles above intentionally keep stricter semantic
-        # checks than argparse alone can express.
-        return None
+        # Reordered verify options accepted by the real parser must retain the
+        # probe distinction. Apply continues to use the stricter fixed forms
+        # above because argparse alone cannot express all preconditions.
+        if arguments.setup_command != "verify":
+            return None
+        parsed_operation = (
+            "verify_probe"
+            if arguments.hook_probe_token is not None
+            else "verify"
+        )
+    elif command_name == "status":
+        parsed_operation = (
+            "status_probe"
+            if arguments.hook_probe_token is not None
+            else "status"
+        )
     if command_name == "protect":
         if arguments.protect_command == "migrate":
             if arguments.migration_command == "apply" and (
@@ -561,6 +575,9 @@ def _parsed_local_management_operation(
         return None
     if command_name == "storage" and not explicit_data_dirs and not explicit_dbs:
         return None
+
+    if parsed_operation is not None:
+        return parsed_operation
 
     subcommand = next(
         (

@@ -266,6 +266,51 @@ def test_proven_local_pre_tool_is_recorded_without_running_graph_analysis(
         ).fetchone()[0] == 1
 
 
+@pytest.mark.parametrize("management_command", ["status", "verify"])
+def test_reordered_probe_options_still_run_current_invocation_analysis(
+    tmp_path, monkeypatch, capsys, management_command,
+):
+    database = tmp_path / "events.db"
+    store = EventStore(database)
+    store.initialize()
+    context = resolve_workspace(str(tmp_path))
+    store.register_workspace(context)
+    save_workspace_activations(database, str(tmp_path))
+    plugin_root = tmp_path / "installed-plugin"
+    launcher = plugin_root / "hooks" / "run_cli.sh"
+    launcher.parent.mkdir(parents=True)
+    launcher.write_text("#!/bin/sh\n", encoding="utf-8")
+    probe_token = "tup-probe-v1-" + "a" * 32
+    if management_command == "status":
+        command = (
+            f"sh {launcher} status --workspace {tmp_path} --json "
+            f"--hook-probe-token {probe_token} --data-dir {database.parent}"
+        )
+    else:
+        command = (
+            f"sh {launcher} setup verify file-payload-exact "
+            f"--workspace {tmp_path} --json --hook-probe-token {probe_token} "
+            f"--data-dir {database.parent}"
+        )
+    monkeypatch.setenv("PLUGIN_ROOT", str(plugin_root))
+    monkeypatch.setenv("TOOLUSEPROXY_PRE_TOOL_POLICY", "1")
+
+    with patch(
+        "hook_monitor.runtime.runner.evaluate_pre_tool_hook_policy",
+        return_value=None,
+    ) as evaluator:
+        assert invoke(
+            monkeypatch,
+            capsys,
+            database,
+            tmp_path,
+            "pre-tool-use",
+            command=command,
+        ) == ""
+
+    evaluator.assert_called_once()
+
+
 def test_legacy_registration_still_protects_and_sibling_stays_silent(
     tmp_path, monkeypatch, capsys,
 ):
