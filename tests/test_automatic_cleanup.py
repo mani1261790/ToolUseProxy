@@ -332,6 +332,34 @@ class AutomaticCleanupTest(unittest.TestCase):
         with sqlite3.connect(self.db_path) as conn:
             self.assertEqual(1, conn.execute("SELECT COUNT(*) FROM events").fetchone()[0])
 
+    def test_hook_activity_during_final_plan_defers_instead_of_failing(self) -> None:
+        self._enable()
+
+        original_plan = automatic_cleanup.plan_storage_cleanup
+        calls = 0
+
+        def signal_during_final_plan(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 3:
+                signal_runtime_activity(self.data_dir)
+            return original_plan(*args, **kwargs)
+
+        with patch.object(
+            automatic_cleanup,
+            "plan_storage_cleanup",
+            side_effect=signal_during_final_plan,
+        ):
+            result = run_automatic_cleanup(
+                self.db_path,
+                now=self.now,
+                wait_for_quiet=False,
+            )
+
+        self.assertEqual(3, calls)
+        self.assertEqual("deferred", result.status)
+        self.assertEqual("runtime_active", result.reason)
+
     def test_another_worker_causes_a_safe_defer(self) -> None:
         self._enable()
         with automatic_cleanup._automatic_cleanup_lock(

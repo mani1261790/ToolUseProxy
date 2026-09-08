@@ -457,6 +457,8 @@ def run_automatic_cleanup(
                 cancel_check=cleanup_cancelled,
             )
         except (OSError, sqlite3.Error, StorageCleanupPlanError) as exc:
+            if cleanup_cancelled():
+                return _defer(state, data_dir, observed, "runtime_active")
             return _fail(state, data_dir, observed, _safe_failure_code(exc))
         notification = (
             "action_threshold_persists"
