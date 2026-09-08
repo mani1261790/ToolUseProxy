@@ -897,6 +897,7 @@ def _run_setup_apply(args: argparse.Namespace) -> int:
                 )
 
         expected_revision = args.expected_revision
+        settings_to_apply = SETUP_PROFILE_SETTINGS
         if args.expect_empty_settings:
             expected_revision = empty_workspace_runtime_settings(
                 workspace.workspace_id
@@ -907,8 +908,11 @@ def _run_setup_apply(args: argparse.Namespace) -> int:
             )
             conflicting_keys = sorted(
                 key
-                for key, value in current_settings.settings.items()
-                if SETUP_PROFILE_SETTINGS.get(key) is not value
+                for key, value in SETUP_PROFILE_SETTINGS.items()
+                if (
+                    key in current_settings.settings
+                    and current_settings.settings[key] is not value
+                )
             )
             if conflicting_keys:
                 raise RuntimeSettingsError(
@@ -917,10 +921,14 @@ def _run_setup_apply(args: argparse.Namespace) -> int:
                     "profile; no settings were changed",
                 )
             expected_revision = current_settings.revision
+            settings_to_apply = {
+                **current_settings.settings,
+                **SETUP_PROFILE_SETTINGS,
+            }
         assert expected_revision is not None
         settings, changes = store.apply_workspace_runtime_settings_profile(
             workspace,
-            settings=SETUP_PROFILE_SETTINGS,
+            settings=settings_to_apply,
             expected_revision=expected_revision,
             prepare_workspace=prepare_manifest,
             rollback_workspace=rollback_manifest,
