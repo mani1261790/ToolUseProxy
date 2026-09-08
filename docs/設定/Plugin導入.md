@@ -25,20 +25,20 @@ alphaのthreat modelは、Pluginやcoding agentの無承認manifest変更、stal
 
 ## 現在versionと更新
 
-`0.1.0-alpha.21`は現在の検証対象public alphaです。alpha.18までの固定`gh issue view`判定、未設定project無出力・無記録、判定時間切れ前の安全停止、個別の保護解除、正規管理操作の自己ブロック防止を維持します。さらに保存内容の重複を減らし、30日を過ぎた詳しい操作記録と安全条件を満たす更新前DB退避を少量ずつ整理できます。大容量DBの変更前計画では、集計の開始時刻ではなく表示完了時刻から5分間を利用者確認に使えます。自動整理は初期状態で無効です。LLM providerと実project試行記録は既定offです。
+`0.1.0-alpha.22`は現在の検証対象public alphaです。alpha.18までの固定`gh issue view`判定、未設定project無出力・無記録、判定時間切れ前の安全停止、個別の保護解除、正規管理操作の自己ブロック防止を維持します。さらに保存内容の重複を減らし、30日を過ぎた詳しい操作記録と安全条件を満たす更新前DB退避を少量ずつ整理できます。大容量DBの変更前計画では、集計の開始時刻ではなく表示完了時刻から5分間を利用者確認に使えます。新しいHook操作が来た場合は自動整理の重い調査を中断し、厳密一致する管理操作はDB不調時にも復旧用として通します。自動整理は初期状態で無効です。LLM providerと実project試行記録は既定offです。
 
 Codex CLIはPluginごとの自動更新commandではなく、登録済みGit marketplaceを明示的に更新する`codex plugin marketplace upgrade`を提供します。moving refを登録している場合、更新されたmarketplace snapshotからinstall済みPluginも置き換わります。ToolUseProxyは次の2方式を分けます。
 
 | 方式 | `--ref` | 用途 | 更新 |
 | --- | --- | --- | --- |
 | public alpha更新チャンネル | `public-alpha` | 通常のdogfood / pilot | `marketplace upgrade`で明示更新 |
-| immutable version固定 | `v0.1.0-alpha.21` | 再現実験、監査、rollback | tagは動かないため自動的に別versionへ進まない |
+| immutable version固定 | `v0.1.0-alpha.22` | 再現実験、監査、rollback | tagは動かないため自動的に別versionへ進まない |
 
 `public-alpha`はreview済み・CI green・公開済みのalpha release commitだけへfast-forwardする保護branchです。開発途中の`main`を実行元にはしません。更新は自動ではなく、ユーザーがcommandを実行した時だけ行われます。
 
 Codex Desktopも同じmarketplaceからPluginをinstallし、複数workspaceで利用できます。Plugin codeのinstallはCodex環境単位ですが、初期化、protected source、runtime設定、監査dataはworkspace単位です。新しいworkspaceを使うたびに、そのworkspaceでbundled setup skillを実行し、保護対象を個別にreviewします。2026-08-22のmacOS実機runでは、alpha.8の5 Hookのreview / trustと配送、public allow、file-backed protected payloadの実行前blockを確認しました。承認2回、public side effect 1、protected side effect 0、exact block 1、raw exposure 0で正式な`passed`です。2026-08-09のrunではdata migration、backup rollback、Disableなしの直接Removeも確認しました。Desktop task履歴のshell名`exec_command`とHook APIのcanonical名`Bash`は別namespaceであり、画面表示だけでなくHook trust、定義hash、値なしmarker、Hook DB、task記録を証拠にします。hosted Web SearchはPreToolUse / PostToolUse Hookの対象外です。
 
-SQLite schemaはalpha.21でv12です。旧版から更新してschema変更が必要な場合は、bundled setup skillの案内に従ってHook外で明示的なatomic setupを行います。更新前にはSQLite backupを作り、schema v12では重複する解析本文と検索用特徴を共有保存へ移します。更新後は変更されたHook definitionをreview・trustして新しいtaskを開始し、bundled skillのread-only verificationを実行してください。
+SQLite schemaはalpha.22でv12です。旧版から更新してschema変更が必要な場合は、bundled setup skillの案内に従ってHook外で明示的なatomic setupを行います。更新前にはSQLite backupを作り、schema v12では重複する解析本文と検索用特徴を共有保存へ移します。更新後は変更されたHook definitionをreview・trustして新しいtaskを開始し、bundled skillのread-only verificationを実行してください。
 
 ## install
 
@@ -52,10 +52,10 @@ codex plugin add tooluseproxy@tooluseproxy
 versionを固定する場合は最初のcommandを次に置き換えます。
 
 ```bash
-codex plugin marketplace add mani1261790/ToolUseProxy --ref v0.1.0-alpha.21
+codex plugin marketplace add mani1261790/ToolUseProxy --ref v0.1.0-alpha.22
 ```
 
-install後はCodexが表示するPlugin source、version、5つのHook definition（SessionStart / SubagentStart / PreToolUse / PostToolUse / Stop）を確認してtrustします。ToolUseProxyはこのreviewを迂回しません。以前trustしたHookでも、matcher、command、sourceなどの定義が変わると`modified`になり、再reviewが必要です。更新後はCodexを完全に終了して起動し直し、新しいタスクでcurrent-invocation healthを確認します。alpha.21のrelease artifact、checksum、SBOM、release notesはGitHub pre-releaseに公開します。
+install後はCodexが表示するPlugin source、version、5つのHook definition（SessionStart / SubagentStart / PreToolUse / PostToolUse / Stop）を確認してtrustします。ToolUseProxyはこのreviewを迂回しません。以前trustしたHookでも、matcher、command、sourceなどの定義が変わると`modified`になり、再reviewが必要です。更新後はCodexを完全に終了して起動し直し、新しいタスクでcurrent-invocation healthを確認します。alpha.22のrelease artifact、checksum、SBOM、release notesはGitHub pre-releaseに公開します。
 
 ### CLIで更新する
 
@@ -410,7 +410,7 @@ sh "<PLUGIN_ROOT>/hooks/run_cli.sh" uninstall apply \
 
 削除対象はSQLite database / sidecar、migration backup、manifest backupだけです。管理外fileは残し、plan後に内容が変わった場合はstale tokenを拒否します。workspace manifestやprotected source本体、symlink先、package codeは削除しません。secure eraseやfilesystem snapshotの削除は保証しません。
 
-alpha.1およびstale alpha.8からalpha.21へのupgrade / safe rollback手順は[Pluginライフサイクル](../運用/Pluginライフサイクル.md)を参照してください。alpha.12 fresh Desktop、alpha.13の未設定・設定済みCodex CLI実経路、alpha.15の判定時間切れ停止はmacOSで確認済みです。alpha.21では容量整理を含む現行schemaへの更新を隔離環境で検証します。Linux / Windowsと将来version間の反復は引き続きpublic alphaの検証課題です。
+alpha.1およびstale alpha.8からalpha.22へのupgrade / safe rollback手順は[Pluginライフサイクル](../運用/Pluginライフサイクル.md)を参照してください。alpha.12 fresh Desktop、alpha.13の未設定・設定済みCodex CLI実経路、alpha.15の判定時間切れ停止はmacOSで確認済みです。alpha.22では容量整理と通常利用優先の中断を含む現行schemaへの更新を隔離環境で検証します。Linux / Windowsと将来version間の反復は引き続きpublic alphaの検証課題です。
 
 pre-release候補で実際のHook trust、agent説明、実tool invocationを検証するときは、通常workspaceや実secretを使わず、[Pluginドッグフードのmanual Phase B](../運用/Pluginドッグフード.md#manual-phase-b)を実行します。prepare出力はlocal pathを含むため公開せず、raw値とpathを除外したverify結果だけをrelease evidenceとして扱います。
 

@@ -47,6 +47,33 @@ class StorageCleanupPlanTest(unittest.TestCase):
     def tearDown(self) -> None:
         self.temporary.cleanup()
 
+    def test_plan_stops_before_scanning_when_runtime_becomes_active(self) -> None:
+        with self.assertRaises(StorageCleanupPlanError) as interrupted:
+            plan_storage_cleanup(
+                self.db_path,
+                now=self.now,
+                cancel_check=lambda: True,
+            )
+
+        self.assertEqual("storage_cleanup_cancelled", interrupted.exception.code)
+
+    def test_plan_stops_during_scanning_when_runtime_becomes_active(self) -> None:
+        checks = 0
+
+        def cancel_after_scan_starts() -> bool:
+            nonlocal checks
+            checks += 1
+            return checks >= 2
+
+        with self.assertRaises(StorageCleanupPlanError) as interrupted:
+            plan_storage_cleanup(
+                self.db_path,
+                now=self.now,
+                cancel_check=cancel_after_scan_starts,
+            )
+
+        self.assertEqual("storage_cleanup_cancelled", interrupted.exception.code)
+
     def _seed_database(self) -> None:
         with sqlite3.connect(self.db_path) as conn:
             conn.execute(

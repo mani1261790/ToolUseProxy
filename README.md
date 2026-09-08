@@ -4,13 +4,13 @@ ToolUseProxyは、AI coding agentがローカルの非公開情報を外部へ�
 
 たとえば、未公開コード、研究ノート、`.env`、設計方針などを`protected source`として登録します。ToolUseProxyはCodexのtool useをローカルで観測し、外部送信候補へ保護情報が到達していないかを確認します。
 
-本プロジェクトは[SecHack365](https://sechack365.nict.go.jp/)での研究・開発成果物です。この版は`0.1.0-alpha.21`です。保存内容の重複を減らし、30日を過ぎた詳しい操作記録と、確認済み新版への更新から7日を過ぎた更新前DB退避を、安全条件を満たす場合だけ少量ずつ整理できます。大容量DBでも、計画の表示が完了してから5分間を利用者確認に使えます。自動整理は初期状態では無効で、直前の変更前計画を利用者が確認した後だけ有効になります。保護対象登録、設定、利用者評価、改善用フィードバック、30日以内の操作記録は容量だけを理由に削除しません。追加の利用者設定を保持したまま固定保護設定を再確認できます。alpha.18までの個別解除、自己ブロック防止、既知の不要な停止の修正も維持しています。研究用public alphaであり、完成したDLP製品ではありません。
+本プロジェクトは[SecHack365](https://sechack365.nict.go.jp/)での研究・開発成果物です。この版は`0.1.0-alpha.22`です。保存内容の重複を減らし、30日を過ぎた詳しい操作記録と、確認済み新版への更新から7日を過ぎた更新前DB退避を、安全条件を満たす場合だけ少量ずつ整理できます。大容量DBでも、計画の表示が完了してから5分間を利用者確認に使えます。自動整理は初期状態では無効で、直前の変更前計画を利用者が確認した後だけ有効になります。新しい操作が始まった場合、自動整理の重い調査を中断して通常利用を優先します。保護対象登録、設定、利用者評価、改善用フィードバック、30日以内の操作記録は容量だけを理由に削除しません。追加の利用者設定を保持したまま固定保護設定を再確認でき、厳密一致するローカル管理操作はDB不調時にも復旧経路として利用できます。alpha.18までの個別解除、自己ブロック防止、既知の不要な停止の修正も維持しています。研究用public alphaであり、完成したDLP製品ではありません。
 
 研究用の固定実通信試験は配布ZIP・wheel・sdistから除外しています。Git経由の更新では開発用ファイルもコピーされますが、通常の監視処理からは読み込まず、自動起動しません。
 
 Codex Pluginとしての導入、Hook配送確認、実行前停止、更新・削除はalpha.12で一区切りです。現在の開発テーマは、ToolUseProxy本体の検出精度です。実projectでfalse blockと見逃し候補を集め、sink payloadの解決、外部性判定、semantic、lineageのどこを改善すべきかを測ります。
 
-> **以前の版から更新する場合:** `alpha.21`へ更新し、Codexを完全に終了して起動し直した後、新しいタスクで動作を確認してください。Hook定義が変更された場合は5 Hookを改めて確認します。実データの整理は、まず変更前計画だけを表示し、その内容を確認してから有効にしてください。`alpha.12`以前には、Pluginを利用しないprojectにも初期化案内が出る旧問題もあります。
+> **以前の版から更新する場合:** `alpha.22`へ更新し、Codexを完全に終了して起動し直した後、新しいタスクで動作を確認してください。Hook定義が変更された場合は5 Hookを改めて確認します。実データの整理は、まず変更前計画だけを表示し、その内容を確認してから有効にしてください。`alpha.12`以前には、Pluginを利用しないprojectにも初期化案内が出る旧問題もあります。
 
 - [5分クイックスタート](QUICKSTART.md)
 - [詳しいPlugin導入ガイド](docs/設定/Plugin導入.md)
@@ -124,7 +124,7 @@ adapterにない未知のcallは、raw commandやpathなどを含まない構造
 | Codex対応 | alpha.12で完了 | Plugin導入、workspace setup、protected source登録、現在のHook配送確認、実行前deny、update / rollback / removeを実証済み |
 | Trace / Detect | 中核実装済み・精度改善中 | tool I/O、file operation、内容対応から観測可能なprovenanceを再構成。実project pilotでfalse blockと見逃し候補を測定 |
 | Stop | 対応範囲内で実証済み | Hookから見えるローカルtoolを実行前判定し、protected flowの既知external / unknownをdeny。Stop再確認も提供 |
-| Plugin配布 | alpha.21 | 未設定projectの無影響確認、判定時間切れ時の実行前停止、current-invocation照合、容量整理、lifecycle、artifact、full testのrelease gateを通過したcommitだけを`public-alpha`へ配信 |
+| Plugin配布 | alpha.22 | 未設定projectの無影響確認、判定時間切れ時の実行前停止、管理操作の復旧経路、自動整理の中断、current-invocation照合、容量整理、lifecycle、artifact、full testのrelease gateを通過したcommitだけを`public-alpha`へ配信 |
 | 外部性判定 | local保護は通常setupで有効 | adapter、bounded static analysis、未確認external payloadのfail-closed、Codex-only background judge、人間review済みrule。LLM providerは既定off |
 | 実network観測 | 評価専用 | Codex network proxyのOTLP eventは実行後かつtool単位join不能のため、production blockには不採用 |
 | hosted tool境界 | 緩和のみ | SessionStart / SubagentStartでprotected contentをhosted toolへ渡さないdeveloper contextを注入。Hook非可視のため技術的遮断ではない |
