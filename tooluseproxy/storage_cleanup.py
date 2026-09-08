@@ -686,6 +686,7 @@ def plan_storage_cleanup(
     *,
     now: datetime | None = None,
     reviewed_at: datetime | None = None,
+    cancel_check: Callable[[], bool] | None = None,
 ) -> StorageCleanupPlan:
     requested = Path(os.path.abspath(os.fspath(db_path.expanduser())))
     if requested.is_symlink():
@@ -705,7 +706,10 @@ def plan_storage_cleanup(
     cutoff_at = cutoff.isoformat(timespec="seconds").replace("+00:00", "Z")
 
     try:
+        _raise_if_cleanup_cancelled(cancel_check)
         with closing(_read_only_connection(requested)) as conn:
+            if cancel_check is not None:
+                conn.set_progress_handler(lambda: int(cancel_check()), 1000)
             conn.execute("BEGIN")
             schema_version = int(conn.execute("PRAGMA user_version").fetchone()[0])
             if schema_version != CURRENT_SCHEMA_VERSION:
@@ -727,24 +731,32 @@ def plan_storage_cleanup(
                     "SELECT COALESCE(MAX(recorded_at), '') FROM events"
                 ).fetchone()[0]
             )
+            _raise_if_cleanup_cancelled(cancel_check)
     except StorageCleanupPlanError:
         raise
     except sqlite3.Error as exc:
+        if cancel_check is not None and cancel_check():
+            raise StorageCleanupPlanError("storage_cleanup_cancelled") from exc
         raise StorageCleanupPlanError("storage_database_read_failed") from exc
 
     try:
+        _raise_if_cleanup_cancelled(cancel_check)
         backup_inventory = inventory_migration_backups(
             requested,
             now=observed_now,
             require_integrity_check=True,
+            cancel_check=cancel_check,
         )
     except MigrationBackupError as exc:
+        if exc.code == "migration_backup_cleanup_cancelled":
+            raise StorageCleanupPlanError("storage_cleanup_cancelled") from exc
         raise StorageCleanupPlanError(exc.code) from exc
     # Closing any of the read-only SQLite connections above may checkpoint an
     # already committed WAL. Bind the plan to the stable post-close files so
     # that physical housekeeping is not mistaken for a logical change
     # immediately after the plan is returned.
     try:
+        _raise_if_cleanup_cancelled(cancel_check)
         database_stat = requested.stat()
     except OSError as exc:
         raise StorageCleanupPlanError("storage_database_unavailable") from exc
@@ -848,6 +860,7 @@ def apply_storage_cleanup(
         db_path,
         now=plan_time,
         reviewed_at=reviewed,
+        cancel_check=cancel_check,
     )
     if initial_plan.plan_revision != expected_plan_revision:
         raise StorageCleanupPlanError("storage_plan_changed")
@@ -865,6 +878,7 @@ def apply_storage_cleanup(
                     requested,
                     now=plan_time,
                     require_integrity_check=True,
+                    cancel_check=cancel_check,
                 )
             except MigrationBackupError as exc:
                 raise StorageCleanupPlanError(exc.code) from exc
@@ -943,6 +957,7 @@ def apply_storage_cleanup(
         requested,
         now=plan_time,
         reviewed_at=datetime.now(UTC),
+        cancel_check=cancel_check,
     )
     return StorageCleanupApplyResult(
         cutoff_at=cutoff_at,
@@ -958,6 +973,13 @@ def apply_storage_cleanup(
         next_plan_revision=next_plan.plan_revision,
         next_reviewed_at=next_plan.reviewed_at,
     )
+
+
+def _raise_if_cleanup_cancelled(
+    cancel_check: Callable[[], bool] | None,
+) -> None:
+    if cancel_check is not None and cancel_check():
+        raise StorageCleanupPlanError("storage_cleanup_cancelled")
 
 
 def _locked_cleanup_plan_revision(

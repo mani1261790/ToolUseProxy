@@ -33,10 +33,12 @@ from hook_monitor.runtime.pre_tool_policy import (
 )
 from hook_monitor.runtime.externality_rules import (
     classify_static_externality_hook_analysis,
+    classify_trusted_local_management_operation,
     conservative_function_tool_decision,
     failed_externality_hook_decision,
     prepare_externality_hook_decision,
 )
+from hook_monitor.runtime.tool_compat import shell_command_from_input
 from hook_monitor.runtime.settings import (
     EXTERNALITY_PROTECTION_KEY,
     FILE_PAYLOAD_EXACT_ENFORCEMENT_KEY,
@@ -358,6 +360,7 @@ def run_hook(
     externality_decision = None
     recovery_externality_decision = None
     static_externality_analysis = None
+    trusted_management_operation = None
     if (
         phase == "pre_tool_use"
         and event_pre_tool_adapter in {"bash", "mcp"}
@@ -376,8 +379,39 @@ def run_hook(
                 plugin_data=store.db_path.parent,
             )
             recovery_externality_decision = static_externality_analysis[0]
+            command = shell_command_from_input(
+                event.tool_name,
+                event.raw_payload.get("tool_input"),
+            )
+            if command is not None:
+                trusted_management_operation = (
+                    classify_trusted_local_management_operation(
+                        command,
+                        plugin_root=(
+                            Path(os.environ["PLUGIN_ROOT"])
+                            if os.environ.get("PLUGIN_ROOT")
+                            else None
+                        ),
+                        workspace_root=Path(event.workspace_root or ""),
+                        plugin_data=store.db_path.parent,
+                    )
+                )
         except Exception:
             recovery_externality_decision = failed_externality_hook_decision()
+    if (
+        phase == "pre_tool_use"
+        and event_pre_tool_adapter in enabled_pre_tool_adapters
+        and recovery_externality_decision is not None
+        and recovery_externality_decision.state == "known_local"
+        and trusted_management_operation not in {"verify_probe", "status_probe"}
+    ):
+        # A proven-local operation cannot be an exfiltration sink.  Keep its
+        # complete operation record, but leave the analysis cursor untouched so
+        # a later external operation still consumes this event and its
+        # PostToolUse evidence.  This avoids rebuilding the information-flow
+        # graph on every harmless local read and on ToolUseProxy's own recovery
+        # commands.
+        return 0
     if phase == "pre_tool_use" and event_pre_tool_adapter == "function":
         externality_decision = conservative_function_tool_decision(event.tool_name)
     elif (

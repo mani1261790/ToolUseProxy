@@ -146,7 +146,7 @@ def classify_static_externality_hook_analysis(
         if command is None:
             return None, None
         if plugin_data is not None:
-            trusted_setup_operation = _trusted_local_recovery_operation(
+            trusted_setup_operation = classify_trusted_local_management_operation(
                 command,
                 plugin_root=trusted_plugin_root,
                 workspace_root=workspace_root,
@@ -215,14 +215,20 @@ def prepare_externality_hook_decision(
     return ExternalityHookDecision(digest, "queued")
 
 
-def _trusted_local_recovery_operation(
+def classify_trusted_local_management_operation(
     command: str,
     *,
     plugin_root: Path | None,
     workspace_root: Path,
     plugin_data: Path,
 ) -> str | None:
-    """Recognize only valid local commands from the installed Plugin CLI."""
+    """Recognize only valid local commands from the installed Plugin CLI.
+
+    This function deliberately has no database dependency.  The Codex adapter
+    also uses it as the last-resort recovery gate when the runtime database is
+    unavailable or busy, so an exact local management command can repair the
+    installation without weakening look-alike command handling.
+    """
 
     if plugin_root is None:
         return None
@@ -338,7 +344,7 @@ def _trusted_local_recovery_operation(
         and tokens[len(verify_prefix) + 2 :] == suffix
         for suffix in verify_suffixes
     ):
-        return "verify"
+        return "verify_probe"
     status_suffixes = (
         ["--workspace", workspace, "--data-dir", data_dir, "--json"],
         ["--workspace", workspace, "--json"],
@@ -351,7 +357,7 @@ def _trusted_local_recovery_operation(
         and tokens[5:] == suffix
         for suffix in status_suffixes
     ):
-        return "status"
+        return "status_probe"
     if tokens in (
         [
             *common,
@@ -441,10 +447,24 @@ def _parsed_local_management_operation(
         return None
 
     command_name = arguments.command
+    parsed_operation: str | None = None
     if command_name == "setup":
-        # The fixed setup profiles above intentionally keep stricter semantic
-        # checks than argparse alone can express.
-        return None
+        # Reordered verify options accepted by the real parser must retain the
+        # probe distinction. Apply continues to use the stricter fixed forms
+        # above because argparse alone cannot express all preconditions.
+        if arguments.setup_command != "verify":
+            return None
+        parsed_operation = (
+            "verify_probe"
+            if arguments.hook_probe_token is not None
+            else "verify"
+        )
+    elif command_name == "status":
+        parsed_operation = (
+            "status_probe"
+            if arguments.hook_probe_token is not None
+            else "status"
+        )
     if command_name == "protect":
         if arguments.protect_command == "migrate":
             if arguments.migration_command == "apply" and (
@@ -555,6 +575,9 @@ def _parsed_local_management_operation(
         return None
     if command_name == "storage" and not explicit_data_dirs and not explicit_dbs:
         return None
+
+    if parsed_operation is not None:
+        return parsed_operation
 
     subcommand = next(
         (

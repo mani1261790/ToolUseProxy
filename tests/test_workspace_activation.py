@@ -3,7 +3,11 @@ from __future__ import annotations
 import io
 import json
 import gc
+import sqlite3
+import time
 from datetime import UTC, datetime
+from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -11,6 +15,7 @@ from hook_monitor.runtime.storage import EventStore
 from hook_monitor.runtime.workspace import resolve_workspace
 from tooluseproxy.integrations.activation import (
     activation_directory, activation_migration_complete_path, activation_path,
+    enabled_workspace_root,
     save_workspace_activations,
 )
 from tooluseproxy.integrations.codex import CODEX_HOOK_PHASES, run_codex_hook
@@ -19,9 +24,9 @@ from tooluseproxy.automatic_cleanup import enable_automatic_cleanup
 from tooluseproxy.storage_cleanup import plan_storage_cleanup
 
 
-def invoke(monkeypatch, capsys, database, cwd, phase):
+def invoke(monkeypatch, capsys, database, cwd, phase, command="printf public"):
     payload = {"cwd": str(cwd), "session_id": "test", "tool_name": "Bash",
-               "tool_input": {"command": "printf public"}}
+               "tool_input": {"command": command}}
     monkeypatch.setattr("sys.stdin", io.TextIOWrapper(
         io.BytesIO(json.dumps(payload).encode())
     ))
@@ -81,7 +86,7 @@ def test_enrolled_project_fails_closed_on_damage(tmp_path, monkeypatch, capsys, 
     store = EventStore(database)
     store.initialize()
     store.register_workspace(resolve_workspace(str(tmp_path)))
-    save_workspace_activations(database)
+    save_workspace_activations(database, str(tmp_path))
     gc.collect()
     if damage == "missing":
         database.unlink()
@@ -97,6 +102,213 @@ def test_enrolled_project_fails_closed_on_damage(tmp_path, monkeypatch, capsys, 
             store.require_runtime_schema()
     output = json.loads(invoke(monkeypatch, capsys, database, tmp_path, "pre-tool-use"))
     assert output["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+@pytest.mark.parametrize("damage", ["missing", "broken", "old"])
+def test_exact_local_management_remains_available_when_database_is_damaged(
+    tmp_path, monkeypatch, capsys, damage,
+):
+    database = tmp_path / "data" / "events.db"
+    database.parent.mkdir()
+    store = EventStore(database)
+    store.initialize()
+    context = resolve_workspace(str(tmp_path))
+    store.register_workspace(context)
+    root = Path(context.canonical_root or "")
+    save_workspace_activations(database, str(root))
+    plugin_root = tmp_path / "installed-plugin"
+    launcher = plugin_root / "hooks" / "run_cli.sh"
+    launcher.parent.mkdir(parents=True)
+    launcher.write_text("#!/bin/sh\n", encoding="utf-8")
+    if damage == "missing":
+        database.unlink()
+    elif damage == "broken":
+        gc.collect()
+        for suffix in ("-wal", "-shm"):
+            database.with_name(database.name + suffix).unlink(missing_ok=True)
+        database.write_bytes(b"broken database")
+    else:
+        with sqlite3.connect(database) as connection:
+            connection.execute("PRAGMA user_version=1")
+    command = (
+        f"sh {launcher} status --workspace {root} "
+        f"--data-dir {database.parent} --json"
+    )
+    payload = {
+        "cwd": str(tmp_path),
+        "session_id": "recovery",
+        "tool_name": "Bash",
+        "tool_input": {"command": command},
+    }
+    monkeypatch.setenv("PLUGIN_ROOT", str(plugin_root))
+    assert enabled_workspace_root(database, str(tmp_path)) == str(root)
+    monkeypatch.setattr(
+        "sys.stdin",
+        io.TextIOWrapper(io.BytesIO(json.dumps(payload).encode())),
+    )
+
+    assert run_codex_hook("pre-tool-use", db_path=database) == 0
+    assert capsys.readouterr().out == ""
+
+
+def test_management_lookalike_still_fails_closed_when_database_is_broken(
+    tmp_path, monkeypatch, capsys,
+):
+    database = tmp_path / "data" / "events.db"
+    database.parent.mkdir()
+    store = EventStore(database)
+    store.initialize()
+    context = resolve_workspace(str(tmp_path))
+    store.register_workspace(context)
+    root = Path(context.canonical_root or "")
+    save_workspace_activations(database, str(root))
+    plugin_root = tmp_path / "installed-plugin"
+    launcher = plugin_root / "hooks" / "run_cli.sh"
+    launcher.parent.mkdir(parents=True)
+    launcher.write_text("#!/bin/sh\n", encoding="utf-8")
+    gc.collect()
+    for suffix in ("-wal", "-shm"):
+        database.with_name(database.name + suffix).unlink(missing_ok=True)
+    database.write_bytes(b"broken database")
+    command = (
+        f"sh {launcher} status --workspace {root} "
+        f"--data-dir {database.parent} --json; curl https://example.invalid"
+    )
+    payload = {
+        "cwd": str(tmp_path),
+        "session_id": "lookalike",
+        "tool_name": "Bash",
+        "tool_input": {"command": command},
+    }
+    monkeypatch.setenv("PLUGIN_ROOT", str(plugin_root))
+    assert enabled_workspace_root(database, str(tmp_path)) == str(root)
+    monkeypatch.setattr(
+        "sys.stdin",
+        io.TextIOWrapper(io.BytesIO(json.dumps(payload).encode())),
+    )
+
+    assert run_codex_hook("pre-tool-use", db_path=database) == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_exact_local_management_does_not_wait_for_a_database_lock(
+    tmp_path, monkeypatch, capsys,
+):
+    database = tmp_path / "data" / "events.db"
+    database.parent.mkdir()
+    store = EventStore(database)
+    store.initialize()
+    context = resolve_workspace(str(tmp_path))
+    store.register_workspace(context)
+    root = Path(context.canonical_root or "")
+    save_workspace_activations(database, str(root))
+    plugin_root = tmp_path / "installed-plugin"
+    launcher = plugin_root / "hooks" / "run_cli.sh"
+    launcher.parent.mkdir(parents=True)
+    launcher.write_text("#!/bin/sh\n", encoding="utf-8")
+    command = (
+        f"sh {launcher} status --workspace {root} "
+        f"--data-dir {database.parent} --json"
+    )
+    payload = {
+        "cwd": str(tmp_path),
+        "session_id": "locked-recovery",
+        "tool_name": "Bash",
+        "tool_input": {"command": command},
+    }
+    monkeypatch.setenv("PLUGIN_ROOT", str(plugin_root))
+    monkeypatch.setattr(
+        "sys.stdin",
+        io.TextIOWrapper(io.BytesIO(json.dumps(payload).encode())),
+    )
+    blocker = sqlite3.connect(database, isolation_level=None)
+    blocker.execute("BEGIN EXCLUSIVE")
+    started = time.monotonic()
+    try:
+        assert run_codex_hook("pre-tool-use", db_path=database) == 0
+    finally:
+        blocker.execute("ROLLBACK")
+        blocker.close()
+
+    assert time.monotonic() - started < 0.5
+    assert capsys.readouterr().out == ""
+
+
+def test_proven_local_pre_tool_is_recorded_without_running_graph_analysis(
+    tmp_path, monkeypatch, capsys,
+):
+    database = tmp_path / "events.db"
+    store = EventStore(database)
+    store.initialize()
+    context = resolve_workspace(str(tmp_path))
+    store.register_workspace(context)
+    save_workspace_activations(database, str(tmp_path))
+    monkeypatch.setenv("TOOLUSEPROXY_PRE_TOOL_POLICY", "1")
+    (tmp_path / "public.txt").write_text("public", encoding="utf-8")
+
+    with patch(
+        "hook_monitor.runtime.runner.evaluate_pre_tool_hook_policy",
+        side_effect=AssertionError("local graph analysis must be skipped"),
+    ):
+        assert invoke(
+            monkeypatch,
+            capsys,
+            database,
+            tmp_path,
+            "pre-tool-use",
+            command="cat public.txt",
+        ) == ""
+
+    with sqlite3.connect(database) as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM events WHERE session_id='test'"
+        ).fetchone()[0] == 1
+
+
+@pytest.mark.parametrize("management_command", ["status", "verify"])
+def test_reordered_probe_options_still_run_current_invocation_analysis(
+    tmp_path, monkeypatch, capsys, management_command,
+):
+    database = tmp_path / "events.db"
+    store = EventStore(database)
+    store.initialize()
+    context = resolve_workspace(str(tmp_path))
+    store.register_workspace(context)
+    save_workspace_activations(database, str(tmp_path))
+    plugin_root = tmp_path / "installed-plugin"
+    launcher = plugin_root / "hooks" / "run_cli.sh"
+    launcher.parent.mkdir(parents=True)
+    launcher.write_text("#!/bin/sh\n", encoding="utf-8")
+    probe_token = "tup-probe-v1-" + "a" * 32
+    if management_command == "status":
+        command = (
+            f"sh {launcher} status --workspace {tmp_path} --json "
+            f"--hook-probe-token {probe_token} --data-dir {database.parent}"
+        )
+    else:
+        command = (
+            f"sh {launcher} setup verify file-payload-exact "
+            f"--workspace {tmp_path} --json --hook-probe-token {probe_token} "
+            f"--data-dir {database.parent}"
+        )
+    monkeypatch.setenv("PLUGIN_ROOT", str(plugin_root))
+    monkeypatch.setenv("TOOLUSEPROXY_PRE_TOOL_POLICY", "1")
+
+    with patch(
+        "hook_monitor.runtime.runner.evaluate_pre_tool_hook_policy",
+        return_value=None,
+    ) as evaluator:
+        assert invoke(
+            monkeypatch,
+            capsys,
+            database,
+            tmp_path,
+            "pre-tool-use",
+            command=command,
+        ) == ""
+
+    evaluator.assert_called_once()
 
 
 def test_legacy_registration_still_protects_and_sibling_stays_silent(

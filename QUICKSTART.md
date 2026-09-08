@@ -1,6 +1,6 @@
 # ToolUseProxy 5分クイックスタート
 
-この手順では、検証済みの公開alphaを保護branch `public-alpha`からインストールします。開発中の変更を含む`main`は、通常利用のインストール元にしないでください。この版は`0.1.0-alpha.21`です。
+この手順では、検証済みの公開alphaを保護branch `public-alpha`からインストールします。開発中の変更を含む`main`は、通常利用のインストール元にしないでください。この版は`0.1.0-alpha.22`です。
 
 ## 1. 必要なもの
 
@@ -26,12 +26,12 @@ MarketplaceとPluginのインストールは、Codex環境ごとに1回だけで
 特定versionへ固定する場合は、1つ目のコマンドで`public-alpha`の代わりにimmutable tagを指定します。
 
 ```bash
-codex plugin marketplace add mani1261790/ToolUseProxy --ref v0.1.0-alpha.21
+codex plugin marketplace add mani1261790/ToolUseProxy --ref v0.1.0-alpha.22
 ```
 
 ## 3. 5つのHookを確認してTrustする
 
-以前の版を使っていた場合は、先に`codex plugin marketplace upgrade tooluseproxy`を実行し、`codex plugin list --json`で`0.1.0-alpha.21`になったことを確認してください。更新後はCodexを完全に終了して起動し直し、新しいタスクを始めます。画面上の版表示だけでは、実行中タスクが新しいHookを読み込んだ証拠になりません。
+以前の版を使っていた場合は、先に`codex plugin marketplace upgrade tooluseproxy`を実行し、`codex plugin list --json`で`0.1.0-alpha.22`になったことを確認してください。更新後はCodexを完全に終了して起動し直し、新しいタスクを始めます。画面上の版表示だけでは、実行中タスクが新しいHookを読み込んだ証拠になりません。
 
 Codexが表示するHookを、次の条件と照合してください。
 
