@@ -308,12 +308,8 @@ class MigrationBackupRetentionTest(unittest.TestCase):
         )
         cleanup_time = self.verified_at + timedelta(days=8)
         inventory = inventory_migration_backups(self.db_path, now=cleanup_time)
-        checks = 0
-
         def cancel_before_second() -> bool:
-            nonlocal checks
-            checks += 1
-            return checks > 1
+            return not first.exists()
 
         with self.assertRaises(MigrationBackupError) as cancelled:
             delete_verified_migration_backups(

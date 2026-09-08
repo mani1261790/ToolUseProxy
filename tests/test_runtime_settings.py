@@ -15,6 +15,7 @@ from hook_monitor.runtime.settings import (
     EXTERNALITY_PROTECTION_KEY,
     FILE_PAYLOAD_EXACT_ENFORCEMENT_KEY,
     FILE_PAYLOAD_SHADOW_KEY,
+    PILOT_RECORDING_KEY,
     PRE_TOOL_POLICY_KEY,
     RuntimeSettingsError,
     empty_workspace_runtime_settings,
@@ -730,6 +731,22 @@ class RuntimeSettingsCliTest(unittest.TestCase):
             ]
         )
         self.assertEqual(0, unset_code)
+        set_code, with_additional_setting, _ = self._run(
+            [
+                "config",
+                "set",
+                PILOT_RECORDING_KEY,
+                "on",
+                "--expected-revision",
+                str(partial["settings_revision"]),
+                "--workspace",
+                str(workspace),
+                "--data-dir",
+                str(data),
+                "--json",
+            ]
+        )
+        self.assertEqual(0, set_code)
 
         arguments = [
             "setup",
@@ -753,9 +770,15 @@ class RuntimeSettingsCliTest(unittest.TestCase):
             applied["changed_keys"],
         )
         self.assertNotEqual(
-            partial["settings_revision"],
+            with_additional_setting["settings_revision"],
             applied["settings_revision"],
         )
+        pilot_recording = next(
+            setting
+            for setting in applied["settings"]
+            if setting["key"] == PILOT_RECORDING_KEY
+        )
+        self.assertTrue(pilot_recording["configured_value"])
         retry_code, retried, _ = self._run(arguments)
         self.assertEqual(0, retry_code)
         self.assertEqual("already_applied", retried["status"])

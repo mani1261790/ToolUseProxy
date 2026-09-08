@@ -333,9 +333,21 @@ def run_automatic_cleanup(
         if not _database_is_idle(db_path):
             return _defer(state, data_dir, observed, "database_busy")
 
+        def cleanup_cancelled() -> bool:
+            return (
+                _activity_revision(data_dir) != activity_revision
+                or _defer_requested(data_dir)
+            )
+
         try:
-            initial_plan = plan_storage_cleanup(db_path, now=observed)
+            initial_plan = plan_storage_cleanup(
+                db_path,
+                now=observed,
+                cancel_check=cleanup_cancelled,
+            )
         except (OSError, sqlite3.Error, StorageCleanupPlanError) as exc:
+            if cleanup_cancelled():
+                return _defer(state, data_dir, observed, "runtime_active")
             return _fail(state, data_dir, observed, _safe_failure_code(exc))
 
         initial_total = _total_managed_bytes(initial_plan)
@@ -362,16 +374,17 @@ def run_automatic_cleanup(
                     reviewed_at=initial_plan.reviewed_at,
                     expected_plan_revision=initial_plan.plan_revision,
                     batch_size=STORAGE_CLEANUP_DEFAULT_BATCH_SIZE,
-                    cancel_check=lambda: (
-                        _activity_revision(data_dir) != activity_revision
-                        or _defer_requested(data_dir)
-                    ),
+                    cancel_check=cleanup_cancelled,
                 )
                 deleted_sessions = result.deleted_session_count
                 deleted_unscoped = result.deleted_unscoped_event_count
                 deleted_rows = sum(result.deleted_rows.values())
                 deleted_backups = result.deleted_migration_backup_count
-            after_delete = plan_storage_cleanup(db_path, now=observed)
+            after_delete = plan_storage_cleanup(
+                db_path,
+                now=observed,
+                cancel_check=cleanup_cancelled,
+            )
         except (OSError, sqlite3.Error, StorageCleanupPlanError) as exc:
             reason = (
                 "runtime_active"
@@ -438,8 +451,14 @@ def run_automatic_cleanup(
                 return _fail(state, data_dir, observed, "database_compaction_failed")
 
         try:
-            final_plan = plan_storage_cleanup(db_path, now=observed)
+            final_plan = plan_storage_cleanup(
+                db_path,
+                now=observed,
+                cancel_check=cleanup_cancelled,
+            )
         except (OSError, sqlite3.Error, StorageCleanupPlanError) as exc:
+            if cleanup_cancelled():
+                return _defer(state, data_dir, observed, "runtime_active")
             return _fail(state, data_dir, observed, _safe_failure_code(exc))
         notification = (
             "action_threshold_persists"

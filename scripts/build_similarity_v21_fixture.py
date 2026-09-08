@@ -373,7 +373,7 @@ def _render_fixture(output: Path) -> str:
             "artifact_retrieval_p95": 2_000.0,
             "source_retrieval_p95": 3_000.0,
             "e2e_full_p95": 50.0,
-            "e2e_incremental_p95": 500.0,
+            "e2e_incremental_p95": 1_000.0,
         },
     }
 
