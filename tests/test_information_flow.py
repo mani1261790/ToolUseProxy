@@ -9415,6 +9415,28 @@ class InformationFlowTest(unittest.TestCase):
         )
         self.assertEqual({}, output)
 
+    def test_git_status_allows_exact_profile_with_protected_source(self) -> None:
+        workspace = self._write_runtime_source_config()
+        event = self._record(
+            "pre_tool_use",
+            "git-status-local",
+            "Bash",
+            tool_input={"command": "git status --short --branch"},
+            cwd=str(workspace),
+        )
+        externality = classify_static_externality_hook_decision(
+            event,
+            workspace_root=workspace,
+        )
+        output = evaluate_pre_tool_hook_policy(
+            self.store,
+            workspace,
+            current_event=event,
+            sink_payload_exact_enforcement_enabled=True,
+            externality_decision=externality,
+        )
+        self.assertEqual({}, output)
+
     def test_public_question_function_allows_bounded_literal_input_under_exact_profile(self) -> None:
         workspace = self._write_runtime_source_config()
         event = self._record(

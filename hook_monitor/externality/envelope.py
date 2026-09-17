@@ -247,6 +247,13 @@ def _analyze_segment(
         # remote show/update/add, global overrides, aliases, or dynamic argv.
         if arguments in (["remote"], ["remote", "-v"], ["remote", "--verbose"]):
             return
+        # `git status` is a local working-tree/index inspection. Keep this
+        # exception deliberately narrower than a general Git allowlist:
+        # global options before the subcommand, dynamic argv, compound shell
+        # segments, and network-capable Git subcommands still remain unknown
+        # or external through the surrounding analysis.
+        if arguments[:1] == ["status"]:
+            return
         if arguments[:1] == ["push"]:
             state.capabilities.add("remote_vcs_write")
         else:
