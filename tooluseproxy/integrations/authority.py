@@ -2,13 +2,35 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
-from hook_monitor.runtime.workspace import resolve_workspace
+from hook_monitor.runtime.workspace import make_workspace_id, resolve_workspace
 from tooluseproxy import authority_state
 from tooluseproxy.authority_state import AuthorityError, State, Target, _Store
+
+
+@contextmanager
+def registered_workspace_authority_lease(
+    database: Path, connection: sqlite3.Connection, workspace_id: str,
+) -> Iterator[State | None]:
+    """Lease an already registered worker target without scanning its sources."""
+    directory = authority_state.AUTHORITY_DIRECTORY
+    if not directory.exists() and not directory.is_symlink():
+        yield None
+        return
+    if database.name != "events.db":
+        raise AuthorityError("authority_database_identity_unsupported")
+    row = connection.execute(
+        "SELECT canonical_root FROM workspaces WHERE workspace_id = ?", (workspace_id,)
+    ).fetchone()
+    if row is None or not isinstance(row[0], str) or make_workspace_id(row[0]) != workspace_id:
+        raise AuthorityError("authority_workspace_unresolved")
+    target = Target(os.getuid(), row[0], str(database.parent.resolve()))
+    with _Store(directory).lease(target) as state:
+        yield state
 
 
 @contextmanager

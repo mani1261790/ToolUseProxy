@@ -10,6 +10,7 @@ import sqlite3
 import stat
 import sys
 import tempfile
+from contextlib import ExitStack
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -153,7 +154,34 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command is None:
         parser.print_help()
         return 0
+    authority_leases = ExitStack()
     try:
+        if args.command in {"init", "setup", "status", "doctor", "config", "protect", "pilot"}:
+            workspace_argument = getattr(args, "workspace", None)
+            if workspace_argument is not None:
+                from tooluseproxy.integrations.authority import workspace_authority_lease
+
+                paths = resolve_runtime_paths(db_path=args.db, data_dir=args.data_dir)
+                state = authority_leases.enter_context(
+                    workspace_authority_lease(paths.db_path, str(workspace_argument))
+                )
+                if state is not None and state.phase != "active":
+                    payload = {
+                        "status": state.phase,
+                        "workspace_root": state.target.workspace,
+                        "runtime_active": False,
+                        "configuration_state": "not_inspected",
+                        "database_opened": False,
+                        "source_manifest_opened": False,
+                        "code": ("administrator_drain_required"
+                                 if state.phase == "deactivating"
+                                 else "administrator_reactivation_required"),
+                        "message": "このプロジェクトは管理者側で利用を停止しています。"
+                                   "停止処理の完了後、管理者側で再開できます。"
+                                   "以前の設定・登録は保持されています。",
+                    }
+                    _render(payload, as_json=getattr(args, "json", False))
+                    return 0 if args.command in {"status", "doctor"} else 1
         if args.command == "hook":
             return run_codex_hook(
                 args.phase,
@@ -196,6 +224,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     ) as exc:
         print(f"tooluseproxy: {exc}", file=sys.stderr)
         return 1
+    finally:
+        authority_leases.close()
     parser.error(f"unsupported command: {args.command}")
     return 2
 

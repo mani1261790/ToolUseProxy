@@ -5,7 +5,7 @@ import json
 import re
 import shlex
 import sqlite3
-from contextlib import contextmanager, redirect_stderr, redirect_stdout
+from contextlib import ExitStack, contextmanager, redirect_stderr, redirect_stdout
 from dataclasses import dataclass
 from io import StringIO
 from pathlib import Path
@@ -769,28 +769,29 @@ def process_externality_jobs(
     review_pending = 0
     failed = 0
     while processed < limit:
-        claimed = _claim_job(db_path, retry_failed=retry_failed)
-        if claimed is None:
-            break
-        job_id, envelope = claimed
-        processed += 1
-        try:
-            result = configuration.chain.judge(envelope)
-        except Exception:
-            _finish_failed(db_path, job_id, "provider_call_failed")
-            failed += 1
-            continue
-        observation = result.observation
-        if observation is None or not _observation_matches(observation, envelope):
-            _finish_failed(
-                db_path,
-                job_id,
-                _failure_code(result.failure_codes, observation is not None),
-            )
-            failed += 1
-            continue
-        _finish_classified(db_path, job_id, observation)
-        review_pending += 1
+        with ExitStack() as leases:
+            claimed = _claim_job(db_path, retry_failed=retry_failed, leases=leases)
+            if claimed is None:
+                break
+            job_id, envelope = claimed
+            processed += 1
+            try:
+                result = configuration.chain.judge(envelope)
+            except Exception:
+                _finish_failed(db_path, job_id, "provider_call_failed")
+                failed += 1
+                continue
+            observation = result.observation
+            if observation is None or not _observation_matches(observation, envelope):
+                _finish_failed(
+                    db_path,
+                    job_id,
+                    _failure_code(result.failure_codes, observation is not None),
+                )
+                failed += 1
+                continue
+            _finish_classified(db_path, job_id, observation)
+            review_pending += 1
     return {
         "processed": processed,
         "review_pending": review_pending,
@@ -889,32 +890,46 @@ def _claim_job(
     db_path: Path,
     *,
     retry_failed: bool,
+    leases: ExitStack,
 ) -> tuple[str, ExternalityEnvelope] | None:
+    from tooluseproxy.integrations.authority import registered_workspace_authority_lease
+
     statuses = ("pending", "failed") if retry_failed else ("pending",)
     placeholders = ",".join("?" for _ in statuses)
     with _connect(db_path) as conn:
         conn.execute("BEGIN IMMEDIATE")
-        row = conn.execute(
+        # Iterate past stopped projects without claiming or altering their jobs.
+        # Only the selected project's lease survives the transaction and covers
+        # the provider call and final database update.
+        rows = conn.execute(
             f"""
-            SELECT job_id, envelope_json FROM externality_classification_jobs
-            WHERE status IN ({placeholders}) ORDER BY created_at, job_id LIMIT 1
+            SELECT job_id, envelope_json, workspace_id FROM externality_classification_jobs
+            WHERE status IN ({placeholders}) ORDER BY created_at, job_id
             """,
             statuses,
-        ).fetchone()
-        if row is None:
-            return None
-        updated = conn.execute(
-            """
-            UPDATE externality_classification_jobs
-            SET status = 'processing', attempt_count = attempt_count + 1,
-                failure_code = NULL, updated_at = CURRENT_TIMESTAMP
-            WHERE job_id = ? AND status IN ('pending', 'failed')
-            """,
-            (str(row[0]),),
-        ).rowcount
-        if updated != 1:
-            return None
-    return str(row[0]), ExternalityEnvelope.from_mapping(json.loads(str(row[1])))
+        )
+        for row in rows:
+            with ExitStack() as candidate:
+                state = candidate.enter_context(
+                    registered_workspace_authority_lease(db_path, conn, str(row[2]))
+                )
+                if state is not None and state.phase != "active":
+                    continue
+                envelope = ExternalityEnvelope.from_mapping(json.loads(str(row[1])))
+                updated = conn.execute(
+                    """
+                    UPDATE externality_classification_jobs
+                    SET status = 'processing', attempt_count = attempt_count + 1,
+                        failure_code = NULL, updated_at = CURRENT_TIMESTAMP
+                    WHERE job_id = ? AND status IN ('pending', 'failed')
+                    """,
+                    (str(row[0]),),
+                ).rowcount
+                if updated != 1:
+                    continue
+                leases.enter_context(candidate.pop_all())
+                return str(row[0]), envelope
+    return None
 
 
 def _finish_classified(
