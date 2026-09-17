@@ -100,7 +100,9 @@ def _apply_review(store: _Store, review: _Review, answer: str) -> State:
     # Confirmation is UX only. transition() independently checks OS identity.
     if answer != "確認して適用":
         raise AuthorityError("administrator_cancelled")
-    if not 0 <= time.monotonic() - review.started < REVIEW_SECONDS:
+    # Compare to the deadline itself: subtracting two float clock readings can
+    # round an exact 120-second deadline down to 119.99999999999999.
+    if not review.started <= time.monotonic() < review.started + REVIEW_SECONDS:
         raise AuthorityError("administrator_review_expired")
     workspace, workspace_identity = _directory_identity(review.target.workspace, review.target.uid)
     data_dir, data_identity = _directory_identity(review.target.data_dir, review.target.uid)

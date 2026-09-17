@@ -54,8 +54,10 @@ def test_confirmation_is_exact_and_cancel_does_not_write(admin_fixture, answer):
 
 
 @pytest.mark.parametrize("elapsed", [-1, 120, 121])
-def test_expired_review_cannot_apply(admin_fixture, monkeypatch, elapsed):
+@pytest.mark.parametrize("started", [8.003, 1000.0])
+def test_expired_review_cannot_apply(admin_fixture, monkeypatch, elapsed, started):
     store, target = admin_fixture
+    monkeypatch.setattr(authority_admin.time, "monotonic", lambda: started)
     review = authority_admin._review(store, **target, action="enroll")
     monkeypatch.setattr(authority_admin.time, "monotonic", lambda: review.started + elapsed)
     with pytest.raises(AuthorityError, match="review_expired"):

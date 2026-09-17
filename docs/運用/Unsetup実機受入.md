@@ -7,7 +7,8 @@
 
 ## 候補の固定
 
-最初の検証候補はcommit `6fa1ff95bcd2c3924f7ad7d463cb02c91ec39b94`。
+旧候補commit `6fa1ff95bcd2c3924f7ad7d463cb02c91ec39b94` は使用しない。
+後続CIで120秒境界の丸め誤差が見つかったため、期限判定修正版の新候補へ差し替える。
 release candidateの4 artifact、manifest、SHA256SUMS、SBOM、release notesを一緒に渡す。
 受領した管理者は独立に確認したsource/配布物と照合し、candidate verifierを実行する。
 署名があるとは扱わない。hashは改変検出であり、エージェントが作ったhashだけを
