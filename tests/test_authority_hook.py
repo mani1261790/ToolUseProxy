@@ -257,3 +257,26 @@ def test_worker_requires_resolvable_registered_identity_when_authority_installed
                 Path(target.data_dir) / "events.db", conn, identity,
             ):
                 pytest.fail("unresolved target must not authorize provider work")
+
+
+@pytest.mark.parametrize("projects", [
+    None, [], [{"project": "project_1"}],
+    [{"project": "project_1"}, {"project": "project_1"}],
+    [{"project": "project_1"}, {"project": "project_2"}],
+    [{"project": "project_1"}, {"project": "../invalid"}],
+])
+def test_pilot_does_not_authorize_missing_or_invalid_participant_bindings(enrolled, projects):
+    import sqlite3
+    from pathlib import Path
+    from tooluseproxy.authority_state import AuthorityError
+    from tooluseproxy.pilot_authority import comparison_authority_lease
+
+    _, target, _ = enrolled
+    with sqlite3.connect(":memory:") as conn:
+        conn.execute("CREATE TABLE pilot_comparisons (comparison_id TEXT, report_json TEXT)")
+        conn.execute("CREATE TABLE pilot_project_aliases (alias_number INTEGER, workspace_id TEXT)")
+        conn.execute("INSERT INTO pilot_comparisons VALUES ('fixture', ?)",
+                     (json.dumps({"projects": projects}),))
+        with pytest.raises(AuthorityError, match="authority_comparison_unresolved"):
+            with comparison_authority_lease(Path(target.data_dir) / "events.db", conn, "fixture"):
+                pytest.fail("invalid participants must not authorize synchronization")

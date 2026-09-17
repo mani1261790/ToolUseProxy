@@ -7,7 +7,7 @@ import os
 import re
 import sqlite3
 import subprocess
-from contextlib import closing
+from contextlib import ExitStack, closing
 from pathlib import Path
 
 if os.name == "nt":  # pragma: no cover - exercised by Windows package checks
@@ -17,6 +17,7 @@ else:
 
 from hook_monitor.runtime.pilot_issue import parse_proposal, proposal_document, validate_document
 from hook_monitor.runtime.pilot_outbox import enqueue_comparisons
+from tooluseproxy.pilot_authority import comparison_authority_lease
 
 
 class SyncFailure(Exception):
@@ -128,7 +129,7 @@ def sync_pending(path: Path, *, repository: str, client=None, limit: int = 20) -
         os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0),
         0o600,
     )
-    with os.fdopen(descriptor, "r+b") as lock:
+    with os.fdopen(descriptor, "r+b") as lock, ExitStack() as authority_leases:
         if not _acquire_lock(lock):
             return {"status": "busy", "sent": 0}
         try:
@@ -137,9 +138,27 @@ def sync_pending(path: Path, *, repository: str, client=None, limit: int = 20) -
                 path.resolve().as_uri() + "?mode=rw", uri=True, timeout=1
             )) as conn:
                 conn.row_factory = sqlite3.Row
-                pending = conn.execute("SELECT * FROM pilot_issue_outbox WHERE state = 'pending' "
-                                       "ORDER BY rowid LIMIT ?", (limit,)).fetchall()
+                candidates = conn.execute("SELECT * FROM pilot_issue_outbox WHERE state = 'pending' "
+                                          "ORDER BY rowid")
+                pending = []
+                for row in candidates:
+                    with ExitStack() as candidate:
+                        allowed = candidate.enter_context(
+                            comparison_authority_lease(path, conn, row["comparison_id"])
+                        )
+                        if not allowed:
+                            continue
+                        authority_leases.enter_context(candidate.pop_all())
+                        pending.append(row)
+                        if len(pending) >= limit:
+                            break
             if not pending:
+                with closing(sqlite3.connect(path)) as conn:
+                    remaining = conn.execute(
+                        "SELECT COUNT(*) FROM pilot_issue_outbox WHERE state='pending'"
+                    ).fetchone()[0]
+                if remaining:
+                    return {"status": "pending", "sent": 0, "remaining": remaining}
                 return {"status": "ok", "sent": 0}
             try:
                 client.authenticate()
