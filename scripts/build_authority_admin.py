@@ -12,6 +12,10 @@ ROOT = Path(__file__).resolve().parents[1]
 def build() -> bytes:
     state = (ROOT / "tooluseproxy" / "authority_state.py").read_text(encoding="utf-8")
     admin = (ROOT / "tooluseproxy" / "authority_admin.py").read_text(encoding="utf-8")
+    return compose(state, admin)
+
+
+def compose(state: str, admin: str) -> bytes:
     tree = ast.parse(admin)
     lines = admin.splitlines(keepends=True)
     excluded = set()

@@ -19,7 +19,11 @@
 
 ## レビュー可能な導入物を作る
 
-開発側では通常権限で次を実行する。出力先は未存在のファイルを指定する。
+release candidateのschema 2には `tooluseproxy-authority-admin.py` が含まれる。
+manifest・SHA256SUMS・SBOMと照合し、通常のcandidate verifierでwheel内ソースとの
+一致も確認する。これらは配布元の真正性やOS権限の証明を代替しない。
+
+開発側で単独生成する場合は、通常権限で次を実行する。出力先は未存在のファイルを指定する。
 
 ```sh
 python3 scripts/build_authority_admin.py --output /tmp/authority-admin-candidate.py

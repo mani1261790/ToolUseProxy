@@ -18,9 +18,17 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 
+if __package__:
+    from .build_authority_admin import compose
+else:
+    from build_authority_admin import compose
+
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PACKAGE_BUILDER = REPO_ROOT / "scripts" / "build_package.py"
 PLUGIN_BUILDER = REPO_ROOT / "scripts" / "build_plugin_bundle.py"
+AUTHORITY_BUILDER = REPO_ROOT / "scripts" / "build_authority_admin.py"
+AUTHORITY_FILENAME = "tooluseproxy-authority-admin.py"
 MANIFEST_FILENAME = "release-manifest.json"
 CHECKSUM_FILENAME = "SHA256SUMS"
 SBOM_SPEC_VERSION = "1.7"
@@ -82,12 +90,14 @@ def build_candidate(outdir: Path, *, require_clean: bool) -> dict[str, Any]:
         _run_builder([sys.executable, str(PACKAGE_BUILDER), "--outdir", str(stage), "--sdist"])
         _run_builder([sys.executable, str(PLUGIN_BUILDER), "--outdir", str(stage)])
 
+        _run_builder([sys.executable, str(AUTHORITY_BUILDER), "--output",
+                      str(stage / AUTHORITY_FILENAME)])
         artifacts, python_version, plugin_version = _inspect_distribution_artifacts(stage)
         sbom_filename = f"tooluseproxy-{python_version}.cdx.json"
         notes_filename = f"tooluseproxy-{python_version}-release-notes.md"
         license_present = (REPO_ROOT / "LICENSE").is_file()
         manifest = {
-            "schema_version": 1,
+            "schema_version": 2,
             "status": "candidate",
             "product": "ToolUseProxy",
             "python_version": python_version,
@@ -175,6 +185,7 @@ def verify_candidate(directory: Path) -> dict[str, Any]:
     python_version, plugin_version, archive_member_count = _validate_distribution_versions(
         directory,
         artifact_entries,
+        require_authority=manifest["schema_version"] >= 2,
     )
     if manifest["python_version"] != python_version or manifest["plugin_version"] != plugin_version:
         raise ReleaseCandidateError("manifest version does not match distribution artifacts")
@@ -247,7 +258,9 @@ def _inspect_distribution_artifacts(
     paths = sorted(directory.iterdir(), key=lambda path: path.name)
     roles: dict[str, tuple[str, str]] = {}
     for path in paths:
-        if path.suffix == ".whl":
+        if path.name == AUTHORITY_FILENAME:
+            roles[path.name] = ("administrator-entrypoint", "text/x-python")
+        elif path.suffix == ".whl":
             roles[path.name] = ("python-wheel", "application/zip")
         elif path.name.endswith(".tar.gz"):
             roles[path.name] = ("python-sdist", "application/gzip")
@@ -256,11 +269,12 @@ def _inspect_distribution_artifacts(
         else:
             raise ReleaseCandidateError(f"unexpected distribution artifact: {path.name}")
     if sorted(role for role, _ in roles.values()) != [
+        "administrator-entrypoint",
         "codex-plugin",
         "python-sdist",
         "python-wheel",
     ]:
-        raise ReleaseCandidateError("expected exactly wheel, sdist, and Plugin artifacts")
+        raise ReleaseCandidateError("expected exactly wheel, sdist, Plugin, and administrator artifacts")
     artifacts = [
         {
             "filename": path.name,
@@ -278,16 +292,33 @@ def _inspect_distribution_artifacts(
 def _validate_distribution_versions(
     directory: Path,
     artifacts: list[dict[str, Any]],
+    *,
+    require_authority: bool = True,
 ) -> tuple[str, str, int]:
     python_versions: set[str] = set()
     plugin_versions: set[str] = set()
     archive_member_count = 0
+    expected_authority = None
+    actual_authority = None
     for artifact in artifacts:
         path = directory / str(artifact["filename"])
         role = str(artifact["role"])
+        if role == "administrator-entrypoint":
+            if path.name != AUTHORITY_FILENAME or path.stat().st_size > 256 * 1024:
+                raise ReleaseCandidateError("administrator artifact is invalid")
+            actual_authority = path.read_bytes()
+            continue
         archive_member_count += _validate_archive_members(path, role)
         if role == "python-wheel":
             with zipfile.ZipFile(path) as archive:
+                try:
+                    expected_authority = compose(
+                        archive.read("tooluseproxy/authority_state.py").decode("utf-8"),
+                        archive.read("tooluseproxy/authority_admin.py").decode("utf-8"),
+                    )
+                except (KeyError, UnicodeError, SyntaxError) as exc:
+                    if require_authority:
+                        raise ReleaseCandidateError("administrator source is invalid") from exc
                 metadata_names = [
                     name
                     for name in archive.namelist()
@@ -329,6 +360,8 @@ def _validate_distribution_versions(
         if not isinstance(version, str) or not version:
             raise ReleaseCandidateError("Python package version is missing")
         python_versions.add(version)
+    if require_authority and (expected_authority is None or actual_authority != expected_authority):
+        raise ReleaseCandidateError("administrator artifact differs from wheel source")
     if len(python_versions) != 1 or len(plugin_versions) != 1:
         raise ReleaseCandidateError("artifact versions are inconsistent")
     python_version = python_versions.pop()
@@ -533,6 +566,9 @@ def _release_notes(manifest: dict[str, Any]) -> str:
             f"- Inspect `{manifest['sbom']['filename']}` for the CycloneDX SBOM.",
             "- Archive members are checked for safe paths, unique names, regular types, "
             "safe modes, expected executables, and bounded expansion.",
+            "- Administrator entrypoint bytes must match the source packaged in the wheel.",
+            "- Administrator installation and human authorization require a separate OS session; "
+            "this candidate does not install or grant privileges.",
             "- Attach the green CI run separately; CI evidence is not inferred locally.",
             "- Review and trust the exact Codex Hook definition manually.",
             "",
@@ -548,7 +584,7 @@ def _release_notes(manifest: dict[str, Any]) -> str:
 
 
 def _validate_manifest(manifest: dict[str, Any]) -> None:
-    if manifest.get("schema_version") != 1 or manifest.get("status") != "candidate":
+    if manifest.get("schema_version") not in (1, 2) or manifest.get("status") != "candidate":
         raise ReleaseCandidateError("release manifest schema or status is invalid")
     if manifest.get("license") != {"id": LICENSE_ID}:
         raise ReleaseCandidateError("release manifest license is invalid")
@@ -562,8 +598,11 @@ def _validate_manifest(manifest: dict[str, Any]) -> None:
         raise ReleaseCandidateError("release manifest commit is invalid")
     if not isinstance(source.get("dirty"), bool):
         raise ReleaseCandidateError("release manifest dirty state is invalid")
-    if len(artifacts) != 3:
-        raise ReleaseCandidateError("release manifest must contain three artifacts")
+    expected_roles = {"python-wheel", "python-sdist", "codex-plugin"}
+    if manifest["schema_version"] >= 2:
+        expected_roles.add("administrator-entrypoint")
+    if len(artifacts) != len(expected_roles):
+        raise ReleaseCandidateError("release manifest artifact count is invalid")
     roles: set[str] = set()
     filenames: set[str] = set()
     for artifact in artifacts:
@@ -581,7 +620,7 @@ def _validate_manifest(manifest: dict[str, Any]) -> None:
             raise ReleaseCandidateError("release manifest artifact metadata is invalid")
         filenames.add(filename)
         roles.add(str(artifact.get("role")))
-    if len(filenames) != 3 or roles != {"python-wheel", "python-sdist", "codex-plugin"}:
+    if len(filenames) != len(expected_roles) or roles != expected_roles:
         raise ReleaseCandidateError("release manifest artifact set is invalid")
 
 
