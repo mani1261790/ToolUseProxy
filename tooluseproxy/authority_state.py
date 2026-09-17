@@ -182,13 +182,16 @@ class _Store:
             os.close(descriptor)
 
     def _publish(self, directory: int, state: State) -> None:
+        payload = json.dumps(state.payload(), sort_keys=True).encode() + b"\n"
+        if len(payload) > MAX_STATE_BYTES:
+            raise AuthorityError("authority_state_too_large")
         temporary = ".state-" + uuid.uuid4().hex
         descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
                              0o644, dir_fd=directory)
         try:
             with os.fdopen(descriptor, "wb") as stream:
                 os.fchmod(stream.fileno(), 0o644)
-                stream.write(json.dumps(state.payload(), sort_keys=True).encode() + b"\n")
+                stream.write(payload)
                 stream.flush()
                 os.fsync(stream.fileno())
             os.replace(temporary, state.target.key + ".json",

@@ -194,3 +194,11 @@ def test_restrictive_administrator_umask_does_not_break_hook_reads(fixture_store
         os.umask(old_mask)
     for suffix in (".json", ".lease", ".admin"):
         assert (fixture_store.directory / (target.key + suffix)).stat().st_mode & 0o777 == 0o644
+
+
+def test_oversized_state_is_rejected_before_publication(fixture_store, target):
+    oversized = Target(target.uid, "/" + "x" * 9000, target.data_dir)
+    with pytest.raises(AuthorityError, match="state_too_large"):
+        enroll(fixture_store, oversized)
+    assert read(fixture_store, oversized) is None
+    assert not list(fixture_store.directory.glob(".state-*"))
