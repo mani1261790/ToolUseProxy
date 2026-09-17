@@ -168,6 +168,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _run_status(args)
         if args.command == "setup":
             return _run_setup(args)
+        if args.command == "unsetup":
+            return _run_unsetup(args)
         if args.command == "config":
             return _run_config(args)
         if args.command == "pilot":
@@ -243,6 +245,17 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     status.add_argument("--json", action="store_true", help="Print machine-readable output.")
     _add_runtime_path_arguments(status)
+
+    unsetup = subparsers.add_parser(
+        "unsetup", help="Preview project deactivation; application requires a trusted authority.",
+        allow_abbrev=False,
+    )
+    unsetup_commands = unsetup.add_subparsers(dest="unsetup_command", required=True)
+    for operation in ("plan", "apply"):
+        command = unsetup_commands.add_parser(operation, allow_abbrev=False)
+        command.add_argument("--workspace", type=Path, required=True)
+        command.add_argument("--json", action="store_true")
+        _add_runtime_path_arguments(command)
 
     setup = subparsers.add_parser(
         "setup",
@@ -708,6 +721,28 @@ def _run_externality(args: argparse.Namespace) -> int:
         }
     _render(payload, as_json=args.json)
     return 0
+
+
+def _run_unsetup(args: argparse.Namespace) -> int:
+    from tooluseproxy.unsetup import plan_unsetup, unavailable_unsetup_application
+
+    if args.unsetup_command == "apply":
+        # Deny before resolving paths, opening state or doing any other work.
+        payload = unavailable_unsetup_application()
+    else:
+        paths = resolve_runtime_paths(db_path=args.db, data_dir=args.data_dir)
+        payload = plan_unsetup(args.workspace, paths.db_path)
+    if args.json:
+        print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+    else:
+        print(payload["message"])
+        if args.unsetup_command == "plan":
+            print(f"対象: {payload['workspace_root']}")
+            for item in (*payload["proposed_effects"], *payload["limitations"]):
+                print(f"- {item}")
+        else:
+            print(payload["recovery"])
+    return 1 if args.unsetup_command == "apply" else 0
 
 
 def _run_uninstall(args: argparse.Namespace) -> int:

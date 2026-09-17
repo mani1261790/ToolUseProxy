@@ -448,6 +448,10 @@ def _parsed_local_management_operation(
 
     command_name = arguments.command
     parsed_operation: str | None = None
+    if command_name == "unsetup":
+        if arguments.unsetup_command != "plan":
+            return None
+        parsed_operation = "unsetup_plan"
     if command_name == "setup":
         # Reordered verify options accepted by the real parser must retain the
         # probe distinction. Apply continues to use the stricter fixed forms
@@ -502,6 +506,7 @@ def _parsed_local_management_operation(
                 return None
     if command_name in {
         "init",
+        "unsetup",
         "doctor",
         "status",
         "setup",
@@ -575,6 +580,14 @@ def _parsed_local_management_operation(
         return None
     if command_name == "storage" and not explicit_data_dirs and not explicit_dbs:
         return None
+    if command_name == "unsetup":
+        # Recovery permits only the read-only preview for this exact data root.
+        if not explicit_data_dirs and not explicit_dbs:
+            return None
+        if explicit_dbs and Path(explicit_dbs[0]).resolve() != (
+            plugin_data / "events.db"
+        ).resolve():
+            return None
 
     if parsed_operation is not None:
         return parsed_operation
