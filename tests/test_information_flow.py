@@ -9421,7 +9421,9 @@ class InformationFlowTest(unittest.TestCase):
             "pre_tool_use",
             "git-status-local",
             "Bash",
-            tool_input={"command": "git status --short --branch"},
+            tool_input={
+                "command": "git -c core.fsmonitor=false status --short --branch"
+            },
             cwd=str(workspace),
         )
         externality = classify_static_externality_hook_decision(
