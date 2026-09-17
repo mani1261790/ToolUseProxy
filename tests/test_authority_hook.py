@@ -280,3 +280,112 @@ def test_pilot_does_not_authorize_missing_or_invalid_participant_bindings(enroll
         with pytest.raises(AuthorityError, match="authority_comparison_unresolved"):
             with comparison_authority_lease(Path(target.data_dir) / "events.db", conn, "fixture"):
                 pytest.fail("invalid participants must not authorize synchronization")
+
+
+def test_cleanup_preserves_stopped_and_unattributed_history_and_drains_active_work(
+    enrolled, monkeypatch,
+):
+    import sqlite3
+    from pathlib import Path
+    from datetime import UTC, datetime, timedelta
+    from hook_monitor.runtime.storage import EventStore
+    from hook_monitor.runtime.workspace import make_workspace_id
+    from tooluseproxy import storage_cleanup
+    from tooluseproxy.migration_backups import MigrationBackupInventory
+
+    store, target, initial = enrolled
+    database = Path(target.data_dir) / "events.db"
+    EventStore(database).initialize()
+    other = Path(target.workspace).parent / "other"
+    other.mkdir()
+    other_target = Target(target.uid, str(other), target.data_dir)
+    active = store.transition(other_target, expected="absent", operation="c" * 32, action="enroll")
+    now = datetime.now(UTC).replace(microsecond=0)
+    old = (now - timedelta(days=60)).isoformat()
+    with sqlite3.connect(database) as conn:
+        for index, workspace in enumerate((target.workspace, str(other))):
+            identity = make_workspace_id(workspace)
+            conn.execute("INSERT INTO workspaces "
+                         "(workspace_id, canonical_root, lexical_root, discovered_by) "
+                         "VALUES (?, ?, ?, 'fixture')", (identity, workspace, workspace))
+            for suffix, session in (("session", f"session{index}"), ("unscoped", None)):
+                conn.execute("INSERT INTO events "
+                             "(event_id, phase, session_id, workspace_id, payload_json, recorded_at) "
+                             "VALUES (?, 'stop', ?, ?, '{}', ?)",
+                             (f"{index}-{suffix}", session, identity, old))
+        conn.execute("INSERT INTO events (event_id, phase, payload_json, recorded_at) "
+                     "VALUES ('unattributed', 'stop', '{}', ?)", (old,))
+    store.transition(target, expected=initial.generation, operation="b" * 32, action="deactivate")
+    backup = Path(target.data_dir) / "fixture.bak"
+    backup.write_bytes(b"fixture history")
+    inventory = MigrationBackupInventory(
+        total_count=1, total_bytes=15, eligible_count=1, eligible_bytes=15,
+        recent_count=0, awaiting_verification_count=0, identity_mismatch_count=0,
+        current_database_integrity_ok=True, verification_current=True, cleanup_blocked=False,
+        eligible_names=(backup.name,), inventory_digest="f" * 64,
+    )
+    monkeypatch.setattr(storage_cleanup, "inventory_migration_backups", lambda *a, **kw: inventory)
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("shared backup ownership is unknown; do not delete")
+
+    monkeypatch.setattr(storage_cleanup, "delete_verified_migration_backups", forbidden)
+    plan = storage_cleanup.plan_storage_cleanup(database, now=now)
+    assert plan.eligible_session_count == plan.eligible_unscoped_event_count == 1
+    assert plan.migration_backup_eligible_count == 0
+    assert plan.migration_backup_cleanup_blocked is True
+    observed = []
+    delete = storage_cleanup._delete_cleanup_targets
+
+    def concurrent_stop(conn):
+        observed.append(store.transition(other_target, expected=active.generation,
+                                         operation="d" * 32, action="deactivate"))
+        return delete(conn)
+
+    monkeypatch.setattr(storage_cleanup, "_delete_cleanup_targets", concurrent_stop)
+    result = storage_cleanup.apply_storage_cleanup(
+        database, cutoff_at=plan.cutoff_at, reviewed_at=plan.reviewed_at,
+        expected_plan_revision=plan.plan_revision,
+    )
+    assert result.deleted_session_count == result.deleted_unscoped_event_count == 1
+    assert observed[0].phase == "deactivating"
+    assert store.transition(other_target, expected=observed[0].generation,
+                            operation="d" * 32, action="deactivate").phase == "inactive"
+    with sqlite3.connect(database) as conn:
+        assert {row[0] for row in conn.execute("SELECT event_id FROM events")} == {
+            "0-session", "0-unscoped", "unattributed",
+        }
+    assert backup.read_bytes() == b"fixture history"
+
+
+def test_cleanup_review_from_before_deactivation_cannot_delete_history(enrolled):
+    import sqlite3
+    from pathlib import Path
+    from datetime import UTC, datetime, timedelta
+    from hook_monitor.runtime.storage import EventStore
+    from hook_monitor.runtime.workspace import make_workspace_id
+    from tooluseproxy.storage_cleanup import (
+        StorageCleanupPlanError, plan_storage_cleanup, apply_storage_cleanup,
+    )
+
+    store, target, initial = enrolled
+    database = Path(target.data_dir) / "events.db"
+    EventStore(database).initialize()
+    identity = make_workspace_id(target.workspace)
+    now = datetime.now(UTC).replace(microsecond=0)
+    with sqlite3.connect(database) as conn:
+        conn.execute("INSERT INTO workspaces "
+                     "(workspace_id, canonical_root, lexical_root, discovered_by) "
+                     "VALUES (?, ?, ?, 'fixture')", (identity, target.workspace, target.workspace))
+        conn.execute("INSERT INTO events "
+                     "(event_id, phase, session_id, workspace_id, payload_json, recorded_at) "
+                     "VALUES ('fixture', 'stop', 'session', ?, '{}', ?)",
+                     (identity, (now - timedelta(days=60)).isoformat()))
+    plan = plan_storage_cleanup(database, now=now)
+    assert plan.eligible_session_count == 1
+    store.transition(target, expected=initial.generation, operation="b" * 32, action="deactivate")
+    with pytest.raises(StorageCleanupPlanError, match="storage_plan_changed"):
+        apply_storage_cleanup(database, cutoff_at=plan.cutoff_at, reviewed_at=plan.reviewed_at,
+                              expected_plan_revision=plan.plan_revision)
+    with sqlite3.connect(database) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM events").fetchone()[0] == 1
