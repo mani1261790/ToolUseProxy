@@ -243,6 +243,13 @@ def _analyze_segment(
         return
     if program == "git":
         state.executable_classes.add("remote_vcs_client")
+        # Git status can start an executable configured through core.fsmonitor.
+        # Treat it as local only when this invocation explicitly disables that
+        # helper before the subcommand. Other Git config overrides remain
+        # unknown so repository or process configuration cannot create an
+        # unobserved external path behind an apparently local inspection.
+        if arguments[:3] == ["-c", "core.fsmonitor=false", "status"]:
+            return
         # Only list locally configured remotes. Do not infer locality for
         # remote show/update/add, global overrides, aliases, or dynamic argv.
         if arguments in (["remote"], ["remote", "-v"], ["remote", "--verbose"]):
