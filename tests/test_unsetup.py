@@ -87,7 +87,7 @@ def test_preview_has_japanese_effects_and_no_approval_token(tmp_path, capsys):
                  "--data-dir", str(tmp_path / "missing")]) == 0
     output = capsys.readouterr().out
     assert "設定・保護対象登録・履歴を保持" in output
-    assert "承認経路が未実装" in output
+    assert "このCLIには承認権限がない" in output
     assert "他プロジェクトを変更しない" in output
     assert list(tmp_path.iterdir()) == []
 

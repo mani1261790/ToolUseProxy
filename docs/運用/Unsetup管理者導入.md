@@ -107,3 +107,16 @@ Command Line Tools/Python実体と全親directoryもエージェントから変�
 所属projectを確定できない記録と、過去のproject構成が不明なDB全体のmigration backupは
 保持する。後者は整理計画でcleanup_blockedと表示される。これは容量削減の制約であり、
 バックアップの検証成功だけでは停止projectの履歴を消してよい根拠にならない。
+
+## 既存の管理CLIとの互換性
+
+管理者状態に登録したprojectでは、通常CLIのconfig set/unsetと、protectの
+remove/reconcile/migrate applyを拒否する。revisionや確認tokenを利用者承認として
+使い回せないよう、DB・保護リストを開く前に拒否する。管理者状態の導入後は全体の
+uninstall applyも拒否する。未登録projectの既存設定操作は従来の動作を維持する。
+これらの変更用の独立した承認入口はまだ提供していないため、登録前に保持する設定・
+保護登録を確認する必要がある。通常CLIの引数やtokenで制限を解除する方法は用意しない。
+
+この制限は正規CLIの境界である。任意shellからのDB直接編集、別のdata directoryへの
+差替え、可変HookやPlugin設定の変更を防いだ証拠にはならない。実機の権限設計では
+それらの資源と実行経路もエージェントから分離する。

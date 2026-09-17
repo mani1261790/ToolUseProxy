@@ -156,6 +156,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     authority_leases = ExitStack()
     try:
+        if args.command == "uninstall" and args.uninstall_command == "apply":
+            from tooluseproxy import authority_state
+
+            authority = authority_state.AUTHORITY_DIRECTORY
+            if authority.exists() or authority.is_symlink():
+                return _deny_administrator_managed_change(args)
         if args.command in {"init", "setup", "status", "doctor", "config", "protect", "pilot"}:
             workspace_argument = getattr(args, "workspace", None)
             if workspace_argument is not None:
@@ -182,6 +188,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                     }
                     _render(payload, as_json=getattr(args, "json", False))
                     return 0 if args.command in {"status", "doctor"} else 1
+                if state is not None and (
+                    (args.command == "config" and args.config_command in {"set", "unset"})
+                    or (args.command == "protect" and any(
+                        getattr(args, operation, None) == "apply"
+                        for operation in ("removal_command", "reconciliation_command", "migration_command")
+                    ))
+                ):
+                    return _deny_administrator_managed_change(args)
         if args.command == "hook":
             return run_codex_hook(
                 args.phase,
@@ -228,6 +242,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         authority_leases.close()
     parser.error(f"unsupported command: {args.command}")
     return 2
+
+
+def _deny_administrator_managed_change(args: argparse.Namespace) -> int:
+    _render({
+        "status": "denied",
+        "code": "administrator_managed_change_required",
+        "changes_applied": False,
+        "database_opened": False,
+        "source_manifest_opened": False,
+        "message": "管理者管理下では、通常CLIから設定・保護登録の変更や全体削除を適用できません。"
+                   "確認番号や設定revisionは利用者承認の代わりになりません。",
+    }, as_json=getattr(args, "json", False))
+    return 1
 
 
 def _build_parser() -> argparse.ArgumentParser:

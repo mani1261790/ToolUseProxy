@@ -389,3 +389,37 @@ def test_cleanup_review_from_before_deactivation_cannot_delete_history(enrolled)
                               expected_plan_revision=plan.plan_revision)
     with sqlite3.connect(database) as conn:
         assert conn.execute("SELECT COUNT(*) FROM events").fetchone()[0] == 1
+
+
+@pytest.mark.parametrize("command", [
+    ["config", "set", "pre_tool_policy", "false", "--expected-revision", "fixture"],
+    ["config", "unset", "pre_tool_policy", "--expected-revision", "fixture"],
+    ["protect", "remove", "apply", "--path", "fixture.txt", "--removal-revision", "fixture",
+     "--expected-manifest-sha256", "fixture"],
+    ["protect", "reconcile", "apply", "--reconciliation-revision", "fixture",
+     "--expected-manifest-sha256", "fixture"],
+    ["protect", "migrate", "apply", "--migration-revision", "fixture",
+     "--expected-manifest-sha256", "fixture"],
+    ["uninstall", "apply", "--confirmation-token", "fixture"],
+])
+def test_active_managed_project_cannot_use_legacy_mutators_as_approval(
+    enrolled, monkeypatch, capsys, command,
+):
+    from tooluseproxy import cli
+    from pathlib import Path
+
+    _, target, _ = enrolled
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("unapproved mutation must stop before dispatch or DB access")
+
+    for handler in ("_run_config", "_run_protect", "_run_uninstall"):
+        monkeypatch.setattr(cli, handler, forbidden)
+    monkeypatch.setattr("sqlite3.connect", forbidden)
+    arguments = [*command, "--data-dir", target.data_dir, "--json"]
+    if command[0] != "uninstall":
+        arguments.extend(["--workspace", target.workspace])
+    assert cli.main(arguments) == 1
+    assert json.loads(capsys.readouterr().out)["code"] == "administrator_managed_change_required"
+    assert list(Path(target.workspace).iterdir()) == []
+    assert list(Path(target.data_dir).iterdir()) == []

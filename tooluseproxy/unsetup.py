@@ -36,7 +36,7 @@ def plan_unsetup(workspace: Path, database: Path) -> dict[str, Any]:
         ],
         "limitations": [
             "現在の有効状態と登録件数は未調査。適用前に管理側で再確認する。",
-            "承認経路が未実装のため、このCLIから解除は適用できない。",
+            "このCLIには承認権限がない。独立した管理者用入口の導入と人間の操作が必要。",
             "確認番号・会話・環境変数・端末入力を人間の承認とは扱わない。",
         ],
     }
@@ -50,7 +50,7 @@ def unavailable_unsetup_application() -> dict[str, Any]:
         "status": "denied",
         "code": "trusted_approval_channel_unavailable",
         "changes_applied": False,
-        "message": "信頼できる利用者承認経路が未実装のため、解除しません。",
-        "recovery": "故障時は利用者がCodexのPlugin管理画面で手動で無効化してください。"
+        "message": "このCLIでは利用者承認を受け付けないため、解除しません。",
+        "recovery": "導入済みの独立した管理者用入口で、人間が対象projectの停止を行ってください。未導入時の故障復旧は、利用者がCodexのPlugin管理画面で手動で無効化してください。"
                     "これは全プロジェクトに影響し、プロジェクト単位のUnsetupとは異なります。",
     }
