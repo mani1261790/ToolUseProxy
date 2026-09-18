@@ -49,5 +49,5 @@ def minimize(original: ReplayResult, target: FailureSignature,
             index = 0
         else:
             index += 1
-    status = "budget_exhausted" if len(attempts) == max_replays and len(best) > 1 else "minimized"
+    status = "budget_exhausted" if len(attempts) == max_replays and len(best) > 1 and index < len(best) else "minimized"
     return Minimized(best, status, len(attempts), tuple(attempts))

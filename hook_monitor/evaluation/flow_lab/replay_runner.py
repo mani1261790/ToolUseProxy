@@ -136,7 +136,7 @@ def main(argv=None):
     source.add_argument('--search-directory', type=Path)
     parser.add_argument('--attempt', type=int, default=1)
     parser.add_argument('--max-replays', type=int, default=5)
-    parser.add_argument('--seconds', type=int, default=500)
+    parser.add_argument('--seconds', type=int, default=600)
     options = parser.parse_args(argv)
     try:
         if options.case:

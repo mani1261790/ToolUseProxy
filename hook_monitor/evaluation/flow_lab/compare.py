@@ -10,7 +10,8 @@ def compare_replays(before: ReplayResult, after: ReplayResult) -> dict:
                 "before_policy": before.spec.policy_revision,
                 "after_policy": after.spec.policy_revision,
                 "synthetic_only": True}
-    if before.actions != after.actions or before.environment_profile != after.environment_profile:
+    if (before.actions != after.actions or before.environment_profile != after.environment_profile
+            or before.spec.policy_revision != after.spec.policy_revision):
         return {**metadata, "status": "not_comparable", "reason": "replay_conditions_changed"}
     if not before.observable or not after.observable:
         return {**metadata, "status": "inconclusive", "reason": "independent_observation_incomplete"}

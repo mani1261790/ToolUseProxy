@@ -49,6 +49,8 @@ class ReplayResult:
                 digest = hashlib.sha256(json.dumps(trace, separators=(",", ":")).encode()).hexdigest() if trace else None
                 if digest != cause:
                     raise LabError("invalid_replay_cause")
+        elif any(cause is not None for cause in self.causes):
+            raise LabError("invalid_replay_cause")
         attempts = set()
         steps = set()
         for number, (action, observation, cause) in enumerate(
