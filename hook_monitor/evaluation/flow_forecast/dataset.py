@@ -18,7 +18,8 @@ from .splits import SplitManifest, split_prefixes, verify_split
 
 FILES = ('inputs.json', 'targets.json', 'splits.json', 'summary.json')
 MAX_ARTIFACT_BYTES = 32 * 1024 * 1024
-MAX_BRANCHES = 2000
+# Aggregate research artifact capacity; execution batches retain their own F02 limits.
+MAX_BRANCHES = 20000
 
 
 @dataclass(frozen=True)
@@ -96,7 +97,11 @@ class Dataset:
 
 def assemble(branches: tuple[Continuation, ...], *, seed='split-v1', related_roots=(),
              provenance='synthetic-reference-v1') -> Dataset:
-    return Dataset(branches, split_prefixes(tuple(b.prefix for b in branches), seed=seed,
+    if (type(branches) is not tuple or not 1 <= len(branches) <= MAX_BRANCHES
+            or any(type(branch) is not Continuation for branch in branches)):
+        raise ForecastDataError('invalid_dataset')
+    prefixes = tuple({b.prefix.prefix_id: b.prefix for b in branches}.values())
+    return Dataset(branches, split_prefixes(prefixes, seed=seed,
                                            related_roots=related_roots), related_roots, provenance)
 
 

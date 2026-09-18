@@ -95,7 +95,7 @@ class SequenceModel:
     def __post_init__(self):
         if (self.algorithm != ALGORITHM or type(self.training_digest) is not str
                 or re.fullmatch('[a-f0-9]{64}', self.training_digest) is None
-                or type(self.training_roots) is not tuple or not 1 <= len(self.training_roots) <= 2000
+                or type(self.training_roots) is not tuple or not 1 <= len(self.training_roots) <= 10000
                 or tuple(sorted(set(self.training_roots))) != self.training_roots
                 or not isinstance(self.transitions, (dict, MappingProxyType))
                 or not 1 <= len(self.transitions) <= MAX_CONTEXTS):
