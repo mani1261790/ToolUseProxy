@@ -58,6 +58,125 @@ function projectLabel(id) {
   const root = knownScopes.find(scope => scope.workspace_id === id)?.workspace_root;
   return root ? `${root.split('/').filter(Boolean).pop() || root} — ${root}` : scopeLabel(id);
 }
+const pickers = new Map();
+function makePicker(id) {
+  const select = $(id);
+  const label = select.parentElement;
+  // Keep a hidden select as the value store; only our combobox is interactive.
+  const heading = node('span', label.firstChild.textContent);
+  heading.id = `${id}-label`;
+  label.firstChild.replaceWith(heading);
+  const wrapper = node('div', undefined, 'picker');
+  const trigger = node('button', undefined, 'picker-trigger');
+  trigger.type = 'button';
+  trigger.id = `${id}-trigger`;
+  trigger.setAttribute('role', 'combobox');
+  trigger.setAttribute('aria-haspopup', 'listbox');
+  trigger.setAttribute('aria-expanded', 'false');
+  trigger.setAttribute('aria-labelledby', heading.id);
+  const valueLabel = node('span', '', 'picker-value');
+  trigger.append(valueLabel, node('span', '', 'picker-chevron'));
+  const list = node('div', undefined, 'picker-options');
+  list.id = `${id}-options`;
+  list.setAttribute('role', 'listbox');
+  list.setAttribute('aria-labelledby', heading.id);
+  list.hidden = true;
+  trigger.setAttribute('aria-controls', list.id);
+  select.hidden = true;
+  label.append(wrapper);
+  wrapper.append(trigger, list);
+  let active = 0;
+  let search = '';
+  let searchAt = 0;
+  let signature = '';
+  const isOpen = () => !list.hidden;
+  function highlight(scroll = false) {
+    [...list.children].forEach((item, index) => item.classList.toggle('active', index === active));
+    if (isOpen() && list.children[active]) {
+      trigger.setAttribute('aria-activedescendant', list.children[active].id);
+      if (scroll) list.children[active].scrollIntoView({block: 'nearest'});
+    } else trigger.removeAttribute('aria-activedescendant');
+  }
+  function close() {
+    list.hidden = true;
+    trigger.setAttribute('aria-expanded', 'false');
+    trigger.removeAttribute('aria-activedescendant');
+  }
+  function sync() {
+    const options = [...select.options];
+    const next = JSON.stringify(options.map(option => [option.value, option.textContent]));
+    const activeValue = list.children[active]?.dataset.value;
+    if (signature !== next) {
+      signature = next;
+      list.replaceChildren(...options.map((option, index) => {
+        const item = node('div', option.textContent, 'picker-option');
+        item.id = `${id}-option-${index}`;
+        item.dataset.value = option.value;
+        item.setAttribute('role', 'option');
+        item.onpointerdown = event => event.preventDefault();
+        item.onclick = () => commit(index);
+        return item;
+      }));
+      active = isOpen() ? Math.max(0, options.findIndex(option => option.value === activeValue)) : Math.max(0, select.selectedIndex);
+    }
+    valueLabel.textContent = select.selectedOptions[0]?.textContent || '';
+    trigger.title = valueLabel.textContent;
+    [...list.children].forEach((item, index) => item.setAttribute('aria-selected', String(index === select.selectedIndex)));
+    highlight();
+  }
+  function open() {
+    for (const picker of pickers.values()) picker.close();
+    sync();
+    active = Math.max(0, select.selectedIndex);
+    list.hidden = false;
+    trigger.setAttribute('aria-expanded', 'true');
+    highlight(true);
+  }
+  function commit(index) {
+    select.selectedIndex = index;
+    sync();
+    close();
+    trigger.focus();
+    select.dispatchEvent(new Event('change', {bubbles: true}));
+  }
+  trigger.onclick = () => isOpen() ? close() : open();
+  trigger.onkeydown = event => {
+    if (event.key === 'Tab') { close(); return; }
+    if (event.key === 'Escape' && isOpen()) {
+      event.preventDefault(); event.stopPropagation(); close(); return;
+    }
+    if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
+      event.preventDefault();
+      if (!isOpen()) open();
+      else if (event.key === 'ArrowDown') active = Math.min(list.children.length - 1, active + 1);
+      else if (event.key === 'ArrowUp') active = Math.max(0, active - 1);
+      if (event.key === 'Home') active = 0;
+      if (event.key === 'End') active = list.children.length - 1;
+      highlight(true);
+    } else if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      if (isOpen()) commit(active); else open();
+    } else if (event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) {
+      event.preventDefault();
+      if (!isOpen()) open();
+      search = Date.now() - searchAt > 700 ? event.key : search + event.key;
+      searchAt = Date.now();
+      const index = [...select.options].findIndex(option => option.textContent.toLocaleLowerCase().startsWith(search.toLocaleLowerCase()));
+      if (index >= 0) { active = index; highlight(true); }
+    }
+  };
+  document.addEventListener('pointerdown', event => { if (!wrapper.contains(event.target)) close(); });
+  // A label containing several controls has ambiguous activation; use an explicit
+  // non-interactive field container and the combobox's labelledby relationship.
+  const field = node('div', undefined, 'picker-field');
+  label.replaceWith(field);
+  field.append(...label.childNodes);
+  const picker = {sync, close};
+  pickers.set(id, picker);
+  sync();
+}
+makePicker('workspace');
+makePicker('session');
 function updateOptions(id, choices, allLabel) {
   const select = $(id);
   const value = select.value;
@@ -65,10 +184,11 @@ function updateOptions(id, choices, allLabel) {
     choices.push([value, select.selectedOptions[0].textContent]);
   }
   const signature = JSON.stringify(choices);
-  if (select.dataset.options === signature) return;
+  if (select.dataset.options === signature) { pickers.get(id).sync(); return; }
   select.dataset.options = signature;
   select.replaceChildren(new Option(allLabel, ''), ...choices.map(([key, label]) => new Option(label, key)));
   select.value = value;
+  pickers.get(id).sync();
 }
 function renderScopes() {
   const projects = [...new Map(knownScopes.map(scope => [JSON.stringify(scope.workspace_id), projectLabel(scope.workspace_id)])).entries()];
@@ -110,7 +230,6 @@ function updateViewSummary() {
   const count = Number(Boolean($('workspace').value)) + Number(Boolean($('session').value)) + Number($('blocked-only').checked);
   $('filter-count').textContent = String(count);
   $('filter-count').hidden = count === 0;
-  $('view-mode').textContent = $('follow').checked ? '最新を追従' : '選択を固定';
   const parts = [];
   if ($('workspace').value) parts.push(projectLabel(JSON.parse($('workspace').value)));
   if ($('session').value) {
@@ -125,7 +244,7 @@ function updateViewSummary() {
 const settings = $('settings-dialog');
 $('display-settings').onclick = () => settings.showModal();
 $('close-settings').onclick = () => settings.close();
-settings.addEventListener('close', () => $('display-settings').focus());
+settings.addEventListener('close', () => { for (const picker of pickers.values()) picker.close(); $('display-settings').focus(); });
 settings.addEventListener('click', event => {
   if (event.target !== settings) return;
   const rect = settings.getBoundingClientRect();
@@ -141,7 +260,7 @@ function renderCalls(calls) {
   if (signature === listJSON) return;
   listJSON = signature;
   $('calls').replaceChildren();
-  $('count').textContent = calls.length;
+  $('count').textContent = `${calls.length}件`;
   if (!calls.length) $('calls').append(node('p', 'この条件に一致する呼び出しはありません。', 'empty'));
   for (const call of calls) {
     const button = node('button', undefined, 'call');

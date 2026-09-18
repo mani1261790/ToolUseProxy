@@ -18,7 +18,6 @@ main { display: grid; grid-template-columns: 340px minmax(0, 1fr); min-height: 0
 h2 { font-size: 20px; margin: 0 0 12px; font-weight: 600; }
 .list-heading h2 { font-size: 16px; margin: 0; }
 #count { margin-left: 10px; font-size: 14px; color: #a7adb7; font-weight: 400; font-variant-numeric: tabular-nums; }
-#view-mode { font-size: 14px; color: #a7adb7; }
 .call { display: grid; gap: 5px; width: 100%; padding: 13px 18px; text-align: left; border: 0; border-bottom: 1px solid #292c31; background: transparent; color: inherit; }
 .call:hover { background: #22252a; }.call.selected { background: #303640; }
 .call-top, .call-meta { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; min-width: 0; }
@@ -44,3 +43,29 @@ dialog::backdrop { background: #0007; }
 .filters .check-option { display: flex; align-items: center; gap: 10px; cursor: pointer; }
 .source { border-top: 1px solid #41454d; padding-top: 16px; overflow-wrap: anywhere; font-size: 14px; }
 @media(max-width:760px) { .appbar { padding: 0 12px; gap: 8px; }h1 { font-size: 17px; }.wordmark-detail { display: none; }.header-actions { gap: 8px; }#connection { max-width: 22vw; font-size: 13px; }#display-settings { padding: 4px 8px; }main { grid-template-columns: 1fr; grid-template-rows: minmax(130px, 30%) minmax(0, 1fr); }.calls { border-right: 0; border-bottom: 1px solid #35383d; }.detail { padding: 20px; }footer { padding: 0 12px; font-size: 12px; } }
+
+/* App-owned controls: native semantics for checks, custom popup for choices. */
+[hidden] { display: none !important; }
+.picker-field { display: grid; gap: 8px; min-width: 0; }
+.picker { position: relative; min-width: 0; }
+.picker-trigger { display: flex; align-items: center; justify-content: space-between; gap: 14px; width: 100%; min-height: 42px; text-align: left; border: 1px solid #626975; border-radius: 5px; background: #17191c; padding: 9px 12px; font-size: 15px; }
+.picker-trigger:hover { border-color: #929eaf; }
+.picker-trigger[aria-expanded="true"] { border-color: #c0cedf; }
+.picker-value { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.picker-chevron { width: 7px; height: 7px; border-right: 1.5px solid #b8c1cf; border-bottom: 1.5px solid #b8c1cf; transform: rotate(45deg) translateY(-2px); flex: 0 0 auto; margin-right: 2px; }
+.picker-trigger[aria-expanded="true"] .picker-chevron { transform: rotate(225deg) translate(-2px, -1px); }
+.picker-options { position: absolute; top: calc(100% + 6px); left: 0; right: 0; z-index: 5; max-height: 220px; overflow-y: auto; overscroll-behavior: contain; background: #252a32; border: 1px solid #626975; border-radius: 6px; padding: 4px; box-shadow: 0 10px 26px #0006; }
+.picker-option { position: relative; padding: 9px 32px 9px 10px; border-radius: 3px; font-size: 15px; line-height: 1.5; overflow-wrap: anywhere; cursor: pointer; }
+.picker-option:hover, .picker-option.active { background: #3a4351; }
+.picker-option[aria-selected="true"]::after { content: ''; position: absolute; right: 13px; top: 14px; width: 5px; height: 9px; border: solid #d4e2f1; border-width: 0 2px 2px 0; transform: rotate(45deg); }
+input[type="checkbox"] { appearance: none; -webkit-appearance: none; display: inline-grid; place-content: center; flex: 0 0 auto; margin: 0; width: 19px; height: 19px; border: 1px solid #7d8796; border-radius: 4px; background: #17191c; cursor: pointer; }
+input[type="checkbox"]:hover { border-color: #d0dcea; }
+input[type="checkbox"]:checked { background: #c6d6e8; border-color: #c6d6e8; }
+input[type="checkbox"]:checked::before { content: ''; width: 5px; height: 9px; border: solid #18202b; border-width: 0 2px 2px 0; transform: translateY(-1px) rotate(45deg); }
+summary { list-style: none; display: flex; align-items: center; gap: 10px; }
+summary::-webkit-details-marker { display: none; }
+summary::before { content: ''; flex: 0 0 auto; width: 6px; height: 6px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(-45deg); }
+details[open] > summary::before { transform: rotate(45deg); }
+* { scrollbar-width: thin; scrollbar-color: #505865 transparent; }
+::-webkit-scrollbar { width: 8px; height: 8px; }::-webkit-scrollbar-thumb { background: #505865; border-radius: 8px; }::-webkit-scrollbar-track { background: transparent; }
+@media (forced-colors: active) { input[type="checkbox"]:checked { background: Highlight; }input[type="checkbox"]:checked::before { border-color: HighlightText; }.picker-option.active { outline: 1px solid Highlight; } }
