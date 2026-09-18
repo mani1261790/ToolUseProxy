@@ -1,0 +1,2 @@
+# typed-operation-markov-v1 uses only Python 3.11/3.12 standard libraries.
+# No external training dependency; nothing is added to the Plugin distribution.
