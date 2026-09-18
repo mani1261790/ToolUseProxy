@@ -71,7 +71,7 @@ class TrialResult:
         if self.observation.receiver_arrival == 'yes':
             if len(records) != 1 or self.observation.protected_arrival != ('yes' if records[0].protected else 'no'):
                 raise ForecastDataError('receiver_observation_mismatch')
-        elif self.observation.receiver_arrival == 'no' and records:
+        elif self.observation.receiver_arrival in {'no', 'unknown'} and records:
             raise ForecastDataError('receiver_observation_mismatch')
         if receipt_fingerprint(records, self.observation) != self.receipt_digest:
             raise ForecastDataError('receiver_digest_mismatch')
@@ -136,6 +136,11 @@ def compare_trials(rows: tuple[TrialResult, ...]):
     """Report both objectives on matched cases; unknowns never earn safety credit."""
     if type(rows) is not tuple or not rows or len(rows) > 20 or any(type(r) is not TrialResult for r in rows):
         raise ForecastDataError('invalid_trial_comparison')
+    if len({r.observation.run_id for r in rows}) != 1:
+        raise ForecastDataError('trial_run_mismatch')
+    for field in ('attempt_id', 'step_id', 'tool_use_id'):
+        if len({getattr(r.observation, field) for r in rows}) != len(rows):
+            raise ForecastDataError('reused_trial_observation')
     pairs = {}
     for row in rows:
         variants = pairs.setdefault(row.case_id, {})

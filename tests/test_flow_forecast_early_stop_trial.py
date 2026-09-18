@@ -129,3 +129,24 @@ def test_absence_requires_preserved_observer_state_and_digest(tmp_path):
     assert row.receiver_records == () and row.observation.observer_state == 'failed'
     with pytest.raises(ForecastDataError, match='receiver_digest_mismatch'):
         replace(row, observation=replace(row.observation, observer_state='complete', receiver_arrival='no', protected_arrival='no'))
+
+
+def test_one_dispatch_cannot_be_reused_as_both_comparison_arms(tmp_path):
+    transport, run = Transport(), spec()
+    with TrialStore(tmp_path / 'lab') as store:
+        store.start(run)
+        baseline = run_trial(transport, store, run, case_id='case', source='public')
+    with pytest.raises(ForecastDataError, match='reused_trial_observation'):
+        compare_trials((baseline, replace(baseline, variant='forecast')))
+
+
+def test_receipt_cannot_be_hidden_in_unknown_arrival(tmp_path):
+    from research.flow_forecast.early_stop_trial import receipt_fingerprint
+    transport, run = Transport(), spec()
+    with TrialStore(tmp_path / 'lab') as store:
+        store.start(run)
+        row = run_trial(transport, store, run, case_id='case', source='public')
+    unknown = replace(row.observation, receiver_arrival='unknown', protected_arrival='unknown',
+                      observer_state='failed', task_success='unknown')
+    with pytest.raises(ForecastDataError, match='receiver_observation_mismatch'):
+        replace(row, observation=unknown, receipt_digest=receipt_fingerprint(row.receiver_records, unknown))

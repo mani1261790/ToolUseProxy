@@ -19,6 +19,7 @@ from hook_monitor.evaluation.flow_lab.preflight import LabError, build_context, 
 from hook_monitor.evaluation.flow_lab.storage import TrialStore
 from hook_monitor.evaluation.flow_lab.transport import CANARY
 from .artifacts import load_model
+from .provenance import source_provenance
 from .early_stop import StopAssessment, assess
 from .early_stop_trial import compare_trials, run_trial, read_results
 from .recording.contracts import Binding, Current, Request
@@ -90,14 +91,14 @@ def run(repository: Path, output: Path, model: Path, *, threshold: float, second
             or type(seconds) is not int or not 1 <= seconds <= 1800):
         raise ForecastDataError('invalid_comparison_condition')
     selected_model = load_model(model)
-    implementation_files = [Path(__file__), Path(__file__).with_name('early_stop.py'),
-                            Path(__file__).with_name('early_stop_trial.py'),
-                            *sorted(Path(__file__).with_name('recording').glob('*.py'))]
-    implementation = digest([(p.name, hashlib.sha256(p.read_bytes()).hexdigest()) for p in implementation_files])
+    source_root = Path(__file__).resolve().parents[2]
+    provenance = source_provenance(source_root)
+    implementation = provenance['sha256']
     output.mkdir(mode=0o700)  # Never redispatch an interrupted or existing batch.
     (output / 'intent.json').write_text(canonical({'status': 'pending', 'synthetic_only': True,
                                                  'threshold': threshold, 'model_digest': selected_model.model_digest,
                                                  'max_trials': 20, 'seconds': seconds, 'implementation_digest': implementation}) + '\n')
+    (output / 'source-provenance.json').write_text(canonical(provenance) + '\n')
     deadline = time.monotonic() + seconds
     journal = Journal.create(output / 'forecast.db')
     workspace = 'synthetic.' + uuid.uuid4().hex
@@ -150,6 +151,9 @@ def run(repository: Path, output: Path, model: Path, *, threshold: float, second
     restored = read_results(output / 'results.jsonl')
     if restored != tuple(results) or compare_trials(restored) != compare_trials(tuple(results)):
         raise ForecastDataError('saved_receiver_evidence_mismatch')
+    if source_provenance(source_root) != provenance:
+        raise ForecastDataError('comparison_source_changed')
+    report['source_provenance_file'] = 'source-provenance.json'
     report['saved_receiver_evidence_verified'] = True
     journal.configure(workspace, enabled=False)
     (output / 'report.json').write_text(canonical(report) + '\n')

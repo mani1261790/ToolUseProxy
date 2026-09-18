@@ -13,7 +13,7 @@ Hook、実際のToolCall、保護設定へは接続していません。既定�
 - experiment_enabledは人工比較の条件であり、人間承認やF04合格の証明ではありません。
   本番導入と人間による明示的な確認は別です。
 
-20件の試験は判定条件、対照集計、実際の予測子プロセス、無効化との競合の検証です。正例のForecastは明示的に作った人工fixtureであり、
+25件の試験は判定条件、対照集計、実際の予測子プロセス、無効化との競合の検証です。正例のForecastは明示的に作った人工fixtureであり、
 F03モデルの有効性を示しません。正常作業の完了率と独立した受信証拠を用いる対照実行を、専用のDocker runnerへ接続しました。
 #204のholdout不足とF04の採用不可判定は解消していません。
 
@@ -62,3 +62,18 @@ python3 -m research.flow_forecast.early_stop_audit --results PATH/output/results
 保存済み8行からの再集計も成功しました。実装digestは
 `c8f2a494c34195c2ee4657925b6eaa57f625bfc73f0a8db51027e65878c1ee88`。
 流出減少や独立課題での有効性は示していません。
+
+
+## レビュー後の整合性検査
+
+同じattempt/step/ToolCall IDを比較の両方式へ再利用することと、異なるrunの混在を拒否します。
+受信記録が存在するのに到達をunknownとする記録も拒否します。
+
+実装provenanceは一部のrunnerファイルだけでなく、research/flow_forecast・hook_monitor・
+tooluseproxy・scriptsのPythonソース一式を対象とします。モデル読込・予測依存を含む
+ファイル別hashをsource-provenance.jsonへ保存し、実行前後の不一致を拒否します。
+モデルartifactとDocker context/imageの識別は別に維持します。これは実行コードの由来であり、
+人間承認の証拠ではありません。受信記録の再監査と実装の由来の記録も別です。
+
+v3は旧方式の部分的な実装digestを使った結果です。新しい検査でも保存8行の再集計は成功していますが、
+完全なsource provenance付きの新しい実行証拠とは区別します。
