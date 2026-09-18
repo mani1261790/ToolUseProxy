@@ -2,11 +2,11 @@
 <html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>ToolUseProxy · ログ</title><link rel="stylesheet" href="screen.css"><script src="screen.js" defer></script></head>
 <body><header><div><h1>ToolUseProxy ログ</h1></div><div class="connection"><span id="connection" role="status">接続中…</span><label><input type="checkbox" id="follow" checked> 新しい呼び出しを追う</label></div></header>
 <div class="source"><details><summary>接続先DB</summary><span id="database">events.db</span></details><span id="updated"></span></div>
-<form class="filters">
-<label>プロジェクト<select id="workspace"><option value="">すべてのプロジェクト</option></select></label>
-<label>セッション<select id="session"><option value="">すべてのセッション</option></select></label>
-<label class="blocked-filter"><input type="checkbox" id="blocked-only"> ブロック判定のみ</label>
+<form class="filters" aria-label="ログの絞り込み" title="選択した条件に一致する最新300イベントを表示">
+<label><span class="sr-only">プロジェクト</span><select id="workspace"><option value="">すべてのプロジェクト</option></select></label>
+<label><span class="sr-only">セッション</span><select id="session"><option value="">すべてのセッション</option></select></label>
+<label class="blocked-filter"><input type="checkbox" id="blocked-only"> ブロックのみ</label>
 </form>
-<p id="scope-note" class="scope-note">選択した条件に一致する最新300イベントを表示します。</p>
+<p id="scope-note" class="scope-note" hidden></p>
 <main><section class="calls"><h2>呼び出し一覧 <span id="count"></span></h2><p class="hint">1秒ごとに自動更新。行を選ぶと詳細を表示します。</p><div id="calls"></div></section><section class="detail"><h2 id="title">呼び出しを選択</h2><p id="identity" class="hint"></p><div id="decisions"></div><div id="io"><p class="empty">ToolUseProxyの記録を待っています。</p></div></section></main>
 <footer>DBを読み取り専用で表示しています。ToolUseProxyが無効の間は新しい記録は増えません。表示するI/Oは保存済みの内容です。</footer></body></html>

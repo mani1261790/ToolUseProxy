@@ -184,7 +184,8 @@ async function refresh() {
     if (version !== refreshVersion) return;
     knownScopes = scopes.scopes;
     renderScopes();
-    $('scope-note').textContent = '選択した条件に一致する最新300イベントを表示します。' + (scopes.truncated ? ' セッション候補は最新1000組までです。' : '');
+    $('scope-note').hidden = !scopes.truncated;
+    $('scope-note').textContent = scopes.truncated ? 'セッション候補は最新1000組までです。' : '';
     $('database').textContent = data.database;
     if (data.calls.length && (!selected || ($('follow').checked && selected.event_id !== data.calls[0].event_id))) choose(data.calls[0]);
     if (selected) selected = data.calls.find(call => callKey(call) === callKey(selected)) || selected;
