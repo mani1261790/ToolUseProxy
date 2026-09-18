@@ -112,10 +112,18 @@ def run_codex_hook(
         raise ValueError(f"unsupported Codex hook phase: {phase}") from None
     captured = io.StringIO()
     original_stdin = sys.stdin
+    authority_lease = contextlib.ExitStack()
     try:
         paths = resolve_runtime_paths(db_path=db_path, data_dir=data_dir)
         prefix = original_stdin.buffer.read(PRE_TOOL_RAW_JSON_MAX_BYTES + 1)
         envelope, _ = inspect_top_level_json_strings(prefix, frozenset({"cwd"}))
+        from tooluseproxy.integrations.authority import workspace_authority_lease
+
+        administrative_state = authority_lease.enter_context(
+            workspace_authority_lease(paths.db_path, envelope.get("cwd"))
+        )
+        if administrative_state is not None and administrative_state.phase != "active":
+            return 0
         workspace_root = enabled_workspace_root(paths.db_path, envelope.get("cwd"))
         if workspace_root is None:
             return 0
@@ -258,6 +266,7 @@ def run_codex_hook(
         )
         return 0
     finally:
+        authority_lease.close()
         sys.stdin = original_stdin
 
 

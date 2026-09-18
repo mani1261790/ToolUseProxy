@@ -8,7 +8,7 @@ import os
 import re
 import subprocess
 import sys
-from contextlib import closing
+from contextlib import ExitStack, closing
 from dataclasses import asdict
 from pathlib import Path
 
@@ -48,15 +48,26 @@ def initialize_pilot_outbox_schema(conn: sqlite3.Connection) -> None:
 
 
 def enqueue_comparisons(path: Path) -> int:
+    from tooluseproxy.pilot_authority import comparison_authority_lease
+
     inserted = 0
-    with closing(sqlite3.connect(
+    with ExitStack() as authority_leases, closing(sqlite3.connect(
         path.resolve().as_uri() + "?mode=rw", uri=True, timeout=0.01
     )) as connection, connection as conn:
         conn.execute("BEGIN IMMEDIATE")
         rows = conn.execute("SELECT comparison_id, report_json FROM pilot_comparisons c "
                             "WHERE NOT EXISTS (SELECT 1 FROM pilot_issue_preparations p "
-                            "WHERE p.comparison_id = c.comparison_id) ORDER BY c.rowid LIMIT 100").fetchall()
+                            "WHERE p.comparison_id = c.comparison_id) ORDER BY c.rowid")
+        prepared = 0
         for identifier, report_json in rows:
+            if prepared >= 100:
+                break
+            with ExitStack() as candidate:
+                allowed = candidate.enter_context(comparison_authority_lease(path, conn, identifier))
+                if not allowed:
+                    continue
+                authority_leases.enter_context(candidate.pop_all())
+            prepared += 1
             try:
                 items = proposals_for_comparison(identifier, json.loads(report_json))
                 for item in items:

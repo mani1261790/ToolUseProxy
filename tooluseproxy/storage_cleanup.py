@@ -6,13 +6,15 @@ import os
 import re
 import shutil
 import sqlite3
-from contextlib import closing
+from contextlib import ExitStack, closing
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable
 
 from hook_monitor.runtime.storage import CURRENT_SCHEMA_VERSION
+from tooluseproxy.cleanup_authority import cleanup_authority_leases, preserve_shared_backups
+from tooluseproxy.authority_state import AuthorityError
 from tooluseproxy.migration_backups import (
     MigrationBackupError,
     MigrationBackupInventory,
@@ -367,7 +369,8 @@ _SESSION_ACTIVITY_CTE = """
         JOIN session_activity activity
           ON activity.session_id = summary.session_id
          AND activity.workspace_id IS summary.workspace_id
-        WHERE NOT EXISTS (
+        WHERE authority_cleanup_allowed(summary.workspace_id)
+          AND NOT EXISTS (
             SELECT 1 FROM pending_sessions pending
             WHERE pending.session_id = summary.session_id
               AND pending.workspace_id IS summary.workspace_id
@@ -452,6 +455,7 @@ _UNSCOPED_ACTIVITY_CTE = """
         FROM events event
         JOIN unscoped_activity activity ON activity.event_id = event.event_id
         WHERE event.session_id IS NULL
+          AND authority_cleanup_allowed(event.workspace_id)
           AND NOT EXISTS (
               SELECT 1 FROM redaction_plans plan
               LEFT JOIN analysis_runs run
@@ -707,7 +711,7 @@ def plan_storage_cleanup(
 
     try:
         _raise_if_cleanup_cancelled(cancel_check)
-        with closing(_read_only_connection(requested)) as conn:
+        with ExitStack() as authority_leases, closing(_read_only_connection(requested)) as conn:
             if cancel_check is not None:
                 conn.set_progress_handler(lambda: int(cancel_check()), 1000)
             conn.execute("BEGIN")
@@ -720,6 +724,7 @@ def plan_storage_cleanup(
             table_rows = _table_row_counts(conn)
             owner_bytes = _owned_page_bytes(conn)
             categories = _category_usage(owner_bytes, table_rows)
+            authority_leases.enter_context(cleanup_authority_leases(requested, conn))
             retention = _retention_candidates(conn, cutoff_at)
             maximum_sequence = int(
                 conn.execute(
@@ -734,6 +739,8 @@ def plan_storage_cleanup(
             _raise_if_cleanup_cancelled(cancel_check)
     except StorageCleanupPlanError:
         raise
+    except AuthorityError as exc:
+        raise StorageCleanupPlanError("storage_authority_unavailable") from exc
     except sqlite3.Error as exc:
         if cancel_check is not None and cancel_check():
             raise StorageCleanupPlanError("storage_cleanup_cancelled") from exc
@@ -751,6 +758,7 @@ def plan_storage_cleanup(
         if exc.code == "migration_backup_cleanup_cancelled":
             raise StorageCleanupPlanError("storage_cleanup_cancelled") from exc
         raise StorageCleanupPlanError(exc.code) from exc
+    backup_inventory = preserve_shared_backups(backup_inventory)
     # Closing any of the read-only SQLite connections above may checkpoint an
     # already committed WAL. Bind the plan to the stable post-close files so
     # that physical housekeeping is not mistaken for a logical change
@@ -867,11 +875,12 @@ def apply_storage_cleanup(
 
     requested = Path(os.path.abspath(os.fspath(db_path.expanduser())))
     try:
-        with closing(_write_connection(requested)) as connection, connection as conn:
+        with ExitStack() as authority_leases, closing(_write_connection(requested)) as connection, connection as conn:
             if cancel_check is not None:
                 conn.set_progress_handler(lambda: int(cancel_check()), 1000)
             _create_cleanup_temp_tables(conn)
             conn.execute("BEGIN IMMEDIATE")
+            authority_leases.enter_context(cleanup_authority_leases(requested, conn))
             inventory = _retention_candidates(conn, cutoff_at)
             try:
                 backup_inventory = inventory_migration_backups(
@@ -882,6 +891,7 @@ def apply_storage_cleanup(
                 )
             except MigrationBackupError as exc:
                 raise StorageCleanupPlanError(exc.code) from exc
+            backup_inventory = preserve_shared_backups(backup_inventory)
             locked_revision = _locked_cleanup_plan_revision(
                 requested,
                 conn,
@@ -923,6 +933,8 @@ def apply_storage_cleanup(
                 raise StorageCleanupPlanError("storage_cleanup_integrity_failed")
     except StorageCleanupPlanError:
         raise
+    except AuthorityError as exc:
+        raise StorageCleanupPlanError("storage_authority_unavailable") from exc
     except sqlite3.Error as exc:
         raise StorageCleanupPlanError("storage_cleanup_write_failed") from exc
 

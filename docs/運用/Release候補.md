@@ -1,6 +1,6 @@
 # Release候補の作成と検証
 
-public alphaのrelease候補は、wheel、sdist、Codex Plugin ZIPを個別に手作業で集めず、同じsource commitから一括生成します。
+public alphaのrelease候補は、wheel、sdist、Codex Plugin ZIP、管理者用単一Pythonファイルを個別に手作業で集めず、同じsource commitから一括生成します。
 
 ```bash
 python3.11 -m pip install \
@@ -15,11 +15,12 @@ python3.11 scripts/build_release_candidate.py \
 
 release builderは`build`、`packaging`、`pyproject-hooks`、`setuptools`、`wheel`が`requirements/build.txt`のexact versionと一致しない環境を拒否します。lockはPython 3.11 / 3.12とmacOS / Linuxで共通のpure Python wheelだけをSHA-256付きで許可し、CIも`--require-hashes --only-binary=:all:`でinstallします。
 
-出力directoryには次の7ファイルだけが入ります。
+出力directoryには次の8ファイルだけが入ります。
 
 - Python wheel
 - Python sdist
 - clean Codex Plugin marketplace ZIP
+- `tooluseproxy-authority-admin.py`（自動導入・権限昇格はしない）
 - `release-manifest.json`
 - CycloneDX 1.7 `*.cdx.json`
 - release notes候補
@@ -36,7 +37,7 @@ python3.11 scripts/build_release_candidate.py \
 
 verifierは次を確認します。
 
-- file setがmanifestで宣言した7ファイルと完全一致する
+- file setがmanifestで宣言した8ファイルと完全一致する
 - symlink、subdirectory、追加fileがない
 - `SHA256SUMS`がchecksum file以外をexactに覆う
 - manifestのsize / hashと実artifactが一致する
@@ -50,4 +51,11 @@ GitHub Actionsの`Reproducible release candidate` jobでも、SHA固定したAct
 
 候補directoryは[Pluginライフサイクル](Pluginライフサイクル.md)の`--candidate`へ渡し、immutable baselineからのupgrade / rollback / disable / removeにも同じ検証済みartifactを使えます。
 
-SBOMはCycloneDX 1.7 JSONを使い、ToolUseProxy applicationと3つの配布artifactをSHA-256付きcomponentとして記録します。runtime third-party dependencyは現在ありません。build / test dependencyはrelease artifactへ同梱されないため、release SBOMのruntime componentには含めません。
+SBOMはCycloneDX 1.7 JSONを使い、ToolUseProxy applicationと4つの配布artifactをSHA-256付きcomponentとして記録します。runtime third-party dependencyは現在ありません。build / test dependencyはrelease artifactへ同梱されないため、release SBOMのruntime componentには含めません。
+
+
+新しいmanifestはschema_version 2。管理者用ファイルはwheel内のauthority_state.pyと
+ authority_admin.pyから再生成したbyte列との一致も検証する。単体のhash再計算だけでは
+差替えを受け入れない。過去の3 artifactを持つschema_version 1候補の検証も維持するが、
+その候補に管理者用Unsetupが含まれるとは扱わない。管理者用ファイルの導入条件は
+[Unsetup管理者導入](Unsetup管理者導入.md)を参照する。

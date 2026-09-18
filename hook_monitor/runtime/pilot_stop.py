@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
-from contextlib import closing
+from contextlib import ExitStack, closing
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -45,6 +45,19 @@ def _connect(path: Path, *, readonly: bool = False) -> sqlite3.Connection:
 
 
 def compare_on_stop(path: Path, *, event: NormalizedEvent, codex_home: Path) -> tuple[str, ...]:
+    from tooluseproxy.integrations.authority import workspace_authority_lease
+
+    if not event.workspace_id or not event.workspace_root or not event.session_id:
+        return ()
+    with workspace_authority_lease(path, event.workspace_root) as state:
+        if state is not None and state.phase != "active":
+            return ()
+        return _compare_on_stop_active(path, event=event, codex_home=codex_home)
+
+
+def _compare_on_stop_active(path: Path, *, event: NormalizedEvent, codex_home: Path) -> tuple[str, ...]:
+    from tooluseproxy.integrations.authority import registered_workspace_authority_lease
+
     if not event.workspace_id or not event.workspace_root or not event.session_id:
         return ()
     with closing(_connect(path, readonly=True)) as conn:
@@ -60,7 +73,7 @@ def compare_on_stop(path: Path, *, event: NormalizedEvent, codex_home: Path) -> 
     )
     now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
     created = []
-    with closing(_connect(path)) as connection, connection as conn:
+    with ExitStack() as authority_leases, closing(_connect(path)) as connection, connection as conn:
         # Every evaluator/reviewer uses SQLite writes. Holding this reservation
         # makes the following multi-project reads a stable snapshot and avoids
         # duplicate rounds even if two Stop hooks arrive together.
@@ -86,6 +99,13 @@ def compare_on_stop(path: Path, *, event: NormalizedEvent, codex_home: Path) -> 
             "SELECT DISTINCT workspace_id FROM pilot_observations ORDER BY workspace_id")]
         observations, problems = [], []
         for workspace_id in workspaces:
+            with ExitStack() as candidate:
+                state = candidate.enter_context(
+                    registered_workspace_authority_lease(path, conn, workspace_id)
+                )
+                if state is not None and state.phase != "active":
+                    continue
+                authority_leases.enter_context(candidate.pop_all())
             conn.execute("INSERT INTO pilot_project_aliases(workspace_id) "
                          "SELECT ? WHERE NOT EXISTS (SELECT 1 FROM pilot_project_aliases WHERE workspace_id = ?)",
                          (workspace_id, workspace_id))

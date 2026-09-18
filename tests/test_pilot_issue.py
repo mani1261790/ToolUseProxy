@@ -101,6 +101,66 @@ class PilotIssueTest(unittest.TestCase):
     def sync(self):
         return sync_pending(self.path, repository="synthetic/product", client=self.client)
 
+    def test_authority_preserves_stopped_comparisons_and_drains_active_sync(self):
+        from tooluseproxy.authority_state import Target, _Store
+        from hook_monitor.runtime.workspace import make_workspace_id
+
+        self.path = self.path.resolve()
+        authority = self.path.parent / "authority"
+        authority.mkdir(mode=0o755)
+        store = _Store(authority, owner=os.geteuid())
+        targets, initial = [], []
+        for index in range(1, 4):
+            workspace = self.path.parent / f"project{index}"
+            workspace.mkdir()
+            target = Target(os.getuid(), str(workspace), str(self.path.parent))
+            targets.append(target)
+            initial.append(store.transition(target, expected="absent", operation=str(index) * 32,
+                                            action="enroll"))
+            identity = make_workspace_id(str(workspace))
+            with sqlite3.connect(self.path) as conn:
+                conn.execute("INSERT INTO workspaces "
+                             "(workspace_id, canonical_root, lexical_root, discovered_by) "
+                             "VALUES (?, ?, ?, 'fixture')", (identity, str(workspace), str(workspace)))
+                conn.execute("INSERT INTO pilot_project_aliases VALUES (?, ?)", (index, identity))
+        self.report["projects"] = [{"project": "project_1"}, {"project": "project_2"}]
+        first = self.add_comparison(1)
+        with patch("tooluseproxy.authority_state.AUTHORITY_DIRECTORY", authority), patch(
+            "tooluseproxy.integrations.authority._Store", lambda _: store,
+        ):
+            self.assertEqual(1, enqueue_comparisons(self.path))
+            with sqlite3.connect(self.path) as conn:
+                before = conn.execute("SELECT * FROM pilot_issue_outbox").fetchall()
+            store.transition(targets[0], expected=initial[0].generation, operation="a" * 32,
+                             action="deactivate")
+            blocked = self.add_comparison(2)
+            self.report["projects"] = [{"project": "project_2"}, {"project": "project_3"}]
+            active = self.add_comparison(3)
+            observed = []
+
+            def authenticate():
+                observed.append(store.transition(targets[1], expected=initial[1].generation,
+                                                 operation="b" * 32, action="deactivate"))
+
+            self.client.authenticate = authenticate
+            result = sync_pending(self.path, repository="synthetic/product", client=self.client, limit=1)
+            self.assertEqual(1, result["sent"])
+            self.assertEqual("deactivating", observed[0].phase)
+            self.assertEqual("inactive", store.transition(
+                targets[1], expected=observed[0].generation, operation="b" * 32,
+                action="deactivate",
+            ).phase)
+            with sqlite3.connect(self.path) as conn:
+                self.assertEqual(before, conn.execute(
+                    "SELECT * FROM pilot_issue_outbox WHERE comparison_id = ?", (first,),
+                ).fetchall())
+                self.assertIsNone(conn.execute("SELECT 1 FROM pilot_issue_preparations "
+                                               "WHERE comparison_id = ?", (blocked,)).fetchone())
+                self.assertEqual("sent", conn.execute("SELECT state FROM pilot_issue_outbox "
+                                                      "WHERE comparison_id = ?", (active,)).fetchone()[0])
+            self.client.authenticate = lambda: self.fail("stopped projects must not contact GitHub")
+            self.assertEqual(0, self.sync()["sent"])
+
     def test_template_rejects_changed_body_and_arbitrary_versions(self):
         item = proposals_for_comparison("a" * 64, self.report)[0]
         title, body = proposal_document(item)
