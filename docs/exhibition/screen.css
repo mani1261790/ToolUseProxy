@@ -52,3 +52,11 @@ input { accent-color: #afc4dc; }
   .source details { max-width: 100%; }
   footer { padding: 18px 20px; }
 }
+
+.filters { display: flex; flex-wrap: wrap; gap: 16px 24px; padding: 20px 28px 8px; align-items: end; }
+.filters label { display: grid; gap: 8px; font-size: 16px; min-width: 0; max-width: 100%; }
+.filters select { background: #23262b; color: inherit; border: 1px solid #60656d; font: inherit; padding: 8px; width: 340px; max-width: 100%; }
+.filters .blocked-filter { display: block; padding: 8px 0; }
+.scope-note { margin: 8px 28px 20px; color: #b8bdc5; font-size: 15px; }
+.call .context { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; font-size: 14px; color: #b8bdc5; }
+select:focus-visible { outline: 2px solid #bdcbdc; outline-offset: 3px; }

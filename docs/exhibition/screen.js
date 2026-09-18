@@ -3,6 +3,9 @@ const $ = (id) => document.getElementById(id);
 let selected = null;
 let listJSON = '';
 let detailJSON = '';
+let refreshVersion = 0;
+let refreshTimer;
+let knownScopes = [];
 function node(tag, text, className) {
   const el = document.createElement(tag);
   if (text !== undefined) el.textContent = text;
@@ -50,19 +53,74 @@ function choose(call) {
   detailJSON = '';
   listJSON = '';
 }
+function scopeLabel(value) { return value === null ? '未記録' : value || '（空のID）'; }
+function updateOptions(id, choices, allLabel) {
+  const select = $(id);
+  const value = select.value;
+  if (value && !choices.some(([key]) => key === value)) {
+    choices.push([value, select.selectedOptions[0].textContent]);
+  }
+  const signature = JSON.stringify(choices);
+  if (select.dataset.options === signature) return;
+  select.dataset.options = signature;
+  select.replaceChildren(new Option(allLabel, ''), ...choices.map(([key, label]) => new Option(label, key)));
+  select.value = value;
+}
+function renderScopes() {
+  const projects = [...new Map(knownScopes.map(scope => [JSON.stringify(scope.workspace_id), scopeLabel(scope.workspace_id)])).entries()];
+  updateOptions('workspace', projects, 'すべてのプロジェクト');
+  const workspace = $('workspace').value;
+  const sessions = knownScopes.filter(scope => !workspace || JSON.stringify(scope.workspace_id) === workspace)
+    .map(scope => [JSON.stringify([scope.workspace_id, scope.session_id]),
+      `${scopeLabel(scope.session_id)}${workspace ? '' : ' · ' + scopeLabel(scope.workspace_id)}`]);
+  updateOptions('session', sessions, 'すべてのセッション');
+}
+function eventQuery() {
+  const params = new URLSearchParams();
+  if ($('workspace').value) params.set('workspace', $('workspace').value);
+  if ($('session').value) {
+    const [workspace, session] = JSON.parse($('session').value);
+    params.set('workspace', JSON.stringify(workspace));
+    params.set('session', JSON.stringify(session));
+  }
+  if ($('blocked-only').checked) params.set('blocked', '1');
+  return params.toString();
+}
+function clearDetail() {
+  choose(null);
+  $('title').textContent = '呼び出しを選択';
+  $('identity').textContent = '';
+  $('decisions').replaceChildren();
+  $('io').replaceChildren(node('p', '条件に一致する呼び出しを待っています。', 'empty'));
+}
+function filtersChanged(projectChanged = false) {
+  if (projectChanged) $('session').value = '';
+  renderScopes();
+  clearDetail();
+  renderCalls([]);
+  clearTimeout(refreshTimer);
+  refresh();
+}
+$('workspace').onchange = () => filtersChanged(true);
+$('session').onchange = () => filtersChanged();
+$('blocked-only').onchange = () => filtersChanged();
+document.querySelector('.filters').onsubmit = event => event.preventDefault();
 function renderCalls(calls) {
   const signature = JSON.stringify([calls, selected?.event_id]);
   if (signature === listJSON) return;
   listJSON = signature;
   $('calls').replaceChildren();
   $('count').textContent = calls.length;
-  if (!calls.length) $('calls').append(node('p', 'まだToolCallの記録がありません。', 'empty'));
+  if (!calls.length) $('calls').append(node('p', 'この条件に一致する呼び出しはありません。', 'empty'));
   for (const call of calls) {
     const button = node('button', undefined, 'call');
     button.classList.toggle('selected', call.event_id === selected?.event_id);
     button.setAttribute('aria-pressed', String(call.event_id === selected?.event_id));
     button.append(node('strong', call.tool_name), node('time', timeLabel(call.recorded_at)),
       node('span', phaseLabel(call), call.blocked ? 'badge badge-blocked' : 'badge'));
+    const context = node('span', `${scopeLabel(call.workspace_id)} · ${scopeLabel(call.session_id)}`, 'context');
+    context.title = context.textContent;
+    button.append(context);
     button.onclick = () => { $('follow').checked = false; choose(call); renderCalls(calls); loadDetail(); };
     $('calls').append(button);
   }
@@ -72,7 +130,7 @@ function renderDetail(data) {
   if (signature === detailJSON) return;
   detailJSON = signature;
   $('title').textContent = selected.tool_name;
-  $('identity').textContent = `${timeLabel(selected.recorded_at)} · ${phaseLabel(selected)}`;
+  $('identity').textContent = `${timeLabel(selected.recorded_at)} · ${phaseLabel(selected)} · プロジェクト: ${scopeLabel(selected.workspace_id)} · セッション: ${scopeLabel(selected.session_id)}`;
   $('decisions').replaceChildren();
   if (!data.decisions.length) $('decisions').append(node('p', '判定は未記録です。許可・成功を意味するものではありません。', 'hint'));
   for (const d of data.decisions) {
@@ -116,23 +174,31 @@ async function loadDetail() {
   }
 }
 async function refresh() {
+  const version = ++refreshVersion;
   try {
-    const data = await get('api/events');
+    const [scopes, data] = await Promise.all([get('api/scopes'), get('api/events?' + eventQuery())]);
+    if (version !== refreshVersion) return;
+    knownScopes = scopes.scopes;
+    renderScopes();
+    $('scope-note').textContent = '選択した条件に一致する最新300イベントを表示します。' + (scopes.truncated ? ' セッション候補は最新1000組までです。' : '');
     $('database').textContent = data.database;
     if (data.calls.length && (!selected || ($('follow').checked && selected.event_id !== data.calls[0].event_id))) choose(data.calls[0]);
     if (selected) selected = data.calls.find(call => callKey(call) === callKey(selected)) || selected;
+    if (!data.calls.length) clearDetail();
     renderCalls(data.calls);
     const current = selected;
     if (current) {
       const detail = await get(`api/detail?id=${encodeURIComponent(current.event_id)}`);
-      if (selected === current) renderDetail(detail);
+      if (version === refreshVersion && selected === current) renderDetail(detail);
     }
+    if (version !== refreshVersion) return;
     $('connection').textContent = '● 接続中 · 自動更新';
     $('connection').className = 'online';
     $('updated').textContent = `最終確認 ${new Date().toLocaleTimeString('ja-JP')}`;
   } catch (error) {
+    if (version !== refreshVersion) return;
     $('connection').textContent = `再接続待ち · ${error.message}`;
     $('connection').className = 'offline';
-  } finally { setTimeout(refresh, 1000); }
+  } finally { if (version === refreshVersion) refreshTimer = setTimeout(refresh, 1000); }
 }
 refresh();

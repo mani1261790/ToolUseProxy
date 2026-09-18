@@ -30,34 +30,71 @@ class LogReader:
         conn.set_progress_handler(lambda: int(monotonic() > deadline), 10000)
         return conn
 
-    def snapshot(self):
+    def scopes(self):
+        with closing(self.connect()) as conn:
+            rows = conn.execute(
+                "SELECT workspace_id, session_id, MAX(sequence_no) AS latest "
+                "FROM events GROUP BY workspace_id, session_id ORDER BY latest DESC LIMIT 1001"
+            ).fetchall()
+        return {"scopes": [dict(row) for row in rows[:1000]], "truncated": len(rows) > 1000}
+
+    def snapshot(self, *, workspace=(), session=(), blocked_only=False):
+        # Empty tuple means all; None deliberately selects unrecorded identity.
+        clauses, params = [], []
+        for column, value in (("workspace_id", workspace), ("session_id", session)):
+            if value != ():
+                if value is not None and (type(value) is not str or len(value) > 4096):
+                    raise ValueError("invalid_scope")
+                clauses.append(f"e.{column} IS ?")
+                params.append(value)
         with closing(self.connect()) as conn:
             conn.execute("BEGIN")
-            rows = conn.execute(
-                f"SELECT {COLUMNS} FROM events ORDER BY rowid DESC LIMIT 300"
-            ).fetchall()
             tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master")}
-            blocked = set()
-            if rows and {"policy_decisions", "sink_candidates"} <= tables:
-                placeholders = ",".join("?" for _ in rows)
-                blocked = {row[0] for row in conn.execute(
-                    "SELECT json_extract(s.metadata_json,'$.event_id') "
-                    "FROM sink_candidates s JOIN policy_decisions p ON p.sink_node_id=s.node_id "
-                    f"WHERE s.sequence_no IN ({placeholders}) AND p.action='block' "
-                    "AND json_valid(s.metadata_json)",
-                    [row["sequence_no"] for row in rows],
-                )}
+            cte = ""
+            blocked = "0"
+            if {"policy_decisions", "sink_candidates"} <= tables:
+                cte = (
+                    "WITH blocked_events AS (SELECT DISTINCT b.event_id,b.workspace_id,"
+                    "b.session_id,b.tool_use_id FROM policy_decisions p "
+                    "JOIN sink_candidates s ON p.sink_node_id=s.node_id "
+                    "JOIN events b ON b.event_id=json_extract("
+                    "CASE WHEN json_valid(s.metadata_json) THEN s.metadata_json ELSE '{}' END,"
+                    "'$.event_id') AND b.sequence_no=s.sequence_no WHERE p.action='block') "
+                )
+                blocked = (
+                    "EXISTS (SELECT 1 FROM blocked_events b WHERE b.event_id=e.event_id OR "
+                    "(e.session_id IS NOT NULL AND e.session_id!='' AND "
+                    "e.tool_use_id IS NOT NULL AND e.tool_use_id!='' AND "
+                    "b.workspace_id IS e.workspace_id AND b.session_id=e.session_id "
+                    "AND b.tool_use_id=e.tool_use_id))"
+                )
+            if blocked_only:
+                if cte:
+                    clauses.append(
+                        "e.event_id IN (SELECT event_id FROM blocked_events UNION "
+                        "SELECT related.event_id FROM blocked_events b JOIN events related "
+                        "ON related.tool_use_id=b.tool_use_id AND related.workspace_id IS b.workspace_id "
+                        "AND related.session_id=b.session_id "
+                        "WHERE b.session_id!='' AND b.tool_use_id!='')"
+                    )
+                    blocked = "1"
+                else:
+                    clauses.append("0")
+            clauses.append("e.tool_name IS NOT NULL AND e.tool_name!=''")
+            rows = conn.execute(
+                cte + f"SELECT {','.join('e.' + c.strip() for c in COLUMNS.split(','))}, "
+                f"{blocked} AS is_blocked FROM events e WHERE {' AND '.join(clauses)} "
+                "ORDER BY e.rowid DESC LIMIT 300", params,
+            ).fetchall()
         calls = {}
         for row in rows:
             event = dict(row)
-            if not event["tool_name"]:
-                continue
+            is_blocked = bool(event.pop("is_blocked"))
             key = (event["workspace_id"], event["session_id"],
                    (event["tool_use_id"] if event["session_id"] else None) or event["event_id"])
             if key not in calls:
-                calls[key] = event | {"phases": [], "blocked": False}
+                calls[key] = event | {"phases": [], "blocked": is_blocked}
             calls[key]["phases"].append(event["phase"])
-            calls[key]["blocked"] |= event["event_id"] in blocked
         return {"database": str(self.path), "calls": list(calls.values()), "window": 300}
 
     def detail(self, event_id):
@@ -121,10 +158,21 @@ def make_server(reader, port=0):
                 return
             route = path.path[len(prefix):]
             status = 200
-            if route in {"api/events", "api/detail"}:
+            if route in {"api/events", "api/detail", "api/scopes"}:
                 try:
-                    result = (reader.snapshot() if route == "api/events" else reader.detail(
-                        parse_qs(path.query).get("id", [""])[0]))
+                    query = parse_qs(path.query, keep_blank_values=True)
+                    if route == "api/scopes":
+                        result = reader.scopes()
+                    elif route == "api/events":
+                        filters = {}
+                        for name in ("workspace", "session"):
+                            if name in query:
+                                filters[name] = json.loads(query[name][0])
+                        result = reader.snapshot(**filters, blocked_only=query.get("blocked") == ["1"])
+                    else:
+                        result = reader.detail(query.get("id", [""])[0])
+                except (ValueError, TypeError):
+                    status, result = 400, {"error": "絞り込み条件が不正です。"}
                 except (sqlite3.Error, OSError):
                     status, result = 503, {"error": "DBに接続できません。保存先・権限・DBの状態を確認してください。"}
                 body = json.dumps(result, ensure_ascii=False).encode()
