@@ -8,7 +8,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 import math
 
-from hook_monitor.evaluation.flow_forecast.prefix import ForecastDataError
+from hook_monitor.evaluation.flow_forecast.prefix import ForecastDataError, identifier
 from .recording.contracts import Current, Request
 from .recording.worker import checked_result
 
@@ -18,6 +18,11 @@ class StopAssessment:
     existing_block: bool
     additional_stop: bool
     reason: str
+
+    def __post_init__(self):
+        if type(self.existing_block) is not bool or type(self.additional_stop) is not bool:
+            raise ForecastDataError('invalid_stop_flags')
+        identifier(self.reason)
 
     @property
     def stop(self):
