@@ -18,7 +18,9 @@ def plan(*, attempts_per_root: int, controls_per_batch: int, seconds_per_attempt
     if (type(seconds_per_attempt) not in (int, float)
             or not math.isfinite(seconds_per_attempt) or seconds_per_attempt <= 0):
         raise ValueError('seconds_per_attempt must be positive and finite')
-    time_capacity = math.floor(protocol['maximum_seconds_per_explicit_batch'] / seconds_per_attempt)
+    seconds_limit = protocol['maximum_seconds_per_explicit_batch']
+    time_capacity = (limit if seconds_per_attempt <= seconds_limit / limit
+                     else math.floor(seconds_limit / seconds_per_attempt))
     capacity = min(limit, time_capacity) - controls_per_batch
     if capacity < attempts_per_root:
         raise ValueError('one root plus controls does not fit the estimated batch budget')

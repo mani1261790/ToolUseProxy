@@ -32,3 +32,8 @@ def test_invalid_or_impossible_batch_is_rejected(overrides):
     args.update(overrides)
     with pytest.raises(ValueError):
         plan(**args)
+
+
+def test_tiny_finite_duration_does_not_overflow_capacity():
+    result = plan(attempts_per_root=4, controls_per_batch=3, seconds_per_attempt=1e-320)
+    assert result['roots_per_batch'] == 4
