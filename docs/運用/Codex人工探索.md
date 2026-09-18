@@ -87,3 +87,18 @@ F01の`search_import`でも`import-evidence.json`へgenerationを引き継ぎ、
 run/attempt/stepと予測データのprefix/branchを対応付ける。モデル入力へは混入させない。
 旧データはgeneration=null。採用提案の記録数と課金済み呼出回数を別々に出力し、
 終了応答や失敗呼出の費用が欠けることも明示する。
+
+### 全呼出の消費記録
+
+新規runでは採用planに加え`call_records`へ全model callを記録する。呼出数とreply上限を
+先に消費し、pending記録を同じcheckpointへ保存してからproviderを呼ぶ。応答があれば
+終了/拒否/重複/棄却の場合も閉じたproposalと取得できたgenerationを残し、失敗は閉じた
+error分類と経過時間を残す。採用されたplanと履歴は試験開始前に一緒に保存する。
+途中でプロセスが落ちればpendingのまま結果不明とし、自動で呼出を繰り返さない。
+
+summaryとF01 import auditのgeneration_costsは全呼出数、記録数、usageあり/なしの件数、
+既知トークンの合計、計測した呼出時間、その完全性を返す。失敗でusageが取得できない場合、
+0消費とはせずtoken_totals_complete=falseとする。旧runの履歴もplanから逆算しない。
+上記の「採用提案だけ」の費用制約は旧runの記録を指し、新規runは終了・棄却応答のusageも
+集計する。ただし未取得usageや単価は推測しない。provider_cost/pricing_sourceはnullで、
+provider請求や課金単価の証拠がなければ全料金を記録できたとは扱わない。
