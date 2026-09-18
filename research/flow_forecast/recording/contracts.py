@@ -42,6 +42,18 @@ class Binding:
 
 
 @dataclass(frozen=True)
+class Current:
+    """Fresh input and selected model version supplied by the source adapter."""
+    binding: Binding
+    model_digest: str
+
+    def __post_init__(self):
+        if type(self.binding) is not Binding:
+            raise ForecastDataError('invalid_current_recording_binding')
+        sha256(self.model_digest)
+
+
+@dataclass(frozen=True)
 class Request:
     binding: Binding
     prefix: Prefix
