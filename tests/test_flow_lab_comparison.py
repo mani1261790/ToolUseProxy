@@ -1,5 +1,7 @@
 from dataclasses import replace
 import uuid
+import hashlib
+import json
 
 import pytest
 
@@ -29,7 +31,10 @@ def result(actions=(Action("public", "plain"),), *, denied=True, cause="a" * 64,
             evidence_kind="exact", termination="blocked" if denied else "completed",
             expected_decision="allow" if action.source == "public" else "deny",
         ))
-    return ReplayResult(spec, actions, tuple(observations), (cause,) * len(actions), True, True, protected_enforcement=True)
+    trace = (("block", "critical", "external_http_request", "source_chunk", cause),) if cause else ()
+    fingerprint = hashlib.sha256(json.dumps(trace, separators=(",", ":")).encode()).hexdigest() if trace else None
+    return ReplayResult(spec, actions, tuple(observations), (fingerprint,) * len(actions), True, True,
+                        protected_enforcement=True, cause_traces=(trace,) * len(actions))
 
 
 def test_public_work_must_really_complete_to_prove_improvement():
@@ -109,3 +114,24 @@ def test_allowing_everything_is_not_an_improvement():
     after = result(denied=False, revision="new")
     assert compare_replays(before, replace(after, protected_enforcement=False))["status"] == "inconclusive"
     assert compare_replays(before, replace(after, protected_enforcement=None))["status"] == "inconclusive"
+
+
+def test_policy_revision_is_a_fixed_comparison_condition():
+    before = result()
+    after = result(denied=False, revision="new")
+    changed = replace(after, spec=replace(after.spec, policy_revision="changed"))
+    assert compare_replays(before, changed)["status"] == "not_comparable"
+
+
+def test_non_null_cause_requires_matching_trace():
+    with pytest.raises(LabError, match="invalid_replay_cause"):
+        replace(result(), cause_traces=())
+
+
+def test_exhaustive_rejection_at_budget_boundary_is_minimized():
+    before = result((Action("public", "plain"), Action("protected", "plain")))
+    target = failure_signatures(before)[0]
+    reduced = minimize(before, target, lambda actions: result(
+        actions, cause="a" * 64 if len(actions) == 2 else "c" * 64), max_replays=3)
+    assert reduced.actions == before.actions
+    assert reduced.replay_count == 3 and reduced.status == "minimized"

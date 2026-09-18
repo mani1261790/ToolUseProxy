@@ -187,3 +187,17 @@ def test_same_source_reuses_exact_image_and_changed_harness_is_rejected(tmp_path
     with pytest.raises(LabError, match='replay_campaign_mismatch'):
         with replay.ReplayCampaign(path):
             pass
+
+
+def test_cli_defaults_to_documented_time_budget(tmp_path, monkeypatch):
+    from hook_monitor.evaluation.flow_lab import replay_runner
+    path = tmp_path / "case.json"
+    path.write_text(json.dumps({"actions": [{"source": "public", "encoding": "plain"}]}))
+    limits = {}
+    def run(*args, **kwargs):
+        limits.update(kwargs)
+        return {"status": "fixture"}
+    monkeypatch.setattr(replay_runner, "run_workflow", run)
+    assert replay_runner.main(["--before", ".", "--after", ".", "--case", str(path),
+                               "--output-directory", str(tmp_path / "out")]) == 0
+    assert limits["seconds"] == 600
