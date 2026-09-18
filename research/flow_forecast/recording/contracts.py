@@ -13,6 +13,14 @@ from hook_monitor.evaluation.flow_forecast.prefix import (
 MAX_REQUEST_BYTES = 256 * 1024
 
 
+class RecordingSourceError(ForecastDataError):
+    def __init__(self, status):
+        if status not in {'input_unavailable', 'input_version_changed', 'model_missing', 'model_invalid'}:
+            raise ForecastDataError('invalid_source_status')
+        self.status = status
+        super().__init__(status)
+
+
 def sha256(value):
     if type(value) is not str or re.fullmatch('[a-f0-9]{64}', value) is None:
         raise ForecastDataError('invalid_recording_digest')

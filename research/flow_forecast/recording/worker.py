@@ -12,7 +12,7 @@ import time
 
 from hook_monitor.evaluation.flow_forecast.predictions import Forecast, Outcome, Route
 from hook_monitor.evaluation.flow_forecast.prefix import ForecastDataError, canonical
-from .contracts import Current, MAX_REQUEST_BYTES
+from .contracts import Current, MAX_REQUEST_BYTES, RecordingSourceError
 from .journal import Journal
 from ..model import ALGORITHM
 
@@ -96,6 +96,8 @@ def run_one(journal: Journal, workspace: str, model_path: Path, *, read_current,
                 fresh = request.validity(after.binding, after.model_digest, clock())
                 if fresh != 'current':
                     status, result = fresh, None
+    except RecordingSourceError as exc:
+        status, result = exc.status, None
     except sqlite3.Error:
         status, result = 'input_database_failure', None
     except Exception:

@@ -20,7 +20,7 @@ MAX_RESULT_BYTES = 256 * 1024
 TERMINAL = frozenset({'recorded', 'expired', 'input_version_changed', 'model_version_changed',
                       'different_workspace', 'different_session', 'clock_reversed', 'project_generation_changed',
                       'disabled', 'model_missing', 'model_invalid', 'timeout', 'worker_failed',
-                      'out_of_domain', 'interrupted', 'input_database_failure'})
+                      'out_of_domain', 'interrupted', 'input_database_failure', 'input_unavailable'})
 
 
 def clock_value(now):
