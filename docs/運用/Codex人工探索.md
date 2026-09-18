@@ -82,3 +82,8 @@ run全体の計測を併用し、トークン単価や失敗時消費を推測�
 
 変更後の実装revisionは旧途中runの継続を拒否する。旧完了runの閲覧は維持する。
 本機能のテストは人工CLIと人工transportで行い、実モデルでの一般化受入とは分ける。
+
+F01の`search_import`でも`import-evidence.json`へgenerationを引き継ぎ、
+run/attempt/stepと予測データのprefix/branchを対応付ける。モデル入力へは混入させない。
+旧データはgeneration=null。採用提案の記録数と課金済み呼出回数を別々に出力し、
+終了応答や失敗呼出の費用が欠けることも明示する。
