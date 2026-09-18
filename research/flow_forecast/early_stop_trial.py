@@ -5,16 +5,39 @@ existing detector's decision separately from an experimental additional stop.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, fields
 import hashlib
+import json
+from pathlib import Path
 import time
 import uuid
 
 from hook_monitor.evaluation.flow_forecast.prefix import ForecastDataError, digest, identifier
-from hook_monitor.evaluation.flow_lab.models import Observation, utc_now
+from hook_monitor.evaluation.flow_lab.models import Observation, utc_now, from_mapping, identifier as trial_identifier
 from hook_monitor.evaluation.flow_lab.preflight import LabError
 from .early_stop import StopAssessment
 from .recording.contracts import sha256
+
+
+@dataclass(frozen=True)
+class ReceiverRecord:
+    kind: str
+    step_id: str
+    protected: bool
+    body_size: int
+
+    def __post_init__(self):
+        trial_identifier(self.step_id)
+        if (self.kind != 'received' or type(self.protected) is not bool
+                or type(self.body_size) is not int or not 0 <= self.body_size <= 65536):
+            raise ForecastDataError('invalid_receiver_record')
+
+
+def receipt_fingerprint(records, observation):
+    return digest({'records': [asdict(r) for r in records],
+                   'receiver_arrival': observation.receiver_arrival,
+                   'protected_arrival': observation.protected_arrival,
+                   'observer_state': observation.observer_state})
 
 
 @dataclass(frozen=True)
@@ -27,7 +50,7 @@ class TrialResult:
     assessment: StopAssessment
     command_digest: str
     receipt_digest: str
-
+    receiver_records: tuple[ReceiverRecord, ...]
 
     def __post_init__(self):
         identifier(self.case_id)
@@ -35,8 +58,23 @@ class TrialResult:
                 or self.variant not in {'baseline', 'forecast'} or type(self.observation) is not Observation
                 or type(self.assessment) is not StopAssessment):
             raise ForecastDataError('invalid_early_stop_result')
+        if (self.observation.policy_mode != 'enforce' or self.observation.decision not in {'allow', 'deny'}
+                or self.assessment.existing_block != (self.observation.decision == 'deny')
+                or self.variant == 'baseline' and self.assessment.additional_stop):
+            raise ForecastDataError('trial_decision_mismatch')
         sha256(self.command_digest)
         sha256(self.receipt_digest)
+        records = self.receiver_records
+        if (type(records) is not tuple or len(records) > 1 or any(type(r) is not ReceiverRecord for r in records)
+                or any(r.step_id != self.observation.step_id for r in records)):
+            raise ForecastDataError('receiver_identity_mismatch')
+        if self.observation.receiver_arrival == 'yes':
+            if len(records) != 1 or self.observation.protected_arrival != ('yes' if records[0].protected else 'no'):
+                raise ForecastDataError('receiver_observation_mismatch')
+        elif self.observation.receiver_arrival == 'no' and records:
+            raise ForecastDataError('receiver_observation_mismatch')
+        if receipt_fingerprint(records, self.observation) != self.receipt_digest:
+            raise ForecastDataError('receiver_digest_mismatch')
 
 
 def run_trial(transport, store, spec, *, case_id, source, encoding='plain', variant='baseline', gate=None, deadline=None):
@@ -77,7 +115,7 @@ def run_trial(transport, store, spec, *, case_id, source, encoding='plain', vari
     should_run = not (existing or assessment.additional_stop)
     succeeded = transport.send(command) if should_run else False
     received, protected = transport.delivery(step_id)
-    records = tuple(r for r in transport.records() if r.get('step_id') == step_id)
+    records = tuple(ReceiverRecord(**r) for r in transport.records() if r.get('step_id') == step_id)
     complete = received != 'unknown' and protected != 'unknown'
     observation = Observation(
         spec.run_id, attempt_id, step_id, step_id, 1, utc_now(), 'shell', 'enforce',
@@ -88,9 +126,10 @@ def run_trial(transport, store, spec, *, case_id, source, encoding='plain', vari
         'blocked' if not should_run else ('completed' if succeeded else 'infrastructure_error'),
         'http_inline' if encoding == 'plain' else 'http_encoded', 'allow' if source == 'public' else 'deny',
     )
+    result = TrialResult(case_id, variant, source, encoding, observation, assessment,
+                         hashlib.sha256(command.encode()).hexdigest(), receipt_fingerprint(records, observation), records)
     store.append(spec, observation)
-    return TrialResult(case_id, variant, source, encoding, observation, assessment,
-                       hashlib.sha256(command.encode()).hexdigest(), digest(records))
+    return result
 
 
 def compare_trials(rows: tuple[TrialResult, ...]):
@@ -128,3 +167,39 @@ def compare_trials(rows: tuple[TrialResult, ...]):
             'product_activation_authorized': False,
             'adoption': 'not_assessed_do_not_adopt',
             'limitations': ['fixed_artificial_cases', 'native_hook_not_tested', 'independent_holdout_unproven']}
+
+
+def read_results(path: Path) -> tuple[TrialResult, ...]:
+    """Reconstruct and validate saved structural evidence without Docker or sends."""
+    if path.is_symlink() or not path.is_file():
+        raise ForecastDataError('invalid_trial_results_file')
+    with path.open('rb') as stream:
+        raw = stream.read(16 * 1024 * 1024 + 1)
+    if len(raw) > 16 * 1024 * 1024:
+        raise ForecastDataError('trial_results_size_limit')
+    lines = raw.splitlines()
+    if not 1 <= len(lines) <= 20:
+        raise ForecastDataError('trial_results_count_limit')
+    def unique(pairs):
+        value = {}
+        for key, item in pairs:
+            if key in value:
+                raise ForecastDataError('duplicate_trial_result_field')
+            value[key] = item
+        return value
+    results = []
+    try:
+        for line in lines:
+            value = json.loads(line, object_pairs_hook=unique)
+            if type(value) is not dict or set(value) != {f.name for f in fields(TrialResult)}:
+                raise ForecastDataError('invalid_trial_result_schema')
+            if type(value['receiver_records']) is not list:
+                raise ForecastDataError('invalid_receiver_record_array')
+            results.append(TrialResult(**(value | {
+                'observation': from_mapping(Observation, value['observation']),
+                'assessment': StopAssessment(**value['assessment']),
+                'receiver_records': tuple(ReceiverRecord(**r) for r in value['receiver_records']),
+            })))
+    except (ValueError, TypeError, KeyError, RecursionError, UnicodeError):
+        raise ForecastDataError('invalid_saved_trial_evidence') from None
+    return tuple(results)

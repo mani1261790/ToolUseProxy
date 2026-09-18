@@ -18,7 +18,7 @@ class Transport(FakeTransport):
         return 'allow'
 
     def records(self):
-        return [{'step_id': self.step_id, 'protected': self.source == 'protected'}] if self.sent else []
+        return [{'kind': 'received', 'step_id': self.step_id, 'protected': self.source == 'protected', 'body_size': 20}] if self.sent and not self.down else []
 
 
 def test_pair_measures_completion_cost_and_receiver_reduction(tmp_path):
@@ -95,3 +95,37 @@ def test_explicit_trial_budget_is_not_extended(tmp_path):
         with pytest.raises(LabError, match='budget_exhausted'):
             run_trial(transport, store, run, case_id='case', source='public', variant='forecast')
         assert store.trial_count() == 1
+
+
+def test_saved_receiver_evidence_can_be_reaudited_and_tampering_is_rejected(tmp_path):
+    from dataclasses import asdict
+    import json
+    from hook_monitor.evaluation.flow_forecast.prefix import canonical
+    from research.flow_forecast.early_stop_trial import read_results
+    transport, run = Transport(), spec()
+    with TrialStore(tmp_path / 'lab') as store:
+        store.start(run)
+        rows = tuple(run_trial(transport, store, run, case_id='case', source='public', variant=variant)
+                     for variant in ('baseline', 'forecast'))
+    path = tmp_path / 'results.jsonl'
+    path.write_text(''.join(canonical(asdict(r)) + '\n' for r in rows))
+    restored = read_results(path)
+    assert restored == rows
+    assert compare_trials(restored) == compare_trials(rows)
+    assert restored[0].receiver_records[0].body_size == 20
+    record = json.loads(path.read_text().splitlines()[0])
+    record['receiver_records'][0]['protected'] = True
+    path.write_text(json.dumps(record) + '\n')
+    with pytest.raises(ForecastDataError, match='invalid_saved_trial_evidence'):
+        read_results(path)
+
+
+def test_absence_requires_preserved_observer_state_and_digest(tmp_path):
+    transport, run = Transport(), spec()
+    transport.down = True
+    with TrialStore(tmp_path / 'lab') as store:
+        store.start(run)
+        row = run_trial(transport, store, run, case_id='case', source='public')
+    assert row.receiver_records == () and row.observation.observer_state == 'failed'
+    with pytest.raises(ForecastDataError, match='receiver_digest_mismatch'):
+        replace(row, observation=replace(row.observation, observer_state='complete', receiver_arrival='no', protected_arrival='no'))

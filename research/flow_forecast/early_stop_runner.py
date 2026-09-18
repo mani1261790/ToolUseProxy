@@ -20,7 +20,7 @@ from hook_monitor.evaluation.flow_lab.storage import TrialStore
 from hook_monitor.evaluation.flow_lab.transport import CANARY
 from .artifacts import load_model
 from .early_stop import StopAssessment, assess
-from .early_stop_trial import compare_trials, run_trial
+from .early_stop_trial import compare_trials, run_trial, read_results
 from .recording.contracts import Binding, Current, Request
 from .recording.journal import Journal
 from .recording.worker import run_one
@@ -147,6 +147,10 @@ def run(repository: Path, output: Path, model: Path, *, threshold: float, second
                 'threshold_basis': 'explicit_engineering_test_only', 'trials': store.trial_count(),
                 'controls_passed': True, 'worker_diagnostics': diagnostics, 'spec': asdict(spec),
             }
+    restored = read_results(output / 'results.jsonl')
+    if restored != tuple(results) or compare_trials(restored) != compare_trials(tuple(results)):
+        raise ForecastDataError('saved_receiver_evidence_mismatch')
+    report['saved_receiver_evidence_verified'] = True
     journal.configure(workspace, enabled=False)
     (output / 'report.json').write_text(canonical(report) + '\n')
     return report
