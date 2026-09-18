@@ -114,6 +114,13 @@ class TrialStore:
             (spec.run_id, canonical(spec), spec.digest),
         )
 
+    def trial_count(self) -> int:
+        """Count all attempts, including unresolved reservations, in this lab only."""
+        return self._connection.execute(
+            "SELECT COUNT(*) FROM (SELECT run_id,attempt_id FROM lab_observation UNION "
+            "SELECT run_id,attempt_id FROM lab_pending)"
+        ).fetchone()[0]
+
     def require_no_unfinished_runs(self) -> None:
         if self._connection.execute(
             "SELECT 1 FROM lab_run WHERE state='running' LIMIT 1"

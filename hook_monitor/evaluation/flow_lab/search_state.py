@@ -21,7 +21,7 @@ class SearchJournal:
         if any(p.is_symlink() for p in (self.directory, *self.directory.parents)):
             raise LabError("unsafe_search_storage")
         self.directory.mkdir(mode=0o700, exist_ok=True)
-        allowed = {"search.sqlite3", "search.sqlite3-journal", "controller.lock", "trials"}
+        allowed = {"search.sqlite3", "search.sqlite3-journal", "controller.lock", "launch.lock", "trials", "controls"}
         if any(p.name not in allowed or p.is_symlink() for p in self.directory.iterdir()):
             raise LabError("unrelated_search_storage")
         self.database = self.directory / "search.sqlite3"
@@ -50,8 +50,10 @@ class SearchJournal:
         self.db.close()
 
     @contextmanager
-    def lease(self):
-        path = self.directory / "controller.lock"
+    def lease(self, name="controller.lock"):
+        if name not in {"controller.lock", "launch.lock"}:
+            raise LabError("invalid_search_lock")
+        path = self.directory / name
         fd = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
         try:
             if os.fstat(fd).st_nlink != 1:
@@ -86,7 +88,7 @@ class SearchJournal:
 
     def storage_size(self) -> int:
         total = 0
-        for directory in (self.directory, self.directory / "trials"):
+        for directory in (self.directory, self.directory / "trials", self.directory / "controls"):
             if not directory.exists():
                 continue
             if directory.is_symlink():

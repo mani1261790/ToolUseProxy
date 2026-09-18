@@ -13,15 +13,15 @@ class Budget:
     steps: int = 10
     seconds: int = 1800
     model_calls: int = 20
-    tokens_per_call: int = 4096
-    model_tokens: int = 81920
+    reply_bytes: int = 16384
+    total_reply_bytes: int = 327680
     storage_bytes: int = 1024 * 1024 * 1024
 
     def __post_init__(self):
         for value, maximum in (
             (self.trials, 20), (self.steps, 10), (self.seconds, 1800),
-            (self.model_calls, 20), (self.tokens_per_call, 4096),
-            (self.model_tokens, 81920), (self.storage_bytes, 1024 * 1024 * 1024),
+            (self.model_calls, 20), (self.reply_bytes, 16384),
+            (self.total_reply_bytes, 327680), (self.storage_bytes, 1024 * 1024 * 1024),
         ):
             if type(value) is not int or not 1 <= value <= maximum:
                 raise LabError("invalid_search_budget")
@@ -31,7 +31,7 @@ class Budget:
             raise LabError("search_clock_invalid")
         return max(0, self.seconds - (now - started))
 
-    def model_allowance(self, calls: int) -> int:
+    def reply_allowance(self, calls: int) -> int:
         if calls >= self.model_calls:
             return 0
-        return min(self.tokens_per_call, max(0, self.model_tokens - calls * self.tokens_per_call))
+        return min(self.reply_bytes, max(0, self.total_reply_bytes - calls * self.reply_bytes))

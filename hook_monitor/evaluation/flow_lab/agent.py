@@ -64,10 +64,10 @@ class Proposal:
 class ProposalProvider(Protocol):
     """Only artificial task and closed observation fields cross this boundary.
 
-    Implementations must enforce timeout/token limits and provide no host tools.
+    Implementations must enforce timeout/response-size limits and provide no host tools.
     Authentication stays in the controller, never in the trial container.
     """
 
     model_id: str
 
-    def propose(self, feedback: list[dict], *, timeout: float, max_tokens: int) -> object: ...
+    def propose(self, feedback: list[dict], *, task_mode: str, timeout: float, max_bytes: int) -> object: ...

@@ -55,11 +55,14 @@ def execute_action(transport: FixedTransport, store: TrialStore, spec: RunSpec,
     return observation
 
 
-def feedback(store: TrialStore, spec: RunSpec) -> list[dict]:
-    return [{key: getattr(o, key) for key in (
+def feedback(store: TrialStore, spec: RunSpec, plans: list[dict]) -> list[dict]:
+    actions = {step: {**action, "attempt_no": index}
+               for index, plan in enumerate(plans, 1)
+               for step, action in zip(plan["steps"], plan["actions"])}
+    return [{**actions[o.step_id], **{key: getattr(o, key) for key in (
         "step_no", "decision", "receiver_arrival", "protected_arrival", "task_success",
         "observer_state", "scenario_family",
-    )} for o in store.read(spec)]
+    )}} for o in store.read(spec)]
 
 
 def validate_state(state: dict, budget: Budget) -> None:
@@ -100,12 +103,14 @@ def validate_state(state: dict, budget: Budget) -> None:
 
 def run_search(journal: SearchJournal, store: TrialStore, spec: RunSpec,
                transport: FixedTransport, provider: ProposalProvider, budget: Budget,
-               *, clock=time.time) -> dict:
+               *, clock=time.time, control_trials=0) -> dict:
     """Resume saved completed steps; never re-dispatch an unresolved reservation."""
     if spec.mode not in {"adaptive_search", "benign_task"}:
         raise LabError("search_mode_required")
     if spec.max_trials != budget.trials or spec.max_steps != budget.steps:
         raise LabError("search_budget_mismatch")
+    if type(control_trials) is not int or not 0 <= control_trials <= budget.trials:
+        raise LabError("invalid_search_budget")
     identity = {"spec": asdict(spec), "budget": asdict(budget), "model": provider.model_id}
     with journal.lease():
         state = journal.read()
@@ -151,21 +156,21 @@ def run_search(journal: SearchJournal, store: TrialStore, spec: RunSpec,
                         return stop("storage_budget_exhausted")
                     execute_action(transport, store, spec, Action(**action),
                                    plan["attempt"], step_id, number)
-            if len(state["plans"]) >= budget.trials:
+            if len(state["plans"]) + control_trials >= budget.trials:
                 return stop("trial_budget_exhausted")
             remaining = budget.remaining_seconds(state["started"], clock())
             if remaining <= 0:
                 return stop("time_budget_exhausted")
-            tokens = budget.model_allowance(state["calls"])
-            if tokens == 0:
+            reply_limit = budget.reply_allowance(state["calls"])
+            if reply_limit == 0:
                 return stop("model_budget_exhausted")
-            # Charge the maximum permitted output before asking, including failed calls.
+            # Charge one call and its full reply allowance before asking, including failed calls.
             state["calls"] += 1
             state["phase"] = "requesting"
             journal.write(state)
             try:
-                response = provider.propose(feedback(store, spec),
-                                            timeout=min(60, remaining), max_tokens=tokens)
+                response = provider.propose(feedback(store, spec, state["plans"]), task_mode=spec.mode,
+                                            timeout=min(60, remaining), max_bytes=reply_limit)
                 proposal = Proposal.parse(response)
             except LabError as exc:
                 state["phase"] = "ready"
