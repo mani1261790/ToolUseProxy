@@ -200,3 +200,15 @@ def test_corrupt_checkpoint_is_refused(context, key, value):
     with pytest.raises(LabError, match="invalid_search_state"):
         run(context, Provider([]))
     assert context[3].guards == 0
+
+
+def test_controls_consume_the_same_trial_budget(context):
+    result = run(context, Provider([proposal()]), control_trials=19)
+    assert result["status"] == "trial_budget_exhausted"
+    assert result["summary"]["attempt_count"] == 1
+
+
+def test_preflight_time_counts_toward_wallclock_limit(context):
+    result = run(context, Provider([]), started_at=100, clock=lambda: 2000)
+    assert result["status"] == "time_budget_exhausted"
+    assert context[0].read()["calls"] == 0

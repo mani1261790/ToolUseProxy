@@ -54,6 +54,22 @@ def command_line(executable: str, directory: Path, model: str) -> list[str]:
     return [*args, "-"]
 
 
+def error_reason(error: object) -> str:
+    # Provider diagnostics are classified locally; their text is never returned.
+    if isinstance(error, dict):
+        value = str(error.get("code", "")) + " " + str(error.get("message", ""))
+    elif isinstance(error, str):
+        value = error
+    else:
+        return "model_unavailable"
+    value = value.lower()
+    if any(code in value for code in ("insufficient_quota", "usage limit", "rate_limit", "quota")):
+        return "model_quota_exhausted"
+    if any(code in value for code in ("unauthorized", "authentication", "not logged in", "token expired")):
+        return "model_auth_required"
+    return "model_unavailable"
+
+
 def parse_events(data: bytes, max_bytes: int) -> object:
     messages = []
     completed = False
@@ -65,7 +81,7 @@ def parse_events(data: bytes, max_bytes: int) -> object:
             if event.get("type") == "turn.completed":
                 completed = True
             if event.get("type") in {"turn.failed", "error"}:
-                raise LabError("model_unavailable")
+                raise LabError(error_reason(event.get("error", event.get("message"))))
             if event.get("type") == "item.completed":
                 item = event["item"]
                 kind = item["type"]
@@ -142,9 +158,11 @@ class CodexProvider:
                         captured.extend(chunk)
                         if len(captured) > 1024 * 1024:
                             raise LabError("model_response_limit")
-                if process.wait(timeout=max(0.01, deadline - time.monotonic())):
+                exit_code = process.wait(timeout=max(0.01, deadline - time.monotonic()))
+                result = parse_events(bytes(captured), max_bytes)
+                if exit_code:
                     raise LabError("model_unavailable")
-                return parse_events(bytes(captured), max_bytes)
+                return result
             except subprocess.TimeoutExpired:
                 raise LabError("model_timeout") from None
             except OSError:

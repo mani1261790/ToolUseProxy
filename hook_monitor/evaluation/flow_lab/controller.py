@@ -103,7 +103,7 @@ def validate_state(state: dict, budget: Budget) -> None:
 
 def run_search(journal: SearchJournal, store: TrialStore, spec: RunSpec,
                transport: FixedTransport, provider: ProposalProvider, budget: Budget,
-               *, clock=time.time, control_trials=0) -> dict:
+               *, clock=time.time, control_trials=0, started_at=None) -> dict:
     """Resume saved completed steps; never re-dispatch an unresolved reservation."""
     if spec.mode not in {"adaptive_search", "benign_task"}:
         raise LabError("search_mode_required")
@@ -115,7 +115,7 @@ def run_search(journal: SearchJournal, store: TrialStore, spec: RunSpec,
     with journal.lease():
         state = journal.read()
         if state is None:
-            state = {"schema": 1, "identity": identity, "started": clock(), "calls": 0,
+            state = {"schema": 1, "identity": identity, "started": clock() if started_at is None else started_at, "calls": 0,
                      "plans": [], "phase": "ready", "status": "running"}
             store.start(spec)
             journal.write(state)

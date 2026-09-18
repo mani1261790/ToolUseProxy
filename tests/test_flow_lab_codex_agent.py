@@ -78,3 +78,13 @@ def test_large_cli_output_is_stopped(tmp_path):
         tmp_path, "print('x' * (2 * 1024 * 1024))"))
     with pytest.raises(LabError, match="model_response_limit"):
         provider.propose([], task_mode="adaptive_search", timeout=2, max_bytes=16384)
+
+
+@pytest.mark.parametrize("diagnostic,reason", [
+    ({"code": "insufficient_quota", "message": "PRIVATE"}, "model_quota_exhausted"),
+    ({"message": "Authentication failed: PRIVATE"}, "model_auth_required"),
+    ({"message": "PRIVATE"}, "model_unavailable"),
+])
+def test_provider_error_is_classified_without_printing_diagnostic(diagnostic, reason):
+    with pytest.raises(LabError, match="^" + reason + "$"):
+        parse_events(json.dumps({"type": "turn.failed", "error": diagnostic}).encode(), 16384)
