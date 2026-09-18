@@ -114,6 +114,23 @@ class TrialStore:
             (spec.run_id, canonical(spec), spec.digest),
         )
 
+    def require_no_unfinished_runs(self) -> None:
+        if self._connection.execute(
+            "SELECT 1 FROM lab_run WHERE state='running' LIMIT 1"
+        ).fetchone():
+            raise StoreError("unfinished_run_requires_reconciliation")
+
+    def start_fixed_suite(self, spec: RunSpec) -> None:
+        # Serialize concurrent invocations before either can dispatch a trial.
+        self._connection.execute("BEGIN IMMEDIATE")
+        try:
+            self.require_no_unfinished_runs()
+            self.start(spec)
+            self._connection.execute("COMMIT")
+        except Exception:
+            self._connection.execute("ROLLBACK")
+            raise
+
     def append(self, spec: RunSpec, observation: Observation) -> int:
         if observation.run_id != spec.run_id:
             raise StoreError("run_identity_mismatch")
@@ -136,6 +153,14 @@ class TrialStore:
                 return duplicate[0]
             if row[1] != "running":
                 raise StoreError("run_already_finished")
+            reserved_identity = self._connection.execute(
+                "SELECT run_id,attempt_id,tool_use_id,step_no FROM lab_pending WHERE step_id=?",
+                (observation.step_id,),
+            ).fetchone()
+            identity = (spec.run_id, observation.attempt_id,
+                        observation.tool_use_id, observation.step_no)
+            if reserved_identity and reserved_identity != identity:
+                raise StoreError("reservation_conflict")
             pending = self._connection.execute(
                 "SELECT step_id,tool_use_id,step_no FROM lab_pending "
                 "WHERE run_id=? AND attempt_id=?", (spec.run_id, observation.attempt_id),
@@ -171,7 +196,8 @@ class TrialStore:
                  observation.tool_use_id, observation.step_no, serialized),
             )
             self._connection.execute(
-                "DELETE FROM lab_pending WHERE step_id=?", (observation.step_id,)
+                "DELETE FROM lab_pending WHERE step_id=? AND run_id=? AND attempt_id=? "
+                "AND tool_use_id=? AND step_no=?", (observation.step_id, *identity)
             )
             self._connection.execute("COMMIT")
             return cursor.lastrowid
