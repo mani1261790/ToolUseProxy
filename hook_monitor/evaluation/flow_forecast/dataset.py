@@ -68,6 +68,7 @@ class Dataset:
 
     def summary(self):
         labels = Counter()
+        conditions = {(b.prefix.prefix_id, b.branch_id, b.policy_mode) for b in self.branches}
         unknown = Counter({kind: 0 for kind in UNKNOWN_RELATIONS})
         for branch in self.branches:
             for horizon in (1, 2, 4, 8):
@@ -86,9 +87,9 @@ class Dataset:
             'deferred_scope': ['semantic_origin', 'selection_influence', 'cross_task_state'],
             'sampling_counts': dict(Counter(b.sampling for b in self.branches)),
             'unpaired_adaptive_count': sum(
-                b.sampling == 'adaptive_search' and not any(
-                    c.prefix.prefix_id == b.prefix.prefix_id and c.branch_id == b.branch_id
-                    and c.policy_mode != b.policy_mode for c in self.branches)
+                b.sampling == 'adaptive_search' and
+                (b.prefix.prefix_id, b.branch_id, 'observe' if b.policy_mode == 'enforce' else 'enforce')
+                not in conditions
                 for b in self.branches),
         }
 
