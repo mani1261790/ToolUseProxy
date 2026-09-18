@@ -17,6 +17,7 @@ from .models import RecordError, RunSpec, from_mapping, utc_now
 from .preflight import LabError, build_context, build_image, check_isolation
 from .runner import SCENARIOS, run_scenario, validate_controls
 from .search_state import SearchJournal
+from .revision import implementation_revision
 from .storage import StoreError, TrialStore
 from .transport import FixedTransport
 from .adaptive_transport import AdaptiveTransport
@@ -26,7 +27,6 @@ def execute(repository: Path, output: Path, model: str, *, mode="adaptive_search
             budget: Budget | None = None) -> dict:
     started = time.time()
     budget = budget or Budget()
-    provider = CodexProvider(model)
     with SearchJournal(output) as journal, journal.lease("launch.lock"):
         saved = journal.read()
         with TrialStore(output / "trials") as store:
@@ -36,8 +36,10 @@ def execute(repository: Path, output: Path, model: str, *, mode="adaptive_search
                 except (KeyError, TypeError):
                     raise LabError("invalid_search_state") from None
                 validate_state(saved, budget)
-                if (saved["identity"] != {"spec": asdict(spec), "budget": asdict(budget),
-                                          "model": model} or spec.mode != mode):
+                identity = saved["identity"]
+                base_identity = {key: identity.get(key) for key in ("spec", "budget", "model")}
+                if (base_identity != {"spec": asdict(spec), "budget": asdict(budget),
+                                      "model": model} or spec.mode != mode):
                     raise LabError("search_revision_mismatch")
                 if store.pending(spec):
                     return {"status": "operation_requires_reconciliation"}
@@ -49,6 +51,11 @@ def execute(repository: Path, output: Path, model: str, *, mode="adaptive_search
                                      exhausted=saved["status"].endswith("budget_exhausted"))
                     return {"status": saved["status"], "summary": store.summary(spec),
                             "synthetic_only": True, "model": model}
+                if identity.get("agent_revision") != implementation_revision():
+                    raise LabError("search_revision_mismatch")
+            if journal.storage_size() >= budget.storage_bytes:
+                return {"status": "storage_budget_exhausted", "synthetic_only": True}
+            provider = CodexProvider(model)
             context = build_context(repository)
             revision = "source-" + hashlib.sha256(context).hexdigest()
             if saved and spec.detector_revision != revision:
@@ -59,7 +66,7 @@ def execute(repository: Path, output: Path, model: str, *, mode="adaptive_search
                 if spec.environment_digest != image[7:] or spec.mode != mode:
                     raise LabError("search_revision_mismatch")
             else:
-                spec = RunSpec(run_id=uuid.uuid4().hex, suite_version="adaptive-http-v1",
+                spec = RunSpec(run_id=uuid.uuid4().hex, suite_version="adaptive-http-v2",
                                detector_revision=revision, policy_revision="fixed-exact-externality-v1",
                                environment_digest=image[7:], started_at=utc_now(), mode=mode,
                                max_trials=budget.trials, max_steps=budget.steps)
@@ -96,6 +103,9 @@ def execute(repository: Path, output: Path, model: str, *, mode="adaptive_search
                         if budget.remaining_seconds(origin, time.time()) <= 0:
                             controls.finish(control_spec, utc_now(), exhausted=True)
                             raise LabError("time_budget_exhausted")
+                        if journal.storage_size() >= budget.storage_bytes:
+                            controls.finish(control_spec, utc_now(), exhausted=True)
+                            raise LabError("storage_budget_exhausted")
                         results.append(run_scenario(transport, controls, control_spec, scenario))
                     controls.finish(control_spec, utc_now())
                     return results

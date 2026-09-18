@@ -109,3 +109,29 @@ def test_controls_must_fit_total_budget_before_dispatch(lab, tmp_path):
     result = module.execute(tmp_path, folder, "synthetic-model", budget=replace(Budget(), trials=12))
     assert result["status"] == "trial_budget_exhausted"
     assert not calls and not instances
+
+
+def test_storage_budget_prevents_control_dispatch(lab, tmp_path):
+    folder, calls, _, instances = lab
+    result = module.execute(tmp_path, folder, "synthetic-model", budget=replace(Budget(), storage_bytes=1))
+    assert result["status"] == "storage_budget_exhausted"
+    assert not calls and not instances
+
+
+def test_completed_run_can_be_read_without_model_executable(lab, tmp_path, monkeypatch):
+    folder, _, _, _ = lab
+    module.execute(tmp_path, folder, "synthetic-model")
+    def missing(*args):
+        pytest.fail("completed run must not require a model process")
+    monkeypatch.setattr(module, "CodexProvider", missing)
+    assert module.execute(tmp_path, folder, "synthetic-model")["status"] == "completed"
+
+
+def test_unfinished_run_refuses_changed_search_implementation(lab, tmp_path, monkeypatch):
+    folder, calls, proposals, _ = lab
+    proposals[:] = [LabError("model_auth_required")]
+    module.execute(tmp_path, folder, "synthetic-model")
+    monkeypatch.setattr(module, "implementation_revision", lambda: "b" * 64)
+    with pytest.raises(LabError, match="search_revision_mismatch"):
+        module.execute(tmp_path, folder, "synthetic-model")
+    assert len(calls) == 1

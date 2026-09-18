@@ -14,6 +14,7 @@ from .budget import Budget
 from .models import Observation, RecordError, RunSpec, identifier, utc_now
 from .preflight import LabError
 from .search_state import SearchJournal
+from .revision import implementation_revision
 from .storage import TrialStore
 from .transport import FixedTransport
 
@@ -67,6 +68,8 @@ def feedback(store: TrialStore, spec: RunSpec, plans: list[dict]) -> list[dict]:
 
 def validate_state(state: dict, budget: Budget) -> None:
     try:
+        if type(state.get("schema")) is not int or state["schema"] != 1:
+            raise ValueError
         if set(state) != {"schema", "identity", "started", "calls", "plans", "phase", "status"}:
             raise ValueError
         if type(state["calls"]) is not int or not 0 <= state["calls"] <= budget.model_calls:
@@ -111,7 +114,8 @@ def run_search(journal: SearchJournal, store: TrialStore, spec: RunSpec,
         raise LabError("search_budget_mismatch")
     if type(control_trials) is not int or not 0 <= control_trials <= budget.trials:
         raise LabError("invalid_search_budget")
-    identity = {"spec": asdict(spec), "budget": asdict(budget), "model": provider.model_id}
+    identity = {"spec": asdict(spec), "budget": asdict(budget), "model": provider.model_id,
+                "agent_revision": implementation_revision()}
     with journal.lease():
         state = journal.read()
         if state is None:

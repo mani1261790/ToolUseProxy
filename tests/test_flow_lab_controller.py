@@ -212,3 +212,28 @@ def test_preflight_time_counts_toward_wallclock_limit(context):
     result = run(context, Provider([]), started_at=100, clock=lambda: 2000)
     assert result["status"] == "time_budget_exhausted"
     assert context[0].read()["calls"] == 0
+
+
+def test_model_refusal_is_recorded_without_trial(context):
+    result = run(context, Provider([{"status": "refused", "actions": []}]))
+    assert result["status"] == "model_refused"
+    assert result["summary"]["observation_count"] == 0
+    assert context[3].guards == 0
+
+
+def test_per_trial_step_limit_is_checked_before_dispatch(context):
+    budget = replace(context[-1], steps=1)
+    spec = replace(context[2], max_steps=1)
+    value = proposal()
+    value["actions"] *= 2
+    result = run((context[0], context[1], spec, context[3], budget), Provider([value]))
+    assert result["status"] == "invalid_model_proposal"
+    assert context[3].guards == 0
+
+
+def test_storage_limit_preserves_observations_and_stops_new_model_calls(context):
+    budget = replace(context[-1], storage_bytes=1)
+    result = run((*context[:-1], budget), Provider([]))
+    assert result["status"] == "storage_budget_exhausted"
+    assert context[0].read()["calls"] == 0
+    assert context[1].read(context[2]) == []
