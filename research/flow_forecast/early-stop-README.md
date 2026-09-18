@@ -57,7 +57,7 @@ python3 -m research.flow_forecast.early_stop_audit --results PATH/output/results
 
 この監査CLIはDockerや送信処理を起動しません。旧v1/v2のdigestだけの記録は受け付けません。
 
-現行の受信証拠付き確認は `/private/tmp/tooluseproxy-138-comparison-v3`。
+受信証拠の保存を追加した時点の確認は `/private/tmp/tooluseproxy-138-comparison-v3`。
 閾値0.5で11試行、正常完了2/2→2/2、保護到達0/2→0/2、追加停止0、矛盾0です。
 保存済み8行からの再集計も成功しました。実装digestは
 `c8f2a494c34195c2ee4657925b6eaa57f625bfc73f0a8db51027e65878c1ee88`。
@@ -77,3 +77,10 @@ tooluseproxy・scriptsのPythonソース一式を対象とします。モデル�
 
 v3は旧方式の部分的な実装digestを使った結果です。新しい検査でも保存8行の再集計は成功していますが、
 完全なsource provenance付きの新しい実行証拠とは区別します。
+
+
+レビュー修正後の確認は `/private/tmp/tooluseproxy-138-comparison-v4`。
+閾値0.5、11試行、正常完了2/2→2/2、保護到達0/2→0/2、追加停止0、矛盾0。
+Docker終了後の再監査と、保存したsource provenanceと現在の実行コード一式の一致を確認しました。
+完全な実装digestは `5c685be03abaea4ebebf9a4a638d74185234543f6c8ec42b257eee16771605c1`。
+以前のv1〜v3を、この完全なprovenance方式の実行証拠としては扱いません。
