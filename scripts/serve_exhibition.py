@@ -32,10 +32,15 @@ class LogReader:
 
     def scopes(self):
         with closing(self.connect()) as conn:
-            rows = conn.execute(
+            tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master")}
+            query = (
                 "SELECT workspace_id, session_id, MAX(sequence_no) AS latest "
                 "FROM events GROUP BY workspace_id, session_id ORDER BY latest DESC LIMIT 1001"
-            ).fetchall()
+            )
+            if "workspaces" in tables:
+                query = ("SELECT g.*, w.canonical_root AS workspace_root FROM (" + query + ") g "
+                         "LEFT JOIN workspaces w ON w.workspace_id=g.workspace_id ORDER BY g.latest DESC")
+            rows = conn.execute(query).fetchall()
         return {"scopes": [dict(row) for row in rows[:1000]], "truncated": len(rows) > 1000}
 
     def snapshot(self, *, workspace=(), session=(), blocked_only=False):

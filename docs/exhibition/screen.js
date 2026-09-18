@@ -54,6 +54,10 @@ function choose(call) {
   listJSON = '';
 }
 function scopeLabel(value) { return value === null ? '未記録' : value || '（空のID）'; }
+function projectLabel(id) {
+  const root = knownScopes.find(scope => scope.workspace_id === id)?.workspace_root;
+  return root ? `${root.split('/').filter(Boolean).pop() || root} — ${root}` : scopeLabel(id);
+}
 function updateOptions(id, choices, allLabel) {
   const select = $(id);
   const value = select.value;
@@ -67,12 +71,12 @@ function updateOptions(id, choices, allLabel) {
   select.value = value;
 }
 function renderScopes() {
-  const projects = [...new Map(knownScopes.map(scope => [JSON.stringify(scope.workspace_id), scopeLabel(scope.workspace_id)])).entries()];
+  const projects = [...new Map(knownScopes.map(scope => [JSON.stringify(scope.workspace_id), projectLabel(scope.workspace_id)])).entries()];
   updateOptions('workspace', projects, 'すべてのプロジェクト');
   const workspace = $('workspace').value;
   const sessions = knownScopes.filter(scope => !workspace || JSON.stringify(scope.workspace_id) === workspace)
     .map(scope => [JSON.stringify([scope.workspace_id, scope.session_id]),
-      `${scopeLabel(scope.session_id)}${workspace ? '' : ' · ' + scopeLabel(scope.workspace_id)}`]);
+      `${scopeLabel(scope.session_id)}${workspace ? '' : ' · ' + projectLabel(scope.workspace_id)}`]);
   updateOptions('session', sessions, 'すべてのセッション');
 }
 function eventQuery() {
@@ -118,7 +122,7 @@ function renderCalls(calls) {
     button.setAttribute('aria-pressed', String(call.event_id === selected?.event_id));
     button.append(node('strong', call.tool_name), node('time', timeLabel(call.recorded_at)),
       node('span', phaseLabel(call), call.blocked ? 'badge badge-blocked' : 'badge'));
-    const context = node('span', `${scopeLabel(call.workspace_id)} · ${scopeLabel(call.session_id)}`, 'context');
+    const context = node('span', `${projectLabel(call.workspace_id)} · ${scopeLabel(call.session_id)}`, 'context');
     context.title = context.textContent;
     button.append(context);
     button.onclick = () => { $('follow').checked = false; choose(call); renderCalls(calls); loadDetail(); };
@@ -130,7 +134,7 @@ function renderDetail(data) {
   if (signature === detailJSON) return;
   detailJSON = signature;
   $('title').textContent = selected.tool_name;
-  $('identity').textContent = `${timeLabel(selected.recorded_at)} · ${phaseLabel(selected)} · プロジェクト: ${scopeLabel(selected.workspace_id)} · セッション: ${scopeLabel(selected.session_id)}`;
+  $('identity').textContent = `${timeLabel(selected.recorded_at)} · ${phaseLabel(selected)} · プロジェクト: ${projectLabel(selected.workspace_id)} · セッション: ${scopeLabel(selected.session_id)}`;
   $('decisions').replaceChildren();
   if (!data.decisions.length) $('decisions').append(node('p', '判定は未記録です。許可・成功を意味するものではありません。', 'hint'));
   for (const d of data.decisions) {
