@@ -34,6 +34,8 @@ python -m research.flow_forecast.task_catalog \
 
 INPUTS.jsonは`[{"directory":"人工artifactのディレクトリ","roots":{"root ID":"design ID"}}]`。
 出力はdataset、task-catalog.json、collection-evidence.json、origins内の設計元文書。
+全ファイル保存後にcollection.jsonを完成印として書く。read_collection()は完成印と
+各文書・データ・分割のdigestを再確認し、未完了や書換えられた成果物を拒否する。
 証跡には入力データ・catalog・出力データ・分割のdigestとroot/designの対応を残す。
 設計情報は予測器への入力には混ぜない。集約全体でも2,000分岐/32MiBの上限を維持する。
 既存出力は上書きせず、過去の凍結計画を新しい集合に流用しない。

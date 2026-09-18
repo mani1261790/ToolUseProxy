@@ -7,7 +7,7 @@ import pytest
 
 from hook_monitor.evaluation.flow_forecast.dataset import assemble, read_dataset, write_dataset
 from hook_monitor.evaluation.flow_forecast.prefix import ForecastDataError
-from research.flow_forecast.task_catalog import collect, design_groups, main, read_origins
+from research.flow_forecast.task_catalog import collect, design_groups, main, read_origins, read_collection
 from test_flow_forecast_dataset import branches
 
 
@@ -104,9 +104,16 @@ def test_cli_keeps_catalog_and_binding_evidence_with_new_dataset(tmp_path):
     assert evidence['split_sha'] == restored.split.digest
     assert evidence['bindings'][0]['root_case_id'] == 'one'
     assert json.loads((output / 'task-catalog.json').read_text()) == json.loads(cat.read_text())
+    assert read_collection(output)[0] == restored
     assert 'origin' not in restored.prefixes[0].model_input()
     with pytest.raises(FileExistsError):
         main(args)
+    (output / 'collection-evidence.json').write_text('{}')
+    with pytest.raises(ForecastDataError, match='document_mismatch'):
+        read_collection(output)
+    (output / 'collection.json').unlink()
+    with pytest.raises(ForecastDataError, match='incomplete_collection'):
+        read_collection(output)
 
 
 def test_unknown_fields_and_unhashable_input_fail_closed():

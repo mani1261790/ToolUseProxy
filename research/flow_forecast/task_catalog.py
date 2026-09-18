@@ -199,6 +199,40 @@ def _write_private(path, raw):
         os.fsync(stream.fileno())
 
 
+def read_collection(directory):
+    """Verify a complete local collection without certifying its research claims."""
+    if directory.is_symlink() or not directory.is_dir():
+        raise ForecastDataError('invalid_collection_directory')
+    if {p.name for p in directory.iterdir()} != {
+            'dataset', 'task-catalog.json', 'collection-evidence.json', 'origins', 'collection.json'}:
+        raise ForecastDataError('incomplete_collection')
+    seal = _json(_read(directory / 'collection.json'))
+    if (type(seal) is not dict or set(seal) != {
+            'schema', 'dataset_digest', 'catalog_sha', 'evidence_sha', 'origin_shas'}
+            or type(seal['schema']) is not int or seal['schema'] != 1):
+        raise ForecastDataError('invalid_collection_seal')
+    documents = {}
+    for name, field in (('task-catalog.json', 'catalog_sha'), ('collection-evidence.json', 'evidence_sha')):
+        raw = _read(directory / name)
+        if hashlib.sha256(raw).hexdigest() != seal[field]:
+            raise ForecastDataError('collection_document_mismatch')
+        documents[name] = _json(raw)
+    catalog, audit = documents['task-catalog.json'], documents['collection-evidence.json']
+    if type(audit) is not dict:
+        raise ForecastDataError('invalid_collection_evidence')
+    origins = read_origins(catalog, directory / 'origins')
+    if {p.name for p in (directory / 'origins').iterdir()} != {key + '.md' for key in origins}:
+        raise ForecastDataError('unknown_collection_origin')
+    data = read_dataset(directory / 'dataset')
+    manifest = _json(_read(directory / 'dataset' / 'manifest.json'))
+    if (manifest['dataset_digest'] != seal['dataset_digest'] or sorted(origins) != seal['origin_shas']
+            or audit.get('catalog_sha') != digest(catalog) or audit.get('dataset_sha') != digest(asdict(data))
+            or audit.get('split_sha') != data.split.digest
+            or audit.get('independence_verified') is not False or audit.get('prior_nonuse_verified') is not False):
+        raise ForecastDataError('collection_identity_mismatch')
+    return data, catalog, audit
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--catalog', required=True, type=Path)
@@ -230,12 +264,18 @@ def main(argv=None):
     audit['origin_artifacts_verified'] = True
     audit['origin_verification_scope'] = 'supplied_document_bytes_match_declared_sha256'
     args.output.mkdir(mode=0o700)
-    write_dataset(data, args.output / 'dataset')
+    dataset_identity = write_dataset(data, args.output / 'dataset')
     _write_private(args.output / 'collection-evidence.json', (canonical(audit) + '\n').encode())
     _write_private(args.output / 'task-catalog.json', (canonical(catalog) + '\n').encode())
     (args.output / 'origins').mkdir(mode=0o700)
     for identity, raw in origins.items():
         _write_private(args.output / 'origins' / (identity + '.md'), raw)
+    # Publish a completion seal only after all provenance artifacts exist.
+    seal = {'schema': 1, 'dataset_digest': dataset_identity,
+            'catalog_sha': hashlib.sha256(_read(args.output / 'task-catalog.json')).hexdigest(),
+            'evidence_sha': hashlib.sha256(_read(args.output / 'collection-evidence.json')).hexdigest(),
+            'origin_shas': sorted(origins)}
+    _write_private(args.output / 'collection.json', (canonical(seal) + '\n').encode())
 
 
 if __name__ == '__main__':
