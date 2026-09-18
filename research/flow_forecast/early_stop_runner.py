@@ -143,7 +143,7 @@ def run(repository: Path, output: Path, model: Path, *, threshold: float, second
             report = compare_trials(tuple(results)) | {
                 'status': 'completed', 'model_digest': selected_model.model_digest, 'threshold': threshold,
                 'implementation_digest': implementation, 'horizon': 4, 'forecast_policy_mode': 'enforce',
-                'independent_root_families': 2, 'paired_cases_are_not_independent_roots': True,
+                'declared_root_families': 2, 'paired_cases_are_not_independent_roots': True,
                 'threshold_basis': 'explicit_engineering_test_only', 'trials': store.trial_count(),
                 'controls_passed': True, 'worker_diagnostics': diagnostics, 'spec': asdict(spec),
             }
