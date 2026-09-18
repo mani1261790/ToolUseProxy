@@ -1,94 +1,91 @@
-"use strict";
-(() => {
-  const data = window.EXHIBITION_REPLAY;
-  const byId = id => document.getElementById(id);
-  if (!data || data.schema !== 1 || data.mode !== "synthetic_replay") {
-    byId("case-title").textContent = "再生データを読み込めませんでした。展示ファイル一式を確認してください。";
-    document.querySelectorAll("button, select").forEach(button => { button.disabled = true; });
-    return;
+'use strict';
+const $ = (id) => document.getElementById(id);
+let selected = null;
+let listJSON = '';
+let detailJSON = '';
+function node(tag, text, className) {
+  const el = document.createElement(tag);
+  if (text !== undefined) el.textContent = text;
+  if (className) el.className = className;
+  return el;
+}
+async function get(path) {
+  const response = await fetch(path, {cache: 'no-store'});
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || '接続できません');
+  return data;
+}
+function callKey(call) {
+  return JSON.stringify(call.session_id && call.tool_use_id ? [call.workspace_id, call.session_id, call.tool_use_id] : [call.event_id]);
+}
+function choose(call) {
+  selected = call;
+  detailJSON = '';
+  listJSON = '';
+}
+function renderCalls(calls) {
+  const signature = JSON.stringify([calls, selected?.event_id]);
+  if (signature === listJSON) return;
+  listJSON = signature;
+  $('calls').replaceChildren();
+  $('count').textContent = calls.length;
+  if (!calls.length) $('calls').append(node('p', 'まだToolCallの記録がありません。', 'empty'));
+  for (const call of calls) {
+    const button = node('button', undefined, 'call');
+    button.classList.toggle('selected', call.event_id === selected?.event_id);
+    button.setAttribute('aria-pressed', String(call.event_id === selected?.event_id));
+    button.append(node('strong', call.tool_name), node('time', call.recorded_at),
+      node('span', call.blocked ? '■ ブロック判定' : [...new Set(call.phases)].reverse().join(' → '), 'hint'));
+    button.onclick = () => { $('follow').checked = false; choose(call); renderCalls(calls); };
+    $('calls').append(button);
   }
-  let scenario = data.scenarios[0], position = -1, selection = 0, timer = null;
-  const buttons = [...document.querySelectorAll("[data-scenario]")];
-  const stop = () => { clearTimeout(timer); timer = null; byId("play").textContent = "▶ 再生する"; };
-  function announce(message) { byId("announcement").textContent = message; }
-  function render() {
-    byId("case-label").textContent = scenario.kind;
-    byId("case-title").textContent = scenario.title;
-    byId("source-name").textContent = scenario.source;
-    byId("progress-label").textContent = `${Math.max(0, position + 1)} / 4 工程`;
-    byId("gate-value").textContent = position >= 2 ? scenario.verdict : "待機中";
-    byId("gate-label").textContent = position >= 2 ? scenario.verdict : "判定前";
-    byId("verdict").textContent = position >= 2 ? scenario.verdict : "未再生";
-    byId("verdict").className = position >= 2 ? scenario.tone : "";
-    byId("verdict-caption").textContent = position >= 2 ? scenario.proof : "再生して送信前の判定を確認します。";
-    byId("receipt").textContent = "未観測";
-    byId("step").disabled = position === 3;
-    byId("play").textContent = timer ? "Ⅱ 一時停止" : position === 3 ? "↻ もう一度再生" : "▶ 再生する";
-    document.querySelectorAll("[data-node]").forEach(node => {
-      const index = Number(node.dataset.node);
-      node.classList.toggle("active", index <= position);
-      node.classList.toggle("stopped", index === 2 && position >= 2 && scenario.id === "protected");
-    });
-    document.querySelectorAll("[data-link]").forEach(link => {
-      const index = Number(link.dataset.link);
-      link.classList.toggle("active", index <= position && index !== 3);
-      link.classList.toggle("stopped", index === 2 && position >= 2 && scenario.id === "protected");
-    });
-    buttons.forEach(button => {
-      const selected = button.dataset.scenario === scenario.id;
-      button.classList.toggle("selected", selected);
-      button.setAttribute("aria-pressed", String(selected));
-    });
-    [...byId("timeline").children].forEach((li, index) => {
-      const button = li.firstElementChild;
-      button.setAttribute("aria-current", String(index === selection));
-      li.querySelector(".check").textContent = index <= position ? "✓" : "—";
-    });
-    byId("reason-title").textContent = scenario.steps[selection][0];
-    byId("reason-body").textContent = scenario.steps[selection][2];
+}
+function renderDetail(data) {
+  const signature = JSON.stringify([selected?.event_id, data]);
+  if (signature === detailJSON) return;
+  detailJSON = signature;
+  $('title').textContent = selected.tool_name;
+  $('identity').textContent = `Call: ${selected.tool_use_id || '未記録'} · Session: ${selected.session_id || '未記録'}`;
+  $('decisions').replaceChildren();
+  if (!data.decisions.length) $('decisions').append(node('p', '判定の記録なし', 'hint'));
+  for (const d of data.decisions) {
+    const box = node('div', undefined, d.action === 'block' ? 'decision blocked' : 'decision');
+    box.append(node('strong', d.action === 'block' ? 'ToolUseProxy: ブロック判定' : `ToolUseProxy: ${d.action}`),
+      node('p', d.user_message || d.reason), node('small', `${d.hook_event || 'Hook未記録'} · ${d.created_at}`));
+    $('decisions').append(box);
   }
-  function prepare() {
-    stop(); position = -1; selection = 0;
-    byId("timeline").replaceChildren();
-    scenario.steps.forEach((step, index) => {
-      const li = document.createElement("li"), button = document.createElement("button");
-      const number = document.createElement("span"), label = document.createElement("span");
-      const title = document.createElement("strong"), subtitle = document.createElement("small");
-      const check = document.createElement("span");
-      number.className = "number"; number.textContent = `0${index + 1}`;
-      title.textContent = step[0]; subtitle.textContent = step[1]; check.className = "check";
-      label.append(title, subtitle); button.append(number, label, check); li.append(button);
-      button.addEventListener("click", () => { stop(); selection = index; render(); });
-      byId("timeline").append(li);
-    });
-    render();
+  $('io').replaceChildren();
+  for (const [label, key] of [['入力', 'tool_input'], ['出力', 'tool_response']]) {
+    const event = [...data.events].reverse().find(item => Object.hasOwn(item.payload, key));
+    const section = node('article');
+    section.append(node('h3', label), node('pre', event ? JSON.stringify(event.payload[key], null, 2) : '未記録'));
+    $('io').append(section);
   }
-  function advance() {
-    position = Math.min(3, position + 1); selection = position;
-    render(); announce(`${scenario.steps[position][0]}。${scenario.steps[position][1]}`);
+  const raw = node('details');
+  raw.append(node('summary', `保存されたイベント ${data.events.length} 件`));
+  for (const event of data.events) {
+    raw.append(node('h3', `${event.phase} · ${event.recorded_at}`));
+    if (event.truncated) raw.append(node('p', '大きな記録のため先頭128K文字のみ表示しています。', 'hint'));
+    raw.append(node('pre', JSON.stringify(event.payload, null, 2)));
   }
-  function tick() {
-    advance();
-    if (position < 3) timer = setTimeout(tick, Number(byId("speed").value));
-    else stop();
-    render();
-  }
-  buttons.forEach(button => button.addEventListener("click", () => {
-    scenario = data.scenarios.find(item => item.id === button.dataset.scenario);
-    prepare(); announce(`${scenario.kind}を選択しました。`);
-  }));
-  byId("play").addEventListener("click", () => {
-    if (timer) { stop(); render(); return; }
-    if (position === 3) { position = -1; selection = 0; }
-    tick();
-  });
-  byId("step").addEventListener("click", () => { stop(); advance(); });
-  byId("reset").addEventListener("click", () => { prepare(); announce("最初の状態へ戻しました。"); });
-  byId("speed").addEventListener("change", () => {
-    if (timer) { clearTimeout(timer); timer = setTimeout(tick, Number(byId("speed").value)); }
-  });
-  document.addEventListener("visibilitychange", () => { if (document.hidden) { stop(); render(); } });
-  byId("provenance").textContent = `${data.source} / Plugin ${data.version}。固定人工試験の集計から、展示用の項目だけを抽出しています。`;
-  byId("record-id").textContent = `試験に用いた配布物 SHA-256: ${data.artifact}`;
-  prepare();
-})();
+  if (data.events.some(event => event.truncated)) $('io').append(node('p', 'サイズ制限によりI/Oを抽出できない記録があります。下の保存イベントを確認してください。', 'hint'));
+  $('io').append(raw);
+  if (!data.events.length) $('io').append(node('p', 'この記録はDBにありません。', 'empty'));
+}
+async function refresh() {
+  try {
+    const data = await get('api/events');
+    $('database').textContent = data.database;
+    if (data.calls.length && (!selected || ($('follow').checked && selected.event_id !== data.calls[0].event_id))) choose(data.calls[0]);
+    if (selected) selected = data.calls.find(call => callKey(call) === callKey(selected)) || selected;
+    renderCalls(data.calls);
+    if (selected) renderDetail(await get(`api/detail?id=${encodeURIComponent(selected.event_id)}`));
+    $('connection').textContent = '● 接続中 · 自動更新';
+    $('connection').className = 'online';
+    $('updated').textContent = `最終確認 ${new Date().toLocaleTimeString('ja-JP')}`;
+  } catch (error) {
+    $('connection').textContent = `再接続待ち · ${error.message}`;
+    $('connection').className = 'offline';
+  } finally { setTimeout(refresh, 1000); }
+}
+refresh();
