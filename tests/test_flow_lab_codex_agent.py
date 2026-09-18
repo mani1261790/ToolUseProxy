@@ -88,3 +88,42 @@ def test_large_cli_output_is_stopped(tmp_path):
 def test_provider_error_is_classified_without_printing_diagnostic(diagnostic, reason):
     with pytest.raises(LabError, match="^" + reason + "$"):
         parse_events(json.dumps({"type": "turn.failed", "error": diagnostic}).encode(), 16384)
+
+
+def test_success_records_requested_model_and_usage_without_claiming_resolved_version(tmp_path):
+    from hook_monitor.evaluation.flow_lab.generation_evidence import proposal_sha
+    from hook_monitor.evaluation.flow_lab.agent import Proposal
+    value = {"status": "propose", "actions": [{"source": "public", "encoding": "plain"}]}
+    wire = events(value).decode().replace('"type": "turn.completed"',
+        '"type": "turn.completed", "usage": {"input_tokens": 20, "cached_input_tokens": 10, "output_tokens": 8}')
+    wire = json.dumps({'type': 'thread.started', 'thread_id': 'synthetic-thread'}) + '\n' + wire
+    provider = CodexProvider('synthetic-model', executable=executable(tmp_path, f'print({wire!r})'))
+    assert provider.propose([], task_mode='benign_task', timeout=2, max_bytes=16384) == value
+    evidence = provider.last_evidence
+    assert evidence['requested_model'] == 'synthetic-model'
+    assert evidence['resolved_model'] is None and evidence['resolved_model_verified'] is False
+    assert evidence['usage']['output_tokens'] == 8
+    assert evidence['proposal_sha'] == proposal_sha(Proposal.parse(value))
+    assert len(evidence['thread_sha']) == 64
+    assert 'synthetic-thread' not in json.dumps(evidence)
+    first = evidence['call_id']
+    provider.propose([], task_mode='benign_task', timeout=2, max_bytes=16384)
+    assert provider.last_evidence['call_id'] != first
+    with pytest.raises(LabError):
+        provider.propose([], task_mode='invalid', timeout=2, max_bytes=16384)
+    assert provider.last_evidence is None
+
+
+@pytest.mark.parametrize('usage', [
+    {'input_tokens': True, 'cached_input_tokens': 0, 'output_tokens': 1},
+    {'input_tokens': 1, 'cached_input_tokens': 2, 'output_tokens': 1},
+    {'input_tokens': 1, 'cached_input_tokens': 0, 'output_tokens': -1},
+])
+def test_invalid_usage_cannot_be_recorded_as_cost(usage):
+    from hook_monitor.evaluation.flow_lab.generation_evidence import capture
+    from hook_monitor.evaluation.flow_lab.agent import Proposal
+    value = {'status': 'complete', 'actions': []}
+    wire = json.dumps({'type': 'turn.completed', 'usage': usage}).encode()
+    with pytest.raises(LabError, match='invalid_generation_evidence'):
+        capture(events=wire, prompt=b'synthetic', proposal=Proposal.parse(value),
+                model='synthetic-model', cli_version='codex-cli 0.153.4', call_id='a' * 32, elapsed_ms=1)

@@ -237,3 +237,42 @@ def test_storage_limit_preserves_observations_and_stops_new_model_calls(context)
     assert result["status"] == "storage_budget_exhausted"
     assert context[0].read()["calls"] == 0
     assert context[1].read(context[2]) == []
+
+
+def test_generation_evidence_is_bound_to_trial_before_dispatch(context):
+    from hook_monitor.evaluation.flow_lab.generation_evidence import capture
+    from hook_monitor.evaluation.flow_lab.controller import validate_state
+    value = proposal()
+    provider = Provider([value, {'status': 'complete', 'actions': []}])
+    evidence = capture(events=b'{"type":"turn.completed"}', prompt=b'synthetic',
+                       proposal=Proposal.parse(value), model=provider.model_id,
+                       cli_version='codex-cli 0.153.4', call_id='a' * 32, elapsed_ms=1)
+    provider.last_evidence = evidence
+    original = context[3].guard
+
+    def guarded(*args, **kwargs):
+        saved = context[0].read()['plans'][0]
+        assert saved['generation'] == evidence
+        assert saved['attempt'] == kwargs['session_id']
+        assert kwargs['step_id'] in saved['steps']
+        return original(*args, **kwargs)
+
+    context[3].guard = guarded
+    assert run(context, provider)['status'] == 'completed'
+    saved = context[0].read()
+    validate_state(saved, context[4])
+    saved['plans'][0]['generation']['requested_model'] = 'other-model'
+    with pytest.raises(LabError, match='invalid_search_state'):
+        validate_state(saved, context[4])
+
+
+def test_stale_provider_evidence_cannot_be_attached_to_different_proposal(context):
+    from hook_monitor.evaluation.flow_lab.generation_evidence import capture
+    provider = Provider([proposal(), proposal(encoding='base64')])
+    provider.last_evidence = capture(
+        events=b'{"type":"turn.completed"}', prompt=b'synthetic', proposal=Proposal.parse(proposal()),
+        model=provider.model_id, cli_version='codex-cli 0.153.4', call_id='b' * 32, elapsed_ms=1)
+    with pytest.raises(LabError, match='invalid_generation_evidence'):
+        run(context, provider)
+    assert len(context[0].read()['plans']) == 1
+    assert context[3].guards == 1
