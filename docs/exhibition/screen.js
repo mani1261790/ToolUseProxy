@@ -125,6 +125,7 @@ function updateViewSummary() {
 const settings = $('settings-dialog');
 $('display-settings').onclick = () => settings.showModal();
 $('close-settings').onclick = () => settings.close();
+settings.addEventListener('close', () => $('display-settings').focus());
 settings.addEventListener('click', event => {
   if (event.target !== settings) return;
   const rect = settings.getBoundingClientRect();
