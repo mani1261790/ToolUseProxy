@@ -100,11 +100,37 @@ function clearDetail() {
 function filtersChanged(projectChanged = false) {
   if (projectChanged) $('session').value = '';
   renderScopes();
+  updateViewSummary();
   clearDetail();
   renderCalls([]);
   clearTimeout(refreshTimer);
   refresh();
 }
+function updateViewSummary() {
+  const count = Number(Boolean($('workspace').value)) + Number(Boolean($('session').value)) + Number($('blocked-only').checked);
+  $('filter-count').textContent = String(count);
+  $('filter-count').hidden = count === 0;
+  $('view-mode').textContent = $('follow').checked ? '最新を追従' : '選択を固定';
+  const parts = [];
+  if ($('workspace').value) parts.push(projectLabel(JSON.parse($('workspace').value)));
+  if ($('session').value) {
+    const [workspace, session] = JSON.parse($('session').value);
+    if (!$('workspace').value) parts.push(projectLabel(workspace));
+    parts.push(scopeLabel(session));
+  }
+  if ($('blocked-only').checked) parts.push('ブロック判定のみ');
+  $('active-scope').textContent = parts.join(' / ') || 'すべての呼び出し';
+  $('active-scope').title = $('active-scope').textContent;
+}
+const settings = $('settings-dialog');
+$('display-settings').onclick = () => settings.showModal();
+$('close-settings').onclick = () => settings.close();
+settings.addEventListener('click', event => {
+  if (event.target !== settings) return;
+  const rect = settings.getBoundingClientRect();
+  if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) settings.close();
+});
+$('follow').onchange = () => { updateViewSummary(); clearTimeout(refreshTimer); refresh(); };
 $('workspace').onchange = () => filtersChanged(true);
 $('session').onchange = () => filtersChanged();
 $('blocked-only').onchange = () => filtersChanged();
@@ -120,12 +146,18 @@ function renderCalls(calls) {
     const button = node('button', undefined, 'call');
     button.classList.toggle('selected', call.event_id === selected?.event_id);
     button.setAttribute('aria-pressed', String(call.event_id === selected?.event_id));
-    button.append(node('strong', call.tool_name), node('time', timeLabel(call.recorded_at)),
-      node('span', phaseLabel(call), call.blocked ? 'badge badge-blocked' : 'badge'));
-    const context = node('span', `${projectLabel(call.workspace_id)} · ${scopeLabel(call.session_id)}`, 'context');
-    context.title = context.textContent;
-    button.append(context);
-    button.onclick = () => { $('follow').checked = false; choose(call); renderCalls(calls); loadDetail(); };
+    const top = node('div', undefined, 'call-top');
+    const name = node('strong', call.tool_name);
+    name.title = call.tool_name;
+    const time = node('time', timeLabel(call.recorded_at).replace(/^\d+\/\d+\/\d+\s/, ''));
+    time.title = timeLabel(call.recorded_at);
+    top.append(name, time);
+    const meta = node('div', undefined, 'call-meta');
+    const context = node('span', `${projectLabel(call.workspace_id).split(' — ')[0]} · ${scopeLabel(call.session_id)}`, 'context');
+    context.title = `${projectLabel(call.workspace_id)} · ${scopeLabel(call.session_id)}`;
+    meta.append(node('span', phaseLabel(call), call.blocked ? 'badge badge-blocked' : 'badge'), context);
+    button.append(top, meta);
+    button.onclick = () => { $('follow').checked = false; choose(call); renderCalls(calls); updateViewSummary(); loadDetail(); };
     $('calls').append(button);
   }
 }
@@ -184,6 +216,7 @@ async function refresh() {
     if (version !== refreshVersion) return;
     knownScopes = scopes.scopes;
     renderScopes();
+    updateViewSummary();
     $('scope-note').hidden = !scopes.truncated;
     $('scope-note').textContent = scopes.truncated ? 'セッション候補は最新1000組までです。' : '';
     $('database').textContent = data.database;
@@ -197,7 +230,7 @@ async function refresh() {
       if (version === refreshVersion && selected === current) renderDetail(detail);
     }
     if (version !== refreshVersion) return;
-    $('connection').textContent = '● 接続中 · 自動更新';
+    $('connection').textContent = '● 接続中';
     $('connection').className = 'online';
     $('updated').textContent = `最終確認 ${new Date().toLocaleTimeString('ja-JP')}`;
   } catch (error) {
