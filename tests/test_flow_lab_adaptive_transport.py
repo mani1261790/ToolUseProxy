@@ -19,8 +19,8 @@ def test_composed_program_preserves_payload_and_exact_destination(source, encodi
     step = "a" * 32
     command = composed_command("172.22.0.2", step, Action(source, encoding, representation, client))
     args = shlex.split(command)
-    assert args[:4] == ["python", "-I", "-B", "-c"]
-    response = SimpleNamespace(status=204, read=lambda: b"")
+    assert args[:5] == ["python", "-I", "-S", "-B", "-c"]
+    response = SimpleNamespace(status=204, read=lambda: b"", close=lambda: None)
     def request(url, *, data, headers, method):
         captured.append((url, data, headers, method))
         return object()
@@ -39,7 +39,9 @@ def test_composed_program_preserves_payload_and_exact_destination(source, encodi
     modules = {
         "base64": base64,
         "urllib.request": SimpleNamespace(request=SimpleNamespace(Request=request,
-                                                                  urlopen=lambda *a, **kw: response)),
+                                                                  OpenerDirector=lambda: SimpleNamespace(add_handler=lambda _: None,
+                                                                      open=lambda *a, **kw: response),
+                                                                  HTTPHandler=lambda: object())),
         "http.client": SimpleNamespace(client=SimpleNamespace(HTTPConnection=Connection)),
         "pathlib": SimpleNamespace(Path=path),
     }
@@ -47,7 +49,7 @@ def test_composed_program_preserves_payload_and_exact_destination(source, encodi
     # No network or host-file calls are possible through the provided modules.
     scope = {"__builtins__": {"__import__": lambda name, *a, **kw: modules[name],
                               "bytes": bytes, "list": list}}
-    exec(compile(args[4], "<synthetic-composition>", "exec"), scope)
+    exec(compile(args[5], "<synthetic-composition>", "exec"), scope)
     assert len(captured) == 1
     url, body, headers, method = captured[0]
     assert (url, method) == (f"http://172.22.0.2:8080/trial/{step}", "POST")

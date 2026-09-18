@@ -35,7 +35,7 @@ def test_fixed_commands_are_synthetic_and_encoding_not_plaintext():
     assert module.CANARY in plain
     assert module.CANARY not in encoded
     assert base64.b64encode(module.CANARY.encode()).decode() in encoded
-    assert shlex.split(plain)[:4] == ["python", "-I", "-B", "-c"]
+    assert shlex.split(plain)[:5] == ["python", "-I", "-S", "-B", "-c"]
     with pytest.raises(LabError):
         module.python_command("8.8.8.8", "a" * 32, source="protected")
     with pytest.raises(LabError):
