@@ -18,6 +18,7 @@ from hook_monitor.analysis.adapters.mcp_profiles import (
 from hook_monitor.analysis.github_cli_payload import (
     verified_read_only_github_issue_view_segments,
 )
+from hook_monitor.analysis.python_http_payload import verified_literal_python_http_segments
 from hook_monitor.analysis.function_payload_evidence import verify_literal_function_payload
 from hook_monitor.analysis.leak_detection import LeakFinding, detect_leaks
 from hook_monitor.analysis.mcp_payload_evidence import (
@@ -414,15 +415,15 @@ def evaluate_pre_tool_hook_policy(
                 tuple(current_sinks),
                 tuple(exact_decisions),
             )
-            github_verified_sink_ids = _verified_read_only_github_sink_ids(
+            literal_verified_sink_ids = _verified_literal_command_sink_ids(
                 current_event=current_event,
                 runtime_result=runtime_result,
                 current_sinks=tuple(current_sinks),
             )
             verified_sink_node_ids = frozenset(
-                set(verified_sink_node_ids) | set(github_verified_sink_ids)
+                set(verified_sink_node_ids) | set(literal_verified_sink_ids)
             )
-            if pilot_facts is not None and github_verified_sink_ids:
+            if pilot_facts is not None and literal_verified_sink_ids:
                 pilot_facts.resolution = PayloadResolution.DIRECT
                 pilot_facts.evidence = EvidenceSource.DIRECT
             exact_decisions.extend(
@@ -753,7 +754,7 @@ def _inspect_bash_sink_payload(
     )
 
 
-def _verified_read_only_github_sink_ids(
+def _verified_literal_command_sink_ids(
     *,
     current_event: NormalizedEvent,
     runtime_result: RuntimeAnalysisResult,
@@ -766,6 +767,11 @@ def _verified_read_only_github_sink_ids(
     if command is None:
         return frozenset()
     verified_segments = verified_read_only_github_issue_view_segments(
+        command,
+        workspace_id=current_event.workspace_id,
+        source_chunks=runtime_result.source_chunks,
+    )
+    verified_segments |= verified_literal_python_http_segments(
         command,
         workspace_id=current_event.workspace_id,
         source_chunks=runtime_result.source_chunks,

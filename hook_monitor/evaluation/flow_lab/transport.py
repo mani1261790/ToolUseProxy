@@ -148,9 +148,12 @@ def python_command(address: str, step_id: str, *, source: str, encoding: str = "
         + ("payload=base64.b64encode(payload); " if encoding == "base64" and source == "file" else "")
         + f"request=urllib.request.Request('http://{address}:8080/trial/{step_id}', "
         + f"data=payload, headers={{'X-Lab-Encoding':{encoding!r}}}, method='POST'); "
-        + "urllib.request.urlopen(request,timeout=2).read()"
+        + "opener=urllib.request.OpenerDirector(); "
+            "opener.add_handler(urllib.request.HTTPHandler()); "
+            "response=opener.open(request,timeout=2); response.read(); "
+            "assert response.status == 204; response.close()"
     )
-    return "python -I -B -c " + shlex.quote(script)
+    return "python -I -S -B -c " + shlex.quote(script)
 
 
 class FixedTransport:
@@ -218,10 +221,12 @@ class FixedTransport:
             raise LabError("unexpected_container_network")
         return info[0]
 
-    def _create(self, name: str, script: str, *, network: str, interactive: bool = False) -> None:
+    def _create(self, name: str, script: str, *, network: str, interactive: bool = False, isolated_sender: bool = False) -> None:
         argv = create_argv(self.image_id, name)
         argv[argv.index("--network") + 1] = network
         argv[-1] = script
+        if isolated_sender:
+            argv.insert(argv.index("-I") + 1, "-S")
         if interactive:
             argv.insert(2, "--interactive")
         self.owned.append(name)
@@ -274,12 +279,12 @@ class FixedTransport:
         if cmd not in self.prepared.values():
             raise LabError("unprepared_fixed_command")
         parts = shlex.split(cmd)
-        if len(parts) != 5 or parts[:4] != ["python", "-I", "-B", "-c"]:
+        if len(parts) != 6 or parts[:5] != ["python", "-I", "-S", "-B", "-c"]:
             raise LabError("invalid_fixed_command")
         # No public arbitrary-command API: caller must compare with its generated scenario.
         name = "tup-lab-" + uuid.uuid4().hex
         network = "none" if disconnected else self.network
-        self._create(name, parts[4], network=network)
+        self._create(name, parts[5], network=network, isolated_sender=True)
         self.check_network()
         try:
             command(["docker", "start", "--attach", name], timeout=5)

@@ -48,7 +48,10 @@ def composed_command(address: str, step_id: str, action: Action) -> str:
         script += (
             f"request=urllib.request.Request('http://{address}:8080/trial/{step_id}', "
             f"data=payload,headers={{'X-Lab-Encoding':{action.encoding!r}}},method='POST'); "
-            "urllib.request.urlopen(request,timeout=2).read()"
+            "opener=urllib.request.OpenerDirector(); "
+            "opener.add_handler(urllib.request.HTTPHandler()); "
+            "response=opener.open(request,timeout=2); response.read(); "
+            "assert response.status == 204; response.close()"
         )
     else:
         script += (
@@ -58,7 +61,7 @@ def composed_command(address: str, step_id: str, action: Action) -> str:
             "response=connection.getresponse(); response.read(); "
             "assert response.status == 204; connection.close()"
         )
-    return "python -I -B -c " + shlex.quote(script)
+    return "python -I -S -B -c " + shlex.quote(script)
 
 
 class AdaptiveTransport(FixedTransport):
