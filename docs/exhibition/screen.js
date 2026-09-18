@@ -347,7 +347,7 @@ async function refresh() {
       if (version === refreshVersion && selected === current) renderDetail(detail);
     }
     if (version !== refreshVersion) return;
-    $('connection').textContent = '● 接続中';
+    $('connection').textContent = '● 接続済み';
     $('connection').className = 'online';
     $('updated').textContent = `最終確認 ${new Date().toLocaleTimeString('ja-JP')}`;
   } catch (error) {
