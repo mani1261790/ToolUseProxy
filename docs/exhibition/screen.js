@@ -94,7 +94,7 @@ function renderDetail(data) {
   raw.append(node('summary', `技術的な詳細・元の記録（${data.events.length}件）`));
   raw.append(node('p', `Call: ${selected.tool_use_id || '未記録'} · Session: ${selected.session_id || '未記録'}`, 'hint'));
   for (const event of data.events) {
-    raw.append(node('h3', `${event.phase} · ${event.recorded_at}`));
+    raw.append(node('h3', `${event.phase} · ${timeLabel(event.recorded_at)}`));
     if (event.truncated) raw.append(node('p', '大きな記録のため先頭128K文字のみ表示しています。', 'hint'));
     raw.append(node('pre', JSON.stringify(event.payload, null, 2)));
   }
