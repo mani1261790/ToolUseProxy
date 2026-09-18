@@ -84,6 +84,7 @@ class EventSource:
                 ('SELECT o.* FROM tool_operation_outcomes o JOIN events e ON e.event_id=o.post_event_id '
                  'WHERE e.workspace_id=? AND e.session_id=? ORDER BY o.post_event_id,o.operation_id', scope),
                 ('SELECT * FROM resource_versions WHERE workspace_id=? AND session_id=? ORDER BY node_id', scope),
+                ('SELECT * FROM sink_candidates WHERE workspace_id=? AND session_id=? ORDER BY node_id', scope),
             ])
             protection = fingerprint([
                 ('SELECT * FROM protected_sources WHERE workspace_id=? ORDER BY source_id', (workspace,)),

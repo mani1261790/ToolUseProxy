@@ -61,3 +61,26 @@ def test_missing_database_is_not_created_and_overflow_is_not_truncated(tmp_path,
     monkeypatch.setattr('research.flow_forecast.recording.source.MAX_ROWS', 0)
     with pytest.raises(ForecastDataError, match='snapshot_limit'):
         reader.snapshot('workspace', 'session')
+
+
+def test_late_candidate_and_resource_revision_invalidate_snapshot(tmp_path):
+    reader = source(tmp_path)
+    initial = reader.snapshot('workspace', 'session')
+    with sqlite3.connect(reader.path) as conn:
+        conn.execute("INSERT INTO sink_candidates(node_id,sink_type,label,sequence_no,metadata_json,workspace_id,session_id) "
+                     "VALUES('sink','http','synthetic',1,'{}','workspace','session')")
+    candidate = reader.snapshot('workspace', 'session')
+    assert candidate.input_digest != initial.input_digest
+    assert candidate.observed_sequence == initial.observed_sequence
+    with sqlite3.connect(reader.path) as conn:
+        conn.execute("UPDATE sink_candidates SET metadata_json=? WHERE node_id='sink'", ('{"input_revision":2}',))
+    updated = reader.snapshot('workspace', 'session')
+    assert updated.input_digest != candidate.input_digest
+    with sqlite3.connect(reader.path) as conn:
+        conn.execute("INSERT INTO resource_versions(node_id,path,content_hash,sequence_no,session_id,workspace_id) "
+                     "VALUES('resource','synthetic','version1',1,'session','workspace')")
+    resource = reader.snapshot('workspace', 'session')
+    assert resource.input_digest != updated.input_digest
+    with sqlite3.connect(reader.path) as conn:
+        conn.execute("UPDATE resource_versions SET content_hash='version2' WHERE node_id='resource'")
+    assert reader.snapshot('workspace', 'session').input_digest != resource.input_digest

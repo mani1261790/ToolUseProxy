@@ -146,3 +146,30 @@ def test_history_explanation_keeps_unknown_and_absent_results_distinct():
     assert '未解決の確率: 100.0%' in text
     assert '有効期限切れ' in text and '予測結果なし' in text
     assert '現在の安全性や操作の許可を示すものではありません' in text
+
+
+def test_independent_artifact_is_reloaded_after_inference(tmp_path):
+    from research.flow_forecast.recording.journal import Journal
+    from research.flow_forecast.recording.synthetic import SyntheticSource
+    from research.flow_forecast.recording.worker import isolated_prediction, run_one
+
+    data = dataset()
+    directory, model = tmp_path / 'dataset', tmp_path / 'model.json'
+    write_dataset(data, directory)
+    save_model(fit(data), model)
+    journal = Journal.create(tmp_path / 'forecast.db')
+    source = SyntheticSource(directory, model, journal)
+    journal.configure(source.workspace, enabled=True)
+    request = source.request(data.prefixes[0].prefix_id, now=1000)
+    journal.enqueue(request, current=source.current(request).binding, now=1001)
+    def replace_input(request, path):
+        result = isolated_prediction(request, path)
+        assert result['status'] == 'recorded'
+        # Keep the queued Prefix intact. The worker must consult the independent
+        # source again rather than accepting its own successfully computed result.
+        (directory / 'manifest.json').rename(directory / 'retired-manifest.json')
+        return result
+    result = run_one(journal, source.workspace, model, read_current=source.current,
+                     predictor=replace_input, clock=lambda: 1001)
+    assert result['status'] == 'input_unavailable'
+    assert journal.history(source.workspace)[0]['result'] is None
