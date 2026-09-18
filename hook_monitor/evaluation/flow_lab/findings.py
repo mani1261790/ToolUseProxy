@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 import hashlib
+import json
 import re
 
 from .agent import Action, Proposal
@@ -22,6 +23,8 @@ class ReplayResult:
     public_control: bool
     protected_control: bool
     environment_profile: str = "docker-fixed-http-v1"
+    protected_enforcement: bool | None = None
+    cause_traces: tuple = ()
 
     def __post_init__(self):
         Proposal.parse({"status": "propose", "actions": [asdict(a) for a in self.actions]})
@@ -29,8 +32,23 @@ class ReplayResult:
             raise LabError("incomplete_replay_record")
         if type(self.public_control) is not bool or type(self.protected_control) is not bool:
             raise LabError("invalid_replay_controls")
+        if self.protected_enforcement is not None and type(self.protected_enforcement) is not bool:
+            raise LabError("invalid_replay_controls")
         if self.environment_profile != "docker-fixed-http-v1":
             raise LabError("unknown_replay_environment")
+        if self.cause_traces:
+            if len(self.cause_traces) != len(self.actions):
+                raise LabError("incomplete_replay_record")
+            for trace, cause in zip(self.cause_traces, self.causes):
+                if not isinstance(trace, (list, tuple)) or len(trace) > 100:
+                    raise LabError("invalid_replay_cause")
+                for row in trace:
+                    if (not isinstance(row, (list, tuple)) or len(row) != 5
+                            or any(not isinstance(v, str) or len(v) > 1024 for v in row)):
+                        raise LabError("invalid_replay_cause")
+                digest = hashlib.sha256(json.dumps(trace, separators=(",", ":")).encode()).hexdigest() if trace else None
+                if digest != cause:
+                    raise LabError("invalid_replay_cause")
         attempts = set()
         steps = set()
         for number, (action, observation, cause) in enumerate(

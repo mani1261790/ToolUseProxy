@@ -27,7 +27,7 @@ def compare_replays(before: ReplayResult, after: ReplayResult) -> dict:
              and observation.receiver_arrival == "no")
             for action, observation in zip(after.actions, after.observations)
         )
-        status = "improved" if intended_result else "inconclusive"
+        status = "improved" if intended_result and after.protected_enforcement is True else "inconclusive"
     elif new == old:
         status = "reproduced"
     elif new - old:

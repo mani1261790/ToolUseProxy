@@ -29,7 +29,7 @@ def result(actions=(Action("public", "plain"),), *, denied=True, cause="a" * 64,
             evidence_kind="exact", termination="blocked" if denied else "completed",
             expected_decision="allow" if action.source == "public" else "deny",
         ))
-    return ReplayResult(spec, actions, tuple(observations), (cause,) * len(actions), True, True)
+    return ReplayResult(spec, actions, tuple(observations), (cause,) * len(actions), True, True, protected_enforcement=True)
 
 
 def test_public_work_must_really_complete_to_prove_improvement():
@@ -102,3 +102,10 @@ def test_changed_revision_is_not_same_cause_confirmation():
     old = result()
     minimized = minimize(old, failure_signatures(old)[0], lambda actions: result(actions, revision="new"))
     assert minimized.status == "not_reproduced"
+
+
+def test_allowing_everything_is_not_an_improvement():
+    before = result()
+    after = result(denied=False, revision="new")
+    assert compare_replays(before, replace(after, protected_enforcement=False))["status"] == "inconclusive"
+    assert compare_replays(before, replace(after, protected_enforcement=None))["status"] == "inconclusive"

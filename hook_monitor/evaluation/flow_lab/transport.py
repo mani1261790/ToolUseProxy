@@ -51,7 +51,7 @@ print(json.dumps({'kind':'ready'}), flush=True)
 server.serve_forever()
 """
 
-GUARD = r"""import contextlib, io, json, os, sys
+GUARD = r"""import contextlib, hashlib, io, json, os, sys
 from pathlib import Path
 sys.path.insert(0, '/opt/tooluseproxy')
 from hook_monitor.runtime.storage import EventStore
@@ -86,7 +86,13 @@ import sqlite3
 with sqlite3.connect(db) as connection:
     receipt = connection.execute('SELECT COUNT(*) FROM events WHERE tool_use_id=?',
         (request['step_id'],)).fetchone()[0]
-print(json.dumps({'decision':decision, 'receipt_count':receipt, 'exit_code':result}))
+    reasons = connection.execute(
+        'SELECT DISTINCT action,severity,sink_type,source_node_kind,reason '
+        'FROM policy_decisions ORDER BY action,severity,sink_type,source_node_kind,reason'
+    ).fetchall()
+cause = hashlib.sha256(json.dumps(reasons, separators=(',', ':')).encode()).hexdigest() if reasons else None
+print(json.dumps({'decision':decision, 'receipt_count':receipt, 'exit_code':result,
+    'cause_digest':cause, 'cause_trace':reasons}))
 """
 
 
@@ -156,6 +162,8 @@ class FixedTransport:
         self.network_created = False
         self.address: str | None = None
         self.prepared: dict[str, str] = {}
+        self.guard_causes: dict[str, str | None] = {}
+        self.guard_traces: dict[str, tuple] = {}
 
     def __enter__(self):
         try:
@@ -237,6 +245,20 @@ class FixedTransport:
             or value.get("exit_code") != 0 or value.get("receipt_count") != 1
         ):
             raise LabError("guard_receipt_missing")
+        cause = value.get("cause_digest")
+        if cause is not None and (not isinstance(cause, str) or not re.fullmatch(r"[a-f0-9]{64}", cause)):
+            raise LabError("invalid_guard_cause")
+        trace = value.get("cause_trace", [])
+        if (not isinstance(trace, list) or len(trace) > 100
+                or any(not isinstance(row, list) or len(row) != 5
+                       or any(not isinstance(v, str) or len(v) > 1024 for v in row) for row in trace)):
+            raise LabError("invalid_guard_cause")
+        import hashlib
+        expected = hashlib.sha256(json.dumps(trace, separators=(",", ":")).encode()).hexdigest() if trace else None
+        if cause != expected:
+            raise LabError("invalid_guard_cause")
+        self.guard_traces[step_id] = tuple(tuple(row) for row in trace)
+        self.guard_causes[step_id] = cause
         self.inspect(name, network="none")
         return value["decision"]
 

@@ -9,6 +9,7 @@ FILES = (
     "agent.py", "adaptive_transport.py", "budget.py", "codex_agent.py", "controller.py",
     "models.py", "preflight.py", "revision.py", "runner.py", "search_runner.py",
     "search_state.py", "storage.py", "transport.py",
+    "findings.py", "compare.py", "minimize.py", "replay.py", "replay_runner.py",
 )
 
 
