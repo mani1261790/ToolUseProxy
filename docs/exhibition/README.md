@@ -1,43 +1,41 @@
-# ToolUseProxy 展示画面
+# ToolUseProxy リアルタイムログビューアー
 
-このdirectoryの4ファイル（index.html / screen.css / screen.js / replay-data.js）を
-同じfolderへコピーし、index.htmlをChrome等で開く。サーバー・インストール・ネット接続は不要。
-ToolUseProxyのPluginは無効のままでよい。実利用DBや保護リストには接続しない。
+ToolUseProxyが実際に保存している `events.db` を読み取り専用で開き、
+ToolCall、保存された入力・出力、ブロック等の判定を1秒ごとに表示する。
+人工シナリオの再生画面ではない。Pluginの有効化、Hook実行、DB移行・変更は行わない。
 
-## 1分の展示
-
-1. 「保護情報の送信」で「再生する」。情報の出所→Shellへの入力→送信前の停止をたどる。
-2. 時系列の「送信前に停止」を選ぶと、固定試験で確認した停止理由の説明を読める。
-3. 「公開情報の送信」を選んで再生し、通常の操作を許可する例を見る。
-4. 判定の横の「実際の外部受信」は未観測。許可と配信完了、停止と未受信の観測は別だと説明する。
-5. 「証拠が足りないとき」は説明用の人工例。試験結果の再生とは明確に区別して表示する。
-6. 「リセット」で工程を初期状態へ戻す。一時停止・1工程ずつ進む・速度変更も使える。
-
-試験の実行や外部送信は再生中に行わない。固定試験に受信側の証拠がないため、
-「受信0件」などの結果を推測して作らない。経路と工程は説明用の再構成であり、
-生の操作ログや実測timestampではない。本文・認証情報・実利用ログは含まない。
-
-## 固定データの再生成
-
-保護リストを含まないclean checkoutで実行する。人工試験は専用の一時directoryを使う。
+リポジトリのルートから、利用中のDBを指定して起動する。
 
 ```sh
-python scripts/demo_plugin.py --json > /tmp/tooluseproxy-demo-evidence.json
-python scripts/build_exhibition_replay.py \
-  --evidence /tmp/tooluseproxy-demo-evidence.json \
-  --output docs/exhibition/replay-data.js
+python3 -m scripts.serve_exhibition --db /absolute/path/to/events.db
 ```
 
-exporterは合格した人工試験の固定項目だけを抽出する。任意の本文・診断・pathを
-転載せず、version/hashも形式を検証する。不合格・不完全な試験を成功例にしない。
-画面のCSPで外部接続を禁止し、fetch、外部font/CDN、解析サービスを使わない。
+表示された `http://127.0.0.1:…/…/` をブラウザーで開く。終了はCtrl+C。
+DBはToolUseProxyの `--db` / `TOOLUSEPROXY_DB_PATH`、data-dir、Pluginの
+`PLUGIN_DATA` に応じて異なるため、閲覧したい保存先を明示する。
+HTMLファイルを直接開く方式ではなく、ローカルサーバーを使用する。
 
-## 自動確認と実ブラウザの確認
+- 左側に最新300イベント内のToolCall、右側に呼び出しの入力・出力・判定を表示。
+- 新しい呼び出しを自動選択。過去の行を選ぶと自動選択を解除し、その呼び出しの
+  遅れて記録された出力・判定を引き続き更新する。チェックを戻すと最新を追う。
+- 同じworkspace・session・tool_use_idのPre/Postをまとめる。
+  sessionやcall IDが欠ける場合はイベント単位とし、別呼び出しを推測で混ぜない。
+- `policy_decisions` と `sink_candidates.metadata_json.event_id` を結び付けて
+  保存された判定を表示する。「ブロック判定」は判定記録であり、外部受信先の
+  不達証明ではない。判定未記録を許可とは表示しない。
+- 入力・出力が保存されていなければ「未記録」。既存のマスク処理を逆転したり、
+  transcriptや参照ファイルから未保存の内容を補完したりしない。
+- I/Oは選択した呼び出しだけ取得し、最大50イベント、各payload先頭128K文字に制限。
+  切り詰めは明示する。一覧は新規保存順で、全履歴の検索・書き出しは対象外。
+- 接続失敗は画面に表示し、自動再接続。既存表示は最後に取得できた記録として残る。
+- ToolUseProxyが無効ならDBの過去記録を表示して待機する。ビューアーが収集を開始する
+  わけではない。稼働中のToolUseProxyが同じDBへ追記すれば、画面が自動更新される。
 
-- exporterの本文非転載、不合格の拒否、受信未観測の保持：tests/test_exhibition_replay.py
-- Chromeで1440pxと390pxの表示、再生完了、リセット、停止/許可/不明の切替を確認済み。
-- Browser offline状態での切替再生、file://からのoffline起動・再生を確認済み。
-- screenshotは作業checkoutのoutput/playwrightへ保存。会場機材の確認は別途行う。
+サーバーはloopbackだけで待ち受け、起動ごとにランダムURLを発行する。
+Host/Origin検査、外部リソース禁止、キャッシュ禁止を適用し、任意ファイルの配信はしない。
+保存されたI/Oには機密情報を含み得るため、画面やURLの共有対象には注意する。
+元の人工再生データ生成器は独立した試験補助として残るが、この画面では読み込まない。
 
-将来のライブ連携は、この静的画面へ実利用ログを直接流し込まず、本文を持たない
-検証済みの表示データへ変換して追加する。現時点のライブ観測は未接続。
+検証: 実DBと同じEventStoreスキーマの人工DBへPre/Post/判定を後から保存し、
+表示の更新、session分離、読み取り専用、切り詰め、接続断復帰、HTTP境界を試験する。
+Pluginを有効化した実機Hookの収集確認とは区別する。
