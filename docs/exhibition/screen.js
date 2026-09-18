@@ -227,9 +227,6 @@ function filtersChanged(projectChanged = false) {
   refresh();
 }
 function updateViewSummary() {
-  const count = Number(Boolean($('workspace').value)) + Number(Boolean($('session').value)) + Number($('blocked-only').checked);
-  $('filter-count').textContent = String(count);
-  $('filter-count').hidden = count === 0;
   const parts = [];
   if ($('workspace').value) parts.push(projectLabel(JSON.parse($('workspace').value)));
   if ($('session').value) {

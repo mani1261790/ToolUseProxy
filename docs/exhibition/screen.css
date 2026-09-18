@@ -11,7 +11,6 @@ h1 { display: flex; align-items: baseline; gap: 12px; margin: 0; font-size: 19px
 .online { color: #bdcfc2; }.offline { color: #ffc3a9; }
 #display-settings, #close-settings { border: 1px solid #50545c; background: #25282d; padding: 4px 12px; border-radius: 5px; font-size: 15px; white-space: nowrap; }
 #display-settings:hover, #close-settings:hover { background: #33373e; }
-#filter-count { margin-left: 8px; color: #cddbe9; font-variant-numeric: tabular-nums; }
 main { display: grid; grid-template-columns: 340px minmax(0, 1fr); min-height: 0; }
 .calls { border-right: 1px solid #35383d; overflow: auto; min-width: 0; }
 .list-heading { position: sticky; top: 0; z-index: 1; display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 18px; background: #17191c; border-bottom: 1px solid #35383d; }
