@@ -114,6 +114,25 @@ class TrialStore:
             (spec.run_id, canonical(spec), spec.digest),
         )
 
+    def runs(self) -> list[RunSpec]:
+        result = []
+        for run_id, encoded in self._connection.execute("SELECT run_id,spec FROM lab_run"):
+            try:
+                spec = from_mapping(RunSpec, json.loads(encoded))
+            except (ValueError, TypeError, RecordError):
+                raise StoreError("invalid_stored_run") from None
+            if spec.run_id != run_id:
+                raise StoreError("invalid_stored_identity")
+            result.append(spec)
+        return result
+
+    def trial_count(self) -> int:
+        """Count all attempts, including unresolved reservations, in this lab only."""
+        return self._connection.execute(
+            "SELECT COUNT(*) FROM (SELECT run_id,attempt_id FROM lab_observation UNION "
+            "SELECT run_id,attempt_id FROM lab_pending)"
+        ).fetchone()[0]
+
     def require_no_unfinished_runs(self) -> None:
         if self._connection.execute(
             "SELECT 1 FROM lab_run WHERE state='running' LIMIT 1"

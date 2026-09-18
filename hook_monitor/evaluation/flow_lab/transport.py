@@ -159,13 +159,14 @@ class FixedTransport:
 
     def __enter__(self):
         try:
+            # Track intent first: Docker may create a resource before its CLI times out.
+            self.network_created = True
             command([
                 "docker", "network", "create", "--driver", "bridge", "--internal",
                 "--ipv6=false", "--label", f"{LABEL}=true",
                 "--opt", f"{GATEWAY_OPTION}=isolated",
                 "--opt", f"{MASQUERADE_OPTION}=false", self.network,
             ])
-            self.network_created = True
             self.check_network()
             self._create(self.receiver, RECEIVER, network=self.network)
             command(["docker", "start", self.receiver])
@@ -182,7 +183,7 @@ class FixedTransport:
                 raise LabError("invalid_receiver_identity") from None
             self.address = receiver_address(address)
             return self
-        except Exception:
+        except BaseException:
             self.close()
             raise
 
@@ -215,8 +216,8 @@ class FixedTransport:
         argv[-1] = script
         if interactive:
             argv.insert(2, "--interactive")
-        command(argv)
         self.owned.append(name)
+        command(argv)
         self.inspect(name, network=network)
 
     def guard(self, cmd: str, *, session_id: str, step_id: str) -> str:
