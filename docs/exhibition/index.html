@@ -1,12 +1,28 @@
 <!doctype html>
-<html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>ToolUseProxy · ログ</title><link rel="stylesheet" href="screen.css"><script src="screen.js" defer></script></head>
-<body><header><div><h1>ToolUseProxy ログ</h1></div><div class="connection"><span id="connection" role="status">接続中…</span><label><input type="checkbox" id="follow" checked> 新しい呼び出しを追う</label></div></header>
-<div class="source"><details><summary>接続先DB</summary><span id="database">events.db</span></details><span id="updated"></span></div>
-<form class="filters">
+<html lang="ja">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>ToolUseProxy · ログ</title><link rel="stylesheet" href="screen.css"><script src="screen.js" defer></script></head>
+<body>
+<header class="appbar">
+<h1>ToolUseProxy<span class="wordmark-detail">ログ</span></h1>
+<div class="header-actions"><span id="connection" role="status" title="ログDBとの接続状態です。Pluginや保護機能の稼働状態ではありません。">接続しています…</span><button id="display-settings" type="button" aria-haspopup="dialog">表示・絞り込み</button></div>
+</header>
+<dialog id="settings-dialog" aria-labelledby="settings-title">
+<div class="dialog-header"><h2 id="settings-title">表示・絞り込み</h2><button id="close-settings" type="button" aria-label="閉じる">閉じる</button></div>
+<form class="filters" aria-label="ログの絞り込み">
 <label>プロジェクト<select id="workspace"><option value="">すべてのプロジェクト</option></select></label>
 <label>セッション<select id="session"><option value="">すべてのセッション</option></select></label>
-<label class="blocked-filter"><input type="checkbox" id="blocked-only"> ブロック判定のみ</label>
+<label class="check-option"><input type="checkbox" id="blocked-only"> ブロック判定のみ</label>
+<label class="check-option"><input type="checkbox" id="follow" checked> 新しい呼び出しを追う</label>
 </form>
-<p id="scope-note" class="scope-note">選択した条件に一致する最新300イベントを表示します。</p>
-<main><section class="calls"><h2>呼び出し一覧 <span id="count"></span></h2><p class="hint">1秒ごとに自動更新。行を選ぶと詳細を表示します。</p><div id="calls"></div></section><section class="detail"><h2 id="title">呼び出しを選択</h2><p id="identity" class="hint"></p><div id="decisions"></div><div id="io"><p class="empty">ToolUseProxyの記録を待っています。</p></div></section></main>
-<footer>DBを読み取り専用で表示しています。ToolUseProxyが無効の間は新しい記録は増えません。表示するI/Oは保存済みの内容です。</footer></body></html>
+<p class="hint">候補はログが保存されているプロジェクトです。現在の保護対象を示す一覧ではありません。</p>
+<details id="project-state" hidden><summary>プロジェクトの状態</summary><dl class="project-state-list"><dt>初期化の記録</dt><dd id="init-state"></dd><dt>利用設定の保存</dt><dd id="setup-state"></dd><dt>保護対象の登録</dt><dd>この画面では未確認</dd><dt>現在の稼働</dt><dd>未確認 — Pluginの有効化とHookの動作確認が必要です。</dd></dl><p class="hint">このDBに残る記録です。解除後も残ることがあるため、記録や設定があるだけでは「保護中」とは判断できません。初期化だけで全ファイルが保護されるわけではありません。</p></details>
+<p id="scope-note" class="hint" hidden></p>
+<p class="hint">変更はすぐに反映されます。選択した条件内の最新300イベントを表示します。</p>
+<details class="source"><summary>接続先DB</summary><span id="database">events.db</span><p class="hint">読み取り専用。ToolUseProxyが無効の間は記録は増えません。</p></details>
+</dialog>
+<main>
+<section class="calls"><div class="list-heading"><h2>呼び出し<span id="count"></span></h2></div><div id="calls"></div></section>
+<section class="detail"><h2 id="title">呼び出しを選択</h2><p id="identity" class="hint"></p><div id="decisions"></div><div id="io"><p class="empty">ToolUseProxyの記録を待っています。</p></div></section>
+</main>
+<footer><span id="active-scope">すべての呼び出し</span><span id="updated"></span></footer>
+</body></html>

@@ -58,6 +58,126 @@ function projectLabel(id) {
   const root = knownScopes.find(scope => scope.workspace_id === id)?.workspace_root;
   return root ? `${root.split('/').filter(Boolean).pop() || root} — ${root}` : scopeLabel(id);
 }
+const pickers = new Map();
+function makePicker(id) {
+  const select = $(id);
+  const label = select.parentElement;
+  // Keep a hidden select as the value store; only our combobox is interactive.
+  const heading = node('span', label.firstChild.textContent);
+  heading.id = `${id}-label`;
+  label.firstChild.replaceWith(heading);
+  const wrapper = node('div', undefined, 'picker');
+  const trigger = node('button', undefined, 'picker-trigger');
+  trigger.type = 'button';
+  trigger.id = `${id}-trigger`;
+  trigger.setAttribute('role', 'combobox');
+  trigger.setAttribute('aria-haspopup', 'listbox');
+  trigger.setAttribute('aria-expanded', 'false');
+  const valueLabel = node('span', '', 'picker-value');
+  valueLabel.id = `${id}-value`;
+  trigger.setAttribute('aria-labelledby', `${heading.id} ${valueLabel.id}`);
+  trigger.append(valueLabel, node('span', '', 'picker-chevron'));
+  const list = node('div', undefined, 'picker-options');
+  list.id = `${id}-options`;
+  list.setAttribute('role', 'listbox');
+  list.setAttribute('aria-labelledby', heading.id);
+  list.hidden = true;
+  trigger.setAttribute('aria-controls', list.id);
+  select.hidden = true;
+  label.append(wrapper);
+  wrapper.append(trigger, list);
+  let active = 0;
+  let search = '';
+  let searchAt = 0;
+  let signature = '';
+  const isOpen = () => !list.hidden;
+  function highlight(scroll = false) {
+    [...list.children].forEach((item, index) => item.classList.toggle('active', index === active));
+    if (isOpen() && list.children[active]) {
+      trigger.setAttribute('aria-activedescendant', list.children[active].id);
+      if (scroll) list.children[active].scrollIntoView({block: 'nearest'});
+    } else trigger.removeAttribute('aria-activedescendant');
+  }
+  function close() {
+    list.hidden = true;
+    trigger.setAttribute('aria-expanded', 'false');
+    trigger.removeAttribute('aria-activedescendant');
+  }
+  function sync() {
+    const options = [...select.options];
+    const next = JSON.stringify(options.map(option => [option.value, option.textContent]));
+    const activeValue = list.children[active]?.dataset.value;
+    if (signature !== next) {
+      signature = next;
+      list.replaceChildren(...options.map((option, index) => {
+        const item = node('div', option.textContent, 'picker-option');
+        item.id = `${id}-option-${index}`;
+        item.dataset.value = option.value;
+        item.setAttribute('role', 'option');
+        item.onpointerdown = event => event.preventDefault();
+        item.onclick = () => commit(index);
+        return item;
+      }));
+      active = isOpen() ? Math.max(0, options.findIndex(option => option.value === activeValue)) : Math.max(0, select.selectedIndex);
+    }
+    valueLabel.textContent = select.selectedOptions[0]?.textContent || '';
+    trigger.title = valueLabel.textContent;
+    [...list.children].forEach((item, index) => item.setAttribute('aria-selected', String(index === select.selectedIndex)));
+    highlight();
+  }
+  function open() {
+    for (const picker of pickers.values()) picker.close();
+    sync();
+    active = Math.max(0, select.selectedIndex);
+    list.hidden = false;
+    trigger.setAttribute('aria-expanded', 'true');
+    highlight(true);
+  }
+  function commit(index) {
+    select.selectedIndex = index;
+    sync();
+    close();
+    trigger.focus();
+    select.dispatchEvent(new Event('change', {bubbles: true}));
+  }
+  trigger.onclick = () => isOpen() ? close() : open();
+  trigger.onkeydown = event => {
+    if (event.key === 'Tab') { close(); return; }
+    if (event.key === 'Escape' && isOpen()) {
+      event.preventDefault(); event.stopPropagation(); close(); return;
+    }
+    if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
+      event.preventDefault();
+      if (!isOpen()) open();
+      else if (event.key === 'ArrowDown') active = Math.min(list.children.length - 1, active + 1);
+      else if (event.key === 'ArrowUp') active = Math.max(0, active - 1);
+      if (event.key === 'Home') active = 0;
+      if (event.key === 'End') active = list.children.length - 1;
+      highlight(true);
+    } else if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      if (isOpen()) commit(active); else open();
+    } else if (event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) {
+      event.preventDefault();
+      if (!isOpen()) open();
+      search = Date.now() - searchAt > 700 ? event.key : search + event.key;
+      searchAt = Date.now();
+      const index = [...select.options].findIndex(option => option.textContent.toLocaleLowerCase().startsWith(search.toLocaleLowerCase()));
+      if (index >= 0) { active = index; highlight(true); }
+    }
+  };
+  document.addEventListener('pointerdown', event => { if (!wrapper.contains(event.target)) close(); });
+  // A label containing several controls has ambiguous activation; use an explicit
+  // non-interactive field container and the combobox's labelledby relationship.
+  const field = node('div', undefined, 'picker-field');
+  label.replaceWith(field);
+  field.append(...label.childNodes);
+  const picker = {sync, close};
+  pickers.set(id, picker);
+  sync();
+}
+makePicker('workspace');
+makePicker('session');
 function updateOptions(id, choices, allLabel) {
   const select = $(id);
   const value = select.value;
@@ -65,10 +185,11 @@ function updateOptions(id, choices, allLabel) {
     choices.push([value, select.selectedOptions[0].textContent]);
   }
   const signature = JSON.stringify(choices);
-  if (select.dataset.options === signature) return;
+  if (select.dataset.options === signature) { pickers.get(id).sync(); return; }
   select.dataset.options = signature;
   select.replaceChildren(new Option(allLabel, ''), ...choices.map(([key, label]) => new Option(label, key)));
   select.value = value;
+  pickers.get(id).sync();
 }
 function renderScopes() {
   const projects = [...new Map(knownScopes.map(scope => [JSON.stringify(scope.workspace_id), projectLabel(scope.workspace_id)])).entries()];
@@ -100,11 +221,48 @@ function clearDetail() {
 function filtersChanged(projectChanged = false) {
   if (projectChanged) $('session').value = '';
   renderScopes();
+  updateViewSummary();
   clearDetail();
   renderCalls([]);
   clearTimeout(refreshTimer);
   refresh();
 }
+function updateProjectState() {
+  const workspace = $('session').value ? JSON.parse($('session').value)[0]
+    : $('workspace').value ? JSON.parse($('workspace').value) : undefined;
+  $('project-state').hidden = workspace === undefined;
+  if (workspace === undefined) return;
+  const scope = knownScopes.find(item => item.workspace_id === workspace);
+  $('init-state').textContent = scope?.initialization_recorded === true
+    ? '初期化・利用設定操作による登録記録あり'
+    : '初期化操作の記録を確認できません（未初期化と断定はしません）';
+  $('setup-state').textContent = scope?.settings_saved === true
+    ? '設定の保存あり（必要な設定がすべて揃っているかは未確認）'
+    : scope?.settings_saved === false ? 'このDBに設定の保存記録なし' : '設定の保存状態を確認できません';
+}
+function updateViewSummary() {
+  updateProjectState();
+  const parts = [];
+  if ($('workspace').value) parts.push(projectLabel(JSON.parse($('workspace').value)));
+  if ($('session').value) {
+    const [workspace, session] = JSON.parse($('session').value);
+    if (!$('workspace').value) parts.push(projectLabel(workspace));
+    parts.push(scopeLabel(session));
+  }
+  if ($('blocked-only').checked) parts.push('ブロック判定のみ');
+  $('active-scope').textContent = parts.join(' / ') || 'すべての呼び出し';
+  $('active-scope').title = $('active-scope').textContent;
+}
+const settings = $('settings-dialog');
+$('display-settings').onclick = () => settings.showModal();
+$('close-settings').onclick = () => settings.close();
+settings.addEventListener('close', () => { for (const picker of pickers.values()) picker.close(); $('display-settings').focus(); });
+settings.addEventListener('click', event => {
+  if (event.target !== settings) return;
+  const rect = settings.getBoundingClientRect();
+  if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) settings.close();
+});
+$('follow').onchange = () => { updateViewSummary(); clearTimeout(refreshTimer); refresh(); };
 $('workspace').onchange = () => filtersChanged(true);
 $('session').onchange = () => filtersChanged();
 $('blocked-only').onchange = () => filtersChanged();
@@ -114,18 +272,24 @@ function renderCalls(calls) {
   if (signature === listJSON) return;
   listJSON = signature;
   $('calls').replaceChildren();
-  $('count').textContent = calls.length;
+  $('count').textContent = `${calls.length}件`;
   if (!calls.length) $('calls').append(node('p', 'この条件に一致する呼び出しはありません。', 'empty'));
   for (const call of calls) {
     const button = node('button', undefined, 'call');
     button.classList.toggle('selected', call.event_id === selected?.event_id);
     button.setAttribute('aria-pressed', String(call.event_id === selected?.event_id));
-    button.append(node('strong', call.tool_name), node('time', timeLabel(call.recorded_at)),
-      node('span', phaseLabel(call), call.blocked ? 'badge badge-blocked' : 'badge'));
-    const context = node('span', `${projectLabel(call.workspace_id)} · ${scopeLabel(call.session_id)}`, 'context');
-    context.title = context.textContent;
-    button.append(context);
-    button.onclick = () => { $('follow').checked = false; choose(call); renderCalls(calls); loadDetail(); };
+    const top = node('div', undefined, 'call-top');
+    const name = node('strong', call.tool_name);
+    name.title = call.tool_name;
+    const time = node('time', timeLabel(call.recorded_at).replace(/^\d+\/\d+\/\d+\s/, ''));
+    time.title = timeLabel(call.recorded_at);
+    top.append(name, time);
+    const meta = node('div', undefined, 'call-meta');
+    const context = node('span', `${projectLabel(call.workspace_id).split(' — ')[0]} · ${scopeLabel(call.session_id)}`, 'context');
+    context.title = `${projectLabel(call.workspace_id)} · ${scopeLabel(call.session_id)}`;
+    meta.append(node('span', phaseLabel(call), call.blocked ? 'badge badge-blocked' : 'badge'), context);
+    button.append(top, meta);
+    button.onclick = () => { $('follow').checked = false; choose(call); renderCalls(calls); updateViewSummary(); loadDetail(); };
     $('calls').append(button);
   }
 }
@@ -184,7 +348,9 @@ async function refresh() {
     if (version !== refreshVersion) return;
     knownScopes = scopes.scopes;
     renderScopes();
-    $('scope-note').textContent = '選択した条件に一致する最新300イベントを表示します。' + (scopes.truncated ? ' セッション候補は最新1000組までです。' : '');
+    updateViewSummary();
+    $('scope-note').hidden = !scopes.truncated;
+    $('scope-note').textContent = scopes.truncated ? 'セッション候補は最新1000組までです。' : '';
     $('database').textContent = data.database;
     if (data.calls.length && (!selected || ($('follow').checked && selected.event_id !== data.calls[0].event_id))) choose(data.calls[0]);
     if (selected) selected = data.calls.find(call => callKey(call) === callKey(selected)) || selected;
@@ -196,7 +362,7 @@ async function refresh() {
       if (version === refreshVersion && selected === current) renderDetail(detail);
     }
     if (version !== refreshVersion) return;
-    $('connection').textContent = '● 接続中 · 自動更新';
+    $('connection').textContent = '● 接続済み';
     $('connection').className = 'online';
     $('updated').textContent = `最終確認 ${new Date().toLocaleTimeString('ja-JP')}`;
   } catch (error) {
