@@ -88,11 +88,14 @@ class Prefix:
     source_version: str
     schema: int = SCHEMA
     protected_sources: tuple[str, ...] = ()
+    task_kind: str = 'unknown'
 
     def __post_init__(self):
         for value in (self.root_case_id, self.environment_version, self.source_version):
             identifier(value)
         sequence(self.max_sequence_no, zero=True)
+        if self.task_kind not in {'plain_http', 'base64_http', 'unknown'}:
+            raise ForecastDataError('invalid_visible_task_kind')
         if type(self.schema) is not int or self.schema != SCHEMA:
             raise ForecastDataError('schema_mismatch')
         if (type(self.observations) is not tuple or type(self.objects) is not tuple
@@ -142,6 +145,7 @@ class Prefix:
             'environment_version': self.environment_version,
             'source_version': self.source_version,
             'protected_sources': list(self.protected_sources),
+            'task_kind': self.task_kind,
         }
 
     @property
@@ -156,7 +160,8 @@ class Prefix:
 def freeze_prefix(*, root_case_id: str, observations: tuple[ObservedStep, ...],
                   objects: tuple[InformationObject, ...], max_sequence_no: int,
                   capabilities: tuple[str, ...], environment_version: str,
-                  source_version: str, protected_sources: tuple[str, ...] = ()) -> Prefix:
+                  source_version: str, protected_sources: tuple[str, ...] = (),
+                  task_kind: str = 'unknown') -> Prefix:
     """Cut a recorder's append-only observations; never rebuild from final truth."""
     sequence(max_sequence_no, zero=True)
     if (type(observations) is not tuple or type(objects) is not tuple
@@ -172,5 +177,5 @@ def freeze_prefix(*, root_case_id: str, observations: tuple[ObservedStep, ...],
         tuple(sorted((o for o in objects if o.observed_at <= max_sequence_no),
                      key=lambda o: (o.observed_at, o.object_id))),
         tuple(sorted(capabilities)), environment_version, source_version,
-        protected_sources=protected_sources,
+        protected_sources=protected_sources, task_kind=task_kind,
     )

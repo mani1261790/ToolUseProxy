@@ -127,7 +127,8 @@ def execute_branch(sender: Sender, *, root_case_id: str, source: str,
                                observations=tuple(steps), objects=tuple(objects),
                                capabilities=('file', 'http', 'tool_output'),
                                environment_version=environment_version,
-                               source_version='synthetic-source-v1', protected_sources=('private-source',))
+                               source_version='synthetic-source-v1', protected_sources=('private-source',),
+                               task_kind=encoding + '_http')
         rows.append(Continuation(prefix, branch, mode, 'fixed_replay', 'fixed_distribution',
                                  1 / 3 if cut == 1 else 1.0,
                                  tuple(s for s in steps if s.sequence_no > cut),
@@ -147,7 +148,7 @@ def reference_suite(sender: Sender, *, environment_version: str,
     for source, encoding in tasks:
         for branch in BRANCHES:
             for mode in ('observe', 'enforce'):
-                records.extend(execute_branch(sender, root_case_id=f'{source}-{encoding}',
+                records.extend(execute_branch(sender, root_case_id=f'{source}-http-family',
                                               source=source, encoding=encoding, branch=branch, mode=mode,
                                               environment_version=environment_version))
     return tuple(records)

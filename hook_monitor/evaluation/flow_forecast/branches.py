@@ -96,7 +96,7 @@ class Continuation:
                       self.prefix.observations + self.observations,
                       self.prefix.objects + self.objects, self.prefix.capabilities,
                       self.prefix.environment_version, self.prefix.source_version,
-                      protected_sources=self.prefix.protected_sources)
+                      protected_sources=self.prefix.protected_sources, task_kind=self.prefix.task_kind)
         by_id = {o.object_id: o for o in full.objects}
         if (type(self.protected_sources) is not tuple or not self.protected_sources
                 or len(set(self.protected_sources)) != len(self.protected_sources)

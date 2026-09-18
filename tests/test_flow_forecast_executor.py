@@ -110,3 +110,14 @@ def test_existing_generation_output_is_never_redispatched(tmp_path, monkeypatch)
     with pytest.raises(FileExistsError):
         runner.run(tmp_path, path)
     assert (path / 'intent.json').read_text() == 'pending'
+
+
+def test_encoding_variants_share_root_split_but_known_task_is_visible():
+    values = tuple(row for variant in ('initial', 'alternate')
+                   for row in reference_suite(FixtureSender(), environment_version='test-v1', task_variant=variant))
+    dataset = assemble(values)
+    assert dataset.summary()['root_count'] == 2
+    for source in ('private-source', 'public-source'):
+        prefixes = [p for p in dataset.prefixes if p.observations[0].inputs == (source,)]
+        assert {p.model_input()['task_kind'] for p in prefixes} == {'plain_http', 'base64_http'}
+        assert len({dataset.split.partition(p) for p in prefixes}) == 1

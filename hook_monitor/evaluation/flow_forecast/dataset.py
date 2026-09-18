@@ -199,7 +199,7 @@ def read_dataset(directory: Path) -> Dataset:
             fields = row['input']
             if set(fields) != {'schema', 'max_sequence_no', 'observations', 'objects',
                                'capabilities', 'environment_version', 'source_version',
-                               'protected_sources'}:
+                               'protected_sources', 'task_kind'}:
                 raise ForecastDataError('unknown_model_input_field')
             prefix = Prefix(**{**fields, 'root_case_id': row['root_case_id'],
                                'observations': tuple(_step(s) for s in fields['observations']),
