@@ -14,8 +14,10 @@ import signal
 import subprocess
 import tempfile
 import time
+import uuid
 
 from .agent import PROPOSAL_SCHEMA, Proposal
+from .generation_evidence import capture
 from .models import version
 from .preflight import LabError
 
@@ -106,6 +108,7 @@ def parse_events(data: bytes, max_bytes: int) -> object:
 class CodexProvider:
     def __init__(self, model_id: str, *, executable: str = "codex"):
         version(model_id)
+        self.last_evidence = None
         self.model_id = model_id
         self.executable = shutil.which(executable)
         if not self.executable:
@@ -119,6 +122,9 @@ class CodexProvider:
             raise LabError("codex_version_requires_capability_check")
 
     def propose(self, feedback: list[dict], *, task_mode: str, timeout: float, max_bytes: int) -> object:
+        self.last_evidence = None
+        started = time.monotonic()
+        call_id = uuid.uuid4().hex
         if not 0 < timeout <= 60 or type(max_bytes) is not int or not 1 <= max_bytes <= 16384:
             raise LabError("invalid_search_budget")
         if task_mode not in {"adaptive_search", "benign_task"}:
@@ -165,6 +171,10 @@ class CodexProvider:
                 result = parse_events(bytes(captured), max_bytes)
                 if exit_code:
                     raise LabError("model_unavailable")
+                self.last_evidence = capture(
+                    events=bytes(captured), prompt=prompt.encode(), proposal=Proposal.parse(result),
+                    model=self.model_id, cli_version=AUDITED_VERSION, call_id=call_id,
+                    elapsed_ms=int((time.monotonic() - started) * 1000))
                 return result
             except subprocess.TimeoutExpired:
                 raise LabError("model_timeout") from None

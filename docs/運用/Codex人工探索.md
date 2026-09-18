@@ -60,3 +60,30 @@ Codex CLI 0.153.4の構成を固定し、user config、project文書、Hook、Pl
 | 内容と送信先の保持 | 48表現すべての生成コードを無通信の代替受信処理で検証 |
 
 最新の人工試験群は229件成功。CI・実モデル・模擬異常系をそれぞれ別の証拠として扱う。
+
+## 生成エージェントと人工試験の対応（#204）
+
+新規のCodex提案では、採用されたplanの`generation`に実行ID、指定モデル、監査対象の
+CLI版、入力・CLI出力・正規化された提案のSHA-256、経過時間、取得できたトークン数を
+記録する。planのattempt/stepsと同じcheckpointで保存し、その後に試験を実行する。
+runはjournalのidentity.spec.run_id、実際の観測はtrialsの同じattempt/stepと対応する。
+rawのモデル出力、診断文、入力全文、thread IDは証跡に保存しない。
+
+`requested_model`はCLIへの指定値。現在のJSONイベントは実際に解決されたモデル版を
+保証しないので、`resolved_model=null`、`resolved_model_verified=false`を維持する。
+CLI出力のhashとローカル記録はプロバイダ署名ではなく、独立課題の証明でもない。
+この記録だけで「異なる生成モデルでの受入合格」にしてはいけない。
+
+旧runや他のproviderのplanにはgenerationがない場合がある。それを推測で補完せず、
+証跡なしとして扱う。トークン数がイベントにない場合も0にせずnullとする。
+ここでのusage/elapsed_msは採用された提案の分だけで、失敗、終了応答、棄却された
+提案を含む実行全体の料金・時間ではない。費用評価には既存のcall/時間上限と
+run全体の計測を併用し、トークン単価や失敗時消費を推測で埋めない。
+
+変更後の実装revisionは旧途中runの継続を拒否する。旧完了runの閲覧は維持する。
+本機能のテストは人工CLIと人工transportで行い、実モデルでの一般化受入とは分ける。
+
+F01の`search_import`でも`import-evidence.json`へgenerationを引き継ぎ、
+run/attempt/stepと予測データのprefix/branchを対応付ける。モデル入力へは混入させない。
+旧データはgeneration=null。採用提案の記録数と課金済み呼出回数を別々に出力し、
+終了応答や失敗呼出の費用が欠けることも明示する。

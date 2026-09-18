@@ -17,7 +17,7 @@ import time
 from hook_monitor.evaluation.flow_lab.agent import Proposal
 from hook_monitor.evaluation.flow_lab.budget import Budget
 from hook_monitor.evaluation.flow_lab.controller import TERMINAL, validate_state
-from hook_monitor.evaluation.flow_lab.models import Observation, RunSpec
+from hook_monitor.evaluation.flow_lab.models import Observation, RunSpec, version
 from hook_monitor.evaluation.flow_lab.preflight import LabError
 from hook_monitor.evaluation.flow_lab.search_state import APPLICATION_ID as SEARCH_ID
 from hook_monitor.evaluation.flow_lab.storage import APPLICATION_ID as TRIAL_ID
@@ -54,6 +54,7 @@ def import_search(directory: Path):
             state = _json(row[0])
         validate_state(state, Budget(**state['identity']['budget']))
         spec = RunSpec(**state['identity']['spec'])
+        version(state['identity']['model'])
         if spec.mode not in {'adaptive_search', 'benign_task'} or state['status'] not in TERMINAL or state['phase'] != 'ready':
             raise ForecastDataError('unfinished_search_not_importable')
         observations = {}
@@ -115,13 +116,20 @@ def import_search(directory: Path):
                 branches.append(Continuation(prefix, step_id, observation.policy_mode if observation else 'enforce',
                                              'historical_observation', 'adaptive_search', None, steps, objects, edges,
                                              prefix.protected_sources, arrivals, complete, termination, spec.run_id))
-                audit.append({'step_id': step_id, 'action': asdict(action),
+                audit.append({'step_id': step_id, 'branch_id': step_id,
+                              'prefix_id': prefix.prefix_id, 'attempt_id': plan['attempt'],
+                              'generation': plan.get('generation'), 'action': asdict(action),
                               'observation': asdict(observation) if observation else None})
         if set(observations) - consumed:
             raise ForecastDataError('unmapped_search_observation')
         return assemble(tuple(branches), provenance='synthetic-flow-lab-v1'), {
             'schema': 1, 'kind': 'historical_synthetic_search', 'run': asdict(spec),
             'records': audit, 'source_state_digest': digest(state),
+            'generator': {'requested_model': state['identity']['model'],
+                          'resolved_model_verified': False, 'charged_model_calls': state['calls'],
+                          'recorded_trial_calls': len({p['generation']['call_id'] for p in state['plans']
+                                                     if 'generation' in p}),
+                          'complete_run_cost_recorded': False},
             'limitations': ['no_paired_counterfactual', 'no_recorded_intermediate_truth',
                             'independent_fresh_guard_actions', 'not_natural_frequencies'],
         }

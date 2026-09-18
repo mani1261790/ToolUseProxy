@@ -11,6 +11,7 @@ import uuid
 
 from .agent import Action, Proposal, ProposalProvider
 from .budget import Budget
+from .generation_evidence import validate as validate_generation_evidence
 from .models import Observation, RecordError, RunSpec, identifier, utc_now
 from .preflight import LabError
 from .search_state import SearchJournal
@@ -84,10 +85,19 @@ def validate_state(state: dict, budget: Budget) -> None:
             raise ValueError
         identifiers = set()
         keys = set()
+        generation_calls = set()
         for plan in state["plans"]:
-            if not isinstance(plan, dict) or set(plan) != {"key", "attempt", "steps", "actions"}:
+            if not isinstance(plan, dict) or set(plan) not in (
+                    {"key", "attempt", "steps", "actions"},
+                    {"key", "attempt", "steps", "actions", "generation"}):
                 raise ValueError
             proposal = Proposal.parse({"status": "propose", "actions": plan["actions"]})
+            if "generation" in plan:
+                validate_generation_evidence(plan["generation"], proposal, state["identity"]["model"])
+                call_id = plan["generation"]["call_id"]
+                if call_id in generation_calls:
+                    raise ValueError
+                generation_calls.add(call_id)
             if len(proposal.actions) > budget.steps or plan["key"] != proposal.key:
                 raise ValueError
             if plan["key"] in keys:
@@ -188,7 +198,14 @@ def run_search(journal: SearchJournal, store: TrialStore, spec: RunSpec,
                 return stop("repeated_proposal")
             if spec.mode == "benign_task" and any(a.source != "public" for a in proposal.actions):
                 return stop("invalid_model_proposal")
+            generation = getattr(provider, "last_evidence", None)
+            if generation is not None:
+                validate_generation_evidence(generation, proposal, provider.model_id)
+                if any(p.get("generation", {}).get("call_id") == generation["call_id"]
+                       for p in state["plans"]):
+                    raise LabError("generation_call_reused")
             state["plans"].append({"key": proposal.key, "attempt": uuid.uuid4().hex,
                                    "steps": [uuid.uuid4().hex for _ in proposal.actions],
-                                   "actions": [asdict(a) for a in proposal.actions]})
+                                   "actions": [asdict(a) for a in proposal.actions],
+                                   **({"generation": generation} if generation is not None else {})})
             journal.write(state)

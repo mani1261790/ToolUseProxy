@@ -36,11 +36,11 @@ class Transport:
         return ('yes', 'yes') if self.arrived else ('no', 'no')
 
 
-def create_search(path, arrived=False):
+def create_search(path, arrived=False, provider=None):
     spec = RunSpec(uuid.uuid4().hex, 'adaptive-v1', 'source-test', 'policy-test',
                    'a' * 64, utc_now(), mode='adaptive_search')
     with SearchJournal(path) as journal, TrialStore(path / 'trials') as store:
-        result = run_search(journal, store, spec, Transport(arrived), Provider(), Budget())
+        result = run_search(journal, store, spec, Transport(arrived), provider or Provider(), Budget())
         assert result['status'] == 'completed'
     return spec
 
@@ -51,6 +51,8 @@ def test_historical_import_is_read_only_and_stopped_samples_stay_unknown(tmp_pat
     files = tuple(path.rglob('*.sqlite3'))
     before = {p: hashlib.sha256(p.read_bytes()).hexdigest() for p in files}
     data, audit = import_search(path)
+    assert audit['records'][0]['generation'] is None
+    assert audit['generator']['recorded_trial_calls'] == 0
     assert len(data.branches) == 1
     assert data.branches[0].probability is None
     assert data.branches[0].termination == 'blocked'
@@ -93,3 +95,31 @@ def test_unfinished_search_is_not_admitted_to_completed_dataset(tmp_path):
         conn.execute("UPDATE lab_run SET state='running'")
     with pytest.raises(ForecastDataError, match='search_trial_revision_mismatch'):
         import_search(path)
+
+
+def test_import_preserves_generator_to_trial_mapping_outside_prediction_inputs(tmp_path):
+    from hook_monitor.evaluation.flow_lab.agent import Proposal
+    from hook_monitor.evaluation.flow_lab.generation_evidence import capture
+
+    class WithEvidence(Provider):
+        def propose(self, *args, **kwargs):
+            value = super().propose(*args, **kwargs)
+            self.last_evidence = capture(
+                events=b'{"type":"turn.completed"}', prompt=b'synthetic',
+                proposal=Proposal.parse(value), model=self.model_id,
+                cli_version='codex-cli 0.153.4', call_id=uuid.uuid4().hex, elapsed_ms=1)
+            return value
+
+    path = tmp_path / 'search'
+    spec = create_search(path, provider=WithEvidence())
+    data, audit = import_search(path)
+    branch, record = data.branches[0], audit['records'][0]
+    assert audit['run']['run_id'] == spec.run_id
+    assert record['branch_id'] == branch.branch_id == record['observation']['step_id']
+    assert record['attempt_id'] == record['observation']['attempt_id']
+    assert record['prefix_id'] == branch.prefix.prefix_id
+    assert record['generation']['requested_model'] == 'synthetic-test'
+    assert audit['generator']['recorded_trial_calls'] == 1
+    assert audit['generator']['charged_model_calls'] == 2
+    assert audit['generator']['resolved_model_verified'] is False
+    assert 'generation' not in branch.prefix.model_input()
