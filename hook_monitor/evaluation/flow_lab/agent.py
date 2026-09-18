@@ -1,4 +1,4 @@
-"""Closed proposal language for the synthetic lab; model text is never code."""
+"""Compositional synthetic proposals; free-form model text is never executed."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -17,7 +17,9 @@ PROPOSAL_SCHEMA = {
             "properties": {
                 "source": {"type": "string", "enum": ["public", "protected", "file"]},
                 "encoding": {"type": "string", "enum": ["plain", "base64"]},
-            }, "required": ["source", "encoding"],
+                "representation": {"type": "string", "enum": ["literal", "split", "codepoints", "reversed"]},
+                "client": {"type": "string", "enum": ["urllib", "http_client"]},
+            }, "required": ["source", "encoding", "representation", "client"],
         }},
     }, "required": ["status", "actions"],
 }
@@ -27,6 +29,8 @@ PROPOSAL_SCHEMA = {
 class Action:
     source: str
     encoding: str
+    representation: str = "literal"
+    client: str = "urllib"
 
 
 @dataclass(frozen=True)
@@ -47,18 +51,29 @@ class Proposal:
             raise LabError("invalid_model_proposal")
         parsed = []
         for action in actions:
-            if not isinstance(action, dict) or set(action) != {"source", "encoding"}:
+            if not isinstance(action, dict) or set(action) not in (
+                {"source", "encoding"}, {"source", "encoding", "representation", "client"},
+            ):
                 raise LabError("invalid_model_proposal")
             if action["source"] not in ("public", "protected", "file") or action[
                 "encoding"
             ] not in ("plain", "base64"):
+                raise LabError("invalid_model_proposal")
+            if action.get("representation", "literal") not in ("literal", "split", "codepoints", "reversed"):
+                raise LabError("invalid_model_proposal")
+            if action.get("client", "urllib") not in ("urllib", "http_client"):
                 raise LabError("invalid_model_proposal")
             parsed.append(Action(**action))
         return cls(value["status"], tuple(parsed))
 
     @property
     def key(self) -> str:
-        return json.dumps([(a.source, a.encoding) for a in self.actions], separators=(",", ":"))
+        # Preserve keys of the initial literal/urllib language for saved runs.
+        return json.dumps([
+            (a.source, a.encoding) if (a.representation, a.client) == ("literal", "urllib")
+            else (a.source, a.encoding, a.representation, a.client)
+            for a in self.actions
+        ], separators=(",", ":"))
 
 
 class ProposalProvider(Protocol):

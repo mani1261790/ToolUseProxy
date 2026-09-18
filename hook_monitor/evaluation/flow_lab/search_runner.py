@@ -19,6 +19,7 @@ from .runner import SCENARIOS, run_scenario, validate_controls
 from .search_state import SearchJournal
 from .storage import StoreError, TrialStore
 from .transport import FixedTransport
+from .adaptive_transport import AdaptiveTransport
 
 
 def execute(repository: Path, output: Path, model: str, *, mode="adaptive_search",
@@ -62,35 +63,63 @@ def execute(repository: Path, output: Path, model: str, *, mode="adaptive_search
                                detector_revision=revision, policy_revision="fixed-exact-externality-v1",
                                environment_digest=image[7:], started_at=utc_now(), mode=mode,
                                max_trials=budget.trials, max_steps=budget.steps)
-            # Initial fixed baseline; on resume, fresh public/protected receiver controls.
-            # All control attempts consume the SAME global trial budget as search.
+            # Controls and exploration share the global trial budget. Every actual
+            # exploration receiver is tested before the first guarded model action.
             with TrialStore(output / "controls") as controls:
                 controls.require_no_unfinished_runs()
-                scenarios = SCENARIOS if controls.trial_count() == 0 else (SCENARIOS[0], SCENARIOS[2])
+                initial = controls.trial_count() == 0
+                if not initial:
+                    baselines = [run for run in controls.runs() if run.suite_version == "fixed-http-v1"]
+                    if (len(baselines) != 1 or baselines[0].detector_revision != revision
+                            or baselines[0].environment_digest != image[7:]
+                            or controls.summary(baselines[0])["state"] != "complete"
+                            or not all(validate_controls(controls.read(baselines[0])).values())):
+                        raise LabError("trial_control_failed")
+                needed = (len(SCENARIOS) if initial else 0) + 2
                 used_search = len(saved["plans"]) if saved else 0
-                if controls.trial_count() + used_search + len(scenarios) >= budget.trials:
+                if controls.trial_count() + used_search + needed > budget.trials:
+                    if saved:
+                        saved["status"] = "trial_budget_exhausted"
+                        journal.write(saved)
+                        store.finish(spec, utc_now(), exhausted=True)
                     return {"status": "trial_budget_exhausted", "synthetic_only": True}
-                control_spec = RunSpec(run_id=uuid.uuid4().hex, suite_version="fixed-http-v1",
-                                       detector_revision=revision,
-                                       policy_revision=spec.policy_revision,
-                                       environment_digest=image[7:], started_at=utc_now())
-                controls.start_fixed_suite(control_spec)
-                with FixedTransport(image) as transport:
-                    results = [run_scenario(transport, controls, control_spec, s) for s in scenarios]
-                checks = validate_controls(results) if len(scenarios) == len(SCENARIOS) else {
-                    "public_receiver_control": results[0].receiver_arrival == "yes"
-                    and results[0].protected_arrival == "no",
-                    "protected_receiver_control": results[1].protected_arrival == "yes",
-                }
-                if not all(checks.values()):
-                    raise LabError("trial_control_failed")
-                controls.finish(control_spec, utc_now())
-                control_count = controls.trial_count()
-            with FixedTransport(image) as transport:
-                result = run_search(journal, store, spec, transport, provider, budget,
-                                    control_trials=control_count, started_at=started)
+
+                def control_run(transport, scenarios, suite_version):
+                    control_spec = RunSpec(
+                        run_id=uuid.uuid4().hex, suite_version=suite_version,
+                        detector_revision=revision, policy_revision=spec.policy_revision,
+                        environment_digest=image[7:], started_at=utc_now())
+                    controls.start_fixed_suite(control_spec)
+                    results = []
+                    for scenario in scenarios:
+                        origin = saved["started"] if saved else started
+                        if budget.remaining_seconds(origin, time.time()) <= 0:
+                            controls.finish(control_spec, utc_now(), exhausted=True)
+                            raise LabError("time_budget_exhausted")
+                        results.append(run_scenario(transport, controls, control_spec, scenario))
+                    controls.finish(control_spec, utc_now())
+                    return results
+
+                checks = {}
+                if initial:
+                    with FixedTransport(image) as baseline:
+                        checks = validate_controls(control_run(baseline, SCENARIOS, "fixed-http-v1"))
+                    if not all(checks.values()):
+                        raise LabError("trial_control_failed")
+                with AdaptiveTransport(image) as transport:
+                    current = control_run(transport, (SCENARIOS[0], SCENARIOS[2]),
+                                          "adaptive-receiver-v1")
+                    checks.update({
+                        "current_public_receiver_control": current[0].receiver_arrival == "yes"
+                        and current[0].protected_arrival == "no",
+                        "current_protected_receiver_control": current[1].protected_arrival == "yes",
+                    })
+                    if not all(checks.values()):
+                        raise LabError("trial_control_failed")
+                    result = run_search(journal, store, spec, transport, provider, budget,
+                                        control_trials=controls.trial_count(), started_at=started)
             return {**result, "controls": checks, "model": model, "synthetic_only": True,
-                    "native_codex_delivery": "not_tested", "proposal_language": "fixed-http-v1",
+                    "native_codex_delivery": "not_tested", "proposal_language": "composed-http-v2",
                     "arbitrary_command_search": False, "public_internet": False,
                     "defense_perfect": False}
 

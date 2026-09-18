@@ -26,7 +26,7 @@ TERMINAL = {"completed", "model_refused", "repeated_proposal", "trial_budget_exh
 
 def execute_action(transport: FixedTransport, store: TrialStore, spec: RunSpec,
                    action: Action, attempt_id: str, step_id: str, number: int) -> Observation:
-    command = transport.prepare(step_id, source=action.source, encoding=action.encoding)
+    command = transport.prepare(step_id, **asdict(action))
     if not store.reserve(spec, attempt_id=attempt_id, step_id=step_id, tool_use_id=step_id,
                          step_no=number, reserved_at=utc_now()):
         raise LabError("operation_requires_reconciliation")
