@@ -4,11 +4,11 @@ import json
 import pytest
 
 from hook_monitor.evaluation.flow_lab.issue_runner import read_proposals
-from hook_monitor.evaluation.flow_lab.outbox import Outbox
+from hook_monitor.evaluation.flow_lab.outbox import GitHubClient, Outbox
 from hook_monitor.evaluation.flow_lab.preflight import LabError
 from hook_monitor.evaluation.flow_lab.proposal import IssueProposal, document, parse_proposal
 from hook_monitor.evaluation.flow_lab.search_state import SearchJournal
-from tooluseproxy.pilot_worker import GitHubClient, SyncFailure
+from tooluseproxy.pilot_worker import SyncFailure
 
 
 def item(revision='a', step='b', **kwargs):
@@ -218,7 +218,7 @@ def test_shared_github_client_sends_structured_json_only(monkeypatch):
     title, body = document(item())
     GitHubClient().create('owner/repository', title, body)
     command, kwargs = calls[0]
-    assert command == ['gh', 'api', '--method', 'POST', 'repos/owner/repository/issues', '--input', '-']
+    assert command == ['gh', 'api', '--hostname', 'github.com', '--method', 'POST', 'repos/owner/repository/issues', '--input', '-']
     assert json.loads(kwargs['input']) == {'title': title, 'body': body}
 
 

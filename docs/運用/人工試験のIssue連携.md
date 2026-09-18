@@ -55,7 +55,7 @@ python3 -m hook_monitor.evaluation.flow_lab.issue_runner sync \
 
 未対応の問題は新規Issueを作る。対応済みなら同じIssueへ観測をコメントする。
 既存Issueの再open・close、コード・PR・Project状態の変更はしない。
-共有先はoutbox作成時に固定し、同じ保存先の別repositoryへの切替を拒否する。
+共有先ホストはgithub.comに固定し、GH_HOSTの変更で転送しない。repositoryはoutbox作成時に固定し、同じ保存先の別repositoryへの切替を拒否する。
 1 repositoryの送信には1つの永続outboxを使う。複数ホスト・複数outboxからの
 同時投稿をGitHub側で原子的に排除する仕組みではない。
 

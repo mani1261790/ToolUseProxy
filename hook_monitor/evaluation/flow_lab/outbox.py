@@ -10,12 +10,20 @@ from pathlib import Path
 import re
 import sqlite3
 
-from tooluseproxy.pilot_worker import GitHubClient, SyncFailure
+from tooluseproxy.pilot_worker import GitHubClient as SharedGitHubClient, SyncFailure
 from .models import canonical
 from .preflight import LabError
 from .proposal import document, parse_proposal
 
 APPLICATION_ID = 0x5455504F
+
+
+class GitHubClient(SharedGitHubClient):
+    def _run(self, args, **kwargs):
+        # A changed GH_HOST must not redirect a queue bound to github.com.
+        if not args or args[0] != 'api':
+            raise SyncFailure('invalid')
+        return super()._run(['api', '--hostname', 'github.com', *args[1:]], **kwargs)
 
 
 def number(value):
