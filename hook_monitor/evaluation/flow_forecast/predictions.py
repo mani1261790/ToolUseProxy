@@ -35,8 +35,8 @@ class Route:
             if (relation == 'send') != (kind == 'sink'):
                 raise ForecastDataError('invalid_predicted_sink')
             previous = offset
-        if self.steps[-1][2] != 'sink' or any(s[2] == 'sink' for s in self.steps[:-1]):
-            raise ForecastDataError('route_must_end_at_sink')
+        if any(s[2] == 'sink' for s in self.steps[:-1]):
+            raise ForecastDataError('route_cannot_continue_after_sink')
 
     @property
     def shape(self):
@@ -88,7 +88,8 @@ class Forecast:
             raise ForecastDataError('forecast_probability_mass_mismatch')
         if self.protected_probability is not None:
             p = probability(self.protected_probability)
-            lower = sum(o.probability for o in self.outcomes if o.routes)
+            lower = sum(o.probability for o in self.outcomes
+                        if any(route.steps[-1][2] == 'sink' for route in o.routes))
             upper = lower + self.other_probability + self.unknown_probability
             if not lower - 1e-9 <= p <= upper + 1e-9:
                 raise ForecastDataError('risk_inconsistent_with_joint_outcomes')

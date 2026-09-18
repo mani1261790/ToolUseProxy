@@ -88,13 +88,15 @@ def score_routes(forecast: Forecast, branch: Continuation, *, top_k=3) -> dict:
     recall = tp / len(edges) if edges else None
     denominator = len(predicted_edges) + len(edges)
     actual_shapes = {route.shape for route in actual}
-    candidates = [{route.shape for route in o.routes} for o in ranked[:top_k]]
+    candidates = [{route.shape for route in o.routes if route.steps[-1][2] == 'sink'}
+                  for o in ranked[:top_k]]
     covered = set().union(*candidates) if candidates else set()
     return {**common, 'status': 'scored', 'edge_precision': precision, 'edge_recall': recall,
             'edge_f1': 2 * tp / denominator if denominator else None,
             'joint_top_k_hit': any(candidate == actual_shapes for candidate in candidates),
             'route_coverage': len(actual_shapes & covered) / len(actual_shapes) if actual_shapes else None,
-            'candidate_missing': not any({r.shape for r in o.routes} == actual_shapes for o in ranked)}
+            'candidate_missing': not any({r.shape for r in o.routes if r.steps[-1][2] == 'sink'}
+                                         == actual_shapes for o in ranked)}
 
 
 @dataclass(frozen=True)

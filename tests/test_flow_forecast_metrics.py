@@ -110,3 +110,14 @@ def test_missing_warning_predictions_do_not_earn_correct_negative_credit():
     assert score_early_warning(negative, (alarm,), threshold=.5)['false_alarm'] is True
     missed = score_early_warning(item, (unknown,), threshold=.5)
     assert missed['detected_early'] is False and missed['unknown_prediction_points'] == 1
+
+
+def test_partial_predicted_path_can_score_edges_without_claiming_arrival():
+    item = branch()
+    partial = Route('source', 'memory', ((2, 'base64', 'bytes'),))
+    forecast = prediction(item, (Outcome((partial,), 1),), p=0, horizon=2)
+    result = score_routes(forecast, item)
+    assert result['edge_f1'] == 1
+    assert result['joint_top_k_hit'] and result['candidate_missing'] is False
+    with pytest.raises(ForecastDataError, match='risk_inconsistent'):
+        replace(forecast, protected_probability=1)
