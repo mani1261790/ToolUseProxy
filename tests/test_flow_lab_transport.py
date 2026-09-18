@@ -103,3 +103,31 @@ def test_cleanup_only_owned_exact_resources(monkeypatch):
         ["docker", "network", "rm", transport.network],
     ]
     assert transport.owned == []
+
+
+@pytest.mark.parametrize("address", [None, "", "PRIVATE_VALUE", [], {}, 123, "8.8.8.8",
+                                     "::1", "127.0.0.1", "0.0.0.0"])
+def test_invalid_receiver_address_has_fixed_error(address):
+    with pytest.raises(LabError, match="^invalid_receiver_identity$"):
+        module.python_command(address, "a" * 32, source="public")
+
+
+@pytest.mark.parametrize("info", [
+    {}, {"NetworkSettings": None}, {"NetworkSettings": {"Networks": {}}},
+    {"NetworkSettings": {"Networks": {"fixed": {}}}},
+    {"NetworkSettings": {"Networks": {"fixed": {"IPAddress": "PRIVATE_VALUE"}}}},
+])
+def test_receiver_setup_failure_reclaims_owned_resources(monkeypatch, info):
+    transport = module.FixedTransport("sha256:" + "a" * 64)
+    transport.network = "fixed"
+    calls = []
+    monkeypatch.setattr(module, "command", lambda args, **kw: calls.append(args))
+    monkeypatch.setattr(transport, "check_network", lambda: None)
+    monkeypatch.setattr(transport, "inspect", lambda *a, **kw: info)
+    monkeypatch.setattr(transport, "records", lambda: [{"kind": "ready"}])
+    with pytest.raises(LabError, match="^invalid_receiver_identity$"):
+        transport.__enter__()
+    assert ["docker", "rm", "--force", transport.receiver] in calls
+    assert calls[-1] == ["docker", "network", "rm", "fixed"]
+    assert transport.owned == []
+    assert not transport.network_created

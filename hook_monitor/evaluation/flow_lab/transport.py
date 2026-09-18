@@ -107,9 +107,23 @@ def validate_network(value: object, name: str) -> None:
         raise LabError("unsafe_network_profile")
 
 
+def receiver_address(value: object) -> str:
+    # The fixed bridge and generated HTTP URL support private IPv4 only.
+    try:
+        if not isinstance(value, str):
+            raise ValueError
+        address = ipaddress.IPv4Address(value)
+        if not address.is_private or address.is_loopback or address.is_unspecified:
+            raise ValueError
+    except (ValueError, TypeError):
+        raise LabError("invalid_receiver_identity") from None
+    return str(address)
+
+
 def python_command(address: str, step_id: str, *, source: str, encoding: str = "plain") -> str:
     """Generate the exact command evaluated by the guard and executed by the sender."""
-    if not ipaddress.ip_address(address).is_private or not re.fullmatch(r"[a-f0-9]{32}", step_id):
+    address = receiver_address(address)
+    if not re.fullmatch(r"[a-f0-9]{32}", step_id):
         raise LabError("invalid_receiver_identity")
     if source not in {"public", "protected", "file"} or encoding not in {"plain", "base64"}:
         raise LabError("invalid_scenario")
@@ -162,10 +176,11 @@ class FixedTransport:
             else:
                 raise LabError("receiver_not_ready")
             info = self.inspect(self.receiver, network=self.network)
-            address = info["NetworkSettings"]["Networks"][self.network]["IPAddress"]
-            if not ipaddress.ip_address(address).is_private:
-                raise LabError("invalid_receiver_identity")
-            self.address = address
+            try:
+                address = info["NetworkSettings"]["Networks"][self.network]["IPAddress"]
+            except (KeyError, TypeError):
+                raise LabError("invalid_receiver_identity") from None
+            self.address = receiver_address(address)
             return self
         except Exception:
             self.close()

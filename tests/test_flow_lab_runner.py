@@ -99,3 +99,25 @@ def test_cli_failure_does_not_print_underlying_os_message(monkeypatch, capsys):
     result = capsys.readouterr().out
     assert "trial_io_error" in result
     assert "PRIVATE_PATH" not in result
+
+
+@pytest.mark.parametrize("pending", [False, True])
+def test_rerun_refuses_unfinished_run_before_docker_or_dispatch(monkeypatch, tmp_path, pending):
+    run = spec()
+    directory = tmp_path / "lab"
+    with TrialStore(directory) as store:
+        store.start(run)
+        if pending:
+            store.reserve(run, attempt_id=uuid.uuid4().hex, step_id=uuid.uuid4().hex,
+                          tool_use_id=uuid.uuid4().hex, step_no=1, reserved_at=utc_now())
+        original = store.pending(run)
+    def unexpected(*args, **kwargs):
+        pytest.fail("an unfinished run must be refused before build/dispatch")
+    monkeypatch.setattr(runner, "build_context", unexpected)
+    monkeypatch.setattr(runner, "FixedTransport", unexpected)
+    from hook_monitor.evaluation.flow_lab.storage import StoreError
+    with pytest.raises(StoreError, match="unfinished_run_requires_reconciliation"):
+        runner.run_suite(tmp_path, directory)
+    with TrialStore(directory) as store:
+        assert store.pending(run) == original
+        assert store.read(run) == []
