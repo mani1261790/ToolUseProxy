@@ -89,7 +89,11 @@ syncは未処理・不明・拒否が残れば終了コード1、全件確認済
 - [旧版の観測](https://github.com/mani1261790/ToolUseProxy/issues/140#issuecomment-5725393913)
 - [新版の観測](https://github.com/mani1261790/ToolUseProxy/issues/140#issuecomment-5725394067)
 
-この実投稿確認は既存Issueへのコメント経路であり、新規Issue作成の実GitHub試験ではない。
+新規作成は[連携試験#199](https://github.com/mani1261790/ToolUseProxy/issues/199)で確認した。
+人工の未試行記録を投稿後、専用outboxでローカル確定記録の喪失を模擬。
+直後の照会では結果不明を保持し、次の照会でマーカーを発見して確定できた。
+復旧時は追加POSTを禁止したクライアントを使い、重複Issueがないことを確認した。
+このIssueは検出器の不具合ではなく連携試験として完了・close済み。
 公開Python送信の保守的停止は#140として残る。#130〜#132の接続だけで検出器の改善が
 完了したとは扱わず、次に#140を修正し、正常操作と保護停止を再比較する。
 ToolUseProxyは無効のまま。実利用DBやrootの利用者管理manifestは変更しない。
