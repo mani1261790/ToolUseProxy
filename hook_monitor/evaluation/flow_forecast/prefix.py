@@ -87,6 +87,7 @@ class Prefix:
     environment_version: str
     source_version: str
     schema: int = SCHEMA
+    protected_sources: tuple[str, ...] = ()
 
     def __post_init__(self):
         for value in (self.root_case_id, self.environment_version, self.source_version):
@@ -110,6 +111,11 @@ class Prefix:
             raise ForecastDataError('duplicate_object')
         if any(obj.observed_at > self.max_sequence_no for obj in self.objects):
             raise ForecastDataError('future_object_in_prefix')
+        if (type(self.protected_sources) is not tuple
+                or len(set(self.protected_sources)) != len(self.protected_sources)
+                or any(key not in by_id or by_id[key].kind != 'source'
+                       for key in self.protected_sources)):
+            raise ForecastDataError('invalid_visible_protection')
         introduced = set()
         for step in self.observations:
             if step.tool not in self.capabilities:
@@ -135,6 +141,7 @@ class Prefix:
             'capabilities': list(self.capabilities),
             'environment_version': self.environment_version,
             'source_version': self.source_version,
+            'protected_sources': list(self.protected_sources),
         }
 
     @property
@@ -149,7 +156,7 @@ class Prefix:
 def freeze_prefix(*, root_case_id: str, observations: tuple[ObservedStep, ...],
                   objects: tuple[InformationObject, ...], max_sequence_no: int,
                   capabilities: tuple[str, ...], environment_version: str,
-                  source_version: str) -> Prefix:
+                  source_version: str, protected_sources: tuple[str, ...] = ()) -> Prefix:
     """Cut a recorder's append-only observations; never rebuild from final truth."""
     sequence(max_sequence_no, zero=True)
     if (type(observations) is not tuple or type(objects) is not tuple
@@ -165,4 +172,5 @@ def freeze_prefix(*, root_case_id: str, observations: tuple[ObservedStep, ...],
         tuple(sorted((o for o in objects if o.observed_at <= max_sequence_no),
                      key=lambda o: (o.observed_at, o.object_id))),
         tuple(sorted(capabilities)), environment_version, source_version,
+        protected_sources=protected_sources,
     )

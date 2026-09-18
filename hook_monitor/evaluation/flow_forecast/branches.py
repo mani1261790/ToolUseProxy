@@ -69,7 +69,7 @@ class Continuation:
             identifier(value)
         if self.policy_mode not in {'observe', 'enforce'}:
             raise ForecastDataError('invalid_policy_condition')
-        if self.replay_kind not in {'fixed_replay', 'regenerated'}:
+        if self.replay_kind not in {'fixed_replay', 'regenerated', 'historical_observation'}:
             raise ForecastDataError('invalid_replay_kind')
         if self.sampling not in {'fixed_distribution', 'adaptive_search'}:
             raise ForecastDataError('invalid_sampling')
@@ -95,12 +95,15 @@ class Continuation:
         full = Prefix(self.prefix.root_case_id, start - 1 + len(self.observations),
                       self.prefix.observations + self.observations,
                       self.prefix.objects + self.objects, self.prefix.capabilities,
-                      self.prefix.environment_version, self.prefix.source_version)
+                      self.prefix.environment_version, self.prefix.source_version,
+                      protected_sources=self.prefix.protected_sources)
         by_id = {o.object_id: o for o in full.objects}
         if (type(self.protected_sources) is not tuple or not self.protected_sources
                 or len(set(self.protected_sources)) != len(self.protected_sources)
                 or any(k not in {o.object_id for o in self.prefix.objects if o.kind == 'source'} for k in self.protected_sources)):
             raise ForecastDataError('invalid_protected_sources')
+        if self.protected_sources != self.prefix.protected_sources:
+            raise ForecastDataError('protection_changed_after_prefix')
         if type(self.receiver_arrivals) is not tuple or len(self.receiver_arrivals) > 100:
             raise ForecastDataError('invalid_receiver_records')
         if len(set(self.receiver_arrivals)) != len(self.receiver_arrivals):

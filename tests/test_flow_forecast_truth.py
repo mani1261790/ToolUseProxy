@@ -16,7 +16,7 @@ def prefix(root='root-1', version='source-v1'):
         observations=(Step(1, 'file', 'read', ('source',), ('memory',), 'ok'),),
         objects=(Obj('source', 'source', 0), Obj('memory', 'bytes', 1)),
         capabilities=('file', 'http', 'tool_output'),
-        environment_version='synthetic-v1', source_version=version,
+        environment_version='synthetic-v1', source_version=version, protected_sources=('source',),
     )
 
 
@@ -119,8 +119,15 @@ def test_unknown_related_root_or_new_holdout_prefix_is_rejected():
 
 def test_confirmed_public_send_is_a_negative_not_an_unknown_protected_route():
     original = branch()
-    public_prefix = replace(original.prefix, objects=original.prefix.objects + (Obj('private-unused', 'source', 0),))
+    public_prefix = replace(original.prefix, objects=original.prefix.objects + (Obj('private-unused', 'source', 0),), protected_sources=('private-unused',))
     public = replace(original, prefix=public_prefix, protected_sources=('private-unused',))
     label = label_future(public, 4)
     assert label.protected_arrival == 'no'
     assert label.routes == ()
+
+
+def test_independent_root_groups_can_populate_all_three_partitions():
+    values = tuple(prefix(f'family-{n}', f'visible-source-version-{n}') for n in range(100))
+    manifest = split_prefixes(values, seed='fixed-split-v1')
+    assert {manifest.partition(p) for p in values} == {'train', 'calibration', 'test'}
+    assert len({row[1] for row in manifest.assignments}) == 100
