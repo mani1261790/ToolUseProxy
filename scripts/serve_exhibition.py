@@ -41,9 +41,13 @@ class LogReader:
             root = "NULL"
             join = ""
             if "workspaces" in tables:
-                root = "w.canonical_root"
-                initialized = "COALESCE(w.discovered_by IN ('init','setup_profile'), 0)"
-                join = "LEFT JOIN workspaces w ON w.workspace_id=g.workspace_id "
+                columns = {row[1] for row in conn.execute("PRAGMA table_info(workspaces)")}
+                if "workspace_id" in columns:
+                    if "canonical_root" in columns:
+                        root = "w.canonical_root"
+                    if "discovered_by" in columns:
+                        initialized = "COALESCE(w.discovered_by IN ('init','setup_profile'), 0)"
+                    join = "LEFT JOIN workspaces w ON w.workspace_id=g.workspace_id "
             saved = ("EXISTS (SELECT 1 FROM workspace_runtime_settings rs "
                      "WHERE rs.workspace_id=g.workspace_id)"
                      if "workspace_runtime_settings" in tables else "NULL")

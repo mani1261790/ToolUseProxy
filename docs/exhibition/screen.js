@@ -73,8 +73,9 @@ function makePicker(id) {
   trigger.setAttribute('role', 'combobox');
   trigger.setAttribute('aria-haspopup', 'listbox');
   trigger.setAttribute('aria-expanded', 'false');
-  trigger.setAttribute('aria-labelledby', heading.id);
   const valueLabel = node('span', '', 'picker-value');
+  valueLabel.id = `${id}-value`;
+  trigger.setAttribute('aria-labelledby', `${heading.id} ${valueLabel.id}`);
   trigger.append(valueLabel, node('span', '', 'picker-chevron'));
   const list = node('div', undefined, 'picker-options');
   list.id = `${id}-options`;

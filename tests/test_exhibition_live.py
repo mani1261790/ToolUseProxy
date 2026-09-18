@@ -202,3 +202,16 @@ def test_project_history_does_not_claim_current_protection(database):
     scope = reader.scopes()['scopes'][0]
     assert scope['settings_saved'] is True  # even an empty saved configuration is not activation
     assert scope['runtime_state'] == 'not_verified'
+
+
+@pytest.mark.parametrize('column', ['canonical_root', 'discovered_by'])
+def test_scopes_tolerate_missing_optional_workspace_metadata(database, column):
+    append(database)
+    with sqlite3.connect(database) as conn:
+        conn.execute('ALTER TABLE workspaces RENAME TO archived_workspaces')
+        conn.execute(f'CREATE TABLE workspaces (workspace_id TEXT PRIMARY KEY, {column} TEXT)')
+        conn.execute(f'INSERT INTO workspaces(workspace_id,{column}) VALUES(?,?)',
+                     ('workspace-a', '/demo/project' if column == 'canonical_root' else 'init'))
+    scope = LogReader(database).scopes()['scopes'][0]
+    assert scope['initialization_recorded'] is (column == 'discovered_by')
+    assert scope['workspace_root'] == ('/demo/project' if column == 'canonical_root' else None)
