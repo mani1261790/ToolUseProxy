@@ -276,3 +276,22 @@ def test_stale_provider_evidence_cannot_be_attached_to_different_proposal(contex
         run(context, provider)
     assert len(context[0].read()['plans']) == 1
     assert context[3].guards == 1
+
+
+def test_generation_call_id_cannot_be_reused_for_another_trial(context):
+    from hook_monitor.evaluation.flow_lab.generation_evidence import capture
+
+    class EvidenceProvider(Provider):
+        def propose(self, feedback, **limits):
+            value = super().propose(feedback, **limits)
+            self.last_evidence = capture(
+                events=b'{"type":"turn.completed"}', prompt=b'synthetic',
+                proposal=Proposal.parse(value), model=self.model_id,
+                cli_version='codex-cli 0.153.4', call_id='c' * 32, elapsed_ms=1)
+            return value
+
+    provider = EvidenceProvider([proposal(), proposal(encoding='base64')])
+    with pytest.raises(LabError, match='generation_call_reused'):
+        run(context, provider)
+    assert len(context[0].read()['plans']) == 1
+    assert context[3].guards == 1
