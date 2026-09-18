@@ -68,3 +68,7 @@ details[open] > summary::before { transform: rotate(45deg); }
 * { scrollbar-width: thin; scrollbar-color: #505865 transparent; }
 ::-webkit-scrollbar { width: 8px; height: 8px; }::-webkit-scrollbar-thumb { background: #505865; border-radius: 8px; }::-webkit-scrollbar-track { background: transparent; }
 @media (forced-colors: active) { input[type="checkbox"]:checked { background: Highlight; }input[type="checkbox"]:checked::before { border-color: HighlightText; }.picker-option.active { outline: 1px solid Highlight; } }
+
+.project-state-list { display: grid; gap: 6px; font-size: 15px; margin: 16px 0; }
+.project-state-list dt { font-weight: 600; margin-top: 8px; }
+.project-state-list dd { margin: 0; color: #bdc6d2; }

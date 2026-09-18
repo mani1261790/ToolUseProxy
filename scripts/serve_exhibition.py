@@ -37,11 +37,30 @@ class LogReader:
                 "SELECT workspace_id, session_id, MAX(sequence_no) AS latest "
                 "FROM events GROUP BY workspace_id, session_id ORDER BY latest DESC LIMIT 1001"
             )
+            initialized = "0"
+            root = "NULL"
+            join = ""
             if "workspaces" in tables:
-                query = ("SELECT g.*, w.canonical_root AS workspace_root FROM (" + query + ") g "
-                         "LEFT JOIN workspaces w ON w.workspace_id=g.workspace_id ORDER BY g.latest DESC")
+                root = "w.canonical_root"
+                initialized = "COALESCE(w.discovered_by IN ('init','setup_profile'), 0)"
+                join = "LEFT JOIN workspaces w ON w.workspace_id=g.workspace_id "
+            saved = ("EXISTS (SELECT 1 FROM workspace_runtime_settings rs "
+                     "WHERE rs.workspace_id=g.workspace_id)"
+                     if "workspace_runtime_settings" in tables else "NULL")
+            query = (f"SELECT g.*, {root} AS workspace_root, "
+                     f"{initialized} AS initialization_recorded, {saved} AS settings_saved "
+                     f"FROM ({query}) g {join}ORDER BY g.latest DESC")
             rows = conn.execute(query).fetchall()
-        return {"scopes": [dict(row) for row in rows[:1000]], "truncated": len(rows) > 1000}
+        scopes = []
+        for row in rows[:1000]:
+            scope = dict(row)
+            scope["initialization_recorded"] = bool(scope["initialization_recorded"])
+            if scope["settings_saved"] is not None:
+                scope["settings_saved"] = bool(scope["settings_saved"])
+            # Database history cannot establish the current Plugin/Hook state.
+            scope["runtime_state"] = "not_verified"
+            scopes.append(scope)
+        return {"scopes": scopes, "truncated": len(rows) > 1000}
 
     def snapshot(self, *, workspace=(), session=(), blocked_only=False):
         # Empty tuple means all; None deliberately selects unrecorded identity.

@@ -176,3 +176,29 @@ def test_scope_filters_http_and_validation(database):
         server.shutdown()
         server.server_close()
         thread.join()
+
+
+def test_project_history_does_not_claim_current_protection(database):
+    from hook_monitor.runtime.settings import RUNTIME_SETTINGS_SCHEMA_VERSION
+
+    append(database)
+    reader = LogReader(database)
+    scope = reader.scopes()['scopes'][0]
+    assert scope['initialization_recorded'] is False
+    assert scope['settings_saved'] is False
+    assert scope['runtime_state'] == 'not_verified'
+    with sqlite3.connect(database) as conn:
+        conn.execute(
+            'INSERT INTO workspaces(workspace_id,canonical_root,lexical_root,discovered_by) '
+            'VALUES(?,?,?,?)', ('workspace-a', '/demo/initialized', '/demo/initialized', 'init'))
+    scope = reader.scopes()['scopes'][0]
+    assert scope['initialization_recorded'] is True
+    assert scope['settings_saved'] is False
+    with sqlite3.connect(database) as conn:
+        conn.execute(
+            'INSERT INTO workspace_runtime_settings(workspace_id,settings_schema_version,'
+            'settings_revision,settings_json) VALUES(?,?,?,?)',
+            ('workspace-a', RUNTIME_SETTINGS_SCHEMA_VERSION, '0' * 64, '{}'))
+    scope = reader.scopes()['scopes'][0]
+    assert scope['settings_saved'] is True  # even an empty saved configuration is not activation
+    assert scope['runtime_state'] == 'not_verified'

@@ -4,7 +4,7 @@
 <body>
 <header class="appbar">
 <h1>ToolUseProxy<span class="wordmark-detail">ログ</span></h1>
-<div class="header-actions"><span id="connection" role="status">接続しています…</span><button id="display-settings" type="button" aria-haspopup="dialog">表示・絞り込み</button></div>
+<div class="header-actions"><span id="connection" role="status" title="ログDBとの接続状態です。Pluginや保護機能の稼働状態ではありません。">接続しています…</span><button id="display-settings" type="button" aria-haspopup="dialog">表示・絞り込み</button></div>
 </header>
 <dialog id="settings-dialog" aria-labelledby="settings-title">
 <div class="dialog-header"><h2 id="settings-title">表示・絞り込み</h2><button id="close-settings" type="button" aria-label="閉じる">閉じる</button></div>
@@ -14,6 +14,8 @@
 <label class="check-option"><input type="checkbox" id="blocked-only"> ブロック判定のみ</label>
 <label class="check-option"><input type="checkbox" id="follow" checked> 新しい呼び出しを追う</label>
 </form>
+<p class="hint">候補はログが保存されているプロジェクトです。現在の保護対象を示す一覧ではありません。</p>
+<details id="project-state" hidden><summary>プロジェクトの状態</summary><dl class="project-state-list"><dt>初期化の記録</dt><dd id="init-state"></dd><dt>利用設定の保存</dt><dd id="setup-state"></dd><dt>保護対象の登録</dt><dd>この画面では未確認</dd><dt>現在の稼働</dt><dd>未確認 — Pluginの有効化とHookの動作確認が必要です。</dd></dl><p class="hint">このDBに残る記録です。解除後も残ることがあるため、記録や設定があるだけでは「保護中」とは判断できません。初期化だけで全ファイルが保護されるわけではありません。</p></details>
 <p id="scope-note" class="hint" hidden></p>
 <p class="hint">変更はすぐに反映されます。選択した条件内の最新300イベントを表示します。</p>
 <details class="source"><summary>接続先DB</summary><span id="database">events.db</span><p class="hint">読み取り専用。ToolUseProxyが無効の間は記録は増えません。</p></details>

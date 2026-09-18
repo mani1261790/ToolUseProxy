@@ -226,7 +226,21 @@ function filtersChanged(projectChanged = false) {
   clearTimeout(refreshTimer);
   refresh();
 }
+function updateProjectState() {
+  const workspace = $('session').value ? JSON.parse($('session').value)[0]
+    : $('workspace').value ? JSON.parse($('workspace').value) : undefined;
+  $('project-state').hidden = workspace === undefined;
+  if (workspace === undefined) return;
+  const scope = knownScopes.find(item => item.workspace_id === workspace);
+  $('init-state').textContent = scope?.initialization_recorded === true
+    ? '初期化・利用設定操作による登録記録あり'
+    : '初期化操作の記録を確認できません（未初期化と断定はしません）';
+  $('setup-state').textContent = scope?.settings_saved === true
+    ? '設定の保存あり（必要な設定がすべて揃っているかは未確認）'
+    : scope?.settings_saved === false ? 'このDBに設定の保存記録なし' : '設定の保存状態を確認できません';
+}
 function updateViewSummary() {
+  updateProjectState();
   const parts = [];
   if ($('workspace').value) parts.push(projectLabel(JSON.parse($('workspace').value)));
   if ($('session').value) {
