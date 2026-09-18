@@ -96,3 +96,17 @@ def test_only_pre_move_warnings_within_their_horizon_count_as_early():
         score_early_warning(item, (point(3), point(1)), threshold=.5)
     with pytest.raises(ForecastDataError):
         score_early_warning(item, (replace(point(1), branch_id='other'),), threshold=.5)
+
+
+def test_missing_warning_predictions_do_not_earn_correct_negative_credit():
+    item = branch()
+    negative = replace(item, observations=item.observations[:1], objects=(),
+                       transfers=item.transfers[:1], receiver_arrivals=(), termination='completed')
+    unknown = WarningPoint('case', 'send', 'observe', 1, None)
+    result = score_early_warning(negative, (unknown,), threshold=.5)
+    assert result['false_alarm'] is None and result['prediction_coverage'] == 0
+    assert score_early_warning(negative, (), threshold=.5)['false_alarm'] is None
+    alarm = replace(unknown, probability=.9)
+    assert score_early_warning(negative, (alarm,), threshold=.5)['false_alarm'] is True
+    missed = score_early_warning(item, (unknown,), threshold=.5)
+    assert missed['detected_early'] is False and missed['unknown_prediction_points'] == 1

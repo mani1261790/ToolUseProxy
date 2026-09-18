@@ -150,15 +150,20 @@ def score_early_warning(branch: Continuation, points: tuple[WarningPoint, ...], 
     label = label_future(branch, 8)
     first = first_forbidden_move(branch)
     alarms = [p.sequence_no for p in points if p.probability is not None and p.probability >= threshold]
+    missing = sum(p.probability is None for p in points)
+    coverage = {'warning_points': len(points), 'unknown_prediction_points': missing,
+                'prediction_coverage': (len(points) - missing) / len(points) if points else None}
     if label.protected_arrival == 'unknown' or label.censored or label.unknown_edges:
-        return {'status': 'unknown_truth', 'lead_steps': None, 'false_alarm': None, 'detected_early': None}
+        return {**coverage, 'status': 'unknown_truth', 'lead_steps': None, 'false_alarm': None, 'detected_early': None}
     if first is None:
-        return {'status': 'negative', 'lead_steps': None, 'false_alarm': bool(alarms), 'detected_early': None}
+        return {**coverage, 'status': 'negative', 'lead_steps': None,
+                'false_alarm': True if alarms else None if missing or not points else False,
+                'detected_early': None}
     early = [p.sequence_no for p in points if p.probability is not None
              and p.probability >= threshold and p.sequence_no < first <= p.sequence_no + p.horizon]
     outside = sum(p.probability is not None and p.probability >= threshold
                   and p.sequence_no + p.horizon < first for p in points)
-    return {'status': 'positive', 'lead_steps': first - early[0] if early else None,
+    return {**coverage, 'status': 'positive', 'lead_steps': first - early[0] if early else None,
             'false_alarm': False, 'detected_early': bool(early),
             'late_alarm': any(at >= first for at in alarms), 'out_of_horizon_alarms': outside,
             'first_forbidden_move': first}
