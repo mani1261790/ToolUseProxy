@@ -182,3 +182,15 @@ def test_research_command_measures_cpu_and_keeps_holdout_absence_visible(tmp_pat
     assert 0 < smoke['conditions']['observe/4']['edge_f1'] < 1
     with pytest.raises(FileExistsError):
         run(source, tmp_path / 'smoke', partition='train')
+
+
+def test_reload_rejects_a_model_from_another_implementation_even_with_valid_content_hash(tmp_path):
+    import json
+    from hook_monitor.evaluation.flow_forecast.prefix import digest
+    from research.flow_forecast.artifacts import load_model
+    payload = fit(dataset()).payload()
+    payload['implementation_sha256'] = '0' * 64
+    path = tmp_path / 'other-implementation.json'
+    path.write_text(json.dumps({'model': payload, 'sha256': digest(payload)}))
+    with pytest.raises(ForecastDataError, match='invalid_model_schema'):
+        load_model(path)

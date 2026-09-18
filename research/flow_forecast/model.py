@@ -3,7 +3,9 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import asdict, dataclass, field, replace
+import hashlib
 import math
+from pathlib import Path
 import re
 from types import MappingProxyType
 
@@ -14,6 +16,19 @@ from .tokens import Action, END, UNKNOWN, advance, context, encode_action, obser
 
 
 ALGORITHM = 'typed-operation-markov-v1'
+# Pin the small inference implementation and its data contracts, not the checkout
+# or user configuration. Read only this explicit list of source files.
+_SOURCE_ROOT = Path(__file__).resolve().parents[2]
+_SOURCE_FILES = (
+    'research/flow_forecast/model.py', 'research/flow_forecast/tokens.py',
+    'hook_monitor/evaluation/flow_forecast/prefix.py',
+    'hook_monitor/evaluation/flow_forecast/branches.py',
+    'hook_monitor/evaluation/flow_forecast/predictions.py',
+    'hook_monitor/evaluation/flow_forecast/calibration.py',
+)
+IMPLEMENTATION_SHA256 = hashlib.sha256(b''.join(
+    name.encode() + b'\0' + (_SOURCE_ROOT / name).read_bytes() + b'\0' for name in _SOURCE_FILES
+)).hexdigest()
 MAX_CONTEXTS = 4096
 MAX_CHOICES = 128
 MAX_BEAM = 64
@@ -107,6 +122,7 @@ class SequenceModel:
 
     def payload(self):
         return {'schema': 1, 'algorithm': self.algorithm, 'configuration': dict(CONFIGURATION),
+                'implementation_sha256': IMPLEMENTATION_SHA256,
                 'training_digest': self.training_digest,
                 'training_roots': list(self.training_roots),
                 'transitions': [[key, [[asdict(action), probability] for action, probability in choices]]

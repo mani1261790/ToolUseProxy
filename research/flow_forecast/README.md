@@ -67,6 +67,7 @@ testを見て再学習・閾値選択・モデル選択を行わない。
 JSONだけで保存し、pickleや実行可能コードを読み込まない。既存成果物への上書き、
 schema/設定/digest不一致、重複したフィールド、不正な確率、サイズ上限超過を拒否する。
 モデル版は学習データだけでなく設定と分布の内容を含むdigestに結び付く。
+さらに、明示した推論実装・入力契約のソースだけをハッシュ化し、異なる実装での読込を拒否する。
 
 既定上限は全処理300秒、ピークRSS 1GiB、モデル64MiB、予測ファイル64MiB。
 学習中の課題ごと・条件ごと、採点中の予測ごとに時間とRSSを検査する。
@@ -79,14 +80,14 @@ schema/設定/digest不一致、重複したフィールド、不正な確率、
 実Docker試験から封印されたF01 initial/alternateを統合した48 continuation、16 Prefix、
 独立2課題群で実行。新しいHTTP試行や実機Hookは起動していない。
 `/private/tmp/tooluseproxy-135-combined-dataset` を入力として、
-`tooluseproxy-135-combined-smoke` / `-repeat` / `-test`（同じ/private/tmp内）へ保存した。
+`tooluseproxy-135-final-smoke` / `-repeat` / `-test`（同じ/private/tmp内）へ保存した。
 
-- 学習実時間0.0081–0.0097秒、モデル19,679 bytes。
-- プロセスピークRSS約25.7–26.0 MB。モデル単体の占有メモリとは異なる。
+- 学習実時間0.0080–0.0081秒、モデル19,770 bytes。
+- プロセスピークRSS約25.6–25.9 MB。モデル単体の占有メモリとは異なる。
 - モデルSHA-256は両学習で
-  `455ac5d2de1a10ef0b00846280b49171819f20c2200fc768d0129436475ae32c`。
+  `aefcecd60af6fb78dc3e0c8f84070883f6216d3429b36d5de669a27a92df1dd7`。
 - train動作確認192予測のdigestは両実行で
-  `06046c6ddb0251b1fe6e1ad8b5401f28e9cc0eb7dbb0729092ba193c104f4f16`。
+  `341f6f4e70f43604dca8c34c147dc469bf679c0b04e3e90cd229a2acfa6f01e8`。
 - 保存前と再読込後も同じ予測。testは0予測で試料不足。
 
 これは小fixtureでの再現性と費用の測定。CPUだけを使い、加速器の性能は測っていない。

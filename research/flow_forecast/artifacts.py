@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 from hook_monitor.evaluation.flow_forecast.prefix import ForecastDataError, canonical, digest
-from .model import CONFIGURATION, SequenceModel
+from .model import CONFIGURATION, IMPLEMENTATION_SHA256, SequenceModel
 from .tokens import Action
 
 
@@ -45,10 +45,11 @@ def load_model(path: Path) -> SequenceModel:
         if type(artifact) is not dict or set(artifact) != {'model', 'sha256'}:
             raise ForecastDataError('invalid_model_artifact')
         value = artifact['model']
-        if (type(value) is not dict or set(value) != {'schema', 'algorithm', 'configuration', 'training_digest',
+        if (type(value) is not dict or set(value) != {'schema', 'algorithm', 'configuration', 'implementation_sha256', 'training_digest',
                                                      'training_roots', 'transitions'}
                 or type(value['schema']) is not int or value['schema'] != 1
                 or value['configuration'] != dict(CONFIGURATION)
+                or value['implementation_sha256'] != IMPLEMENTATION_SHA256
                 or type(value['training_roots']) is not list or type(value['transitions']) is not list):
             raise ForecastDataError('invalid_model_schema')
         if digest(value) != artifact['sha256']:
