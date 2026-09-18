@@ -146,10 +146,11 @@ def test_origin_documents_are_verified_without_trusting_the_claim(tmp_path):
 def test_aggregate_limits_apply_before_building_the_collection(monkeypatch):
     from research.flow_forecast import task_catalog
     samples = ((dataset('one'), {'one': 'a'}), (dataset('two'), {'two': 'a'}))
+    original_limit = task_catalog.MAX_BRANCHES
     monkeypatch.setattr(task_catalog, 'MAX_BRANCHES', 4)
     with pytest.raises(ForecastDataError, match='collection_size_limit'):
         collect(catalog(design('a')), samples)
-    monkeypatch.setattr(task_catalog, 'MAX_BRANCHES', 2000)
+    monkeypatch.setattr(task_catalog, 'MAX_BRANCHES', original_limit)
     monkeypatch.setattr(task_catalog, 'MAX_ARTIFACT_BYTES', 1)
     with pytest.raises(ForecastDataError, match='collection_size_limit'):
         collect(catalog(design('a')), samples)

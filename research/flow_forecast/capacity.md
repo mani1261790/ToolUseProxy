@@ -36,3 +36,7 @@ hash分割はtrain 3,182 / calibration 410 / test 408。8方式の学習・調�
 117.05秒、ピーク193,314,816 bytesで、300秒/1GiB以内だった。
 `results/capacity-20260919.json`に当時のソース一覧・hashと工程別の実測を保持する。
 これは単一マシン・短い機械的fixtureの結果であり、実課題の所要時間や精度を保証しない。
+
+PR #214のcatalog収集処理との接続確認では、この16,000分岐を同じ機械的設計へ
+対応付けるとgrouped_root_countは1となり、independence_verified=falseのままだった。
+処理は約10.03秒、ピーク209,223,680 bytes。容量を扱えることと独立試料の数を区別する。
