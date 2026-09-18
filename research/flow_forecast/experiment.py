@@ -179,10 +179,21 @@ def strata_summary(rows):
             for key, group in sorted(groups.items())}
 
 
-def evaluate(dataset, models, plan, *, partition='test', check_budget=lambda: None):
+def evaluate(dataset, models, plan, *, partition='test', check_budget=lambda: None,
+             calibration_dataset=None):
     if partition not in {'test', 'train'}:
         raise ForecastDataError('unsupported_comparison_partition')
-    if plan != freeze_plan(dataset, models, check_budget=check_budget):
+    calibration_data = dataset if calibration_dataset is None else calibration_dataset
+    if calibration_dataset is not None:
+        development_rows = tuple(row for row in dataset.split.assignments if row[2] != 'test')
+        development_branches = tuple(b for b in dataset.branches
+                                     if dataset.split.partition(b.prefix) != 'test')
+        if (calibration_data.split.assignments != development_rows
+                or calibration_data.branches != development_branches
+                or calibration_data.split.seed != dataset.split.seed
+                or calibration_data.provenance != dataset.provenance):
+            raise ForecastDataError('comparison_development_mismatch')
+    if plan != freeze_plan(calibration_data, models, check_budget=check_budget):
         raise ForecastDataError('comparison_plan_mismatch')
     results, cases = {}, {}
     for name in MODEL_NAMES:
