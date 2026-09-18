@@ -116,3 +116,63 @@ def test_server_security_and_recovery(database):
         server.shutdown()
         server.server_close()
         thread.join()
+
+
+def test_filters_apply_before_window_and_preserve_blocked_call(database):
+    reader = LogReader(database)
+    append(database, tool_input={'cmd': 'protected synthetic'})
+    block(database)
+    # A later post remains part of the blocked call even when its pre is outside the window.
+    for index in range(310):
+        append(database, f'noise-{index}', sequence=index + 2, session='busy-session')
+    append(database, 'post', 'post_tool_use', 400, tool_response='late result')
+    assert all(call['session_id'] == 'session-a' for call in
+               reader.snapshot(workspace='workspace-a', session='session-a')['calls'])
+    calls = reader.snapshot(blocked_only=True)['calls']
+    assert len(calls) == 1
+    assert calls[0]['blocked']
+    assert set(calls[0]['phases']) == {'pre_tool_use', 'post_tool_use'}
+    assert reader.snapshot(session='busy-session', blocked_only=True)['calls'] == []
+    assert reader.snapshot(workspace='missing')['calls'] == []
+    assert {row['session_id'] for row in reader.scopes()['scopes']} == {'session-a', 'busy-session'}
+
+
+def test_filter_null_identity_and_cross_workspace_call_ids(database):
+    append(database)
+    block(database)
+    append(database, 'other-workspace', sequence=2)
+    append(database, 'unknown', sequence=3, session=None)
+    with sqlite3.connect(database) as conn:
+        conn.execute("UPDATE events SET workspace_id='workspace-b' WHERE event_id='other-workspace'")
+        conn.execute("UPDATE events SET workspace_id=NULL WHERE event_id='unknown'")
+    reader = LogReader(database)
+    assert reader.snapshot(workspace='workspace-b', session='session-a', blocked_only=True)['calls'] == []
+    calls = reader.snapshot(workspace=None, session=None)['calls']
+    assert [call['event_id'] for call in calls] == ['unknown']
+    assert not calls[0]['blocked']
+    assert {row['workspace_id'] for row in reader.scopes()['scopes']} == {'workspace-a', 'workspace-b', None}
+
+
+def test_scope_filters_http_and_validation(database):
+    from urllib.parse import urlencode
+
+    append(database)
+    block(database)
+    server, url = make_server(LogReader(database))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        query = urlencode({'workspace': json.dumps('workspace-a'),
+                           'session': json.dumps('session-a'), 'blocked': '1'})
+        with urlopen(url + 'api/events?' + query) as response:
+            assert len(json.load(response)['calls']) == 1
+        with urlopen(url + 'api/scopes') as response:
+            assert json.load(response)['scopes'][0]['session_id'] == 'session-a'
+        for value in ('[1]', '123', '{', 'true'):
+            with pytest.raises(HTTPError) as error:
+                urlopen(url + 'api/events?' + urlencode({'workspace': value}))
+            assert error.value.code == 400
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
