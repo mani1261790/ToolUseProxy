@@ -422,7 +422,7 @@ def collect_ticket_captures(directories, source_path, *, checked=False):
     return data, evidence, catalog, origins
 
 
-def collect_message_captures(directories, source_path):
+def collect_message_captures(directories, source_path, *, checked=False):
     from .bfcl_message_import import catalog as message_catalog, read_capture
     from .bfcl_message_reference import source_text
     if type(directories) is not tuple or not 1 <= len(directories) <= MAX_INPUTS:
@@ -431,7 +431,14 @@ def collect_message_captures(directories, source_path):
     catalog, origins = message_catalog()
     samples, audits, total = [], [], 0
     for directory in directories:
-        data, audit = read_capture(directory, source)
+        if checked:
+            from .checked_message import read_checked_capture
+            if (type(directory) is not dict or set(directory) != {'capture','interventions'}
+                    or any(type(v) is not str or not v for v in directory.values())):
+                raise ForecastDataError('invalid_checked_message_input')
+            data, audit = read_checked_capture(Path(directory['capture']), Path(directory['interventions']), source)
+        else:
+            data, audit = read_capture(directory, source)
         total += len(canonical(audit).encode()) + len(canonical(asdict(data)).encode())
         if total > MAX_ARTIFACT_BYTES:
             raise ForecastDataError('collection_size_limit')
@@ -497,6 +504,7 @@ def main(argv=None):
     inputs_group.add_argument('--checked-ticket-captures', type=Path, help='JSON list of Ticket capture/interventions pairs')
     inputs_group.add_argument('--ticket-captures', type=Path, help='JSON list of completed Ticket capture directories')
     inputs_group.add_argument('--message-captures', type=Path, help='JSON list of completed Message capture directories')
+    inputs_group.add_argument('--checked-message-captures', type=Path, help='JSON list of Message capture/interventions pairs')
     inputs_group.add_argument('--mbpp-captures', type=Path, help='JSON list of completed pinned MBPP captures')
     inputs_group.add_argument('--checked-task-worlds', type=Path, help='JSON list of capture/interventions directory pairs')
     inputs_group.add_argument('--checked-agenda-captures', type=Path, help='JSON list of agenda capture/interventions pairs')
@@ -514,9 +522,16 @@ def main(argv=None):
         parser.error('--mbpp-source requires MBPP captures')
     if args.ticket_source and not (args.ticket_captures or args.checked_ticket_captures):
         parser.error('--ticket-source requires --ticket-captures')
-    if args.message_source and not args.message_captures:
+    if args.message_source and not (args.message_captures or args.checked_message_captures):
         parser.error('--message-source requires --message-captures')
-    if args.message_captures:
+    if args.checked_message_captures:
+        if args.catalog or args.origins or args.message_source is None:
+            parser.error('checked Message captures require --message-source and use their captured definitions')
+        pairs = _json(_read(args.checked_message_captures))
+        if type(pairs) is not list:
+            raise ForecastDataError('invalid_checked_message_input')
+        data, audit, catalog, origins = collect_message_captures(tuple(pairs), args.message_source, checked=True)
+    elif args.message_captures:
         if args.catalog or args.origins or args.message_source is None:
             parser.error('Message captures require --message-source and use their captured definitions')
         paths = _json(_read(args.message_captures))
