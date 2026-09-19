@@ -1,0 +1,85 @@
+{
+  "schema": 1,
+  "scope": "public_design_source_structure_audit_not_trials",
+  "grouping_method": "declared-relations-and-flow-refinement-v2",
+  "audit_implementation_sha256": "d2d4cb01b3e4a614766607f19b2113793ab71c71a9be840b7199643161c1db2b",
+  "grouping_implementation_sha256": "5caecd95e949ea293b5ae2e11fed5028a15f2cfeac06d8abf64143eba70e1314",
+  "repository": "microsoft/JARVIS",
+  "commit": "7624cf388b47334ff8a0868e7d862dde18cfda86",
+  "source_subdirectory": "taskbench/data_dailylifeapis",
+  "files": [
+    {
+      "name": "data.json",
+      "bytes": 9463811,
+      "git_blob_sha": "ea5e70584a144d1ff7a9a246805bab7c7fe0f511",
+      "sha256": "7b97fd3fcd7111dacf2a1a87c2b0c1bb5a1adc962c505624854cc0b697afa3a3"
+    },
+    {
+      "name": "tool_desc.json",
+      "bytes": 14069,
+      "git_blob_sha": "c79202fcf0ade9b1f64f8d96ef7f18f180b8a15d",
+      "sha256": "64b3ed4f0f3ad199d817695bc3bb7e2f7d9bc2cae2f310821744a62ae41aee13"
+    },
+    {
+      "name": "LICENSE",
+      "bytes": 1141,
+      "git_blob_sha": "9e841e7a26e4eb057b24511e7b92d42b257a80e5",
+      "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+    }
+  ],
+  "records": 4318,
+  "library_tools": 40,
+  "accepted_structure_records": 4050,
+  "structural_profile_count": 2854,
+  "profile_size_histogram": {
+    "1": 2788,
+    "2": 24,
+    "3": 2,
+    "14": 1,
+    "18": 1,
+    "19": 1,
+    "20": 1,
+    "23": 1,
+    "24": 2,
+    "25": 2,
+    "26": 1,
+    "27": 2,
+    "28": 3,
+    "29": 3,
+    "30": 1,
+    "31": 3,
+    "32": 4,
+    "33": 1,
+    "34": 2,
+    "35": 3,
+    "36": 2,
+    "37": 1,
+    "38": 2,
+    "40": 1,
+    "41": 1,
+    "42": 1
+  },
+  "graph_types": {
+    "single": 1208,
+    "chain": 2585,
+    "dag": 257
+  },
+  "excluded_records": {
+    "tool_not_in_pinned_library": 252,
+    "unknown_link_endpoint": 8,
+    "duplicate_tool_node": 4,
+    "invalid_graph": 4
+  },
+  "independence_verified": false,
+  "prior_nonuse_verified": false,
+  "trials_executed": 0,
+  "model_calls": 0,
+  "accepted_f02_roots": 0,
+  "limitations": [
+    "declared_graphs_not_observed_execution",
+    "dependency_edges_not_verified_information_flow",
+    "structural_profiles_not_semantic_independence",
+    "public_data_not_asserted_unused_holdout",
+    "no_compatible_runtime_adapter"
+  ]
+}

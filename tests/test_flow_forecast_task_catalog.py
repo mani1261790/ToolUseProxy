@@ -154,3 +154,50 @@ def test_aggregate_limits_apply_before_building_the_collection(monkeypatch):
     monkeypatch.setattr(task_catalog, 'MAX_ARTIFACT_BYTES', 1)
     with pytest.raises(ForecastDataError, match='collection_size_limit'):
         collect(catalog(design('a')), samples)
+
+
+def test_renamed_flow_nodes_cannot_inflate_groups_or_cross_splits():
+    first, second = design('original'), design('renamed', origin='b')
+    renaming = {'synthetic-source': 'input-72', 'working-memory': 'buffer-93',
+                'synthetic-receiver': 'destination-15'}
+    second['flow'] = [[renaming[source], operation, renaming[target]]
+                      for source, operation, target in reversed(second['flow'])]
+    groups = design_groups(catalog(first, second))
+    assert len(set(groups.values())) == 1
+    data, evidence = collect(catalog(first, second), (
+        (dataset('root-1'), {'root-1': 'original'}),
+        (dataset('root-2'), {'root-2': 'renamed'})))
+    assert len({row[1] for row in data.split.assignments}) == 1
+    assert evidence['grouped_root_count'] == 1
+
+
+def test_changed_operations_or_topology_are_not_equated_solely_by_node_count():
+    first, fork, encoded = design('chain'), design('fork', origin='b'), design('encoded', origin='c')
+    fork['flow'][1][0] = 'synthetic-source'
+    encoded['flow'][0][1] = 'encode'
+    assert len(set(design_groups(catalog(first, fork, encoded)).values())) == 3
+
+
+def test_refinement_is_invariant_under_node_permutation_including_cycles():
+    import random
+    randomizer = random.Random(12)
+    for size in (3, 8, 20, 100):
+        first = design('a')
+        first['flow'] = [[f'n{index}', 'copy', f'n{(index + 1) % size}'] for index in range(size)]
+        second = deepcopy(first)
+        second.update(id='b', origin={**first['origin'], 'artifact_sha': 'b' * 64})
+        permutation = list(range(size))
+        randomizer.shuffle(permutation)
+        second['flow'] = [[f'alias{permutation[int(source[1:])]}', operation,
+                           f'alias{permutation[int(target[1:])]}'] for source, operation, target in first['flow']]
+        randomizer.shuffle(second['flow'])
+        assert len(set(design_groups(catalog(first, second)).values())) == 1
+
+
+def test_refinement_collision_is_conservative_not_independence_proof():
+    first, second = design('cycle'), design('triangles', origin='b')
+    first['flow'] = [[str(i), 'copy', str((i + 1) % 6)] for i in range(6)]
+    second['flow'] = [[str(i), 'copy', str(3 * (i // 3) + (i + 1) % 3)] for i in range(6)]
+    # Equal refinement profiles may cover non-isomorphic graphs. Group them;
+    # never turn an incomplete graph test into an independence assertion.
+    assert len(set(design_groups(catalog(first, second)).values())) == 1
