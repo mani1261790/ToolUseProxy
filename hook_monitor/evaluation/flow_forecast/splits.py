@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 
 from .prefix import ForecastDataError, Prefix, digest, identifier
 
@@ -71,8 +72,61 @@ def split_prefixes(prefixes: tuple[Prefix, ...], *, seed: str,
     return SplitManifest(tuple(rows), seed, identity)
 
 
+@dataclass(frozen=True)
+class PlannedSplitManifest(SplitManifest):
+    plan_sha: str
+    root_assignments: tuple[tuple[str, str, str], ...]  # root, stable declared group, partition
+
+    @property
+    def digest(self):
+        return digest(['planned-cohort-v1', self.seed, self.dataset_digest, self.assignments,
+                       self.plan_sha, self.root_assignments])
+
+
+def split_planned(prefixes, *, seed, related_roots, plan_sha, root_assignments):
+    if (type(plan_sha) is not str or re.fullmatch('[a-f0-9]{64}', plan_sha) is None
+            or type(root_assignments) is not tuple or not 1 <= len(root_assignments) <= 10000):
+        raise ForecastDataError('invalid_planned_split')
+    mapping, anchors, partitions = {}, {}, {}
+    links = list(related_roots)
+    for row in root_assignments:
+        if type(row) is not tuple or len(row) != 3:
+            raise ForecastDataError('invalid_planned_split')
+        root, group, partition = row
+        identifier(root)
+        identifier(group)
+        if root in mapping or type(partition) is not str or partition not in PARTITIONS:
+            raise ForecastDataError('invalid_planned_split')
+        if partitions.setdefault(group, partition) != partition:
+            raise ForecastDataError('planned_group_partition_conflict')
+        mapping[root] = (group, partition)
+        previous = anchors.setdefault(group, root)
+        if previous != root:
+            links.append(tuple(sorted((previous, root))))
+    if set(mapping) != {p.root_case_id for p in prefixes}:
+        raise ForecastDataError('planned_root_coverage_mismatch')
+    base = split_prefixes(prefixes, seed=seed, related_roots=tuple(sorted(set(links))))
+    by_prefix = {p.prefix_id:p.root_case_id for p in prefixes}
+    components = {}
+    rows = []
+    for prefix_id, component, _ in base.assignments:
+        assignment = mapping[by_prefix[prefix_id]]
+        if components.setdefault(component, assignment) != assignment:
+            raise ForecastDataError('planned_related_group_conflict')
+        rows.append((prefix_id, *assignment))
+    normalized = tuple(sorted(root_assignments))
+    identity = digest(['planned-cohort-v1', base.dataset_digest, plan_sha, normalized])
+    return PlannedSplitManifest(tuple(rows), seed, identity, plan_sha, normalized)
+
+
 def verify_split(manifest: SplitManifest, prefixes: tuple[Prefix, ...], *,
                  related_roots: tuple[tuple[str, str], ...] = ()) -> None:
-    expected = split_prefixes(prefixes, seed=manifest.seed, related_roots=related_roots)
+    if type(manifest) is PlannedSplitManifest:
+        expected = split_planned(prefixes, seed=manifest.seed, related_roots=related_roots,
+                                 plan_sha=manifest.plan_sha, root_assignments=manifest.root_assignments)
+    elif type(manifest) is SplitManifest:
+        expected = split_prefixes(prefixes, seed=manifest.seed, related_roots=related_roots)
+    else:
+        raise ForecastDataError('invalid_split_manifest')
     if manifest != expected:
         raise ForecastDataError('split_manifest_mismatch')

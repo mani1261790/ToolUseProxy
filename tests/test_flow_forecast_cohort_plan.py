@@ -74,7 +74,7 @@ def test_import_rejects_relabeling_even_with_rehashed_plan(tmp_path,reference):
         mbpp_import.read_capture(directory,Path('source'))
 
 
-def test_posthoc_collection_split_cannot_override_planned_partition(tmp_path,reference):
+def test_collection_uses_predeclared_partition_instead_of_root_hash(tmp_path,reference):
     directory=tmp_path/'capture'
     intent,execution,report=capture(directory,reference)
     data,_=mbpp_import.read_capture(directory,Path('source'))
@@ -86,5 +86,5 @@ def test_posthoc_collection_split_cannot_override_planned_partition(tmp_path,ref
     report['execution_sha']=digest(execution)
     for name,value in [('intent',intent),('execution',execution),('report',report)]:
         (directory/(name+'.json')).write_text(canonical(value))
-    with pytest.raises(ForecastDataError,match='cohort_partition_mismatch'):
-        task_catalog.collect_mbpp_captures((directory,),Path('source'))
+    assigned,_audit,_catalog,_origins = task_catalog.collect_mbpp_captures((directory,),Path('source'))
+    assert {assigned.split.partition(p) for p in assigned.prefixes} == {wrong}

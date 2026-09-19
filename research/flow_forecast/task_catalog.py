@@ -160,7 +160,7 @@ def design_groups(catalog):
         raise ForecastDataError('invalid_task_catalog') from error
 
 
-def collect(catalog, samples, *, seed='split-v1'):
+def collect(catalog, samples, *, seed='split-v1', cohort=None):
     """Bind actual artifact roots to designs, then recompute a new grouped split.
 
     samples contains (Dataset, {root_case_id: design_id}). Existing frozen plans
@@ -195,8 +195,17 @@ def collect(catalog, samples, *, seed='split-v1'):
             bindings.append({'root_case_id': root, 'design_id': design, 'declared_group': groups[design]})
     if len(provenances) != 1:
         raise ForecastDataError('collection_provenance_mismatch')
+    planned = None
+    if cohort is not None:
+        from .cohort_plan import binding
+        plan_rows = []
+        for row in bindings:
+            selected = binding(cohort, catalog, row['design_id'])
+            stable_group = digest([cohort['plan_sha'], selected['declared_group']])
+            plan_rows.append((row['root_case_id'], stable_group, selected['partition']))
+        planned = (cohort['plan_sha'], tuple(sorted(plan_rows)))
     data = assemble(tuple(branches), seed=seed, related_roots=tuple(sorted(set(relations))),
-                    provenance=provenances.pop())
+                    provenance=provenances.pop(), planned=planned)
     return data, {'schema': 1, 'grouping_method': GROUPING_METHOD, 'catalog_sha': digest(catalog), 'source_dataset_shas': sources,
                   'bindings': sorted(bindings, key=lambda row: row['root_case_id']),
                   'dataset_sha': digest(asdict(data)), 'split_sha': data.split.digest,
@@ -405,11 +414,14 @@ def collect_mbpp_captures(directories, source_path, *, checked=False):
         task = audit['intent']['origin']['candidate']['task_id']
         samples.append((data, {audit['intent']['root']: 'mbpp-' + str(task)}))
         audits.append(audit)
-    data, evidence = collect(catalog, tuple(samples))
     assignments = [a['intent'].get('cohort_assignment') for a in audits]
+    cohort = None
     if any(a is not None for a in assignments):
         if any(a is None for a in assignments) or len({a['plan']['plan_sha'] for a in assignments}) != 1:
             raise ForecastDataError('collection_cohort_plan_mismatch')
+        cohort = assignments[0]['plan']
+    data, evidence = collect(catalog, tuple(samples), cohort=cohort)
+    if cohort is not None:
         planned = {a['intent']['root']: a['intent']['cohort_assignment']['partition'] for a in audits}
         for prefix in data.prefixes:
             if data.split.partition(prefix) != planned[prefix.root_case_id]:
