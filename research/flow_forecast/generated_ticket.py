@@ -35,7 +35,7 @@ def validate(value):
             raise ValueError
         if value['generation']['schema'] == 3:
             from .ollama_ticket_generation import request as local_request
-            if value['generation']['request_sha'] != digest(local_request()):
+            if value['generation']['request_sha'] not in {digest(local_request(revision)) for revision in (1, 2)}:
                 raise ValueError
         request = {'schema': 1, 'task': value['task'], 'definition': value['definition'],
                    'model': value['model'], 'maximum_model_calls': 1, 'reply_limit': 16384,

@@ -76,4 +76,33 @@ Ticket captureは生成計画をtrial前のintentへ固定し、collection読込
 再照合時の新規モデル呼出しは0。
 [機械可読記録](results/ollama-ticket-receipts-20260920.json)に結果を記載。
 有効なローカル生成計画から実Docker trialまでの実測は未達であり、
-collection接続の成功証拠は現時点ではfixture試験に限る。
+この実測時点でのcollection接続の成功証拠はfixture試験に限られていた。
+
+
+## 提案・拒否の形式を分離した実生成（2026-09-20）
+
+従来のJSON Schemaは、Plan.parseが拒否する「status=refusedかつoperationsが非空」も
+許していた。Ollama要求revision 2は提案/拒否のoneOfに分け、拒否はoperations=[]、
+export=publicとする。提案の順序・内容を正解へ書き換えたり、拒否を禁止したりしない。
+実行不能な提案と正しい拒否は引き続きprepareで止まり、消費量を残す。
+OllamaのformatへのSchema指定は[公式文書](https://docs.ollama.com/capabilities/structured-outputs)に従う。
+
+旧revision 1の要求は再構成可能なまま保持する。新workerは観測へrevision 2を記録し、
+receiptのrequest hashへ結び付ける。新しい実行で旧workerの無版応答は受理しない。
+過去の失敗応答原本から旧execution receiptが同一に再構成できることも実確認した。
+
+実装64f1162593cba483d07bedbcb9fba642a8c2d3e8で明示的な生成1回を実施した。
+約37.185秒、input316/output38/cache0でpropose・resolve/query/send・publicを得た。
+別の明示バッチは18試行・19.0766秒・report前118297bytes。observe/enforceの両方で
+公開結果が実受信され、課題完了、保護マーカー到達なし。記録した6個のcontainer/networkは撤去済み。
+
+既存介入との結合、checked collection封印、生成receiptと実枝の対応、個別APIを再検証した。
+1既知関連群・3prefix・6branch、生成receipt1件。今回の機械的splitはtestのみでtrainがなく、
+比較prepareはno_fixed_distribution_training_rootsで終了した。割当てをやり直していない。
+既知課題の開発用実行であり、testという名前を未使用性の証明とは扱わない。
+採用独立群0、resolved_model_verified=false、金銭費用/価格根拠はnullのまま。
+実Hook/PostToolUse、未使用課題での性能、独立群数の受入には未到達。
+
+原本は `/private/tmp/tooluseproxy-204-ollama-ticket-union-{prepared,capture,collection}-v1`。
+[実測記録](results/ollama-ticket-plan-union-20260920.json)に識別hash、usage、状態を保存した。
+再生成・自動延長は行っていない。過去の失敗2回も成功扱いに変更しない。

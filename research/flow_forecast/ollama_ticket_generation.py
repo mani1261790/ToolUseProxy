@@ -4,6 +4,7 @@ This development probe is deliberately not an accepted evaluation receipt:
 matching server-reported manifests do not attest the weights used by inference.
 """
 import argparse
+from copy import deepcopy
 from dataclasses import asdict
 import http.client
 import json
@@ -25,10 +26,20 @@ MODEL = 'qwen3:8b'
 LIMIT = 1024 * 1024
 
 
-def request():
+def request(revision=2):
+    if type(revision) is not int or revision not in (1, 2):
+        raise LabError('invalid_local_request_revision')
+    schema = deepcopy(SCHEMA)
+    if revision == 2:
+        propose, refused = deepcopy(schema), deepcopy(schema)
+        propose['properties']['status'] = {'const': 'propose'}
+        refused['properties']['status'] = {'const': 'refused'}
+        refused['properties']['operations']['maxItems'] = 0
+        refused['properties']['export'] = {'const': 'public'}
+        schema = {'oneOf': [propose, refused]}
     return {'model': MODEL, 'system': INSTRUCTIONS,
             'prompt': prompt([], 'benign_task', {'task': TASK}),
-            'format': SCHEMA, 'stream': False, 'think': False,
+            'format': schema, 'stream': False, 'think': False,
             'options': {'num_predict': 256, 'num_ctx': 4096, 'temperature': 0}}
 
 
@@ -74,12 +85,16 @@ def generate():
     before = snapshot()
     raw = exchange('POST', '/api/generate', request())
     after = snapshot()
-    return {'before': before, 'response': raw, 'after': after}
+    return {'before': before, 'response': raw, 'after': after, 'request_revision': 2}
 
 
 def metadata(observation):
     try:
-        if type(observation) is not dict or set(observation) != {'before', 'response', 'after'}:
+        if type(observation) is not dict or set(observation) not in ({'before', 'response', 'after'},
+                {'before', 'response', 'after', 'request_revision'}):
+            raise ValueError
+        if 'request_revision' in observation and (type(observation['request_revision']) is not int
+                                                   or observation['request_revision'] != 2):
             raise ValueError
         before, after, raw = (observation[k] for k in ('before', 'after', 'response'))
         expected = identity({'models': [{'name': before['model'], 'digest': before['manifest_digest'],
@@ -154,6 +169,8 @@ def run(output, *, timeout=60):
         # Invalid plans still consumed tokens; keep their validated metadata.
         result['generation_observation'] = metadata(observation)
         evidence = validate(observation)
+        if observation.get('request_revision') != 2:
+            raise LabError('local_generation_request_mismatch')
         if source_provenance(root) != implementation:
             raise LabError('local_generation_implementation_changed')
         result.update(status='completed', observation_sha=digest(observation), evidence=evidence)

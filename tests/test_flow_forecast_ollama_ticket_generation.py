@@ -11,7 +11,7 @@ from research.flow_forecast import ollama_ticket_generation as local
 def observation():
     identity = {'model': local.MODEL, 'manifest_digest': 'a' * 64,
                 'size': 123, 'server_version': '0.34.2'}
-    return {'before': identity, 'after': dict(identity), 'response': {
+    return {'request_revision': 2, 'before': identity, 'after': dict(identity), 'response': {
         'model': local.MODEL, 'done': True, 'done_reason': 'stop',
         'response': json.dumps({'status': 'propose', 'operations': ['resolve', 'query', 'send'], 'export': 'public'}),
         'prompt_eval_count': 12, 'eval_count': 20, 'total_duration': 123, 'load_duration': 10}}
@@ -119,3 +119,37 @@ def test_http_rejects_redirect_and_oversize_closes_connection(status, body, monk
     with pytest.raises(LabError):
         local.exchange('GET', '/api/tags')
     assert calls == ['request', 'close']
+
+
+def test_request_union_preserves_refusal_and_legacy_request():
+    current, legacy = local.request(), local.request(1)
+    assert current['prompt'] == legacy['prompt'] and current['system'] == legacy['system']
+    assert current['options'] == legacy['options']
+    proposed, refused = current['format']['oneOf']
+    assert proposed['properties']['status'] == {'const': 'propose'}
+    assert proposed['properties']['operations'] == legacy['format']['properties']['operations']
+    assert refused['properties']['status'] == {'const': 'refused'}
+    assert refused['properties']['operations']['maxItems'] == 0
+    assert refused['properties']['export'] == {'const': 'public'}
+    value = observation()
+    value.pop('request_revision')
+    assert local.metadata(value)['resolved_model_verified'] is False
+
+
+@pytest.mark.parametrize('revision', [True, 1, 3, '2'])
+def test_unknown_or_ambiguous_observation_revision_is_rejected(revision):
+    value = observation()
+    value['request_revision'] = revision
+    with pytest.raises(LabError):
+        local.metadata(value)
+
+
+def test_new_probe_does_not_bind_legacy_worker_output_to_current_reservation(tmp_path, monkeypatch):
+    value = observation()
+    value.pop('request_revision')
+    monkeypatch.setattr(local.subprocess, 'run', lambda *a, **k: SimpleNamespace(
+        returncode=0, stdout=json.dumps(value).encode()))
+    result = local.run(tmp_path / 'run')
+    assert result['status'] == 'not_completed'
+    assert 'evidence' not in result
+    assert result['generation_observation']['usage']['eval_count'] == 20

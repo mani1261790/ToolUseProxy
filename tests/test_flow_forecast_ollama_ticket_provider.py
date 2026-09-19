@@ -127,3 +127,34 @@ def test_resealed_plan_cannot_replace_actual_generated_plan(tmp_path, monkeypatc
     path.write_text(json.dumps(result))
     with pytest.raises(ForecastDataError):
         generated_ticket.load(out)
+
+
+def test_old_observation_remains_bound_to_old_request_without_relabeling():
+    from research.flow_forecast import ollama_ticket_generation as local
+    value = response()
+    value.pop('request_revision')
+    old = provider.receipt(value, 'a' * 32, 12)
+    assert old['request_sha'] == local.digest(local.request(1))
+    assert old['request_sha'] != local.digest(local.request())
+
+
+def test_new_execution_rejects_unversioned_worker_output(tmp_path, monkeypatch):
+    value = response()
+    value.pop('request_revision')
+    out = tmp_path / 'prepared'
+    calls = replay(monkeypatch, out, value)
+    result = generated_ticket.prepare(provider.OllamaTicketProvider('qwen3:8b', out), out)
+    assert len(calls) == 1 and result['status'] == 'not_prepared'
+    assert not (out / 'generated-plan.json').exists()
+
+
+def test_well_formed_refusal_is_kept_without_execution_or_retry(tmp_path, monkeypatch):
+    value = response()
+    value['response']['response'] = json.dumps({'status':'refused','operations':[],'export':'public'})
+    out = tmp_path / 'refusal'
+    calls = replay(monkeypatch, out, value)
+    result = generated_ticket.prepare(provider.OllamaTicketProvider('qwen3:8b', out), out)
+    assert result['status'] == 'not_prepared' and len(calls) == 1
+    assert result['call']['proposal']['status'] == 'refused'
+    assert result['costs']['known_token_totals']['output_tokens'] == 20
+    assert not (out / 'generated-plan.json').exists()
