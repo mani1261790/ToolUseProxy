@@ -48,7 +48,7 @@ def load(dataset, directory, expected_identity, *, check_budget=lambda: None):
     check_budget()
     if collection_identity(directory) != expected_identity:
         raise ForecastDataError('generation_collection_changed')
-    source, _, audit = read_collection(directory)
+    source, catalog, audit = read_collection(directory)
     if _identity(source) != _identity(dataset):
         raise ForecastDataError('generation_collection_dataset_mismatch')
     roots = {prefix.root_case_id for prefix in dataset.prefixes}
@@ -93,6 +93,11 @@ def load(dataset, directory, expected_identity, *, check_budget=lambda: None):
                 raise ForecastDataError('generation_root_mismatch')
             frozen = execution['generator_evidence']
             validate_generated(frozen)
+            assignment = frozen['assignment']
+            bindings = [row for row in audit['bindings'] if row['root_case_id'] == root]
+            if (assignment['catalog'] != catalog or len(bindings) != 1
+                    or bindings[0]['design_id'] != assignment['design_id']):
+                raise ForecastDataError('generation_assignment_mismatch')
             if frozen['plan'] != execution['plan'] or report['prepared_generation_sha'] != frozen['prepared_sha']:
                 raise ForecastDataError('generation_plan_mismatch')
             rebuilt = dataset_from_traces(execution, report['conditions'])
