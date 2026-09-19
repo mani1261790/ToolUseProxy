@@ -9,6 +9,7 @@ import ast
 import hashlib
 from pathlib import Path
 
+from hook_monitor.evaluation.flow_forecast.dataset import _json, _read
 from hook_monitor.evaluation.flow_forecast.prefix import ForecastDataError, canonical, digest
 from .mbpp_batch import checked, selected
 
@@ -99,12 +100,35 @@ def inspect_reference(row):
             'independence_verified': False}
 
 
+def bind_capture(capture, source_path):
+    from .mbpp_import import read_capture
+    _, audit = read_capture(capture, source_path)
+    candidate = audit['intent']['origin']['candidate']
+    matches = [row for row in selected(source_path) if row['task_id'] == candidate['task_id']]
+    if len(matches) != 1 or canonical(checked(matches[0])) != canonical(candidate):
+        raise ForecastDataError('mbpp_contract_capture_mismatch')
+    return {'schema': 1, 'capture_root': audit['intent']['root'],
+            'capture_report_sha': digest(audit['report']), 'capture_dataset_sha': audit['dataset_sha'],
+            'reference_evidence': inspect_reference(matches[0]),
+            'scope': 'reference_input_capabilities_bound_to_verified_capture',
+            'semantic_truth_promoted': False}
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--source', required=True, type=Path)
+    parser.add_argument('--captures', type=Path, help='Optional JSON list of existing completed captures')
     args = parser.parse_args(argv)
     result = {'schema': 1, 'references': [inspect_reference(row) for row in selected(args.source)],
               'new_model_calls': 0, 'new_trials': 0, 'semantic_truth_promoted': False}
+    if args.captures:
+        paths = _json(_read(args.captures))
+        if (type(paths) is not list or not 1 <= len(paths) <= 100
+                or any(type(path) is not str or not path for path in paths) or len(set(paths)) != len(paths)):
+            raise ForecastDataError('invalid_mbpp_contract_captures')
+        result['capture_bindings'] = [bind_capture(Path(path), args.source) for path in paths]
+        if len({row['capture_root'] for row in result['capture_bindings']}) != len(paths):
+            raise ForecastDataError('duplicate_mbpp_contract_capture')
     print(canonical(result))
     return 0
 

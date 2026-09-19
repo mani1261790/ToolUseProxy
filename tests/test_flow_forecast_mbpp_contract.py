@@ -45,3 +45,25 @@ def test_ambient_reads_reflection_aliases_and_unreviewed_syntax_rejected(source)
 def test_inspection_does_not_run_even_nonterminating_source():
     source = 'def f(x):\n    while x:\n        x = x\n    return x\n'
     assert inspect_program(source)['termination_proven'] is False
+
+
+def test_verified_capture_binding_retains_unknown_truth(tmp_path, monkeypatch):
+    from hook_monitor.evaluation.flow_forecast.prefix import digest
+    from research.flow_forecast import mbpp_batch, mbpp_contract as module, mbpp_import
+    from test_flow_forecast_mbpp_import import capture
+    row = {'task_id': 602, 'text': 'Return input.', 'code': 'def answer(value):\n    return value\n',
+           'test_setup_code': '', 'test_list': ['assert answer("sample") == "sample"'] * 3,
+           'challenge_test_list': []}
+    monkeypatch.setattr(mbpp_batch, 'RECORDS', {602: digest(row)})
+    monkeypatch.setattr(module, 'selected', lambda path: [row])
+    monkeypatch.setattr(mbpp_import, 'selected', lambda path: [row])
+    path = tmp_path / 'capture'
+    _, _, report = capture(path, row)
+    binding = module.bind_capture(path, tmp_path / 'source')
+    assert binding['capture_report_sha'] == digest(report)
+    assert binding['reference_evidence']['record_sha'] == digest(row)
+    assert binding['semantic_truth_promoted'] is False
+    # Binding must not bypass the strict observation reader.
+    (path / 'observe-step-1.json').write_text('{}')
+    with pytest.raises(ForecastDataError):
+        module.bind_capture(path, tmp_path / 'source')
