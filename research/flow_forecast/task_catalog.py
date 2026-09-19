@@ -422,6 +422,29 @@ def collect_ticket_captures(directories, source_path, *, checked=False):
     return data, evidence, catalog, origins
 
 
+def collect_message_captures(directories, source_path):
+    from .bfcl_message_import import catalog as message_catalog, read_capture
+    from .bfcl_message_reference import source_text
+    if type(directories) is not tuple or not 1 <= len(directories) <= MAX_INPUTS:
+        raise ForecastDataError('invalid_collection_inputs')
+    source = source_text(source_path)
+    catalog, origins = message_catalog()
+    samples, audits, total = [], [], 0
+    for directory in directories:
+        data, audit = read_capture(directory, source)
+        total += len(canonical(audit).encode()) + len(canonical(asdict(data)).encode())
+        if total > MAX_ARTIFACT_BYTES:
+            raise ForecastDataError('collection_size_limit')
+        samples.append((data, {audit['intent']['root']: 'bfcl-message'}))
+        audits.append(audit)
+    data, evidence = collect(catalog, tuple(samples))
+    evidence['message_captures'] = audits
+    evidence['development_used'] = True
+    if len(canonical(evidence).encode()) > MAX_ARTIFACT_BYTES:
+        raise ForecastDataError('collection_size_limit')
+    return data, evidence, catalog, origins
+
+
 def collect_mbpp_captures(directories, source_path, *, checked=False):
     from .mbpp_import import catalog as mbpp_catalog, read_capture
     from .mbpp_batch import selected
@@ -467,11 +490,13 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--catalog', type=Path)
     parser.add_argument('--ticket-source', type=Path, help='Pinned original TicketAPI source for --ticket-captures')
+    parser.add_argument('--message-source', type=Path, help='Pinned original MessageAPI source for --message-captures')
     parser.add_argument('--mbpp-source', type=Path, help='Pinned original MBPP JSONL, only with --mbpp-captures')
     inputs_group = parser.add_mutually_exclusive_group(required=True)
     inputs_group.add_argument('--checked-mbpp-captures', type=Path, help='JSON list of MBPP capture/interventions pairs')
     inputs_group.add_argument('--checked-ticket-captures', type=Path, help='JSON list of Ticket capture/interventions pairs')
     inputs_group.add_argument('--ticket-captures', type=Path, help='JSON list of completed Ticket capture directories')
+    inputs_group.add_argument('--message-captures', type=Path, help='JSON list of completed Message capture directories')
     inputs_group.add_argument('--mbpp-captures', type=Path, help='JSON list of completed pinned MBPP captures')
     inputs_group.add_argument('--checked-task-worlds', type=Path, help='JSON list of capture/interventions directory pairs')
     inputs_group.add_argument('--checked-agenda-captures', type=Path, help='JSON list of agenda capture/interventions pairs')
@@ -489,7 +514,17 @@ def main(argv=None):
         parser.error('--mbpp-source requires MBPP captures')
     if args.ticket_source and not (args.ticket_captures or args.checked_ticket_captures):
         parser.error('--ticket-source requires --ticket-captures')
-    if args.checked_ticket_captures:
+    if args.message_source and not args.message_captures:
+        parser.error('--message-source requires --message-captures')
+    if args.message_captures:
+        if args.catalog or args.origins or args.message_source is None:
+            parser.error('Message captures require --message-source and use their captured definitions')
+        paths = _json(_read(args.message_captures))
+        if (type(paths) is not list or not 1 <= len(paths) <= MAX_INPUTS
+                or any(type(path) is not str or not path for path in paths)):
+            raise ForecastDataError('invalid_collection_inputs')
+        data, audit, catalog, origins = collect_message_captures(tuple(Path(path) for path in paths), args.message_source)
+    elif args.checked_ticket_captures:
         if args.catalog or args.origins or args.ticket_source is None:
             parser.error('checked Ticket captures require --ticket-source and captured definitions')
         pairs = _json(_read(args.checked_ticket_captures))
