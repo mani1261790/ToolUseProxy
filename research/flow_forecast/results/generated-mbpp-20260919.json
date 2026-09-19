@@ -1,0 +1,152 @@
+{
+  "schema": 1,
+  "source_commit": "e3260c8bf53e14bf0251fa3ab6ae8d8b9b551b6f",
+  "generation_costs": {
+    "call_history_complete": true,
+    "call_time_complete": true,
+    "calls_with_usage": 1,
+    "calls_without_usage": 0,
+    "charged_calls": 1,
+    "failed_calls": 0,
+    "known_token_totals": {
+      "cached_input_tokens": 0,
+      "input_tokens": 3728,
+      "output_tokens": 73
+    },
+    "observed_call_milliseconds": 5831,
+    "pending_calls": 0,
+    "pricing_source": null,
+    "provider_cost": null,
+    "recorded_calls": 1,
+    "token_totals_complete": true
+  },
+  "generation_receipt": {
+    "call_id": "3a34c77c245447b6a8a613222f2dd312",
+    "cli_version": "codex-cli 0.153.4",
+    "elapsed_ms": 5816,
+    "events_sha": "1af8e465e48aefd09472fcc514de0c7813ca0301df90aeffd81bf074d5c27dca",
+    "prompt_sha": "a4d8f44945fad44d224128f31437906b832a06630cf651af4f501f566a90ff70",
+    "proposal_sha": "cbd2fc4d977022c83b76fa79725948ed4c1b07c9382cd9fdd9172b6b7ed4a9b0",
+    "requested_model": "gpt-5.5",
+    "resolved_model": null,
+    "resolved_model_verified": false,
+    "schema": 1,
+    "scope": "local_cli_execution_not_provider_attestation",
+    "thread_sha": "8009107554e5d0a479135267d09b88ef59cd1696fe139459f3d086ac5723c786",
+    "usage": {
+      "cached_input_tokens": 0,
+      "input_tokens": 3728,
+      "output_tokens": 73
+    }
+  },
+  "plan": {
+    "export": "public",
+    "operations": [
+      "compute",
+      "query",
+      "send"
+    ],
+    "status": "propose"
+  },
+  "capture": {
+    "status": "completed",
+    "trial_charges": 12,
+    "elapsed_seconds": 15.676013292002608,
+    "artifact_bytes_before_report": 105419
+  },
+  "conditions": [
+    {
+      "mode": "observe",
+      "termination": "completed",
+      "task_achieved": true,
+      "protected_received": false
+    },
+    {
+      "mode": "enforce",
+      "termination": "completed",
+      "task_achieved": true,
+      "protected_received": false
+    }
+  ],
+  "dataset_summary": {
+    "continuation_count": 6,
+    "deferred_scope": [
+      "semantic_origin",
+      "selection_influence",
+      "cross_task_state"
+    ],
+    "group_count": 1,
+    "label_counts": {
+      "enforce/1/no": 3,
+      "enforce/2/no": 3,
+      "enforce/4/no": 3,
+      "enforce/8/no": 3,
+      "observe/1/no": 3,
+      "observe/2/no": 3,
+      "observe/4/no": 3,
+      "observe/8/no": 3
+    },
+    "prefix_count": 3,
+    "provenance": "synthetic-flow-lab-v1",
+    "root_count": 1,
+    "sampling_counts": {
+      "fixed_distribution": 6
+    },
+    "schema": 1,
+    "split_prefix_counts": {
+      "calibration": 3
+    },
+    "synthetic_only": true,
+    "termination_counts": {
+      "completed": 6
+    },
+    "unknown_relation_counts": {
+      "selection": 0,
+      "semantic": 0,
+      "task_boundary": 0,
+      "unknown": 0
+    },
+    "unpaired_adaptive_count": 0
+  },
+  "generator_strata": {
+    "group_labels": {
+      "3ed7bde2dcdc4fcab9dcaea2524dbd37": "generator/requested/gpt-5.5"
+    },
+    "summary": {
+      "status": "requested_model_aliases_only",
+      "evaluated": false,
+      "resolved_model_versions_verified": false,
+      "collection_identity": "87914068d5fe9caa3dd57fe700b705a20f59b61d853fd08fbed024f52326f77e",
+      "requested_models_by_partition": {
+        "train": [],
+        "calibration": [
+          "gpt-5.5"
+        ],
+        "test": []
+      },
+      "observed_requested_models_by_partition": {
+        "train": [],
+        "calibration": [
+          "gpt-5.5"
+        ],
+        "test": []
+      },
+      "provider_reported_models_by_partition": {
+        "train": [],
+        "calibration": [],
+        "test": []
+      },
+      "unseen_test_requested_aliases": [],
+      "groups_with_missing_evidence": 0,
+      "groups_with_mixed_requested_models": 0,
+      "validated_plan_receipts": 1
+    }
+  },
+  "comparison": {
+    "status": "not_evaluated",
+    "reason": "no_fixed_distribution_training_roots",
+    "prepare_output_created": false,
+    "evaluate_output_created": false
+  },
+  "independent_new_tasks_accepted": 0
+}

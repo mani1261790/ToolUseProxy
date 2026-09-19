@@ -38,10 +38,16 @@ def validate(intent, execution, report, reference):
                 or report['native_codex_hook_delivery'] != 'not_tested'):
             raise ValueError
         candidate = checked(reference)
-        if (intent['generator'] is not None or canonical(intent['origin']) != canonical({
+        if (canonical(intent['origin']) != canonical({
                 'source_commit': COMMIT, 'source_sha': SOURCE_SHA,
                 'candidate': candidate, 'case_index': 0})):
             raise ValueError
+        if intent['generator'] is not None:
+            from .generated_mbpp import validate as validate_generation
+            validate_generation(intent['generator'])
+            if (canonical(intent['generator']['task']) != canonical(reference)
+                    or intent['generator']['plan']['export'] != intent['variant']):
+                raise ValueError
         limits = intent['limits']
         if (set(limits) != {'trials', 'seconds', 'bytes'} or any(type(v) is not int for v in limits.values())
                 or limits['trials'] != 20 or limits['bytes'] != 1024**3 or not 1 <= limits['seconds'] <= 1800
