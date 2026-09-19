@@ -37,5 +37,5 @@ python -m research.flow_forecast.audit_taskbench --directory PINNED_SOURCE_DIREC
 
 F02受入数は0、独立性/未使用性の確認はfalse。生成モデルの実解決版も依然未確認。
 現在の環境ではOPENAI_API_KEY/ANTHROPIC_API_KEYの有無だけを調べ、どちらも未設定だった。
-認証情報の値は読んでいない。既存Codex認証で得たrequested model/CLI版を、providerが証明した
+認証情報の値を出力・保存していない。既存Codex認証で得たrequested model/CLI版を、providerが証明した
 モデル版へ昇格させない。#204は継続する。
