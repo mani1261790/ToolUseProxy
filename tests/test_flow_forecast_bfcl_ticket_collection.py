@@ -114,6 +114,7 @@ def test_receiver_mismatch_refuses_completion(monkeypatch):
 
 
 def test_failed_preflight_records_zero_charge(monkeypatch, tmp_path):
+    monkeypatch.setattr(batch, 'source_provenance', lambda root: {'fixture': 'same code'})
     monkeypatch.setattr(batch, 'source_text', lambda *a: SOURCE)
     def fail(*a):
         raise LabError('fixture_failure')
@@ -126,6 +127,7 @@ def test_failed_preflight_records_zero_charge(monkeypatch, tmp_path):
 
 def test_control_trials_do_not_replace_pinned_source_before_dispatch(monkeypatch, tmp_path):
     from types import SimpleNamespace
+    monkeypatch.setattr(batch, 'source_provenance', lambda root: {'fixture': 'same code'})
     monkeypatch.setattr(batch, 'source_text', lambda *a: SOURCE)
     monkeypatch.setattr(batch, 'build_context', lambda *a: b'fixture context')
     monkeypatch.setattr(batch, 'build_image', lambda *a, **k: 'sha256:' + 'a' * 64)

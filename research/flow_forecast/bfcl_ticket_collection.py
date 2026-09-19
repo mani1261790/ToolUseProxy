@@ -24,8 +24,10 @@ def run(repository, source_path, variant, output, *, seconds=180, clock=time.mon
         raise LabError('invalid_ticket_batch')
     source = source_text(source_path)
     started, charged = clock(), 0
-    source_root = Path(__file__).resolve().parents[2]
+    source_root = Path(repository).resolve(strict=True)
     implementation = source_provenance(source_root)
+    if implementation != source_provenance(Path(__file__).resolve().parents[2]):
+        raise LabError('ticket_repository_implementation_mismatch')
     output.mkdir(mode=0o700)
     _write_private(output / 'implementation.json', canonical(implementation).encode())
     intent = {'schema': 1, 'task': 'closed_ticket_dispatch_v1', 'variant': variant,
@@ -46,13 +48,13 @@ def run(repository, source_path, variant, output, *, seconds=180, clock=time.mon
         check()
         if charged >= 20:
             raise LabError('ticket_trial_budget_exhausted')
+        _write_private(output / f'reservation-{charged + 1}.json', canonical(identity).encode())
         charged += 1
-        _write_private(output / f'reservation-{charged}.json', canonical(identity).encode())
 
     try:
         check()
-        context = build_context(repository)
-        image = build_image(repository, context=context)
+        context = build_context(source_root)
+        image = build_image(source_root, context=context)
         check_isolation(image)
         execution = {'intent_sha': digest(intent), 'image': image, 'context_sha': hashlib.sha256(context).hexdigest()}
         _write_private(output / 'execution.json', canonical(execution).encode())
