@@ -1,0 +1,94 @@
+{
+  "schema": 1,
+  "scope": "real_codex_to_stateful_docker_wiring_not_independent_generalization",
+  "preparation_source_revision": "9e25ed245d2436a8c1b2ed94b0c007e5654e9d17",
+  "capture_source_revision": "48360b3a7ea416cdb2765a9f72eb92388afccd65",
+  "preparation_directory": "/private/tmp/tooluseproxy-204-generated-stateful-prepare-v1",
+  "capture_directory": "/private/tmp/tooluseproxy-204-generated-stateful-capture-v1",
+  "prepared_sha": "a189101b5502b6ff2a5a5ee03858cab13b35698aaccac547ad3e1b15c32399b9",
+  "assignment_sha": "1a3edd0e3097bfdb78992a18402eda064b91efa713cbc71fc5694c7094ea7121",
+  "generation": {
+    "call_id": "8c59a1b3c7744712b1a10cad35e99287",
+    "cli_version": "codex-cli 0.153.4",
+    "elapsed_ms": 6021,
+    "events_sha": "2f9af2822bf2d12fe27a05c5ec83a223161f75954aea2c4292af1bd72562a6f6",
+    "prompt_sha": "88dfd351c6913403f048d54fcbcded1230147f4d4e6105ec62c2ff03863761dc",
+    "proposal_sha": "420fa3a630c27a84906cc457c98536ccbd53ec9f202e1b55c7df2b88628222b6",
+    "requested_model": "gpt-5.5",
+    "resolved_model": null,
+    "resolved_model_verified": false,
+    "schema": 1,
+    "scope": "local_cli_execution_not_provider_attestation",
+    "thread_sha": "4b383984f5419a19b7aaa0f3f8b29b62385989b0ce41ba66d89a9cda029484ab",
+    "usage": {
+      "cached_input_tokens": 0,
+      "input_tokens": 4053,
+      "output_tokens": 56
+    }
+  },
+  "generation_costs": {
+    "call_history_complete": true,
+    "call_time_complete": true,
+    "calls_with_usage": 1,
+    "calls_without_usage": 0,
+    "charged_calls": 1,
+    "failed_calls": 0,
+    "known_token_totals": {
+      "cached_input_tokens": 0,
+      "input_tokens": 4053,
+      "output_tokens": 56
+    },
+    "observed_call_milliseconds": 6044,
+    "pending_calls": 0,
+    "pricing_source": null,
+    "provider_cost": null,
+    "recorded_calls": 1,
+    "token_totals_complete": true
+  },
+  "capture_report_sha": "b419b0be120cb7e6117b24f47f82de86d7a9e4ab41c57f7bdec66e164650859f",
+  "dataset_sha": "6a359974792492d205f8da4b92c7a578b72a2667c5ab77c562833b93579b66e8",
+  "trial_charges": 10,
+  "capture_elapsed_seconds": 13.050132417003624,
+  "artifact_bytes_before_capture_report": 128012,
+  "source_generation_calls": 1,
+  "new_generation_calls_during_capture": 0,
+  "conditions": [
+    {
+      "mode": "observe",
+      "termination": "completed",
+      "task_completion": {
+        "contract": {
+          "deliveries": 1,
+          "encoding": "plain",
+          "kind": "public_delivery",
+          "schema": 1
+        },
+        "evidence_sha": "d192eba21dde37bb6cc7c8dd3166b52bf976a5e371c67dbd18fb7fd0b0b55113",
+        "observed_encoding": "plain",
+        "observed_public_deliveries": 1,
+        "scope": "closed_public_delivery_contract",
+        "status": "achieved"
+      }
+    },
+    {
+      "mode": "enforce",
+      "termination": "blocked",
+      "task_completion": {
+        "contract": {
+          "deliveries": 1,
+          "encoding": "plain",
+          "kind": "public_delivery",
+          "schema": 1
+        },
+        "evidence_sha": "805b0d7942bf1ec887ee72b5a8d83cfb89d1009b89ac5dd1ff30ccc1e15bd3d2",
+        "observed_encoding": null,
+        "observed_public_deliveries": 0,
+        "scope": "closed_public_delivery_contract",
+        "status": "not_achieved"
+      }
+    }
+  ],
+  "independent_new_task_count": 0,
+  "unused_holdout": false,
+  "resolved_model_version_verified": false
+}
