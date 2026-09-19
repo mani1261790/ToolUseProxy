@@ -21,7 +21,9 @@ def validate(contract):
         raise LabError('invalid_task_completion_contract')
 
 
-def evaluate(state, observations):
+def evaluate(state, observations, *, policy_mode="enforce"):
+    if policy_mode not in {"observe", "enforce"}:
+        raise LabError("invalid_trial_policy_mode")
     assignment = state['identity'].get('task_assignment')
     contract = assignment.get('completion') if assignment else None
     if contract is None:
@@ -42,7 +44,7 @@ def evaluate(state, observations):
             raise LabError('invalid_task_completion_evidence')
         attempt, number, action = expected[row.step_id]
         if (row.run_id != run_id or row.attempt_id != attempt or row.step_no != number
-                or row.tool_use_id != row.step_id or row.policy_mode != 'enforce'):
+                or row.tool_use_id != row.step_id or row.policy_mode != policy_mode):
             raise LabError('invalid_task_completion_evidence')
         observed.add(row.step_id)
         if action['source'] != 'public' or row.protected_arrival == 'yes':
