@@ -153,3 +153,24 @@ def test_bad_response_model_is_a_controlled_failure(fake, tmp_path, reported):
     result = generated.prepare('inventory', api.APIWorldPlanProvider('fixture-alias'), tmp_path / 'run')
     assert result['status'] == 'not_prepared' and len(fake['calls']) == 1
     assert result['costs']['calls_without_usage'] == 1
+
+
+def test_wall_deadline_kills_and_reaps_actual_child(monkeypatch, tmp_path):
+    # Exercise the real subprocess timeout, not a fabricated TimeoutExpired.
+    # exec prevents a shell-owned sleep descendant surviving its parent.
+    sleeper = tmp_path / 'fake-python'
+    sleeper.write_text('#!/bin/sh\nexec sleep 10\n')
+    sleeper.chmod(0o700)
+    processes = []
+    real_popen = subprocess.Popen
+    def record(*args, **kwargs):
+        process = real_popen(*args, **kwargs)
+        processes.append(process)
+        return process
+    monkeypatch.setattr(api.sys, 'executable', str(sleeper))
+    monkeypatch.setattr(api.subprocess, 'Popen', record)
+    monkeypatch.setenv('OPENAI_API_KEY', 'synthetic-key')
+    with pytest.raises(LabError, match='model_timeout'):
+        api.APIWorldPlanProvider('fixture').propose([], task_mode='benign_task', timeout=0.1,
+                                                  max_bytes=16384, task_context={'world': 'inventory'})
+    assert len(processes) == 1 and processes[0].poll() is not None
