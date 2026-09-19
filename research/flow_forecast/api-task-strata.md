@@ -28,3 +28,17 @@ Messageのprepare/train評価を実行し、各モデルの層別成績と共通
 Ticketはtrainなしのため比較モデルの学習は行わない。
 封印識別と集計は `results/api-task-strata-20260920.json` に保存。
 未使用課題・道具・モデルの本評価、独立データ量、固定モデル版・費用証拠は#204の残件。
+
+## 学習診断とtest証拠の区別
+
+`--partition train` の評価数・性能は `scored_partition_metrics` に保存し、
+受入判定の `test_*` とtest性能指標には流用しない（null/未評価）。
+モデル別の診断値と部品除去の詳細は残すが、学習試験の値で一般化・部品除去の
+受入条件を満たさない。test区分がデータ中に存在するだけでも評価済みとは扱わない。
+課題分類 `unknown` は新しい課題名ではない。train/testの課題分類に不明があれば、
+課題間一般化の受入条件は未確認とし、そのprefix数をレポートに残す。
+
+2026-09-20に既存Message collectionの凍結計画を再評価した。
+学習診断の正例1群と行数は保存され、受入側test件数はnull、判定は
+`inconclusive_do_not_adopt`。新しいモデル呼出・trial・独立群は0。
+旧レポートやsealed collectionは書き換えていない。

@@ -59,6 +59,15 @@ def attach_assessment(report, dataset, models, costs, resources, plan, *, genera
         'peak_memory_bytes': resources['peak_process_memory_bytes'],
         'prediction_p95_ms': primary['prediction_p95_ms'], 'model_bytes': model_bytes,
     }
+    scored_metrics = {('normal_roots' if key == 'test_normal_roots' else
+                       'positive_roots' if key == 'test_positive_roots' else key): value
+                      for key, value in metrics.items()}
+    test_scored = report['partition'] == 'test' and probability['row_count'] > 0
+    if report['partition'] != 'test':
+        # Training diagnostics cannot fill heldout sample or performance gates.
+        development_costs = {'training_roots', 'calibration_normal_roots', 'training_seconds',
+                             'peak_memory_bytes', 'model_bytes'}
+        metrics = {key: value if key in development_costs else None for key, value in metrics.items()}
     ablations = {name: _ablation_benefit(report, name) for name in VARIANTS}
     test_prefixes = [p for p in dataset.prefixes if dataset.split.partition(p) == 'test']
     train_prefixes = [p for p in dataset.prefixes if dataset.split.partition(p) == 'train']
@@ -68,11 +77,15 @@ def attach_assessment(report, dataset, models, costs, resources, plan, *, genera
                   for s in b.prefix.observations + b.observations}
     train_tasks = {p.task_kind for p in train_prefixes}
     test_tasks = {p.task_kind for p in test_prefixes}
+    unknown_tasks = {'training_prefixes': sum(p.task_kind == 'unknown' for p in train_prefixes),
+                     'test_prefixes': sum(p.task_kind == 'unknown' for p in test_prefixes)}
+    unseen_tasks = test_tasks - train_tasks - {'unknown'}
     generalization = {
         'training_tools': sorted(train_tools), 'test_tools': sorted(test_tools),
         'unseen_test_tools': sorted(test_tools - train_tools),
         'training_tasks': sorted(train_tasks), 'test_tasks': sorted(test_tasks),
-        'unseen_test_tasks': sorted(test_tasks - train_tasks),
+        'unseen_test_tasks': sorted(unseen_tasks),
+        'unknown_task_evidence': unknown_tasks, 'scored_partition': report['partition'],
         'agent_models': {'status': 'not_recorded_in_F01_schema', 'evaluated': False},
         'test_prior_use': 'not_proven_by_a_partition_label',
         'independence': 'component_grouping_verified_but_new_root_ids_are_not_independence_proof',
@@ -90,16 +103,17 @@ def attach_assessment(report, dataset, models, costs, resources, plan, *, genera
         'unused_test_partition': False if report['partition'] == 'train' else None,
         'frozen_calibration_selection': True if chosen else None,
         'independent_root_groups': None,
-        'different_tools_evaluated': bool(test_tools - train_tools) if test_prefixes else None,
-        'different_tasks_evaluated': bool(test_tasks - train_tasks) if test_prefixes else None,
+        'different_tools_evaluated': bool(test_tools - train_tools) if test_scored else None,
+        'different_tasks_evaluated': bool(unseen_tasks) if test_scored and not any(unknown_tasks.values()) else None,
         'different_agent_models_evaluated': None,
-        'object_identity_ablation_benefit': ablations['without_object_identity']['benefit'],
-        'parent_relation_ablation_benefit': ablations['without_parent_relations']['benefit'],
-        'multistep_ablation_benefit': ablations['without_multistep']['benefit'],
+        'object_identity_ablation_benefit': ablations['without_object_identity']['benefit'] if test_scored else None,
+        'parent_relation_ablation_benefit': ablations['without_parent_relations']['benefit'] if test_scored else None,
+        'multistep_ablation_benefit': ablations['without_multistep']['benefit'] if test_scored else None,
     }
     report.update({'acceptance': assess(metrics, conditions), 'acceptance_metrics': metrics,
                    'ablation_benefits': ablations, 'generalization': generalization,
                    'costs': {'training_seconds': costs, 'resources': resources, 'sequence_model_bytes': model_bytes},
+                   'scored_partition_metrics': {'partition': report['partition'], **scored_metrics},
                    'dataset_summary': dataset.summary()})
     return report
 
