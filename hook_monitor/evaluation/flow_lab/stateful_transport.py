@@ -86,6 +86,33 @@ def observer_script(plan, number):
             "'output_sha':hashlib.sha256(after).hexdigest(),'input_size':len(before),'output_size':len(after)}))")
 
 
+def validate_guard_receipt(row, *, persisted=False):
+    try:
+        required = {'decision', 'receipt_count', 'exit_code', 'cause_digest', 'cause_trace', 'decision_reason'}
+        if persisted:
+            required.add('trace_scope')
+        if type(row) is not dict or set(row) != required:
+            raise ValueError
+        if persisted and row['trace_scope'] != 'cumulative_session_policy_trace':
+            raise ValueError
+        if (type(row) is not dict or row.get('decision') not in ('allow', 'deny')
+                or type(row.get('receipt_count')) is not int or row['receipt_count'] != 1
+                or type(row.get('exit_code')) is not int or row['exit_code'] != 0):
+            raise ValueError
+        trace = row.get('cause_trace')
+        if (type(trace) is not list or len(trace) > 100
+                or any(type(item) is not list or len(item) != 5
+                       or any(type(value) is not str or len(value) > 1024 for value in item) for item in trace)
+                or type(row.get('decision_reason')) is not str or len(row['decision_reason']) > 2048):
+            raise ValueError
+        expected = hashlib.sha256(json.dumps(trace, separators=(',', ':')).encode()).hexdigest() if trace else None
+        if row.get('cause_digest') != expected:
+            raise ValueError
+    except (ValueError, TypeError) as error:
+        raise LabError('stateful_guard_receipt_missing') from error
+    return row
+
+
 class StatefulTransport(FixedTransport):
     receiver_script = RECEIVER.replace('import base64, json, re', 'import base64, hashlib, json, re').replace(
         "'body_size':len(body)", "'body_size':len(body), 'body_sha':hashlib.sha256(body).hexdigest()")
@@ -155,19 +182,7 @@ class StatefulTransport(FixedTransport):
                       timeout=10)
         try:
             row = json.loads(raw)
-            if (type(row) is not dict or row.get('decision') not in ('allow', 'deny')
-                    or type(row.get('receipt_count')) is not int or row['receipt_count'] != 1
-                    or type(row.get('exit_code')) is not int or row['exit_code'] != 0):
-                raise ValueError
-            trace = row.get('cause_trace')
-            if (type(trace) is not list or len(trace) > 100
-                    or any(type(item) is not list or len(item) != 5
-                           or any(type(value) is not str or len(value) > 1024 for value in item) for item in trace)
-                    or type(row.get('decision_reason')) is not str or len(row['decision_reason']) > 2048):
-                raise ValueError
-            expected = hashlib.sha256(json.dumps(trace, separators=(',', ':')).encode()).hexdigest() if trace else None
-            if row.get('cause_digest') != expected:
-                raise ValueError
+            validate_guard_receipt(row)
             self.guard_receipts[step_id] = {**row, 'trace_scope': 'cumulative_session_policy_trace'}
             self.decisions[step_id] = row['decision']
             return row['decision']

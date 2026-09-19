@@ -24,7 +24,7 @@ from hook_monitor.evaluation.flow_forecast.prefix import (
 from hook_monitor.evaluation.flow_lab.models import RunSpec, RecordError, utc_now
 from hook_monitor.evaluation.flow_lab.preflight import LabError, build_context, build_image, check_isolation
 from hook_monitor.evaluation.flow_lab.runner import Scenario, run_scenario
-from hook_monitor.evaluation.flow_lab.stateful_transport import PUBLIC, StatefulTransport, validate_plan
+from hook_monitor.evaluation.flow_lab.stateful_transport import PUBLIC, StatefulTransport, validate_guard_receipt, validate_plan
 from hook_monitor.evaluation.flow_lab.transport import CANARY
 from hook_monitor.evaluation.flow_lab.storage import TrialStore, StoreError
 from .task_catalog import _write_private
@@ -48,10 +48,8 @@ def validate_trace(plan, condition):
                     or type(row['dispatched']) is not bool
                     or row['dispatched'] != (condition['mode'] == 'observe' or row['decision'] == 'allow')):
                 raise ValueError
-            receipt = row['guard_receipt']
-            if (type(receipt) is not dict or receipt.get('decision') != row['decision']
-                    or type(receipt.get('receipt_count')) is not int or receipt['receipt_count'] != 1
-                    or type(receipt.get('exit_code')) is not int or receipt['exit_code'] != 0):
+            receipt = validate_guard_receipt(row['guard_receipt'], persisted=True)
+            if receipt['decision'] != row['decision']:
                 raise ValueError
             identities.add(row['step_id'])
             if not row['dispatched']:
@@ -81,7 +79,7 @@ def validate_trace(plan, condition):
         else:
             if condition['termination'] != 'completed' or len(rows) != len(plan['operations']):
                 raise ValueError
-    except (KeyError, TypeError, ValueError) as error:
+    except (KeyError, TypeError, ValueError, LabError) as error:
         raise ForecastDataError('invalid_stateful_trace') from error
 
 

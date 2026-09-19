@@ -49,7 +49,11 @@ class Transport(ControlTransport):
 
     def guard_step(self, cmd, session_id, step):
         decision = 'deny' if self.plan['source'] == 'protected' and self.numbers[step] == len(self.plan['operations']) else 'allow'
-        self.guard_receipts[step] = {'decision': decision, 'receipt_count': 1, 'exit_code': 0}
+        trace = [['block', 'critical', 'fixture', 'source', 'synthetic-only']] if decision == 'deny' else []
+        self.guard_receipts[step] = {
+            'decision': decision, 'receipt_count': 1, 'exit_code': 0, 'cause_trace': trace,
+            'cause_digest': hashlib.sha256(json.dumps(trace, separators=(',', ':')).encode()).hexdigest() if trace else None,
+            'decision_reason': 'synthetic-only', 'trace_scope': 'cumulative_session_policy_trace'}
         return decision
 
     def execute_step(self, cmd, step):
@@ -97,13 +101,27 @@ def test_public_pipeline_proves_completion_without_protected_arrival(lab, tmp_pa
     assert all(label_future(b, 4).protected_arrival == 'no' for b in data.branches)
 
 
-@pytest.mark.parametrize('corrupt', ['hash', 'receiver', 'order', 'dispatch', 'guard', 'incomplete'])
+@pytest.mark.parametrize('corrupt', ['hash', 'receiver', 'order', 'dispatch', 'guard', 'incomplete',
+                                    'cause_trace', 'cause_digest', 'decision_reason', 'trace_scope']
+                         + ['missing_' + field for field in (
+                             'decision', 'receipt_count', 'exit_code', 'cause_trace', 'cause_digest',
+                             'decision_reason', 'trace_scope')])
 def test_corrupt_or_incomplete_capture_cannot_become_truth(lab, tmp_path, corrupt):
     output = tmp_path / 'capture'
     report = module.run(tmp_path, PLAN, output)
     conditions = deepcopy(report['conditions'])
     row = conditions[0]['steps'][-1]
-    if corrupt == 'hash':
+    if corrupt.startswith('missing_'):
+        del row['guard_receipt'][corrupt[len('missing_'):]]
+    elif corrupt == 'cause_trace':
+        row['guard_receipt']['cause_trace'][0][-1] = 'modified'
+    elif corrupt == 'cause_digest':
+        row['guard_receipt']['cause_digest'] = '0' * 64
+    elif corrupt == 'decision_reason':
+        row['guard_receipt']['decision_reason'] = 'x' * 2049
+    elif corrupt == 'trace_scope':
+        row['guard_receipt']['trace_scope'] = 'per_event'
+    elif corrupt == 'hash':
         row['observation']['input_sha'] = '0' * 64
     elif corrupt == 'receiver':
         row['observation']['receiver']['body_sha'] = '0' * 64
