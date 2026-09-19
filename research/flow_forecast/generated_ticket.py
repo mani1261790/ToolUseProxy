@@ -160,16 +160,20 @@ def main(argv=None):
     parser.add_argument('--source', type=Path)
     parser.add_argument('--output', required=True, type=Path)
     args = parser.parse_args(argv)
-    if args.stage == 'prepare':
-        if not args.model:
-            parser.error('prepare requires --model')
-        result = prepare(TicketPlanProvider(args.model), args.output)
-    else:
-        if args.prepared is None or args.repository is None or args.source is None:
-            parser.error('collect requires --prepared, --repository and --source')
-        from .bfcl_ticket_collection import run
-        value = load(args.prepared)
-        result = run(args.repository, args.source, value['plan']['export'], args.output, generation=value)
+    try:
+        if args.stage == 'prepare':
+            if not args.model:
+                parser.error('prepare requires --model')
+            result = prepare(TicketPlanProvider(args.model), args.output)
+        else:
+            if args.prepared is None or args.repository is None or args.source is None:
+                parser.error('collect requires --prepared, --repository and --source')
+            from .bfcl_ticket_collection import run
+            value = load(args.prepared)
+            result = run(args.repository, args.source, value['plan']['export'], args.output, generation=value)
+    except (LabError, ForecastDataError) as error:
+        print(canonical({'status':'not_completed','reason':str(error)}))
+        return 1
     print(canonical(result))
     return 0 if result['status'] in ('prepared','completed') else 1
 

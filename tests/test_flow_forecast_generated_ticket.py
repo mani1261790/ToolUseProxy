@@ -151,3 +151,23 @@ def test_checked_collection_receipt_retains_projection_proof_binding(tmp_path,mo
     monkeypatch.setattr(generator_strata,'read_collection',lambda *a:(data,catalog,changed))
     with pytest.raises(ForecastDataError,match='branch_mismatch'):
         generator_strata.load(data,directory,identity)
+
+
+@pytest.mark.parametrize('failure', ['provider','load','batch'])
+def test_cli_closed_errors_return_structured_failure(tmp_path, monkeypatch, capsys, failure):
+    def fail(*args, **kwargs):
+        raise (ForecastDataError('invalid_task_plan_artifacts') if failure == 'load' else LabError('fixture_failure'))
+    args = ['prepare','--model','fixture'] if failure == 'provider' else [
+        'collect','--prepared','fixture','--repository','fixture','--source','fixture']
+    if failure == 'provider':
+        monkeypatch.setattr(module,'TicketPlanProvider',fail)
+    elif failure == 'load':
+        monkeypatch.setattr(module,'load',fail)
+    else:
+        monkeypatch.setattr(module,'load',lambda *a: {'plan':{'export':'public'}})
+        monkeypatch.setattr(ticket_collection,'run',fail)
+    assert module.main(args + ['--output',str(tmp_path/'out')]) == 1
+    output = capsys.readouterr()
+    assert json.loads(output.out) == {'status':'not_completed','reason':
+        'invalid_task_plan_artifacts' if failure == 'load' else 'fixture_failure'}
+    assert output.err == '' and not (tmp_path/'out').exists()
