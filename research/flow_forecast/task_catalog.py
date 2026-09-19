@@ -328,14 +328,22 @@ def collect_stateful_captures(directories):
     return data, evidence, catalog, origins
 
 
-def collect_task_worlds(directories):
+def collect_task_worlds(directories, *, checked=False):
     from .task_world_import import catalog as world_catalog, read_capture
     if type(directories) is not tuple or not 1 <= len(directories) <= MAX_INPUTS:
         raise ForecastDataError('invalid_collection_inputs')
     catalog, origins = world_catalog()
     samples, audits, total = [], [], 0
     for directory in directories:
-        data, audit = read_capture(directory)
+        if checked:
+            from .checked_task_world import read_checked_capture
+            if type(directory) is not dict or set(directory) != {'capture', 'interventions'}:
+                raise ForecastDataError('invalid_checked_world_input')
+            if any(type(value) is not str or not value for value in directory.values()):
+                raise ForecastDataError('invalid_checked_world_input')
+            data, audit = read_checked_capture(Path(directory['capture']), Path(directory['interventions']))
+        else:
+            data, audit = read_capture(directory)
         total += len(canonical(audit).encode()) + len(canonical(asdict(data)).encode())
         if total > MAX_ARTIFACT_BYTES:
             raise ForecastDataError('collection_size_limit')
@@ -352,6 +360,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--catalog', type=Path)
     inputs_group = parser.add_mutually_exclusive_group(required=True)
+    inputs_group.add_argument('--checked-task-worlds', type=Path, help='JSON list of capture/interventions directory pairs')
     inputs_group.add_argument('--task-worlds', type=Path, help='JSON list of completed task world capture directories')
     inputs_group.add_argument('--stateful-captures', type=Path, help='JSON list of completed generated capture directories')
     inputs_group.add_argument('--assigned-searches', type=Path, help='JSON list of completed assigned search directories')
@@ -361,7 +370,14 @@ def main(argv=None):
     parser.add_argument('--origins', type=Path,
                         help='Synthetic design documents named by SHA-256 with .md suffix')
     args = parser.parse_args(argv)
-    if args.assigned_searches or args.stateful_captures or args.task_worlds:
+    if args.checked_task_worlds:
+        if args.catalog or args.origins:
+            parser.error('checked task worlds use their captured definitions')
+        pairs = _json(_read(args.checked_task_worlds))
+        if type(pairs) is not list:
+            raise ForecastDataError('invalid_checked_world_input')
+        data, audit, catalog, origins = collect_task_worlds(tuple(pairs), checked=True)
+    elif args.assigned_searches or args.stateful_captures or args.task_worlds:
         if args.catalog or args.origins:
             parser.error('assigned captures use their recorded catalogs and origins')
         paths = _json(_read(args.assigned_searches or args.stateful_captures or args.task_worlds))

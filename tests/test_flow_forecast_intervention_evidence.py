@@ -70,3 +70,4 @@ def test_binding_requires_same_computation_and_environment(lab, tmp_path, monkey
         result = module.bind_capture(tmp_path, output)
         assert result['capture_report_sha'] == digest(capture['report'])
         assert len(result['changed_cases']) == 2 and result['semantic_truth_promoted'] is False
+        assert result['input_contract']['external_values'] == ['source']
