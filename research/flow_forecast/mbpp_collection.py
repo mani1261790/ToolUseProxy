@@ -46,6 +46,8 @@ def run(repository, source_path, task_id, variant, output, *, seconds=180, clock
         from .cohort_plan import binding
         from .mbpp_import import catalog
         cohort_binding = binding(cohort, catalog(rows)[0], 'mbpp-' + str(task_id))
+        if cohort_binding['partition'] != 'train' and cohort['schema'] != 2:
+            raise LabError('cohort_history_required_for_holdout')
     origin = {'source_commit': COMMIT, 'source_sha': SOURCE_SHA, 'candidate': checked(row), 'case_index': 0}
     started, charged = clock(), 0
     source_root = Path(__file__).resolve().parents[2]

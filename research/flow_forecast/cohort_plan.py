@@ -13,8 +13,8 @@ PARTITIONS = ('train', 'calibration', 'test')
 
 def validate(value):
     try:
-        if (type(value) is not dict or set(value) != {'schema', 'catalog', 'origins', 'assignments', 'plan_sha'}
-                or type(value['schema']) is not int or value['schema'] != 1
+        if (type(value) is not dict or set(value) != {'schema', 'catalog', 'origins', 'assignments', 'plan_sha'} | ({'history'} if value.get('schema') == 2 else set())
+                or type(value['schema']) is not int or value['schema'] not in (1,2)
                 or len(canonical(value).encode()) > MAX_ARTIFACT_BYTES
                 or value['plan_sha'] != digest({k:v for k,v in value.items() if k != 'plan_sha'})):
             raise ValueError
@@ -35,6 +35,11 @@ def validate(value):
             group = groups[design]
             if selected.setdefault(group, partition) != partition:
                 raise ForecastDataError('cohort_related_partition_conflict')
+        if value['schema'] == 2:
+            from .cohort_history import known_designs
+            known = known_designs(value['catalog'], value['history'])
+            if any(assignments[key] != 'train' for key in known):
+                raise ForecastDataError('cohort_known_origin_in_holdout')
         return groups
     except (KeyError, TypeError, ValueError, UnicodeError) as error:
         if isinstance(error, ForecastDataError):
@@ -42,10 +47,13 @@ def validate(value):
         raise ForecastDataError('invalid_cohort_plan') from error
 
 
-def prepare(catalog, origins, assignments):
+def prepare(catalog, origins, assignments, *, prior=()):
     content = {'schema':1, 'catalog':deepcopy(catalog),
                'origins':{key:raw.decode('utf-8') for key,raw in origins.items()},
                'assignments':deepcopy(assignments)}
+    if prior:
+        from .cohort_history import freeze
+        content.update(schema=2, history=freeze(prior))
     result = {**content, 'plan_sha':digest(content)}
     validate(result)
     return result
@@ -87,9 +95,10 @@ def main(argv=None):
     parser.add_argument('--origins', type=Path, required=True)
     parser.add_argument('--assignments', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--prior-collection', type=Path, action='append', default=[])
     args = parser.parse_args(argv)
     catalog = _json(_read(args.catalog))
-    value = prepare(catalog, read_origins(catalog,args.origins), _json(_read(args.assignments)))
+    value = prepare(catalog, read_origins(catalog,args.origins), _json(_read(args.assignments)), prior=tuple(args.prior_collection))
     _write_private(args.output, (canonical(value)+'\n').encode())
     return 0
 

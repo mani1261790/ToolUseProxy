@@ -1,0 +1,15 @@
+# 生成前の既知由来の拒否
+
+`cohort_plan --prior-collection USED_COLLECTION`は、指定された過去collectionのsealとcatalog原文を照合して計画schema2に保存する。保存済み原文のhash、seal identity、origin一覧、catalog構造を再検証し、候補と履歴の由来・処理構造・親子関係をまとめて確認する。既知関連はtrainだけに指定でき、calibration/testは拒否する。
+
+生成時・試行前・取込時にも計画のvalidateを通るため、用途と計画hashだけを作り直して既知課題を未使用扱いにはできない。新しくcalibration/testを生成・実行する経路は履歴のないschema1計画も拒否する。旧schema1の読込互換性を維持し、既存記録を変更しない。
+
+履歴は指定されたcollectionだけで、完全性や独立性、過去に参照されなかったことを証明しない。履歴をローカルで全面的に捏造する不正controllerへの認証基盤でもない。seal/catalogだけを読むので、この確認でtestの正解やtraceを読むことはない。
+
+## 実確認
+
+source8d3faf1で固定MBPP catalogと既存checked-MBPP collectionを使い、全trainの履歴付き計画を新規保存した。計画SHAは0229ded1c2be52fefed96b6740e03753a570e2536c5a8fd3dfc1c24b4b1fe9ae、既知関連は602/603/604。
+
+その用途をcalibration/testへ変更しhashを再計算しても、生成prepareはcohort_known_origin_in_holdoutで拒否した。出力directoryは作成されず、モデル呼出し・試行0。結果は [results/cohort-history-20260919.json](results/cohort-history-20260919.json)。
+
+関連980テスト/Ruff成功。名前変更、履歴改変/重複、用途差替え、履歴省略、モデル呼出前拒否の回帰を含む。#204の独立課題数・未使用評価・固定モデル版・費用不足は残っている。次は蓄積したPRの統合と、独立候補を増やす収集経路の適合性を確認する。
