@@ -139,6 +139,7 @@ def test_invalid_proposal_preserves_usage_but_never_becomes_accepted(tmp_path):
     assert provider.last_evidence is None
     receipt = provider.last_execution
     assert receipt['proposal_sha'] is None
+    assert provider.last_validation_stage == 'proposal_schema_invalid'
     assert receipt['usage']['output_tokens'] == 7
     assert 'PRIVATE' not in json.dumps(receipt)
     with pytest.raises(LabError):
