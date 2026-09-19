@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 from dataclasses import asdict
 import hashlib
+import re
 from pathlib import Path
 import time
 import uuid
@@ -55,6 +56,9 @@ def validate(value):
                 or type(value['schema']) is not int or value['schema'] != 1
                 or value['translation'] != TRANSLATION or len(canonical(value).encode()) > MAX_BYTES
                 or value['prepared_sha'] != digest({k: v for k, v in value.items() if k != 'prepared_sha'})):
+            raise ValueError
+        if any(type(value[k]) is not str or re.fullmatch('[a-f0-9]{64}', value[k]) is None
+               for k in ('request_sha', 'implementation_sha', 'prepared_sha')):
             raise ValueError
         task_context = context(value['assignment'])
         proposal = Proposal.parse(value['proposal'])

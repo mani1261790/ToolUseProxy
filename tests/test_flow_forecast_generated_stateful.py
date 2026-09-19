@@ -154,3 +154,13 @@ def test_sealed_generation_is_bound_before_stateful_dispatch(lab, tmp_path):
     with pytest.raises(ForecastDataError, match='generated_plan_mismatch'):
         stateful_collection.run(tmp_path, changed, tmp_path / 'other', generation=frozen)
     assert not (tmp_path / 'other').exists()
+
+
+def test_invalid_implementation_identity_is_rejected_before_trial(tmp_path):
+    directory = tmp_path / 'prepared'
+    module.prepare(binding(), Provider(), directory)
+    value = module.load(directory)
+    value['implementation_sha'] = None
+    value['prepared_sha'] = digest({k: v for k, v in value.items() if k != 'prepared_sha'})
+    with pytest.raises(ForecastDataError):
+        module.validate(value)
