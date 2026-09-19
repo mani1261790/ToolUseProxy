@@ -47,7 +47,7 @@ class AgendaAPI:
             if len(owned) >= 16:
                 return {'error': 'capacity'}
             owned[key] = {'title': arguments['title'], 'time': arguments['time'],
-                          'private': 'synthetic-private-' + self._principal}
+                          'private': owned['shared']['private']}
             return {'id': key, 'created': True}
         if key not in owned:
             return {'error': 'not_found'}
