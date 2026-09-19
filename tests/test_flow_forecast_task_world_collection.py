@@ -67,3 +67,35 @@ def test_expired_batch_keeps_intent_without_dispatch_or_report(lab, tmp_path):
     assert (out / 'intent.json').exists()
     assert not (out / 'execution.json').exists()
     assert not (out / 'report.json').exists()
+
+
+def test_denied_first_step_never_dispatches_in_enforce(lab, tmp_path, monkeypatch):
+    original = Transport.guard_step
+    execute = Transport.execute_step
+    def deny(self, cmd, session, step):
+        original(self, cmd, session, step)
+        self.guard_receipts[step]['decision'] = 'deny'
+        return 'deny'
+    def track(self, cmd, step):
+        assert self.mode == 'observe'
+        return execute(self, cmd, step)
+    monkeypatch.setattr(Transport, 'guard_step', deny)
+    monkeypatch.setattr(Transport, 'execute_step', track)
+    result = module.run(tmp_path, 'inventory', 'public', tmp_path / 'capture')
+    assert result['trial_charges'] == 11
+    enforce = result['conditions'][1]
+    assert enforce['termination'] == 'blocked' and enforce['protected_received'] is None
+    assert len(enforce['steps']) == 1 and enforce['steps'][0]['observation'] is None
+
+
+def test_interruption_charges_dispatch_and_retains_no_completion(lab, tmp_path, monkeypatch):
+    def interrupt(*args):
+        raise KeyboardInterrupt
+    monkeypatch.setattr(Transport, 'execute_step', interrupt)
+    output = tmp_path / 'capture'
+    with pytest.raises(KeyboardInterrupt):
+        module.run(tmp_path, 'ledger', 'public', output)
+    assert (output / 'reservation-4.json').exists()
+    assert (output / 'observe-guard-1.json').exists()
+    assert not (output / 'report.json').exists()
+    assert Transport.instances[-1].closed
