@@ -251,3 +251,27 @@ def test_unaccounted_attempt_or_failure_is_rejected(tmp_path, extra):
     (path / (extra + '.json')).write_text('{}')
     with pytest.raises(ForecastDataError):
         importer.read_capture(path)
+
+
+def test_creation_prefix_exposes_acknowledgment_not_internal_record(tmp_path):
+    datasets = []
+    for variant in ('public', 'include_private'):
+        path = tmp_path / variant
+        capture(path, variant)
+        data, _ = importer.read_capture(path)
+        datasets.append(data)
+        for prefix in data.prefixes:
+            assert prefix.source_version == 'closed-agenda-io-v2'
+            assert all(obj.object_id != 'agenda-record' for obj in prefix.objects)
+            if prefix.max_sequence_no >= 1:
+                first = prefix.observations[0]
+                assert first.outputs == ('agenda-ack',)
+                assert first.inputs == ('agenda-input',)
+            if prefix.max_sequence_no == 2:
+                query = prefix.observations[1]
+                assert ('protected-source' in query.inputs) == (variant == 'include_private')
+    # Both variants have the same visible add result; later private output must
+    # not leak into the earlier prediction boundary.
+    for cut in (0, 1):
+        values = [next(p.model_input() for p in d.prefixes if p.max_sequence_no == cut) for d in datasets]
+        assert values[0] == values[1]
