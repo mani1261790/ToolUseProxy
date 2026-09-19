@@ -11,11 +11,12 @@ from .budget import Budget
 from .compare import MAX_REPORT_BYTES, attach_assessment
 from .experiment import build_models, evaluate, freeze_plan
 from .holdout import HoldoutLedger
+from . import generator_strata
 from .partition_bundle import combine, read_development, read_manifest, read_partition, write_bundle
 from .provenance import source_provenance
 
 
-def _prepare(directory, budget):
+def _prepare(directory, budget, collection=None):
     manifest = read_manifest(directory)
     development = read_development(directory, manifest)
     models, costs = build_models(development, check_budget=budget.check)
@@ -24,16 +25,18 @@ def _prepare(directory, budget):
                'model_sha': digest({'versions': {name: row['version'] for name, row in plan['models'].items()},
                                     'sequence': models['sequence'].model_digest}),
                'evaluator_sha': digest(source_provenance(Path(__file__).resolve().parents[2]))}
+    if collection is not None:
+        content['generator_collection_sha'] = generator_strata.collection_identity(collection)
     return manifest, development, models, costs, {**content, 'plan_sha': digest(content)}
 
 
-def prepare(directory, *, budget=None):
-    return _prepare(directory, budget or Budget())[-1]
+def prepare(directory, *, budget=None, collection=None):
+    return _prepare(directory, budget or Budget(), collection)[-1]
 
 
-def evaluate_once(directory, plan, ledger, *, budget=None):
+def evaluate_once(directory, plan, ledger, *, budget=None, collection=None):
     budget = budget or Budget()
-    manifest, development, models, costs, expected = _prepare(directory, budget)
+    manifest, development, models, costs, expected = _prepare(directory, budget, collection)
     if plan != expected:
         raise ForecastDataError('holdout_plan_mismatch')
     seal = manifest['partitions']['test']
@@ -46,9 +49,12 @@ def evaluate_once(directory, plan, ledger, *, budget=None):
     dataset = combine((development, test))
     if digest(dataset.split.assignments) != manifest['source_digest']:
         raise ForecastDataError('bundle_source_mismatch')
+    generators = (generator_strata.load(dataset, collection, plan['generator_collection_sha'],
+                                         check_budget=budget.check) if collection is not None else None)
     result = evaluate(dataset, models, plan['calibration_plan'], calibration_dataset=development,
-                      check_budget=budget.check)
-    attach_assessment(result, dataset, models, costs, budget.snapshot(), plan['calibration_plan'])
+                      check_budget=budget.check, generator_groups=generators['group_labels'] if generators else None)
+    attach_assessment(result, dataset, models, costs, budget.snapshot(), plan['calibration_plan'],
+                      generator_evidence=generators)
     result['holdout'] = {'reservation': reservation, 'prior_access': manifest['prior_access'],
                          'bundle_sha': manifest['bundle_sha']}
     # A converted dataset was accessible before sealing; the ledger cannot erase that.
@@ -75,6 +81,7 @@ def main(argv=None):
             command.add_argument('--ledger', type=Path, required=True)
         if stage in ('prepare', 'evaluate'):
             command.add_argument('--output', type=Path, required=True)
+            command.add_argument('--collection', type=Path)
         if stage == 'evaluate':
             command.add_argument('--plan', type=Path, required=True)
         if stage == 'retire':
@@ -89,7 +96,7 @@ def main(argv=None):
         HoldoutLedger.create(args.ledger)
         return
     if args.stage == 'prepare':
-        result = prepare(args.bundle)
+        result = prepare(args.bundle, collection=args.collection)
     else:
         ledger = HoldoutLedger(args.ledger)
         seal = read_manifest(args.bundle)['partitions']['test']
@@ -99,7 +106,7 @@ def main(argv=None):
         if args.stage == 'retire':
             ledger.retire(dataset_sha=seal['dataset_sha'], reason=args.reason)
             return
-        result = evaluate_once(args.bundle, _json(_read(args.plan)), ledger)
+        result = evaluate_once(args.bundle, _json(_read(args.plan)), ledger, collection=args.collection)
     with args.output.open('x', encoding='utf-8') as stream:
         stream.write(canonical(result) + '\n')
 
