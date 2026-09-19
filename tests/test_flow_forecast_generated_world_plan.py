@@ -80,3 +80,30 @@ def test_plan_binds_capture_before_trials(lab, tmp_path):
     with pytest.raises(Exception, match='world_generation_plan_mismatch'):
         task_world_collection.run(tmp_path, 'ledger', 'public', tmp_path / 'wrong', generation=frozen)
     assert not (tmp_path / 'wrong').exists()
+
+
+def test_generated_world_collection_uses_original_receipt_and_rejects_reuse(lab, tmp_path):
+    from research.flow_forecast import task_catalog, generator_strata
+    out = tmp_path / 'prepared'
+    module.prepare('inventory', provider(tmp_path), out, timeout=2)
+    frozen = module.load(out)
+    captures = []
+    for number in range(2):
+        capture = tmp_path / f'capture-{number}'
+        task_world_collection.run(tmp_path, 'inventory', 'public', capture, generation=frozen)
+        captures.append(str(capture))
+    for count in (1, 2):
+        paths = tmp_path / f'paths-{count}.json'
+        paths.write_text(json.dumps(captures[:count]))
+        collection = tmp_path / f'collection-{count}'
+        task_catalog.main(['--task-worlds', str(paths), '--output', str(collection)])
+        data, _, audit = task_catalog.read_collection(collection)
+        assert audit['grouped_root_count'] == 1
+        identity = generator_strata.collection_identity(collection)
+        if count == 1:
+            strata = generator_strata.load(data, collection, identity)
+            assert set(strata['group_labels'].values()) == {'generator/requested/fixture-model'}
+            assert strata['summary']['validated_plan_receipts'] == 1
+        else:
+            with pytest.raises(ForecastDataError, match='generation_receipt_reused'):
+                generator_strata.load(data, collection, identity)

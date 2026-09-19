@@ -4,7 +4,7 @@ Requested aliases remain aliases. No local receipt is promoted to a provider-
 verified model version, and related roots with different generators stay grouped.
 """
 from collections import defaultdict
-from dataclasses import asdict
+from dataclasses import asdict, replace
 import re
 
 from hook_monitor.evaluation.flow_forecast.dataset import _json, _read
@@ -104,6 +104,42 @@ def load(dataset, directory, expected_identity, *, check_budget=lambda: None):
             expected = sorted(digest(asdict(b)) for b in dataset.branches if b.prefix.root_case_id == root)
             if (sorted(digest(asdict(b)) for b in rebuilt.branches) != expected
                     or item['dataset_sha'] != digest(asdict(rebuilt))):
+                raise ForecastDataError('generation_branch_mismatch')
+            call_id = frozen['generation']['call_id']
+            if call_id in seen_calls:
+                raise ForecastDataError('generation_receipt_reused')
+            seen_calls.add(call_id)
+            models[root] = frozen['model']
+        for item in audit.get('task_world_captures', []):
+            from .generated_world_plan import validate as validate_world_generation
+            from .task_world_import import dataset_from_evidence
+            check_budget()
+            intent = item['intent']
+            frozen = intent['generator']
+            if frozen is None:
+                continue
+            validate_world_generation(frozen)
+            root = intent['root']
+            if root not in roots or root in models or item.get('generator_evidence') != frozen:
+                raise ForecastDataError('generation_root_mismatch')
+            bindings = [row for row in audit['bindings'] if row['root_case_id'] == root]
+            if len(bindings) != 1 or bindings[0]['design_id'] != 'world-' + frozen['world']:
+                raise ForecastDataError('generation_assignment_mismatch')
+            rebuilt = dataset_from_evidence(intent, item['execution'], item['report'])
+            actual = [b for b in dataset.branches if b.prefix.root_case_id == root]
+            proof = item.get('closed_computation_evidence')
+            normalized = []
+            for branch in actual:
+                edges = []
+                for edge in branch.transfers:
+                    if edge.relation in ('closed_compute', 'json_projection'):
+                        if proof is None or edge.evidence_digest != digest(proof):
+                            raise ForecastDataError('generation_branch_mismatch')
+                        edge = replace(edge, relation='semantic' if edge.relation == 'closed_compute' else 'selection',
+                                       evidence='unknown', evidence_digest=None)
+                    edges.append(edge)
+                normalized.append(replace(branch, transfers=tuple(edges)))
+            if sorted(digest(asdict(b)) for b in normalized) != sorted(digest(asdict(b)) for b in rebuilt.branches):
                 raise ForecastDataError('generation_branch_mismatch')
             call_id = frozen['generation']['call_id']
             if call_id in seen_calls:
