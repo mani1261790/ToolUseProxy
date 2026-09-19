@@ -32,6 +32,13 @@ def run(repository, source_path, task_id, variant, output, *, seconds=180, clock
     if generation is not None:
         from .generated_mbpp import validate
         validate(generation)
+        generated_cohort = generation.get('cohort_assignment')
+        if generated_cohort is not None:
+            if cohort is not None and canonical(cohort) != canonical(generated_cohort['plan']):
+                raise LabError('mbpp_generation_cohort_mismatch')
+            cohort = generated_cohort['plan']
+        elif cohort is not None:
+            raise LabError('mbpp_generation_has_no_cohort')
         if generation['task'] != source_row or generation['plan']['export'] != variant:
             raise LabError('mbpp_generation_plan_mismatch')
     cohort_binding = None

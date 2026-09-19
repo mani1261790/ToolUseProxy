@@ -18,11 +18,22 @@ from .task_catalog import _write_private
 from .mbpp_plan_provider import Plan, MbppPlanProvider, definition, prompt
 
 
+def cohort_binding(cohort, task):
+    from .cohort_plan import binding
+    from .mbpp_import import catalog
+    expected = catalog([task])[0]['designs'][0]
+    result = binding(cohort, cohort['catalog'], expected['id'])
+    actual = next(row for row in cohort['catalog']['designs'] if row['id'] == expected['id'])
+    if canonical(actual) != canonical(expected):
+        raise ForecastDataError('generation_cohort_task_mismatch')
+    return result
+
+
 def validate(value):
     try:
         if (type(value) is not dict or set(value) != {'schema', 'task', 'definition', 'model', 'plan',
-                'generation', 'implementation_sha', 'request_sha', 'prepared_sha'}
-                or type(value['schema']) is not int or value['schema'] != 1
+                'generation', 'implementation_sha', 'request_sha', 'prepared_sha'} | ({'cohort_assignment'} if value.get('schema') == 2 else set())
+                or type(value['schema']) is not int or value['schema'] not in (1, 2)
                 or value['definition'] != definition(value['task'])
                 or value['prepared_sha'] != digest({k: v for k, v in value.items() if k != 'prepared_sha'})):
             raise ValueError
@@ -36,6 +47,11 @@ def validate(value):
         request = {'schema': 1, 'task': value['task'], 'definition': value['definition'],
                    'model': value['model'], 'maximum_model_calls': 1, 'reply_limit': 16384,
                    'implementation_sha': value['implementation_sha'], 'prompt_sha': hashlib.sha256(text.encode()).hexdigest()}
+        if value['schema'] == 2:
+            binding = cohort_binding(value['cohort_assignment']['plan'], value['task'])
+            if canonical(binding) != canonical(value['cohort_assignment']):
+                raise ValueError
+            request['cohort_assignment'] = binding
         if (value['request_sha'] != digest(request) or value['generation']['prompt_sha'] != request['prompt_sha']
                 or type(value['implementation_sha']) is not str or re.fullmatch('[a-f0-9]{64}', value['implementation_sha']) is None):
             raise ValueError
@@ -44,8 +60,9 @@ def validate(value):
         raise ForecastDataError('invalid_generated_task_plan') from error
 
 
-def prepare(task, provider, output, *, timeout=60, clock=time.monotonic):
+def prepare(task, provider, output, *, timeout=60, clock=time.monotonic, cohort=None):
     task_definition = definition(task)
+    binding = cohort_binding(cohort, task) if cohort is not None else None
     version(provider.model_id)
     if type(timeout) is not int or not 1 <= timeout <= 60:
         raise ForecastDataError('invalid_task_generation_budget')
@@ -53,6 +70,8 @@ def prepare(task, provider, output, *, timeout=60, clock=time.monotonic):
     request = {'schema': 1, 'task': task, 'definition': task_definition, 'model': provider.model_id,
                'maximum_model_calls': 1, 'reply_limit': 16384, 'implementation_sha': digest(implementation),
                'prompt_sha': hashlib.sha256(prompt([], 'benign_task', {'task': task}).encode()).hexdigest()}
+    if binding is not None:
+        request['cohort_assignment'] = binding
     output.mkdir(mode=0o700)
     for name, document in [('implementation', implementation), ('request', request)]:
         _write_private(output / (name + '.json'), canonical(document).encode())
@@ -75,6 +94,8 @@ def prepare(task, provider, output, *, timeout=60, clock=time.monotonic):
         content = {'schema': 1, 'task': task, 'definition': task_definition, 'model': provider.model_id,
                    'plan': record['proposal'], 'generation': receipt,
                    'implementation_sha': digest(implementation), 'request_sha': digest(request)}
+        if binding is not None:
+            content.update(schema=2, cohort_assignment=binding)
         value = validate({**content, 'prepared_sha': digest(content)})
         if source_provenance(Path(__file__).resolve().parents[2]) != implementation:
             raise LabError('task_generation_implementation_changed')
@@ -157,6 +178,7 @@ def main(argv=None):
     parser.add_argument('--source', required=True, type=Path)
     parser.add_argument('--task-id', type=int, choices=(602,603,604))
     parser.add_argument('--prepared', type=Path)
+    parser.add_argument('--cohort-plan', type=Path)
     parser.add_argument('--repository', type=Path)
     parser.add_argument('--output', required=True, type=Path)
     args = parser.parse_args(argv)
@@ -167,8 +189,12 @@ def main(argv=None):
         rows = [row for row in selected(args.source) if row['task_id'] == args.task_id]
         if len(rows) != 1:
             parser.error('prepare requires --task-id')
-        result = prepare(rows[0], MbppPlanProvider(args.model), args.output)
+        from .cohort_plan import load as load_cohort
+        result = prepare(rows[0], MbppPlanProvider(args.model), args.output,
+                         cohort=load_cohort(args.cohort_plan) if args.cohort_plan else None)
     else:
+        if args.cohort_plan is not None:
+            parser.error('collect uses the cohort sealed during prepare')
         if args.prepared is None or args.repository is None:
             parser.error('collect requires --prepared and --repository')
         from .mbpp_collection import run
