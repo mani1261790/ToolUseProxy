@@ -20,6 +20,7 @@ from hook_monitor.evaluation.flow_forecast.prefix import ForecastDataError, cano
 
 MAX_DESIGNS = 10000
 MAX_INPUTS = 1000
+GROUPING_METHOD = "declared-relations-and-flow-refinement-v2"
 
 
 def _identifier(value):
@@ -38,6 +39,37 @@ def _identifiers(values):
     for value in values:
         _identifier(value)
 
+
+
+def _flow_signature(row):
+    """Name-invariant directed edge-labelled refinement; collisions join conservatively.
+
+    This is not a proof of graph isomorphism or semantic independence. All source,
+    sink and intermediate identifiers are excluded; operation/tool names remain.
+    Refinement only splits partitions, so at most the number of vertices rounds
+    are needed, including for cyclic graphs.
+    """
+    flow = row['flow']
+    nodes = {endpoint for source, _, target in flow for endpoint in (source, target)}
+    incoming = {node: [] for node in nodes}
+    outgoing = {node: [] for node in nodes}
+    for source, operation, target in flow:
+        outgoing[source].append((operation, target))
+        incoming[target].append((operation, source))
+    colors = {node: 0 for node in nodes}
+    count = 1
+    for _ in range(len(nodes)):
+        signatures = {node: (colors[node],
+                            tuple(sorted((operation, colors[target]) for operation, target in outgoing[node])),
+                            tuple(sorted((operation, colors[source]) for operation, source in incoming[node])))
+                      for node in nodes}
+        ranks = {signature: index for index, signature in enumerate(sorted(set(signatures.values())))}
+        colors = {node: ranks[signature] for node, signature in signatures.items()}
+        if len(ranks) == count:
+            break
+        count = len(ranks)
+    return digest([sorted(row['tools']), sorted(colors.values()),
+                   sorted((colors[source], operation, colors[target]) for source, operation, target in flow)])
 
 def design_groups(catalog):
     """Return canonical related components, never a count of verified independent tasks."""
@@ -97,7 +129,7 @@ def design_groups(catalog):
 
         for key, row in records.items():
             # Conservatively collapse equal mechanics even with different prose.
-            signature = digest([sorted(row['tools']), sorted(row['flow'])])
+            signature = _flow_signature(row)
             join(key, signatures.setdefault(signature, key))
             join(key, origins.setdefault(row['origin']['artifact_sha'], key))
             for related in row['parents']:
@@ -165,7 +197,7 @@ def collect(catalog, samples, *, seed='split-v1'):
         raise ForecastDataError('collection_provenance_mismatch')
     data = assemble(tuple(branches), seed=seed, related_roots=tuple(sorted(set(relations))),
                     provenance=provenances.pop())
-    return data, {'schema': 1, 'catalog_sha': digest(catalog), 'source_dataset_shas': sources,
+    return data, {'schema': 1, 'grouping_method': GROUPING_METHOD, 'catalog_sha': digest(catalog), 'source_dataset_shas': sources,
                   'bindings': sorted(bindings, key=lambda row: row['root_case_id']),
                   'dataset_sha': digest(asdict(data)), 'split_sha': data.split.digest,
                   'declared_design_count': len({row['design_id'] for row in bindings}),
