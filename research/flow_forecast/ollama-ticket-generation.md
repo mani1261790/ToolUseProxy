@@ -3,7 +3,8 @@
 `python -m research.flow_forecast.ollama_ticket_generation --output NEW_DIRECTORY`
 は既存の `qwen3:8b` に人工Ticket課題を1回だけ渡す開発用経路。
 モデル取得・変更、ホスト道具の実行、再試行は行わない。出力先は新規に限る。
-現在のCodex生成receiptや評価collectionへの投入経路とは未接続。
+下記のprovider経路では既存の準備・費用集計・収集データへ接続する。
+この単独probeの保存物を後から有効な準備計画に変換する機能はない。
 
 要求と実装hashを先に保存し、固定loopbackの `/api/tags` と `/api/version`、
 1回の `/api/generate`、同じ識別情報の再取得を行う。各HTTP応答は1MiB以内、
@@ -35,3 +36,44 @@ F02の予測器RSS上限と、この生成モデルのメモリ使用量は別�
 
 この試験はローカル経路が返答を得られることと、不正な計画を実行しないことの確認。
 固定モデル版の受入、520独立群、未使用holdout、費用、有効性は未達のまま。
+
+## 既存の収集経路への接続
+
+```sh
+python -m research.flow_forecast.generated_ticket prepare \
+  --provider ollama --model qwen3:8b --output NEW_PREPARED_DIRECTORY
+```
+
+共通の事前予約を書いてから同じ有限workerを1回だけ呼び、応答原本を保存する。
+有効な計画だけ `generated-plan.json` を作成し、既存の `collect` へ渡せる。
+prepare成功後のcollectは別の明示的バッチであり、prepareから自動では開始しない。
+不正な計画はexecution receiptと消費量を残し、prepared計画やtrialを作らない。
+
+receipt schema 3は固定loopback、要求hash、観測hash、前後manifest・サーバー版、
+生成計画hashを記録する。汎用のモデル識別子規則は緩めず、
+`ollama-qwen3-8b` とOllamaの要求名 `qwen3:8b` の対応を明示する。
+既存のCodex/API receipt schema 1/2は維持する。
+サーバーがcache token数を省略した場合、cache=0とせずreceiptのusageをnullにする。
+
+準備計画の再読込は保存した応答原本からreceiptを再構成して一致を確認する。
+Ticket captureは生成計画をtrial前のintentへ固定し、collection読込時には
+生成計画・branch・関連群との対応を検証する。モデル別集計には要求aliasと
+観測されたローカル識別情報を別々に載せ、固定重みが確認済みとは扱わない。
+
+### 接続後の実測
+
+実装commit `090edd8cff3bc2518abe8ed44471cf840be08377` で1回だけ実行。
+`/private/tmp/tooluseproxy-204-ollama-ticket-prepared-v1` に原本を保存した。
+先の単独probeから独立した接続確認バッチであり、同じ人工課題の開発用反復。
+新しい独立群や未使用評価には加算しない。
+
+生成は25,377msで終了し、入力316/出力37/cache0tokensを共通費用集計へ記録。
+返答は再びrefusedと操作一覧が矛盾したため `invalid_model_proposal` で拒否した。
+生成要求1・失敗1・trial0。再生成はしていない。金銭費用はnullのまま。
+モデルmanifestとサーバー版は単独probeと同じだった。
+
+保存済みの事前予約、実装、要求、応答原本、execution receipt、費用集計を再照合した。
+再照合時の新規モデル呼出しは0。
+[機械可読記録](results/ollama-ticket-receipts-20260920.json)に結果を記載。
+有効なローカル生成計画から実Docker trialまでの実測は未達であり、
+collection接続の成功証拠は現時点ではfixture試験に限る。
