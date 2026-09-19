@@ -119,7 +119,7 @@ def run(repository, source_path, variant, output, *, seconds=180, clock=time.mon
         report = {'schema': 1, 'status': 'completed', 'intent_sha': digest(intent), 'execution_sha': digest(execution),
                   'conditions': conditions, 'trial_charges': charged, 'elapsed_seconds': elapsed,
                   'artifact_bytes_before_report': size, 'new_model_calls': 0, 'independent_new_tasks_accepted': 0,
-                  'f01_import': 'not_yet_supported', 'guard_scope': 'direct_runtime_pre_tool_mcp_payload',
+                  'f01_import': 'closed_message_capture_v1', 'guard_scope': 'direct_runtime_pre_tool_mcp_payload',
                   'post_tool_hook_delivery': 'not_tested', 'native_codex_hook_delivery': 'not_tested'}
         _write_private(output / 'report.json', canonical(report).encode())
         return report
