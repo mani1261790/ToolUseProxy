@@ -107,3 +107,12 @@ def test_generated_world_collection_uses_original_receipt_and_rejects_reuse(lab,
         else:
             with pytest.raises(ForecastDataError, match='generation_receipt_reused'):
                 generator_strata.load(data, collection, identity)
+
+
+def test_cli_reports_unsuccessful_generation_as_failure(tmp_path, monkeypatch, capsys):
+    refused = provider(tmp_path, {'status': 'refused', 'operations': [], 'export': 'public'})
+    monkeypatch.setattr(module, 'WorldPlanProvider', lambda _: refused)
+    status = module.main(['prepare', '--world', 'inventory', '--model', 'fixture-model',
+                          '--output', str(tmp_path / 'prepared')])
+    assert status == 1
+    assert json.loads(capsys.readouterr().out)['status'] == 'not_prepared'

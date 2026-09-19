@@ -165,7 +165,8 @@ def main(argv=None):
         value = load(args.prepared)
         result = run(args.repository, value['world'], value['plan']['export'], args.output, generation=value)
     print(canonical(result))
+    return 0 if result['status'] in ('prepared', 'completed') else 1
 
 
 if __name__ == '__main__':
-    main()
+    raise SystemExit(main())
