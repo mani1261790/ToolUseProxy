@@ -242,3 +242,12 @@ def test_collection_keeps_related_variants_in_one_group(tmp_path):
     assert audit["independence_verified"] is False and audit["prior_nonuse_verified"] is False
     assert len(audit["agenda_captures"]) == 2
     assert len(data.branches) == 12
+
+
+@pytest.mark.parametrize('extra', ['reservation-13', 'observe-step-4', 'enforce-guard-4', 'failure'])
+def test_unaccounted_attempt_or_failure_is_rejected(tmp_path, extra):
+    path = tmp_path / 'capture'
+    capture(path)
+    (path / (extra + '.json')).write_text('{}')
+    with pytest.raises(ForecastDataError):
+        importer.read_capture(path)

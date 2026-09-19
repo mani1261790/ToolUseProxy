@@ -20,15 +20,16 @@ IDENTITY = ('mode', 'number', 'step_id', 'call_sha', 'call', 'receiver_address',
 
 def validate(intent, execution, report):
     try:
-        if (intent['schema'] != 1 or intent['task'] != 'closed_agenda_dispatch_v1'
+        if (type(intent['schema']) is not int or intent['schema'] != 1 or intent['task'] != 'closed_agenda_dispatch_v1'
                 or intent['variant'] not in ('public', 'include_private') or intent['generator'] is not None
                 or not re.fullmatch('[a-f0-9]{32}', intent['root'])
-                or report['schema'] != 1 or report['status'] != 'completed'
+                or type(report['schema']) is not int or report['schema'] != 1 or report['status'] != 'completed'
                 or report['intent_sha'] != digest(intent) or execution['intent_sha'] != digest(intent)
                 or report['execution_sha'] != digest(execution)
                 or not re.fullmatch('sha256:[a-f0-9]{64}', execution['image'])
                 or not re.fullmatch('[a-f0-9]{64}', execution['context_sha'])
-                or report['new_model_calls'] != 0 or report['independent_new_tasks_accepted'] != 0
+                or type(report['new_model_calls']) is not int or report['new_model_calls'] != 0
+                or type(report['independent_new_tasks_accepted']) is not int or report['independent_new_tasks_accepted'] != 0
                 or report['guard_scope'] != 'direct_runtime_pre_tool_mcp_payload'
                 or report['post_tool_hook_delivery'] != 'not_tested'
                 or report['native_codex_hook_delivery'] != 'not_tested'):
@@ -190,6 +191,17 @@ def read_capture(directory):
                 n = row['number']
                 if (read(f'reservation-{charged}') != {k: row[k] for k in IDENTITY}
                         or read(f'{mode}-step-{n}') != row or read(f'{mode}-guard-{n}') != row['receipt']):
+                    raise ValueError
+        if (directory / 'failure.json').exists():
+            raise ValueError
+        expected_files = {f'reservation-{n}.json' for n in range(1, charged + 1)}
+        if {p.name for p in directory.glob('reservation-*.json')} != expected_files:
+            raise ValueError
+        for mode in ('observe', 'enforce'):
+            rows = next(c['steps'] for c in report['conditions'] if c['mode'] == mode)
+            for kind in ('step', 'guard'):
+                if {p.name for p in directory.glob(f'{mode}-{kind}-*.json')} != {
+                        f'{mode}-{kind}-{row["number"]}.json' for row in rows}:
                     raise ValueError
         data = dataset(intent, execution, report)
         return data, {'intent': intent, 'execution': execution, 'report': report,
