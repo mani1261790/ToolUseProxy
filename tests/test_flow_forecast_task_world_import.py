@@ -16,6 +16,7 @@ def test_exact_task_completion_never_promotes_semantic_truth(lab, tmp_path, vari
     data, audit = task_world_import.read_capture(output)
     assert len(data.branches) == 8
     assert audit['generator_evidence'] is None
+    assert {p.task_kind for p in data.prefixes} == {'inventory_allocation'}
     for branch in data.branches:
         label = label_future(branch, 4)
         assert label.protected_arrival == 'unknown'
@@ -60,6 +61,7 @@ def test_sealed_collection_groups_variants_without_invented_generators(lab, tmp_
     task_catalog.main(['--task-worlds', str(source), '--output', str(output)])
     data, catalog, audit = task_catalog.read_collection(output)
     assert audit['grouped_root_count'] == 2
+    assert {p.task_kind for p in data.prefixes} == {'inventory_allocation', 'ledger_reconciliation'}
     assert audit['independence_verified'] is False and audit['prior_nonuse_verified'] is False
     assert digest(catalog) == audit['catalog_sha']
     strata = generator_strata.load(data, output, generator_strata.collection_identity(output))

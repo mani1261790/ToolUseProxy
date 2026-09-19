@@ -21,7 +21,7 @@ def validate_evidence(intent, execution, report):
         if (type(intent['schema']) is not int or intent['schema'] != 1 or intent['definition'] != world
                 or intent['variant'] not in ('public', 'include_private') or intent['generator'] is not None
                 or type(intent['root']) is not str or not re.fullmatch('[a-f0-9]{32}', intent['root'])
-                or report['schema'] != 1 or report['status'] != 'completed'
+                or type(report['schema']) is not int or report['schema'] != 1 or report['status'] != 'completed'
                 or report['intent_sha'] != digest(intent) or execution['intent_sha'] != digest(intent)
                 or report['execution_sha'] != digest(execution)
                 or not re.fullmatch('sha256:[a-f0-9]{64}', execution['image'])
@@ -133,7 +133,8 @@ def dataset_from_evidence(intent, execution, report):
                         + tuple(o for o in objects if o.observed_at <= cut),
                 capabilities=('file', 'shell', 'http'), environment_version=execution['image'][7:],
                 source_version='task-world-' + intent['world'] + '-v1', protected_sources=('protected-source',),
-                task_kind='unknown')
+                task_kind={'inventory': 'inventory_allocation', 'calendar': 'calendar_intersection',
+                           'ledger': 'ledger_reconciliation'}[intent['world']])
             branches.append(Continuation(prefix, 'predeclared-task-world', condition['mode'],
                 'fixed_replay', 'fixed_distribution', 1.0, steps[cut:],
                 tuple(o for o in objects if o.observed_at > cut), edges, prefix.protected_sources,
