@@ -356,11 +356,32 @@ def collect_task_worlds(directories, *, checked=False):
     return data, evidence, catalog, origins
 
 
+def collect_agenda_captures(directories):
+    from .agenda_import import catalog as agenda_catalog, read_capture
+    if type(directories) is not tuple or not 1 <= len(directories) <= MAX_INPUTS:
+        raise ForecastDataError('invalid_collection_inputs')
+    catalog, origins = agenda_catalog()
+    samples, audits, total = [], [], 0
+    for directory in directories:
+        data, audit = read_capture(directory)
+        total += len(canonical(audit).encode()) + len(canonical(asdict(data)).encode())
+        if total > MAX_ARTIFACT_BYTES:
+            raise ForecastDataError('collection_size_limit')
+        samples.append((data, {audit['intent']['root']: 'agenda'}))
+        audits.append(audit)
+    data, evidence = collect(catalog, tuple(samples))
+    evidence['agenda_captures'] = audits
+    if len(canonical(evidence).encode()) > MAX_ARTIFACT_BYTES:
+        raise ForecastDataError('collection_size_limit')
+    return data, evidence, catalog, origins
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--catalog', type=Path)
     inputs_group = parser.add_mutually_exclusive_group(required=True)
     inputs_group.add_argument('--checked-task-worlds', type=Path, help='JSON list of capture/interventions directory pairs')
+    inputs_group.add_argument('--agenda-captures', type=Path, help='JSON list of completed agenda captures with endpoint evidence')
     inputs_group.add_argument('--task-worlds', type=Path, help='JSON list of completed task world capture directories')
     inputs_group.add_argument('--stateful-captures', type=Path, help='JSON list of completed generated capture directories')
     inputs_group.add_argument('--assigned-searches', type=Path, help='JSON list of completed assigned search directories')
@@ -377,15 +398,16 @@ def main(argv=None):
         if type(pairs) is not list:
             raise ForecastDataError('invalid_checked_world_input')
         data, audit, catalog, origins = collect_task_worlds(tuple(pairs), checked=True)
-    elif args.assigned_searches or args.stateful_captures or args.task_worlds:
+    elif args.assigned_searches or args.stateful_captures or args.task_worlds or args.agenda_captures:
         if args.catalog or args.origins:
             parser.error('assigned captures use their recorded catalogs and origins')
-        paths = _json(_read(args.assigned_searches or args.stateful_captures or args.task_worlds))
+        paths = _json(_read(args.assigned_searches or args.stateful_captures or args.task_worlds or args.agenda_captures))
         if (type(paths) is not list or not 1 <= len(paths) <= MAX_INPUTS
                 or any(type(path) is not str or not path for path in paths)):
             raise ForecastDataError('invalid_collection_inputs')
         collector = (collect_assigned_searches if args.assigned_searches else
-                     collect_stateful_captures if args.stateful_captures else collect_task_worlds)
+                     collect_stateful_captures if args.stateful_captures else
+                     collect_agenda_captures if args.agenda_captures else collect_task_worlds)
         data, audit, catalog, origins = collector(tuple(Path(path) for path in paths))
     else:
         if args.catalog is None or args.origins is None:
