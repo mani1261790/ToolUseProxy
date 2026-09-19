@@ -392,6 +392,29 @@ def collect_agenda_captures(directories, *, checked=False):
     return data, evidence, catalog, origins
 
 
+def collect_ticket_captures(directories, source_path):
+    from .bfcl_ticket_import import catalog as ticket_catalog, read_capture
+    from .bfcl_ticket_reference import source_text
+    if type(directories) is not tuple or not 1 <= len(directories) <= MAX_INPUTS:
+        raise ForecastDataError('invalid_collection_inputs')
+    source = source_text(source_path)
+    catalog, origins = ticket_catalog()
+    samples, audits, total = [], [], 0
+    for directory in directories:
+        data, audit = read_capture(directory, source)
+        total += len(canonical(audit).encode()) + len(canonical(asdict(data)).encode())
+        if total > MAX_ARTIFACT_BYTES:
+            raise ForecastDataError('collection_size_limit')
+        samples.append((data, {audit['intent']['root']: 'bfcl-ticket'}))
+        audits.append(audit)
+    data, evidence = collect(catalog, tuple(samples))
+    evidence['ticket_captures'] = audits
+    evidence['development_used'] = True
+    if len(canonical(evidence).encode()) > MAX_ARTIFACT_BYTES:
+        raise ForecastDataError('collection_size_limit')
+    return data, evidence, catalog, origins
+
+
 def collect_mbpp_captures(directories, source_path, *, checked=False):
     from .mbpp_import import catalog as mbpp_catalog, read_capture
     from .mbpp_batch import selected
@@ -436,9 +459,11 @@ def collect_mbpp_captures(directories, source_path, *, checked=False):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--catalog', type=Path)
+    parser.add_argument('--ticket-source', type=Path, help='Pinned original TicketAPI source for --ticket-captures')
     parser.add_argument('--mbpp-source', type=Path, help='Pinned original MBPP JSONL, only with --mbpp-captures')
     inputs_group = parser.add_mutually_exclusive_group(required=True)
     inputs_group.add_argument('--checked-mbpp-captures', type=Path, help='JSON list of MBPP capture/interventions pairs')
+    inputs_group.add_argument('--ticket-captures', type=Path, help='JSON list of completed Ticket capture directories')
     inputs_group.add_argument('--mbpp-captures', type=Path, help='JSON list of completed pinned MBPP captures')
     inputs_group.add_argument('--checked-task-worlds', type=Path, help='JSON list of capture/interventions directory pairs')
     inputs_group.add_argument('--checked-agenda-captures', type=Path, help='JSON list of agenda capture/interventions pairs')
@@ -454,7 +479,17 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if args.mbpp_source and not (args.mbpp_captures or args.checked_mbpp_captures):
         parser.error('--mbpp-source requires MBPP captures')
-    if args.checked_mbpp_captures:
+    if args.ticket_source and not args.ticket_captures:
+        parser.error('--ticket-source requires --ticket-captures')
+    if args.ticket_captures:
+        if args.catalog or args.origins or args.ticket_source is None:
+            parser.error('Ticket captures require --ticket-source and use their captured definitions')
+        paths = _json(_read(args.ticket_captures))
+        if (type(paths) is not list or not 1 <= len(paths) <= MAX_INPUTS
+                or any(type(path) is not str or not path for path in paths)):
+            raise ForecastDataError('invalid_collection_inputs')
+        data, audit, catalog, origins = collect_ticket_captures(tuple(Path(path) for path in paths), args.ticket_source)
+    elif args.checked_mbpp_captures:
         if args.catalog or args.origins or args.mbpp_source is None:
             parser.error('checked MBPP captures require --mbpp-source and use their captured definitions')
         pairs = _json(_read(args.checked_mbpp_captures))
