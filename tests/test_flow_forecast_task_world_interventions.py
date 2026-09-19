@@ -6,10 +6,10 @@ import pytest
 
 from hook_monitor.evaluation.flow_lab.preflight import LabError
 from research.flow_forecast import task_world_interventions as module
-from research.flow_forecast.task_worlds import encoded
+from research.flow_forecast.task_worlds import WORLDS, encoded
 
 
-@pytest.mark.parametrize('name', ['inventory', 'calendar', 'ledger'])
+@pytest.mark.parametrize('name', WORLDS)
 def test_changed_inputs_produce_independently_declared_answers(name):
     cases = module.cases(name)
     for case in cases:

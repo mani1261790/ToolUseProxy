@@ -21,7 +21,7 @@ from hook_monitor.evaluation.flow_lab.storage import TrialStore
 from hook_monitor.evaluation.flow_lab.transport import CANARY
 from .provenance import source_provenance
 from .task_catalog import _write_private
-from .task_worlds import definition, observe_bytes, operation_script
+from .task_worlds import WORLDS, definition, observe_bytes, operation_script
 
 
 class WorldTransport(StatefulTransport):
@@ -171,7 +171,7 @@ def run(repository, name, variant, output, *, seconds=180, clock=time.monotonic,
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--world', required=True, choices=('inventory', 'calendar', 'ledger'))
+    parser.add_argument('--world', required=True, choices=tuple(WORLDS))
     parser.add_argument('--variant', required=True, choices=('public', 'include_private'))
     parser.add_argument('--repository', required=True, type=Path)
     parser.add_argument('--output', required=True, type=Path)

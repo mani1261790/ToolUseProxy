@@ -5,7 +5,7 @@ import pytest
 from hook_monitor.evaluation.flow_lab.preflight import LabError
 from hook_monitor.evaluation.flow_lab.transport import CANARY
 from research.flow_forecast import task_world_collection as module
-from research.flow_forecast.task_worlds import definition, encoded, observe_bytes
+from research.flow_forecast.task_worlds import WORLDS, definition, encoded, observe_bytes
 from test_flow_forecast_stateful_collection import Transport as Base
 
 
@@ -35,7 +35,7 @@ def lab(monkeypatch):
     monkeypatch.setattr(module, 'check_isolation', lambda _: None)
 
 
-@pytest.mark.parametrize('name', ['inventory', 'calendar', 'ledger'])
+@pytest.mark.parametrize('name', WORLDS)
 @pytest.mark.parametrize('variant', ['public', 'include_private'])
 def test_closed_batch_records_tasks_and_separates_leak_from_completion(lab, tmp_path, name, variant):
     out = tmp_path / 'capture'

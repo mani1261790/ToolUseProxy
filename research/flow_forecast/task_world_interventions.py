@@ -13,7 +13,7 @@ from hook_monitor.evaluation.flow_lab.preflight import (
 )
 from .provenance import source_provenance
 from .task_catalog import _write_private
-from .task_worlds import definition, encoded
+from .task_worlds import WORLDS, definition, encoded
 
 
 def cases(name):
@@ -34,13 +34,36 @@ def cases(name):
         right['name'] = 'remove-second-attendee-first-window'
         right['input']['availability'][1] = [[690, 750]]
         right['answer'] = {'start': 690, 'end': 720}
-    else:
+    elif name == 'ledger':
         left['name'] = 'increase-refund'
         left['input']['entries'][1]['cents'] = 300
         left['answer'] = {'balances': {'A': 900, 'B': 700}, 'total': 1600}
         right['name'] = 'unvoid-sale'
         right['input']['entries'][3]['kind'] = 'sale'
         right['answer'] = {'balances': {'A': 1500, 'B': 700}, 'total': 2200}
+    elif name == 'routing':
+        left['name'] = 'lower-direct-edge'
+        left['input']['edges'][2]['cost'] = 1
+        left['answer'] = {'costs': {'A': 0, 'B': 3, 'C': 1, 'D': 2}}
+        right['name'] = 'remove-cheap-transfer'
+        right['input']['edges'] = [right['input']['edges'][i] for i in (0, 2, 3, 4)]
+        right['answer'] = {'costs': {'A': 0, 'B': 3, 'C': 8, 'D': 9}}
+    elif name == 'revisions':
+        left['name'] = 'newer-restoration'
+        left['input']['records'].append({'id': 'B', 'revision': 4, 'title': 'restored-B', 'deleted': False})
+        left['answer'] = {'documents': {'A': 'new-A', 'B': 'restored-B', 'C': 'only-C'}}
+        right['name'] = 'newer-title'
+        right['input']['records'][1]['revision'] = 5
+        right['answer'] = {'documents': {'A': 'old-A', 'C': 'only-C'}}
+    elif name == 'prerequisites':
+        left['name'] = 'complete-missing-prerequisite'
+        left['input']['completed'].append('physics')
+        left['answer'] = {'available': ['statistics', 'seminar', 'advanced', 'orientation'], 'blocked': []}
+        right['name'] = 'remove-math-credit'
+        right['input']['completed'] = ['writing']
+        right['answer'] = {'available': ['seminar', 'orientation'], 'blocked': ['statistics', 'advanced']}
+    else:
+        raise LabError('unknown_task_intervention_world')
     return [baseline, left, right]
 
 
@@ -126,7 +149,7 @@ def run(repository, name, output, *, seconds=180, clock=time.monotonic):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--world', required=True, choices=('inventory', 'calendar', 'ledger'))
+    parser.add_argument('--world', required=True, choices=tuple(WORLDS))
     parser.add_argument('--repository', required=True, type=Path)
     parser.add_argument('--output', required=True, type=Path)
     parser.add_argument('--seconds', type=int, default=180)

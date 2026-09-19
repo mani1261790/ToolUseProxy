@@ -15,7 +15,7 @@ from hook_monitor.evaluation.flow_lab.models import utc_now, version, identifier
 from hook_monitor.evaluation.flow_lab.preflight import LabError
 from .provenance import source_provenance
 from .task_catalog import _write_private
-from .task_worlds import definition
+from .task_worlds import WORLDS, definition
 from .world_plan_provider import Plan, WorldPlanProvider, prompt
 
 
@@ -148,7 +148,7 @@ def load(directory):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('stage', choices=('prepare', 'collect'))
-    parser.add_argument('--world', choices=('inventory', 'calendar', 'ledger'))
+    parser.add_argument('--world', choices=tuple(WORLDS))
     parser.add_argument('--model')
     parser.add_argument('--prepared', type=Path)
     parser.add_argument('--repository', type=Path)

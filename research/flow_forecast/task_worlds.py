@@ -1,6 +1,6 @@
 """Closed, synthetic business tasks with separately specified answer oracles.
 
-These three designs are candidates, not certified independent F02 samples. Their
+These designs are candidates, not certified independent F02 samples. Their
 computed relationships are semantic; they must not become checked-byte F01 edges.
 No caller code, paths, network addresses or real business data are accepted.
 """
@@ -56,6 +56,62 @@ for entry in source['entries']:
     amount=entry['cents'] if entry['kind']=='sale' else -entry['cents']
     balances[entry['vendor']]=balances.get(entry['vendor'],0)+amount
 result={'balances':balances,'total':sum(balances.values())}
+""",
+    },
+    'routing': {
+        'objective': 'Find minimum directed travel costs from A without assuming input edge order is optimal.',
+        'input': {'origin': 'A', 'passes': 4, 'edges': [
+            {'start': 'C', 'end': 'D', 'cost': 1}, {'start': 'B', 'end': 'C', 'cost': 2},
+            {'start': 'A', 'end': 'C', 'cost': 8}, {'start': 'A', 'end': 'B', 'cost': 3},
+            {'start': 'B', 'end': 'D', 'cost': 9}]},
+        'answer': {'costs': {'A': 0, 'B': 3, 'C': 5, 'D': 6}},
+        'program': """costs={source['origin']:0}
+for pass_number in range(source['passes']):
+    for edge in source['edges']:
+        start=costs.get(edge['start'])
+        if start is not None:
+            candidate=start+edge['cost']; previous=costs.get(edge['end'])
+            if previous is None or candidate<previous:
+                costs[edge['end']]=candidate
+result={'costs':costs}
+""",
+    },
+    'revisions': {
+        'objective': 'Resolve the highest revision for each document, ignoring older out-of-order records and honoring deletion tombstones.',
+        'input': {'records': [
+            {'id': 'A', 'revision': 2, 'title': 'new-A', 'deleted': False},
+            {'id': 'A', 'revision': 1, 'title': 'old-A', 'deleted': False},
+            {'id': 'B', 'revision': 1, 'title': 'old-B', 'deleted': False},
+            {'id': 'B', 'revision': 3, 'title': '', 'deleted': True},
+            {'id': 'C', 'revision': 1, 'title': 'only-C', 'deleted': False}]},
+        'answer': {'documents': {'A': 'new-A', 'C': 'only-C'}},
+        'program': """latest={}
+for record in source['records']:
+    previous=latest.get(record['id'])
+    if previous is None or record['revision']>previous['revision']:
+        latest[record['id']]=record
+active={}
+for record in latest.values():
+    if not record['deleted']:
+        active[record['id']]=record['title']
+result={'documents':active}
+""",
+    },
+    'prerequisites': {
+        'objective': 'List courses whose complete prerequisite sets have been satisfied, and list the blocked courses separately.',
+        'input': {'completed': ['math', 'writing'], 'courses': [
+            {'id': 'statistics', 'requires': ['math']},
+            {'id': 'seminar', 'requires': ['writing']},
+            {'id': 'advanced', 'requires': ['math', 'physics']},
+            {'id': 'orientation', 'requires': []}]},
+        'answer': {'available': ['statistics', 'seminar', 'orientation'], 'blocked': ['advanced']},
+        'program': """available=[]; blocked=[]
+for course in source['courses']:
+    if all(any(required==done for done in source['completed']) for required in course['requires']):
+        available.append(course['id'])
+    else:
+        blocked.append(course['id'])
+result={'available':available,'blocked':blocked}
 """,
     },
 }
