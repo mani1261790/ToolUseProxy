@@ -20,7 +20,7 @@ from .provenance import source_provenance
 from .task_catalog import _write_private
 
 
-def run(repository, source_path, task_id, variant, output, *, seconds=180, clock=time.monotonic, generation=None):
+def run(repository, source_path, task_id, variant, output, *, seconds=180, clock=time.monotonic, generation=None, cohort=None):
     if variant not in ('public', 'include_private') or type(seconds) is not int or not 1 <= seconds <= 1800:
         raise LabError('invalid_mbpp_batch')
     rows = selected(source_path)
@@ -34,6 +34,11 @@ def run(repository, source_path, task_id, variant, output, *, seconds=180, clock
         validate(generation)
         if generation['task'] != source_row or generation['plan']['export'] != variant:
             raise LabError('mbpp_generation_plan_mismatch')
+    cohort_binding = None
+    if cohort is not None:
+        from .cohort_plan import binding
+        from .mbpp_import import catalog
+        cohort_binding = binding(cohort, catalog(rows)[0], 'mbpp-' + str(task_id))
     origin = {'source_commit': COMMIT, 'source_sha': SOURCE_SHA, 'candidate': checked(row), 'case_index': 0}
     started, charged = clock(), 0
     source_root = Path(__file__).resolve().parents[2]
@@ -44,6 +49,8 @@ def run(repository, source_path, task_id, variant, output, *, seconds=180, clock
               'root': uuid.uuid4().hex, 'implementation_sha': digest(implementation),
               'limits': {'trials': 20, 'seconds': seconds, 'bytes': 1024 * 1024 * 1024},
               'planned_trials': 12, 'generator': generation, 'origin': origin}
+    if cohort_binding is not None:
+        intent['cohort_assignment'] = cohort_binding
     _write_private(output / 'intent.json', canonical(intent).encode())
 
     def check():
@@ -149,9 +156,12 @@ def main(argv=None):
     parser.add_argument('--repository', required=True, type=Path)
     parser.add_argument('--output', required=True, type=Path)
     parser.add_argument('--seconds', type=int, default=180)
+    parser.add_argument('--cohort-plan', type=Path)
     args = parser.parse_args(argv)
+    from .cohort_plan import load as load_cohort
+    cohort = load_cohort(args.cohort_plan) if args.cohort_plan else None
     try:
-        report = run(args.repository, args.source, args.task_id, args.variant, args.output, seconds=args.seconds)
+        report = run(args.repository, args.source, args.task_id, args.variant, args.output, seconds=args.seconds, cohort=cohort)
     except LabError as error:
         print(json.dumps({'status': 'not_completed', 'reason': str(error)}))
         return 1

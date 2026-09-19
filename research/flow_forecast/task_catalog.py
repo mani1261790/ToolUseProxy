@@ -406,6 +406,15 @@ def collect_mbpp_captures(directories, source_path, *, checked=False):
         samples.append((data, {audit['intent']['root']: 'mbpp-' + str(task)}))
         audits.append(audit)
     data, evidence = collect(catalog, tuple(samples))
+    assignments = [a['intent'].get('cohort_assignment') for a in audits]
+    if any(a is not None for a in assignments):
+        if any(a is None for a in assignments) or len({a['plan']['plan_sha'] for a in assignments}) != 1:
+            raise ForecastDataError('collection_cohort_plan_mismatch')
+        planned = {a['intent']['root']: a['intent']['cohort_assignment']['partition'] for a in audits}
+        for prefix in data.prefixes:
+            if data.split.partition(prefix) != planned[prefix.root_case_id]:
+                raise ForecastDataError('collection_cohort_partition_mismatch')
+        evidence['cohort_plan_sha'] = assignments[0]['plan']['plan_sha']
     evidence['mbpp_captures'] = audits
     if len(canonical(evidence).encode()) > MAX_ARTIFACT_BYTES:
         raise ForecastDataError('collection_size_limit')
