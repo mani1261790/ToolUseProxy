@@ -139,7 +139,8 @@ def dataset_from_evidence(intent, execution, report):
                 capabilities=('file', 'shell', 'http'), environment_version=execution['image'][7:],
                 source_version='task-world-' + intent['world'] + '-v1', protected_sources=('protected-source',),
                 task_kind={'inventory': 'inventory_allocation', 'calendar': 'calendar_intersection',
-                           'ledger': 'ledger_reconciliation'}[intent['world']])
+                           'ledger': 'ledger_reconciliation', 'routing': 'directed_routing',
+                           'revisions': 'revision_resolution', 'prerequisites': 'prerequisite_eligibility'}[intent['world']])
             branches.append(Continuation(prefix, 'predeclared-task-world', condition['mode'],
                 'fixed_replay', 'fixed_distribution', 1.0, steps[cut:],
                 tuple(o for o in objects if o.observed_at > cut), edges, prefix.protected_sources,

@@ -94,7 +94,7 @@ class Prefix:
         for value in (self.root_case_id, self.environment_version, self.source_version):
             identifier(value)
         sequence(self.max_sequence_no, zero=True)
-        if self.task_kind not in {'plain_http', 'base64_http', 'inventory_allocation', 'calendar_intersection', 'ledger_reconciliation', 'unknown'}:
+        if self.task_kind not in {'plain_http', 'base64_http', 'inventory_allocation', 'calendar_intersection', 'ledger_reconciliation', 'directed_routing', 'revision_resolution', 'prerequisite_eligibility', 'unknown'}:
             raise ForecastDataError('invalid_visible_task_kind')
         if type(self.schema) is not int or self.schema != SCHEMA:
             raise ForecastDataError('schema_mismatch')

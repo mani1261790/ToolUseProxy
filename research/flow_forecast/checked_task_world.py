@@ -1,4 +1,4 @@
-"""Narrow computation/projection evidence for the three closed task-world v1 programs.
+"""Narrow computation/projection evidence for the registered closed task-world v1 programs.
 
 A generic semantic edge stays unknown. This path requires exact operation hashes,
 observed bytes, the input-only contract and matching finite interventions. It
