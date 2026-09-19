@@ -1,0 +1,62 @@
+{
+  "accepted_independent_groups": 0,
+  "candidate_count": 199,
+  "code_executed": false,
+  "independence_verified": false,
+  "inspected_training_records": 374,
+  "model_calls": 0,
+  "prior_nonuse_verified": false,
+  "rejections": {
+    "non_json_test_values": 71,
+    "not_single_function": 103,
+    "setup_code_required": 1
+  },
+  "schema": 1,
+  "scope": "upstream_training_static_candidate_inventory",
+  "source_commit": "4700efb9afa54286b0e04473ba80a13e8461e25f",
+  "source_records": 974,
+  "source_sha": "ccf64ceae9c5403bf50a044cb6d505bfd2a2963ee58338ba268fd65beab92a9f",
+  "trials": 0,
+  "inventory_sha": "af7c0fff48fe7a20d3198ba1dbb1c032b72289b05316f04f1c1448149170c632",
+  "implementation_commit": "c4eefb568c7698171892b571b04ceeba4fb3a7e8",
+  "exact_reference_ast_profiles": 199,
+  "exact_ast_profiles_are_not_independent_groups": true,
+  "candidate_case_count": 597,
+  "source_audit": {
+    "repository": "google-research/google-research",
+    "commit": "4700efb9afa54286b0e04473ba80a13e8461e25f",
+    "files": [
+      {
+        "path": "README.md",
+        "git_blob_sha": "1e7f7fd0a6e8033987fdd0e28bc815ae2c61e50f",
+        "sha256": "1022d37738b52c672304dbe71038a4a1f0d2cac5de3c9178652873a5698a8674",
+        "bytes": 1007
+      },
+      {
+        "path": "LICENSE",
+        "git_blob_sha": "d645695673349e3947e8e5ae42332d0ac3164cd7",
+        "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+        "bytes": 11358
+      },
+      {
+        "path": "mbpp/README.md",
+        "git_blob_sha": "719199c2d95ba6683d6ce5c716f3db35eaeb2a55",
+        "sha256": "02d63a4ffdad806c3c87b5ea2aa91e946f6eec0c2869643b09831650883f41be",
+        "bytes": 1422
+      },
+      {
+        "path": "mbpp/mbpp.jsonl",
+        "git_blob_sha": "96e2dc2f7dd95b7b87b38dc46e42cbed444251bb",
+        "sha256": "ccf64ceae9c5403bf50a044cb6d505bfd2a2963ee58338ba268fd65beab92a9f",
+        "bytes": 563743
+      },
+      {
+        "path": "mbpp/sanitized-mbpp.json",
+        "git_blob_sha": "a999d25df7e489e4c183cadfa5c0ecf557a702b6",
+        "sha256": "ca95deaa9a01ef0a6f439f88bcf0dd3db3563d22f22aad6cae04ebb9a8d8c8e9",
+        "bytes": 255053
+      }
+    ],
+    "code_executed": false
+  }
+}
