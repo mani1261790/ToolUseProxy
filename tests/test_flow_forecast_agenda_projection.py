@@ -61,3 +61,57 @@ def test_failed_projection_batch_keeps_all_reserved_calls(monkeypatch, tmp_path)
         agenda_batch.run(tmp_path, output, suite='projection')
     assert json.loads((output/'failure.json').read_text())['trial_reservations'] == 3
     assert not (output/'report.json').exists()
+
+
+@pytest.fixture
+def captured_interventions(monkeypatch, tmp_path):
+    import contextlib
+    import io
+    monkeypatch.setattr(agenda_batch, 'build_context', lambda *a: b'fixture')
+    monkeypatch.setattr(agenda_batch, 'build_image', lambda *a, **k: 'sha256:' + 'a'*64)
+    monkeypatch.setattr(agenda_batch, 'check_isolation', lambda *a: None)
+    def execute(image, source, **kwargs):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            exec(compile(source, '<closed-agenda-test>', 'exec'), {})
+        return out.getvalue().encode()
+    monkeypatch.setattr(agenda_batch, 'execute', execute)
+    output = tmp_path / 'interventions'
+    agenda_batch.run(tmp_path, output, suite='projection')
+    return output
+
+
+def test_saved_interventions_revalidate_exact_case_calls_and_outputs(captured_interventions):
+    from research.flow_forecast.agenda_projection_evidence import read_interventions
+    result = read_interventions(captured_interventions)
+    assert result['report']['trial_charges'] == 15
+    assert result['report']['semantic_truth_promoted'] is False
+
+
+@pytest.mark.parametrize('part', ['observation-1','result-1','reservation-1','container-1','failure','reservation-16'])
+def test_saved_interventions_reject_drift_and_extra_attempts(captured_interventions, part):
+    from hook_monitor.evaluation.flow_forecast.prefix import ForecastDataError
+    from research.flow_forecast.agenda_projection_evidence import read_interventions
+    (captured_interventions / (part + '.json')).write_text('{}')
+    with pytest.raises(ForecastDataError):
+        read_interventions(captured_interventions)
+
+
+def test_binding_records_different_images_without_claiming_equivalence(captured_interventions, monkeypatch, tmp_path):
+    import hashlib
+    from hook_monitor.evaluation.flow_forecast.prefix import ForecastDataError
+    from research.flow_forecast import agenda_projection_evidence as evidence
+    from test_flow_forecast_agenda_import import capture
+    path = tmp_path / 'capture'
+    capture(path)
+    _, audit = evidence.read_capture(path)
+    audit['execution']['context_sha'] = hashlib.sha256(b'fixture').hexdigest()
+    audit['execution']['image'] = 'sha256:' + 'f'*64
+    monkeypatch.setattr(evidence, 'read_capture', lambda *a: (None, audit))
+    proof = evidence.bind_capture(path, captured_interventions)
+    assert proof['identical_image_verified'] is False
+    assert proof['query_observations_bound'] == 2
+    assert proof['semantic_truth_promoted'] is False
+    audit['execution']['context_sha'] = '0'*64
+    with pytest.raises(ForecastDataError, match='context_mismatch'):
+        evidence.bind_capture(path, captured_interventions)
