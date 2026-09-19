@@ -52,7 +52,7 @@ def load(dataset, directory, expected_identity, *, check_budget=lambda: None):
     if _identity(source) != _identity(dataset):
         raise ForecastDataError('generation_collection_dataset_mismatch')
     roots = {prefix.root_case_id for prefix in dataset.prefixes}
-    models, reported_models, seen_calls = {}, {}, set()
+    models, reported_models, local_identities, seen_calls = {}, {}, {}, set()
     try:
         for item in audit.get('assigned_searches', []):
             check_budget()
@@ -218,6 +218,9 @@ def load(dataset, directory, expected_identity, *, check_budget=lambda: None):
                 raise ForecastDataError('generation_receipt_reused')
             seen_calls.add(call_id)
             models[root] = frozen['model']
+            if frozen['generation']['schema'] == 3:
+                reported_models[root] = frozen['generation']['reported_model']
+                local_identities[root] = frozen['generation']['model_identity_before']
         for item in audit.get('mbpp_captures', []):
             from .generated_mbpp import validate as validate_mbpp_generation
             from .mbpp_import import dataset as mbpp_dataset
@@ -280,6 +283,11 @@ def load(dataset, directory, expected_identity, *, check_budget=lambda: None):
             for prefix_id, _, selected in dataset.split.assignments
             if selected == part and by_prefix[prefix_id] in reported_models})
             for part in ('train', 'calibration', 'test')},
+        'local_observed_identities_by_partition': {part: [values[key] for key in sorted(values)]
+            for part in ('train', 'calibration', 'test')
+            for values in [{digest(local_identities[by_prefix[prefix_id]]): local_identities[by_prefix[prefix_id]]
+                for prefix_id, _, selected in dataset.split.assignments
+                if selected == part and by_prefix[prefix_id] in local_identities}]},
         'unseen_test_requested_aliases': sorted(set(by_partition['test']) - set(observed_by_partition['train'])),
         'groups_with_missing_evidence': sum(label == UNKNOWN for label in labels.values()),
         'groups_with_mixed_requested_models': sum(label == MIXED for label in labels.values()),
