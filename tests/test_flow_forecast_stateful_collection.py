@@ -48,8 +48,9 @@ class Transport(ControlTransport):
         return step
 
     def guard_step(self, cmd, session_id, step):
-        self.guard_receipts[step] = {'fixture': True}
-        return 'deny' if self.plan['source'] == 'protected' and self.numbers[step] == len(self.plan['operations']) else 'allow'
+        decision = 'deny' if self.plan['source'] == 'protected' and self.numbers[step] == len(self.plan['operations']) else 'allow'
+        self.guard_receipts[step] = {'decision': decision, 'receipt_count': 1, 'exit_code': 0}
+        return decision
 
     def execute_step(self, cmd, step):
         return proof(self.plan, self.numbers[step], step)
@@ -93,7 +94,7 @@ def test_public_pipeline_proves_completion_without_protected_arrival(lab, tmp_pa
     assert all(label_future(b, 4).protected_arrival == 'no' for b in data.branches)
 
 
-@pytest.mark.parametrize('corrupt', ['hash', 'receiver', 'order', 'dispatch', 'incomplete'])
+@pytest.mark.parametrize('corrupt', ['hash', 'receiver', 'order', 'dispatch', 'guard', 'incomplete'])
 def test_corrupt_or_incomplete_capture_cannot_become_truth(lab, tmp_path, corrupt):
     output = tmp_path / 'capture'
     report = module.run(tmp_path, PLAN, output)
@@ -105,6 +106,8 @@ def test_corrupt_or_incomplete_capture_cannot_become_truth(lab, tmp_path, corrup
         row['observation']['receiver']['body_sha'] = '0' * 64
     elif corrupt == 'order':
         row['number'] = 1
+    elif corrupt == 'guard':
+        row['guard_receipt']['decision'] = 'allow'
     elif corrupt == 'dispatch':
         conditions[1]['steps'][-1]['dispatched'] = True
     else:

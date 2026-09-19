@@ -48,6 +48,11 @@ def validate_trace(plan, condition):
                     or type(row['dispatched']) is not bool
                     or row['dispatched'] != (condition['mode'] == 'observe' or row['decision'] == 'allow')):
                 raise ValueError
+            receipt = row['guard_receipt']
+            if (type(receipt) is not dict or receipt.get('decision') != row['decision']
+                    or type(receipt.get('receipt_count')) is not int or receipt['receipt_count'] != 1
+                    or type(receipt.get('exit_code')) is not int or receipt['exit_code'] != 0):
+                raise ValueError
             identities.add(row['step_id'])
             if not row['dispatched']:
                 if (number != len(rows) or row['observation'] is not None
@@ -64,6 +69,10 @@ def validate_trace(plan, condition):
                     or proof['output_sha'] != hashlib.sha256(value).hexdigest()
                     or type(proof['input_size']) is not int or proof['input_size'] != len(before)
                     or type(proof['output_size']) is not int or proof['output_size'] != len(value)):
+                raise ValueError
+            if op == 'send' and (type(proof['receiver']) is not dict
+                    or type(proof['receiver'].get('protected')) is not bool
+                    or type(proof['receiver'].get('body_size')) is not int):
                 raise ValueError
             if op == 'send' and proof['receiver'] != {
                     'kind': 'received', 'step_id': row['step_id'], 'body_sha': proof['output_sha'],
