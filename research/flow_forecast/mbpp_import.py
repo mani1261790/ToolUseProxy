@@ -45,6 +45,8 @@ def validate(intent, execution, report, reference):
         if intent['generator'] is not None:
             from .generated_mbpp import validate as validate_generation
             validate_generation(intent['generator'])
+            if canonical(intent.get('cohort_assignment')) != canonical(intent['generator'].get('cohort_assignment')):
+                raise ValueError
             if (canonical(intent['generator']['task']) != canonical(reference)
                     or intent['generator']['plan']['export'] != intent['variant']):
                 raise ValueError
