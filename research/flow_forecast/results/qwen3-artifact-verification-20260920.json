@@ -1,0 +1,63 @@
+{
+  "schema": 1,
+  "scope": "post_generation_published_manifest_and_local_blob_content_verification",
+  "verified_at": "2026-09-19T17:26:58.439436+00:00",
+  "manifest_source_url": "https://registry.ollama.ai/v2/library/qwen3/manifests/8b",
+  "manifest_sha256": "500a1f067a9f782620b40bee6f7b0c89e17ae61f686b92c24933e4ca4b2b8b41",
+  "manifest_bytes": 859,
+  "generation_observation_sha256": "a37e9987e1ef2298880049753f868b818ea2c700fc2bad9a2d56ee1ac142a02c",
+  "observed_model_identity": {
+    "manifest_digest": "500a1f067a9f782620b40bee6f7b0c89e17ae61f686b92c24933e4ca4b2b8b41",
+    "model": "qwen3:8b",
+    "server_version": "0.34.2",
+    "size": 5225388164
+  },
+  "local_blobs": [
+    {
+      "media_type": "application/vnd.docker.container.image.v1+json",
+      "bytes": 487,
+      "sha256": "05a61d37b08453e59290add468e3bb2f688e23a01e967fecb0e2fa41218cea76",
+      "content_matches_manifest": true,
+      "stat_unchanged_during_read": true
+    },
+    {
+      "media_type": "application/vnd.ollama.image.model",
+      "bytes": 5225374496,
+      "sha256": "a3de86cd1c132c822487ededd47a324c50491393e6565cd14bafa40d0b8e686f",
+      "content_matches_manifest": true,
+      "stat_unchanged_during_read": true
+    },
+    {
+      "media_type": "application/vnd.ollama.image.template",
+      "bytes": 1723,
+      "sha256": "ae370d884f108d16e7cc8fd5259ebc5773a0afa6e078b11f4ed7e39a27e0dfc4",
+      "content_matches_manifest": true,
+      "stat_unchanged_during_read": true
+    },
+    {
+      "media_type": "application/vnd.ollama.image.license",
+      "bytes": 11338,
+      "sha256": "d18a5cc71b84bc4af394a31116bd3932b42241de70c77d2b76d69a314ec8aa12",
+      "content_matches_manifest": true,
+      "stat_unchanged_during_read": true
+    },
+    {
+      "media_type": "application/vnd.ollama.image.params",
+      "bytes": 120,
+      "sha256": "cff3f395ef3756ab63e58b0ad1b32bb6f802905cae1472e6a12034e4246fbbdb",
+      "content_matches_manifest": true,
+      "stat_unchanged_during_read": true
+    }
+  ],
+  "bytes_read": 5225388164,
+  "elapsed_seconds": 7.9148123749910155,
+  "maximum_verification_seconds": 60,
+  "read_buffer_bytes": 1048576,
+  "public_manifest_matches_generation_observation": true,
+  "inference_loaded_weights_attested": false,
+  "resolved_model_verified": false,
+  "new_model_calls": 0,
+  "new_trials": 0,
+  "new_model_bytes_downloaded": 0,
+  "new_independent_groups": 0
+}
