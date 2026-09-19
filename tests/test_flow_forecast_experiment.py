@@ -78,3 +78,47 @@ def test_cli_reports_insufficient_evidence_and_never_overwrites_results(tmp_path
     with pytest.raises(SystemExit):
         main(['evaluate', '--dataset', str(source), '--plan', str(plan), '--output', str(report)])
     assert report.read_bytes() == original
+
+
+def assessed(data, partition):
+    from research.flow_forecast.compare import attach_assessment
+    models, costs = build_models(data)
+    plan = freeze_plan(data, models)
+    report = evaluate(data, models, plan, partition=partition)
+    return attach_assessment(report, data, models, costs,
+                             {'peak_process_memory_bytes': 1}, plan)
+
+
+def test_training_diagnostics_do_not_fill_heldout_acceptance_even_when_test_exists():
+    from test_flow_forecast_partition_bundle import fixture_dataset
+    report = assessed(fixture_dataset(), 'train')
+    assert report['scored_partition_metrics']['partition'] == 'train'
+    assert report['scored_partition_metrics']['positive_roots'] > 0
+    for name in ('test_normal_roots', 'test_positive_roots', 'truth_coverage', 'prediction_coverage',
+                 'fpr_upper', 'recall_lower', 'brier_improvement', 'paired_brier_lower',
+                 'edge_f1_improvement', 'paired_edge_f1_lower', 'positive_top3_route_coverage',
+                 'median_early_lead_steps', 'prediction_p95_ms'):
+        assert report['acceptance_metrics'][name] is None
+    gates = {g['metric']: g for g in report['acceptance']['gates']}
+    for name in ('different_tasks_evaluated', 'different_tools_evaluated',
+                 'object_identity_ablation_benefit', 'parent_relation_ablation_benefit',
+                 'multistep_ablation_benefit'):
+        assert gates[name]['status'] == 'missing'
+    assert report['acceptance_metrics']['training_roots'] > 0
+    assert gates['unused_test_partition']['value'] is False
+
+
+@pytest.mark.parametrize('unknown_partition', ['train', 'test'])
+def test_unknown_task_is_missing_evidence_not_an_unseen_task(unknown_partition):
+    from dataclasses import replace
+    from test_flow_forecast_partition_bundle import fixture_dataset
+    original = fixture_dataset()
+    data = assemble(tuple(replace(b, prefix=replace(b.prefix, task_kind='unknown'))
+                          if original.split.partition(b.prefix) == unknown_partition else b
+                          for b in original.branches))
+    report = assessed(data, 'test')
+    assert 'unknown' not in report['generalization']['unseen_test_tasks']
+    gates = {g['metric']: g for g in report['acceptance']['gates']}
+    assert gates['different_tasks_evaluated']['status'] == 'missing'
+    assert report['acceptance_metrics']['test_positive_roots'] == report['scored_partition_metrics']['positive_roots']
+    assert report['scored_partition_metrics']['partition'] == 'test'
