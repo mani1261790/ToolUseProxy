@@ -52,7 +52,7 @@ def load(dataset, directory, expected_identity, *, check_budget=lambda: None):
     if _identity(source) != _identity(dataset):
         raise ForecastDataError('generation_collection_dataset_mismatch')
     roots = {prefix.root_case_id for prefix in dataset.prefixes}
-    models, seen_calls = {}, set()
+    models, reported_models, seen_calls = {}, {}, set()
     try:
         for item in audit.get('assigned_searches', []):
             check_budget()
@@ -110,6 +110,8 @@ def load(dataset, directory, expected_identity, *, check_budget=lambda: None):
                 raise ForecastDataError('generation_receipt_reused')
             seen_calls.add(call_id)
             models[root] = frozen['model']
+            if frozen['generation']['schema'] == 2:
+                reported_models[root] = frozen['generation']['reported_model']
         for item in audit.get('task_world_captures', []):
             from .generated_world_plan import validate as validate_world_generation
             from .task_world_import import dataset_from_evidence
@@ -146,6 +148,8 @@ def load(dataset, directory, expected_identity, *, check_budget=lambda: None):
                 raise ForecastDataError('generation_receipt_reused')
             seen_calls.add(call_id)
             models[root] = frozen['model']
+            if frozen['generation']['schema'] == 2:
+                reported_models[root] = frozen['generation']['reported_model']
     except (KeyError, TypeError, ValueError, LabError) as error:
         if isinstance(error, ForecastDataError):
             raise
@@ -170,6 +174,10 @@ def load(dataset, directory, expected_identity, *, check_budget=lambda: None):
         'resolved_model_versions_verified': False, 'collection_identity': expected_identity,
         'requested_models_by_partition': by_partition,
         'observed_requested_models_by_partition': observed_by_partition,
+        'provider_reported_models_by_partition': {part: sorted({reported_models[by_prefix[prefix_id]]
+            for prefix_id, _, selected in dataset.split.assignments
+            if selected == part and by_prefix[prefix_id] in reported_models})
+            for part in ('train', 'calibration', 'test')},
         'unseen_test_requested_aliases': sorted(set(by_partition['test']) - set(observed_by_partition['train'])),
         'groups_with_missing_evidence': sum(label == UNKNOWN for label in labels.values()),
         'groups_with_mixed_requested_models': sum(label == MIXED for label in labels.values()),
