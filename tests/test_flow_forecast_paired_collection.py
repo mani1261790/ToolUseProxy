@@ -64,7 +64,12 @@ def test_fixed_plan_runs_both_modes_in_fresh_receivers_with_no_new_model_calls(l
     assert result['conditions'][0]['source_steps'] == result['conditions'][1]['source_steps']
     assert result == json.loads((output / 'report.json').read_text())
     intent = json.loads((output / 'intent.json').read_text())
-    assert intent['planned_trials'] == 8
+    assert intent['planned_trials'] == 8 and intent['planned_operations'] == result['operation_count'] == 8
+    data = module.read_dataset(output / 'dataset')
+    assert len(data.branches) == 2
+    assert {row.policy_mode for row in data.branches} == {'observe', 'enforce'}
+    assert len({row.prefix.snapshot_digest for row in data.branches}) == 1
+    assert all(row.probability is None and row.sampling == 'adaptive_search' for row in data.branches)
     with pytest.raises(FileExistsError):
         module.run(tmp_path, lab, output)
     assert len(Transport.instances) == 2
@@ -131,9 +136,8 @@ def test_observe_executes_denied_synthetic_action_but_enforce_does_not(context):
 def test_time_and_storage_exhaustion_prevent_first_dispatch(lab, tmp_path, monkeypatch):
     ticks = iter((0, 601))
     with monkeypatch.context() as patch:
-        patch.setattr(module.time, 'monotonic', lambda: next(ticks))
         with pytest.raises(ForecastDataError, match='pair_time_budget_exhausted'):
-            module.run(tmp_path, lab, tmp_path / 'time')
+            module.run(tmp_path, lab, tmp_path / 'time', clock=lambda: next(ticks))
     with monkeypatch.context() as patch:
         patch.setattr(module, 'MAX_STORAGE', 1)
         with pytest.raises(ForecastDataError, match='pair_storage_budget_exhausted'):
@@ -149,3 +153,14 @@ def test_failed_controls_do_not_dispatch_task(lab, tmp_path, monkeypatch):
     assert len(Transport.instances) == 1
     assert len(Transport.instances[0].prepared) == 3
     assert not (output / 'report.json').exists()
+
+
+def test_multiple_actions_count_operations_separately_from_trial_plans(lab, tmp_path, monkeypatch):
+    audit, records, proposal = module.selected_plan(lab, 1)
+    from hook_monitor.evaluation.flow_lab.agent import Proposal
+    proposal = Proposal('propose', proposal.actions * 2)
+    second = {**records[0], 'step_id': '0' * 32}
+    monkeypatch.setattr(module, 'selected_plan', lambda *_: (audit, [records[0], second], proposal))
+    result = module.run(tmp_path, lab, tmp_path / 'pair')
+    assert result['operation_count'] == 10
+    assert result['trial_count'] == 8

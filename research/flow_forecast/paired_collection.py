@@ -8,11 +8,15 @@ from __future__ import annotations
 import argparse
 from dataclasses import asdict
 import hashlib
+import math
 from pathlib import Path
 import time
 import uuid
 
 from hook_monitor.evaluation.flow_forecast.search_import import import_search
+from hook_monitor.evaluation.flow_forecast.branches import Continuation, Transfer
+from hook_monitor.evaluation.flow_forecast.dataset import assemble, write_dataset, read_dataset
+from hook_monitor.evaluation.flow_forecast.prefix import InformationObject as Obj, ObservedStep as Step, freeze_prefix
 from hook_monitor.evaluation.flow_forecast.prefix import ForecastDataError, canonical, digest
 from hook_monitor.evaluation.flow_lab.adaptive_transport import AdaptiveTransport
 from hook_monitor.evaluation.flow_lab.agent import Proposal
@@ -49,10 +53,42 @@ def selected_plan(directory, attempt):
     return audit, records, proposal
 
 
-def run(repository, source, output, *, attempt=1, seconds=600):
+
+def paired_dataset(intent, conditions):
+    rows = []
+    for condition in conditions:
+        prefix = freeze_prefix(root_case_id=intent['source_run'], observations=(), max_sequence_no=0,
+                               objects=(Obj('private-source', 'source', 0), Obj('public-source', 'source', 0)),
+                               capabilities=('http',), environment_version=condition['spec']['environment_digest'],
+                               source_version='synthetic-source-v1', protected_sources=('private-source',))
+        for action, original_step, observation in zip(intent['actions'], condition['source_steps'], condition['observations']):
+            steps, objects, transfers, arrivals = (), (), (), ()
+            source = 'public-source' if action['source'] == 'public' else 'private-source'
+            complete = observation['observer_state'] == 'complete'
+            termination = 'unknown'
+            if observation['process_started'] == 'yes':
+                if observation['receiver_arrival'] == 'yes':
+                    objects = (Obj('receiver', 'sink', 1),)
+                    steps = (Step(1, 'http', 'send', (source,), ('receiver',), 'ok'),)
+                    arrivals = (('receiver', 1),)
+                    # Receipt is observed, but this harness does not instrument each transform.
+                    transfers = (Transfer(source, 'receiver', 1, 'unknown', 'unknown', None),)
+                else:
+                    steps = (Step(1, 'http', 'send', (source,), (), 'unknown'),)
+            if observation['termination'] == 'blocked' and observation['process_started'] == 'no':
+                termination = 'blocked'
+            elif (observation['termination'] == 'completed' and complete
+                  and observation['process_started'] == 'yes' and observation['receiver_arrival'] != 'unknown'):
+                termination = 'completed'
+            rows.append(Continuation(prefix, original_step, condition['mode'], 'fixed_replay',
+                                     'adaptive_search', None, steps, objects, transfers,
+                                     prefix.protected_sources, arrivals, complete, termination, intent['source_run']))
+    return assemble(tuple(rows), provenance='synthetic-flow-lab-v1')
+
+def run(repository, source, output, *, attempt=1, seconds=600, clock=time.monotonic):
     if type(seconds) is not int or not 1 <= seconds <= 1800:
         raise ForecastDataError('invalid_pair_time_budget')
-    started = time.monotonic()
+    started = clock()
     audit, source_records, proposal = selected_plan(source, attempt)
     output.mkdir(mode=0o700)  # No silent retry of interrupted dispatches.
     implementation = digest([implementation_revision(), hashlib.sha256(Path(__file__).read_bytes()).hexdigest()])
@@ -61,17 +97,30 @@ def run(repository, source, output, *, attempt=1, seconds=600):
               'assignment_sha': audit['task_assignment']['assignment_sha'],
               'actions': [asdict(action) for action in proposal.actions],
               'modes': ['observe', 'enforce'], 'implementation': implementation,
-              'max_trials': 20, 'planned_trials': 2 * (3 + len(proposal.actions)),
+              'max_trials': 20, 'planned_trials': 8, 'max_operations': 20,
+              'planned_operations': 2 * (3 + len(proposal.actions)),
               'seconds': seconds, 'storage_bytes': MAX_STORAGE}
     _write_private(output / 'source-evidence.json', (canonical(audit) + '\n').encode())
     _write_private(output / 'intent.json', (canonical(intent) + '\n').encode())
 
     def check():
-        if time.monotonic() - started >= seconds:
+        elapsed = clock() - started
+        if not math.isfinite(elapsed) or elapsed < 0:
+            raise ForecastDataError('pair_clock_invalid')
+        if elapsed >= seconds:
             raise ForecastDataError('pair_time_budget_exhausted')
         size = sum(path.stat().st_size for path in output.rglob('*') if path.is_file())
         if size >= MAX_STORAGE:
             raise ForecastDataError('pair_storage_budget_exhausted')
+
+    operations = 0
+
+    def charge():
+        nonlocal operations
+        check()
+        if operations >= 20:
+            raise ForecastDataError('pair_operation_budget_exhausted')
+        operations += 1
 
     check()
     context = build_context(repository)
@@ -88,7 +137,7 @@ def run(repository, source, output, *, attempt=1, seconds=600):
             with AdaptiveTransport(image) as transport:
                 controls = []
                 for source_name, control_mode in [('public', 'observe'), ('protected', 'observe'), ('protected', 'enforce')]:
-                    check()
+                    charge()
                     controls.append(run_scenario(transport, store, spec, Scenario(source_name, control_mode, 'http_inline')))
                 valid = (all(row.observer_state == 'complete' for row in controls)
                          and controls[0].task_success == 'yes' and controls[0].protected_arrival == 'no'
@@ -99,7 +148,7 @@ def run(repository, source, output, *, attempt=1, seconds=600):
                     raise ForecastDataError('pair_controls_failed')
                 rows, steps, attempt_id = [], [], uuid.uuid4().hex
                 for number, action in enumerate(proposal.actions, 1):
-                    check()
+                    charge()
                     if store.trial_count() >= 20:
                         raise ForecastDataError('pair_trial_budget_exhausted')
                     step = uuid.uuid4().hex
@@ -116,8 +165,14 @@ def run(repository, source, output, *, attempt=1, seconds=600):
             _write_private(output / (mode + '.json'), (canonical(condition) + '\n').encode())
             conditions.append(condition)
         check()
-        report = {'schema': 1, 'status': 'completed', 'intent_sha': digest(intent),
+        dataset = paired_dataset(intent, conditions)
+        dataset_sha = write_dataset(dataset, output / 'dataset')
+        if read_dataset(output / 'dataset') != dataset:
+            raise ForecastDataError('pair_dataset_roundtrip_mismatch')
+        check()
+        report = {'dataset_sha': dataset_sha, 'schema': 1, 'status': 'completed', 'intent_sha': digest(intent),
                   'source_run': audit['run']['run_id'], 'trial_count': store.trial_count(),
+                  'operation_count': operations,
                   'conditions': conditions, 'synthetic_only': True, 'additional_model_calls': 0,
                   'independent_new_task_count': 0, 'unused_holdout': False,
                   'limitations': ['adaptive_source_selection', 'fresh_guard_per_action',
