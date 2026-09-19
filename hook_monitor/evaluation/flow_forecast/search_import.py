@@ -15,6 +15,7 @@ import sqlite3
 import time
 
 from hook_monitor.evaluation.flow_lab.agent import Proposal
+from hook_monitor.evaluation.flow_lab.task_completion import evaluate as evaluate_completion
 from hook_monitor.evaluation.flow_lab.call_history import summarize as summarize_calls
 from hook_monitor.evaluation.flow_lab.budget import Budget
 from hook_monitor.evaluation.flow_lab.controller import TERMINAL, validate_state
@@ -133,6 +134,7 @@ def import_search(directory: Path):
                           'complete_run_cost_recorded': False, 'generation_costs': summarize_calls(state)},
             'generation_calls': state.get('call_records'),
             'task_assignment': state['identity'].get('task_assignment'),
+            'task_completion': evaluate_completion(state, tuple(observations.values())),
             'limitations': ['no_paired_counterfactual', 'no_recorded_intermediate_truth',
                             'independent_fresh_guard_actions', 'not_natural_frequencies'],
         }

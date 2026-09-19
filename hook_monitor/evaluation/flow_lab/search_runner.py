@@ -23,6 +23,7 @@ from .revision import implementation_revision
 from .storage import StoreError, TrialStore
 from .transport import FixedTransport
 from .task_assignment import load as load_assignment, validate as validate_assignment
+from .task_completion import evaluate as evaluate_completion
 from .adaptive_transport import AdaptiveTransport
 
 
@@ -58,7 +59,8 @@ def execute(repository: Path, output: Path, model: str, *, mode="adaptive_search
                         store.finish(spec, utc_now(),
                                      exhausted=saved["status"].endswith("budget_exhausted"))
                     return {"status": saved["status"], "summary": store.summary(spec),
-                            "synthetic_only": True, "model": model, "generation_costs": summarize_calls(saved)}
+                            "synthetic_only": True, "model": model, "generation_costs": summarize_calls(saved),
+                            "task_completion": evaluate_completion(saved, store.read(spec))}
                 if identity.get("agent_revision") != implementation_revision():
                     raise LabError("search_revision_mismatch")
             if journal.storage_size() >= budget.storage_bytes:
