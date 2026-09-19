@@ -11,7 +11,7 @@ from hook_monitor.evaluation.flow_forecast.prefix import ForecastDataError
 from hook_monitor.evaluation.flow_lab.agent import Proposal
 from hook_monitor.evaluation.flow_lab.generation_evidence import capture
 from research.flow_forecast import generator_strata as gs
-from research.flow_forecast import compare, compare_holdout
+from research.flow_forecast import compare, compare_holdout, api_task_strata
 from research.flow_forecast.experiment import build_models, evaluate, freeze_plan
 from research.flow_forecast.holdout import HoldoutLedger
 from test_flow_forecast_baselines import dataset
@@ -52,6 +52,7 @@ def test_aliases_are_descriptive_and_related_roots_are_not_split(tmp_path, monke
     audit = evidence(data)
     path = seal_only(tmp_path)
     monkeypatch.setattr(gs, 'read_collection', lambda _: (data, {}, audit))
+    monkeypatch.setattr(api_task_strata, 'read_collection', lambda _: (data, {}, audit))
     result = gs.load(data, path, gs.collection_identity(path))
     assert set(result['group_labels'].values()) == {gs.MIXED}
     assert result['summary']['groups_with_mixed_requested_models'] == 1
@@ -179,6 +180,7 @@ def test_comparison_cli_pins_evidence_and_reports_requested_aliases(tmp_path, mo
     collection = seal_only(tmp_path)
     audit = evidence(data)
     monkeypatch.setattr(gs, 'read_collection', lambda _: (data, {}, audit))
+    monkeypatch.setattr(api_task_strata, 'read_collection', lambda _: (data, {}, audit))
     plan, report = tmp_path / 'plan.json', tmp_path / 'report.json'
     common = ['--dataset', str(source), '--collection', str(collection)]
     compare.main(['prepare', *common, '--output', str(plan)])
@@ -204,6 +206,7 @@ def test_holdout_report_binds_reordered_dataset_and_receipts(tmp_path, monkeypat
     collection = seal_only(tmp_path)
     audit = evidence(data)
     monkeypatch.setattr(gs, 'read_collection', lambda _: (data, {}, audit))
+    monkeypatch.setattr(api_task_strata, 'read_collection', lambda _: (data, {}, audit))
     plan = compare_holdout.prepare(directory, collection=collection)
     ledger = HoldoutLedger.create(tmp_path / 'ledger.db')
     seal = manifest['partitions']['test']
@@ -234,8 +237,33 @@ def test_training_mixed_group_prevents_false_unseen_test_alias(tmp_path, monkeyp
     audit = evidence(data, names)
     path = seal_only(tmp_path)
     monkeypatch.setattr(gs, 'read_collection', lambda _: (data, {}, audit))
+    monkeypatch.setattr(api_task_strata, 'read_collection', lambda _: (data, {}, audit))
     summary = gs.load(data, path, gs.collection_identity(path))['summary']
     assert summary['requested_models_by_partition']['train'] == []
     assert summary['requested_models_by_partition']['test'] == ['model-A']
     assert summary['observed_requested_models_by_partition']['train'] == ['model-A', 'model-B']
     assert summary['unseen_test_requested_aliases'] == []
+
+
+def test_api_audit_opens_only_after_reservation_and_failure_consumes_holdout(tmp_path, monkeypatch):
+    from test_flow_forecast_partition_bundle import fixture_dataset
+    directory, manifest = bundle(tmp_path)
+    data = fixture_dataset()
+    collection = seal_only(tmp_path)
+    monkeypatch.setattr(gs, 'read_collection', lambda _: (data, {}, evidence(data)))
+    calls = []
+    ledger = HoldoutLedger.create(tmp_path / 'ledger.db')
+    seal = manifest['partitions']['test']
+    ledger.seal(**seal)
+    def fail(*args, **kwargs):
+        calls.append(ledger.status(seal['dataset_sha'])['state'])
+        raise ForecastDataError('invalid_api_task_evidence')
+    monkeypatch.setattr(api_task_strata, 'load', fail)
+    plan = compare_holdout.prepare(directory, collection=collection)
+    assert calls == []
+    with pytest.raises(ForecastDataError, match='invalid_api_task_evidence'):
+        compare_holdout.evaluate_once(directory, plan, ledger, collection=collection)
+    assert calls == ['opened']
+    assert ledger.status(seal['dataset_sha'])['report_sha'] is None
+    with pytest.raises(ForecastDataError, match='holdout_already_consumed'):
+        compare_holdout.evaluate_once(directory, plan, ledger, collection=collection)

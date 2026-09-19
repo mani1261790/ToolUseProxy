@@ -1,0 +1,72 @@
+{
+  "message": {
+    "scope": "observed_closed_api_ids_not_independence",
+    "collection_identity": "5f0337078a5e0fee34fafc47cab027a86c978f7d8c6ef2ef8f2303c25ca1c31a",
+    "partitions": {
+      "train": {
+        "tasks": [
+          "bfcl-message"
+        ],
+        "tools": [
+          "mcp__lab__send_message",
+          "mcp__message__get_message_stats",
+          "mcp__message__message_login",
+          "mcp__message__view_messages_sent"
+        ],
+        "roots_with_evidence": 2,
+        "roots_without_evidence": 0
+      },
+      "calibration": {
+        "tasks": [],
+        "tools": [],
+        "roots_with_evidence": 0,
+        "roots_without_evidence": 0
+      },
+      "test": {
+        "tasks": [],
+        "tools": [],
+        "roots_with_evidence": 0,
+        "roots_without_evidence": 0
+      }
+    },
+    "unseen_test_tasks": [],
+    "unseen_test_tools": [],
+    "independence_verified": false,
+    "predictor_input_changed": false
+  },
+  "ticket": {
+    "scope": "observed_closed_api_ids_not_independence",
+    "collection_identity": "4e77296a8ee141495863fe7f605b91140959bb6d0b7cc14c6b4f1e842b7944f4",
+    "partitions": {
+      "train": {
+        "tasks": [],
+        "tools": [],
+        "roots_with_evidence": 0,
+        "roots_without_evidence": 0
+      },
+      "calibration": {
+        "tasks": [
+          "bfcl-ticket"
+        ],
+        "tools": [
+          "mcp__lab__send_message",
+          "mcp__ticket__get_ticket",
+          "mcp__ticket__get_user_tickets",
+          "mcp__ticket__resolve_ticket"
+        ],
+        "roots_with_evidence": 2,
+        "roots_without_evidence": 0
+      },
+      "test": {
+        "tasks": [],
+        "tools": [],
+        "roots_with_evidence": 0,
+        "roots_without_evidence": 0
+      }
+    },
+    "unseen_test_tasks": [],
+    "unseen_test_tools": [],
+    "independence_verified": false,
+    "predictor_input_changed": false
+  }
+}

@@ -134,7 +134,7 @@ def main(argv=None):
         if len(raw) > 1024 * 1024:
             raise ForecastDataError('comparison_plan_size_limit')
         plan = json.loads(raw)
-        generators = None
+        generators = apis = None
         if collection_sha is not None:
             if (type(plan) is not dict or set(plan) != {
                     'schema', 'calibration_plan', 'generator_collection_sha'}
@@ -142,10 +142,15 @@ def main(argv=None):
                     or plan['generator_collection_sha'] != collection_sha):
                 raise ForecastDataError('comparison_generator_plan_mismatch')
             generators = generator_strata.load(dataset, args.collection, collection_sha, check_budget=budget.check)
+            from .api_task_strata import load as load_apis
+            apis = load_apis(dataset, args.collection, collection_sha, check_budget=budget.check)
             plan = plan['calibration_plan']
         result = evaluate(dataset, models, plan, partition=args.partition, check_budget=budget.check,
-                          generator_groups=generators['group_labels'] if generators else None)
+                          generator_groups=generators['group_labels'] if generators else None,
+                          api_labels=apis['branch_labels'] if apis else None)
         attach_assessment(result, dataset, models, costs, budget.snapshot(), plan, generator_evidence=generators)
+        if apis is not None:
+            result['generalization']['closed_api_tasks'] = apis['summary']
     budget.check()
     encoded = canonical(result) + '\n'
     if len(encoded.encode()) > MAX_REPORT_BYTES:
