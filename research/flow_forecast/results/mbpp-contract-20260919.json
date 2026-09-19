@@ -1,0 +1,340 @@
+{
+  "capture_bindings": [
+    {
+      "capture_dataset_sha": "7490e03f17747f2af211715eb0a29a4e66bf8f740dfb3b965f5070ffaa42746d",
+      "capture_report_sha": "ef52285ef4e5313c65ba2333864fa1ab1f7c3380a2a8c10f64e08a5831fed813",
+      "capture_root": "0d7e802001214e35a232bfd13c274d25",
+      "reference_evidence": {
+        "candidate_sha": "f69597715948c1342b4f34e3622c36a5adb7f59167d54b5f040d5324a34f4e9c",
+        "contract": {
+          "assumptions": [
+            "unmodified Python primitives",
+            "plain JSON arguments",
+            "successful execution"
+          ],
+          "builtins": [
+            "enumerate"
+          ],
+          "contract": "pinned-mbpp-input-capabilities-v1",
+          "execution_authorized": false,
+          "external_values": [
+            "plain_json_arguments"
+          ],
+          "methods": [
+            "count"
+          ],
+          "program_sha": "8b270920884cb1f46cedf656d4421fdb5658d6598845fe04562a0d6f7813f306",
+          "schema": 1,
+          "scope": "input_capabilities_not_field_causality",
+          "semantic_truth_promoted": false,
+          "termination_proven": false,
+          "timing_and_exception_flows_evaluated": false
+        },
+        "independence_verified": false,
+        "record_sha": "da99ce1c7e293ec99062af8fe62d0752fab4cdebe9a1eb8cc8f977c9d69297c7",
+        "task_id": 602
+      },
+      "schema": 1,
+      "scope": "reference_input_capabilities_bound_to_verified_capture",
+      "semantic_truth_promoted": false
+    },
+    {
+      "capture_dataset_sha": "b4f5b37c7458bd6c857f44e646f948fdf88f8283e74525927e283640a3f8a87e",
+      "capture_report_sha": "11f3a8875123fefcaa1f8c39a7e9748c8e86ae683995379f98bdae16ce36e6f7",
+      "capture_root": "071d1ebc9a3442668d8de38003fe6776",
+      "reference_evidence": {
+        "candidate_sha": "f69597715948c1342b4f34e3622c36a5adb7f59167d54b5f040d5324a34f4e9c",
+        "contract": {
+          "assumptions": [
+            "unmodified Python primitives",
+            "plain JSON arguments",
+            "successful execution"
+          ],
+          "builtins": [
+            "enumerate"
+          ],
+          "contract": "pinned-mbpp-input-capabilities-v1",
+          "execution_authorized": false,
+          "external_values": [
+            "plain_json_arguments"
+          ],
+          "methods": [
+            "count"
+          ],
+          "program_sha": "8b270920884cb1f46cedf656d4421fdb5658d6598845fe04562a0d6f7813f306",
+          "schema": 1,
+          "scope": "input_capabilities_not_field_causality",
+          "semantic_truth_promoted": false,
+          "termination_proven": false,
+          "timing_and_exception_flows_evaluated": false
+        },
+        "independence_verified": false,
+        "record_sha": "da99ce1c7e293ec99062af8fe62d0752fab4cdebe9a1eb8cc8f977c9d69297c7",
+        "task_id": 602
+      },
+      "schema": 1,
+      "scope": "reference_input_capabilities_bound_to_verified_capture",
+      "semantic_truth_promoted": false
+    },
+    {
+      "capture_dataset_sha": "2f48e285e73a58c366895b4b7b3a7f9f4080fdf6fc1b43dbc11e631a9a4ce553",
+      "capture_report_sha": "bd6fe4168fc492f840ff9ec4453b27289f0d09078cfad9993d623eae8e67472b",
+      "capture_root": "34ed001e13fe493aa27c0ac806e66f63",
+      "reference_evidence": {
+        "candidate_sha": "8ca67906e326775f1a9892197fd73d6c783d4c38b0fd668e2c4dbeb601a14612",
+        "contract": {
+          "assumptions": [
+            "unmodified Python primitives",
+            "plain JSON arguments",
+            "successful execution"
+          ],
+          "builtins": [
+            "len",
+            "range"
+          ],
+          "contract": "pinned-mbpp-input-capabilities-v1",
+          "execution_authorized": false,
+          "external_values": [
+            "plain_json_arguments"
+          ],
+          "methods": [
+            "append",
+            "remove"
+          ],
+          "program_sha": "963032f071e2d037857dfd39b8020f28ee64ef276cf4f82a90c05011a9bec85b",
+          "schema": 1,
+          "scope": "input_capabilities_not_field_causality",
+          "semantic_truth_promoted": false,
+          "termination_proven": false,
+          "timing_and_exception_flows_evaluated": false
+        },
+        "independence_verified": false,
+        "record_sha": "796a6b33281e636e65fef77c1e9ba270b782c60a7874b63a9102788ac62f7041",
+        "task_id": 603
+      },
+      "schema": 1,
+      "scope": "reference_input_capabilities_bound_to_verified_capture",
+      "semantic_truth_promoted": false
+    },
+    {
+      "capture_dataset_sha": "b53a8c0914d0c954a8db65c0aaa6b9e5a351e118c0fdf62d30cf901248063bab",
+      "capture_report_sha": "7f9f26f3a43310373300ee36901763239e584b38ffe238527305a0e2023730b1",
+      "capture_root": "8687c980bb4e49bca3a06f38a83ef3d9",
+      "reference_evidence": {
+        "candidate_sha": "8ca67906e326775f1a9892197fd73d6c783d4c38b0fd668e2c4dbeb601a14612",
+        "contract": {
+          "assumptions": [
+            "unmodified Python primitives",
+            "plain JSON arguments",
+            "successful execution"
+          ],
+          "builtins": [
+            "len",
+            "range"
+          ],
+          "contract": "pinned-mbpp-input-capabilities-v1",
+          "execution_authorized": false,
+          "external_values": [
+            "plain_json_arguments"
+          ],
+          "methods": [
+            "append",
+            "remove"
+          ],
+          "program_sha": "963032f071e2d037857dfd39b8020f28ee64ef276cf4f82a90c05011a9bec85b",
+          "schema": 1,
+          "scope": "input_capabilities_not_field_causality",
+          "semantic_truth_promoted": false,
+          "termination_proven": false,
+          "timing_and_exception_flows_evaluated": false
+        },
+        "independence_verified": false,
+        "record_sha": "796a6b33281e636e65fef77c1e9ba270b782c60a7874b63a9102788ac62f7041",
+        "task_id": 603
+      },
+      "schema": 1,
+      "scope": "reference_input_capabilities_bound_to_verified_capture",
+      "semantic_truth_promoted": false
+    },
+    {
+      "capture_dataset_sha": "e4e8f7dc19941357a03d1c0ba8a6b233bac65aa7430327824b2f5b0c55bb5025",
+      "capture_report_sha": "aef8213e50e7e617b29b78a24a48854457c95b01a3cb819949f253e545581a49",
+      "capture_root": "e74505ad63ff4bb98e5f33c1a4e0f8d3",
+      "reference_evidence": {
+        "candidate_sha": "fb8a3d609e5dc7ffe34b8c0c03b88f1e897e658e9ac03e0c9151d1950e9d79ab",
+        "contract": {
+          "assumptions": [
+            "unmodified Python primitives",
+            "plain JSON arguments",
+            "successful execution"
+          ],
+          "builtins": [
+            "reversed"
+          ],
+          "contract": "pinned-mbpp-input-capabilities-v1",
+          "execution_authorized": false,
+          "external_values": [
+            "plain_json_arguments"
+          ],
+          "methods": [
+            "join",
+            "split"
+          ],
+          "program_sha": "cdc9909fbcd8692862074ea876581d7f57b1737227260591e29151e5f890ddc4",
+          "schema": 1,
+          "scope": "input_capabilities_not_field_causality",
+          "semantic_truth_promoted": false,
+          "termination_proven": false,
+          "timing_and_exception_flows_evaluated": false
+        },
+        "independence_verified": false,
+        "record_sha": "5fe759bd237edee78c0aae690bf680709540918cc668e500c68e6e41fa6f9771",
+        "task_id": 604
+      },
+      "schema": 1,
+      "scope": "reference_input_capabilities_bound_to_verified_capture",
+      "semantic_truth_promoted": false
+    },
+    {
+      "capture_dataset_sha": "9ee039905d6c2af5413b3af2d2855843acd927afbc0c0e602081afc5f399e530",
+      "capture_report_sha": "e3b395e6864165d787425ca091a44c92af8f5348c5f446f3377b6ca5c27da337",
+      "capture_root": "a74e9e76546549f491e0e7a73baa7ac6",
+      "reference_evidence": {
+        "candidate_sha": "fb8a3d609e5dc7ffe34b8c0c03b88f1e897e658e9ac03e0c9151d1950e9d79ab",
+        "contract": {
+          "assumptions": [
+            "unmodified Python primitives",
+            "plain JSON arguments",
+            "successful execution"
+          ],
+          "builtins": [
+            "reversed"
+          ],
+          "contract": "pinned-mbpp-input-capabilities-v1",
+          "execution_authorized": false,
+          "external_values": [
+            "plain_json_arguments"
+          ],
+          "methods": [
+            "join",
+            "split"
+          ],
+          "program_sha": "cdc9909fbcd8692862074ea876581d7f57b1737227260591e29151e5f890ddc4",
+          "schema": 1,
+          "scope": "input_capabilities_not_field_causality",
+          "semantic_truth_promoted": false,
+          "termination_proven": false,
+          "timing_and_exception_flows_evaluated": false
+        },
+        "independence_verified": false,
+        "record_sha": "5fe759bd237edee78c0aae690bf680709540918cc668e500c68e6e41fa6f9771",
+        "task_id": 604
+      },
+      "schema": 1,
+      "scope": "reference_input_capabilities_bound_to_verified_capture",
+      "semantic_truth_promoted": false
+    }
+  ],
+  "new_model_calls": 0,
+  "new_trials": 0,
+  "references": [
+    {
+      "candidate_sha": "f69597715948c1342b4f34e3622c36a5adb7f59167d54b5f040d5324a34f4e9c",
+      "contract": {
+        "assumptions": [
+          "unmodified Python primitives",
+          "plain JSON arguments",
+          "successful execution"
+        ],
+        "builtins": [
+          "enumerate"
+        ],
+        "contract": "pinned-mbpp-input-capabilities-v1",
+        "execution_authorized": false,
+        "external_values": [
+          "plain_json_arguments"
+        ],
+        "methods": [
+          "count"
+        ],
+        "program_sha": "8b270920884cb1f46cedf656d4421fdb5658d6598845fe04562a0d6f7813f306",
+        "schema": 1,
+        "scope": "input_capabilities_not_field_causality",
+        "semantic_truth_promoted": false,
+        "termination_proven": false,
+        "timing_and_exception_flows_evaluated": false
+      },
+      "independence_verified": false,
+      "record_sha": "da99ce1c7e293ec99062af8fe62d0752fab4cdebe9a1eb8cc8f977c9d69297c7",
+      "task_id": 602
+    },
+    {
+      "candidate_sha": "8ca67906e326775f1a9892197fd73d6c783d4c38b0fd668e2c4dbeb601a14612",
+      "contract": {
+        "assumptions": [
+          "unmodified Python primitives",
+          "plain JSON arguments",
+          "successful execution"
+        ],
+        "builtins": [
+          "len",
+          "range"
+        ],
+        "contract": "pinned-mbpp-input-capabilities-v1",
+        "execution_authorized": false,
+        "external_values": [
+          "plain_json_arguments"
+        ],
+        "methods": [
+          "append",
+          "remove"
+        ],
+        "program_sha": "963032f071e2d037857dfd39b8020f28ee64ef276cf4f82a90c05011a9bec85b",
+        "schema": 1,
+        "scope": "input_capabilities_not_field_causality",
+        "semantic_truth_promoted": false,
+        "termination_proven": false,
+        "timing_and_exception_flows_evaluated": false
+      },
+      "independence_verified": false,
+      "record_sha": "796a6b33281e636e65fef77c1e9ba270b782c60a7874b63a9102788ac62f7041",
+      "task_id": 603
+    },
+    {
+      "candidate_sha": "fb8a3d609e5dc7ffe34b8c0c03b88f1e897e658e9ac03e0c9151d1950e9d79ab",
+      "contract": {
+        "assumptions": [
+          "unmodified Python primitives",
+          "plain JSON arguments",
+          "successful execution"
+        ],
+        "builtins": [
+          "reversed"
+        ],
+        "contract": "pinned-mbpp-input-capabilities-v1",
+        "execution_authorized": false,
+        "external_values": [
+          "plain_json_arguments"
+        ],
+        "methods": [
+          "join",
+          "split"
+        ],
+        "program_sha": "cdc9909fbcd8692862074ea876581d7f57b1737227260591e29151e5f890ddc4",
+        "schema": 1,
+        "scope": "input_capabilities_not_field_causality",
+        "semantic_truth_promoted": false,
+        "termination_proven": false,
+        "timing_and_exception_flows_evaluated": false
+      },
+      "independence_verified": false,
+      "record_sha": "5fe759bd237edee78c0aae690bf680709540918cc668e500c68e6e41fa6f9771",
+      "task_id": 604
+    }
+  ],
+  "schema": 1,
+  "semantic_truth_promoted": false,
+  "source_commit": "910eabe5f9f9a0132489e377f9d9ec3a34eeca08",
+  "contract_report_sha": "76b7271920c11c150b3cd61fed811fc1febf8f1c061e8bf8767387e7ebd48807",
+  "independent_new_tasks_accepted": 0
+}
