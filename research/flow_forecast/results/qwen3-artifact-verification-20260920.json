@@ -5,7 +5,6 @@
   "manifest_source_url": "https://registry.ollama.ai/v2/library/qwen3/manifests/8b",
   "manifest_sha256": "500a1f067a9f782620b40bee6f7b0c89e17ae61f686b92c24933e4ca4b2b8b41",
   "manifest_bytes": 859,
-  "generation_observation_sha256": "a37e9987e1ef2298880049753f868b818ea2c700fc2bad9a2d56ee1ac142a02c",
   "observed_model_identity": {
     "manifest_digest": "500a1f067a9f782620b40bee6f7b0c89e17ae61f686b92c24933e4ca4b2b8b41",
     "model": "qwen3:8b",
@@ -59,5 +58,6 @@
   "new_model_calls": 0,
   "new_trials": 0,
   "new_model_bytes_downloaded": 0,
-  "new_independent_groups": 0
+  "new_independent_groups": 0,
+  "generation_event_record_sha256": "a37e9987e1ef2298880049753f868b818ea2c700fc2bad9a2d56ee1ac142a02c"
 }
