@@ -45,5 +45,33 @@
     "trial_charges": 20
   },
   "artifact_bindings_rechecked": true,
-  "recorded_containers_absent": true
+  "recorded_containers_absent": true,
+  "capture_bindings": [
+    {
+      "schema": 1,
+      "capture_root": "15b1e2fa8ca84d61be1e2ce3d41b08e7",
+      "capture_report_sha": "85ad55ad40d18dc9031302635c58f612412687f7148883cf2f4302a577c0e688",
+      "intervention_report_sha": "404b6f70456ab5b0a0a381023708bf7db92491e909e3f0b6ae2d9e81b4ba2c52",
+      "source_sha": "6a9375aa6425410c07a151aef27f3e44e9ed1023bb5cc5c25f14f4a9b3c99116",
+      "query_observations_bound": 2,
+      "semantic_truth_promoted": false,
+      "capture_image": "sha256:3a9670a6650f1ea9b50019b0f6fc37ca3679fae7c916777384f46bbe02a44f73",
+      "intervention_image": "sha256:9f782805ef24d65584f5ea94bf2427891f2215b089c1634715fc716e30d489e2",
+      "identical_image_verified": false,
+      "scope": "finite_ticket_field_interventions_not_universal_noninterference"
+    },
+    {
+      "schema": 1,
+      "capture_root": "7b54f55dac7244ae9fe9d598b54d3967",
+      "capture_report_sha": "1ce6546056736bb853ee141d2deac3b4a5af52bb85cd2d4e5ec0b83907b4d981",
+      "intervention_report_sha": "404b6f70456ab5b0a0a381023708bf7db92491e909e3f0b6ae2d9e81b4ba2c52",
+      "source_sha": "6a9375aa6425410c07a151aef27f3e44e9ed1023bb5cc5c25f14f4a9b3c99116",
+      "query_observations_bound": 2,
+      "semantic_truth_promoted": false,
+      "capture_image": "sha256:868ba3a565e8dd8f0105743a9cb056c1f9d58611c2a5842b68ccc88264460772",
+      "intervention_image": "sha256:9f782805ef24d65584f5ea94bf2427891f2215b089c1634715fc716e30d489e2",
+      "identical_image_verified": false,
+      "scope": "finite_ticket_field_interventions_not_universal_noninterference"
+    }
+  ]
 }

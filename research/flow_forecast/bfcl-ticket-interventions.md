@@ -11,9 +11,11 @@
 実測は20試行・7.221秒・report前49,394 bytes、全5ケースの期待値が一致。
 [記録](results/bfcl-ticket-interventions-20260919.json)に実行commitを保存した。
 予約とscript/観測/reportのhash対応を再計算し、記録した全containerが撤去済みと確認した。
-8テストとRuff成功。新規モデル呼出し0、採用独立群0。
+照合処理を含む20テストとRuff成功。新規モデル呼出し0、採用独立群0。
 
 他所有者本文は所有者別一覧に影響せず、ID取得には反映された。自分のtitleは一覧に反映され、他所有者ID取得には影響しなかった。
 他所有者のownerだけをAに変えてもOpenのため一覧から除外され、statusだけをResolvedに変えてもBのため除外された。
 この有限集合の観測を一般的な非干渉の証明にはしない。receiver、native Hook、生成モデルの試験ではない。
-F01の因果ラベル昇格や既存captureへの証跡照合は次の工程であり、現時点ではunknownを維持する。
+`bfcl_ticket_evidence.bind_capture`で予約・実装・script・出力・状態の証跡を再検査し、公開/保護の各query 2件を基準ケースへ照合した。
+ビルドcontextは一致するがimage IDは異なり、identical_image_verified=falseを記録する。
+この照合に追加trialは不要。F01の因果ラベル昇格はまだ行わず、unknownを維持する。
