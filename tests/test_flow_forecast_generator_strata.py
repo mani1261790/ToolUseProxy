@@ -27,10 +27,10 @@ def seal_only(tmp_path):
     return path
 
 
-def evidence(data):
+def evidence(data, model_by_root=None):
     result = []
     for index, root in enumerate(sorted({p.root_case_id for p in data.prefixes})):
-        requested = f'fixture-model-{index}'
+        requested = model_by_root[root] if model_by_root is not None else f'fixture-model-{index}'
         records = []
         for branch_id in sorted({b.branch_id for b in data.branches if b.prefix.root_case_id == root}):
             action = {'source': 'public', 'encoding': 'plain'}
@@ -57,6 +57,9 @@ def test_aliases_are_descriptive_and_related_roots_are_not_split(tmp_path, monke
     assert result['summary']['groups_with_mixed_requested_models'] == 1
     assert result['summary']['resolved_model_versions_verified'] is False
     assert result['summary']['evaluated'] is False
+    assert all(not names for names in result['summary']['requested_models_by_partition'].values())
+    observed = result['summary']['observed_requested_models_by_partition']
+    assert {name for names in observed.values() for name in names} == {'fixture-model-0', 'fixture-model-1'}
     audit['assigned_searches'].pop()
     assert set(gs.load(data, path, gs.collection_identity(path))['group_labels'].values()) == {gs.UNKNOWN}
 
@@ -212,3 +215,27 @@ def test_holdout_report_binds_reordered_dataset_and_receipts(tmp_path, monkeypat
     assert summary['requested_alias_strata_scored'] is True
     assert summary['evaluated'] is False
     assert ledger.status(seal['dataset_sha'])['report_sha']
+
+
+def test_training_mixed_group_prevents_false_unseen_test_alias(tmp_path, monkeypatch):
+    from test_flow_forecast_partition_bundle import fixture_dataset
+    original = fixture_dataset()
+    train_root = next(p.root_case_id for p in original.prefixes if original.split.partition(p) == 'train')
+    # A related second training run uses another model. It must stay in the same
+    # group without hiding the first model from the test novelty check.
+    copies = tuple(replace(b, prefix=replace(b.prefix, root_case_id='zz-related-run',
+                                            source_version='zz-related-run'))
+                   for b in original.branches if b.prefix.root_case_id == train_root)
+    data = assemble(original.branches + copies, related_roots=((train_root, 'zz-related-run'),))
+    assert all(data.split.partition(p) == 'train' for p in data.prefixes
+               if p.root_case_id in (train_root, 'zz-related-run'))
+    names = {p.root_case_id: 'model-B' if p.root_case_id == 'zz-related-run' else 'model-A'
+             for p in data.prefixes}
+    audit = evidence(data, names)
+    path = seal_only(tmp_path)
+    monkeypatch.setattr(gs, 'read_collection', lambda _: (data, {}, audit))
+    summary = gs.load(data, path, gs.collection_identity(path))['summary']
+    assert summary['requested_models_by_partition']['train'] == []
+    assert summary['requested_models_by_partition']['test'] == ['model-A']
+    assert summary['observed_requested_models_by_partition']['train'] == ['model-A', 'model-B']
+    assert summary['unseen_test_requested_aliases'] == []
