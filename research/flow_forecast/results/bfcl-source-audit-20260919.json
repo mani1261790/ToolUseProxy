@@ -1,0 +1,146 @@
+{
+  "repository": "https://github.com/ShishirPatil/gorilla",
+  "commit": "6ea57973c7a6097fd7c5915698c54c17c5b1b6c8",
+  "tree_truncated": false,
+  "files": [
+    {
+      "path": "LICENSE",
+      "git_blob_sha": "261eeb9e9f8b2b4b0d119366dda99c6fd7d35c64",
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+      "bytes": 11357
+    },
+    {
+      "path": "berkeley-function-call-leaderboard/bfcl_eval/data/README.md",
+      "git_blob_sha": "460ddf62835f5cc5c2ec86e254749ce86414e2c3",
+      "sha256": "93119d83df28fee0a9f3ea41b0c6a947aad9f7ba4334ae89fef41c74b67b208d",
+      "bytes": 20277
+    },
+    {
+      "path": "berkeley-function-call-leaderboard/bfcl_eval/eval_checker/multi_turn_eval/multi_turn_checker.py",
+      "git_blob_sha": "34b36715cdfaa4464ba1be137af4d30e85da8efb",
+      "sha256": "b3b787515eda3bf0e365e39634a8fc7f831763f010f716d35d86f96fd5aab1b5",
+      "bytes": 13592
+    },
+    {
+      "path": "berkeley-function-call-leaderboard/bfcl_eval/eval_checker/multi_turn_eval/multi_turn_utils.py",
+      "git_blob_sha": "dfcf6512a2eeb592820f3a0fa0fb564a117facc4",
+      "sha256": "9fdbd779ec715959c310445b54b431e91abaa8b45a302abb6fd8db8d61b62ba2",
+      "bytes": 5234
+    },
+    {
+      "path": "berkeley-function-call-leaderboard/bfcl_eval/eval_checker/multi_turn_eval/func_source_code/message_api.py",
+      "git_blob_sha": "3fb461dfbf60ecb9b6cc832162c97368d69ec1ae",
+      "sha256": "cf72af1635654147af17df1891a7fb354549e78a61930139f741a31f4be21121",
+      "bytes": 12534
+    },
+    {
+      "path": "berkeley-function-call-leaderboard/bfcl_eval/eval_checker/multi_turn_eval/func_source_code/ticket_api.py",
+      "git_blob_sha": "6ce72a1cd23a11d814841b46a39d173ccc4e47bb",
+      "sha256": "6a9375aa6425410c07a151aef27f3e44e9ed1023bb5cc5c25f14f4a9b3c99116",
+      "bytes": 9677
+    },
+    {
+      "path": "berkeley-function-call-leaderboard/bfcl_eval/eval_checker/multi_turn_eval/func_source_code/gorilla_file_system.py",
+      "git_blob_sha": "6d269dd5fcf809d514eb531263f1e0e14246993c",
+      "sha256": "84173750930b09aaa31b90547c9bd79ce75714682608b35e78a9c1ea259faf2b",
+      "bytes": 32759
+    },
+    {
+      "path": "berkeley-function-call-leaderboard/bfcl_eval/data/multi_turn_func_doc/message_api.json",
+      "git_blob_sha": "a178734ad47f269571c877e6e433b26171516024",
+      "sha256": "4d58ea933a5d2b280d7a52366617fb47fecd333d7b0e08e724db6fa12fb5f847",
+      "bytes": 6027
+    },
+    {
+      "path": "berkeley-function-call-leaderboard/bfcl_eval/data/multi_turn_func_doc/ticket_api.json",
+      "git_blob_sha": "f8281657b64c4b6410a8590cc82b9584bc39729f",
+      "sha256": "31324e0380782664fe82ba05bd23517808ad55692b45a5fe7c3d4d395fe4f0f8",
+      "bytes": 6648
+    }
+  ],
+  "third_party_code_executed": false,
+  "dialogue_rows_imported": 0,
+  "trials": 0,
+  "model_calls": 0,
+  "accepted_independent_groups": 0,
+  "schema": 1,
+  "scope": "pinned_public_source_feasibility_audit_not_execution",
+  "tree_response_sha": "6ea57973c7a6097fd7c5915698c54c17c5b1b6c8",
+  "commit_tree_sha": "8f9c7a04207ca8be448e084dd0802a6aecbd313f",
+  "tree_response_sha_is_not_commit_tree_sha": true,
+  "function_inventory": {
+    "message_api": {
+      "public_methods": [
+        "list_users",
+        "get_user_id",
+        "message_login",
+        "message_get_login_status",
+        "send_message",
+        "delete_message",
+        "view_messages_sent",
+        "add_contact",
+        "search_messages",
+        "get_message_stats"
+      ],
+      "count": 10,
+      "documented_methods": 10,
+      "all_have_response_schema": true
+    },
+    "ticket_api": {
+      "public_methods": [
+        "create_ticket",
+        "get_ticket",
+        "close_ticket",
+        "resolve_ticket",
+        "edit_ticket",
+        "ticket_login",
+        "ticket_get_login_status",
+        "logout",
+        "get_user_tickets"
+      ],
+      "count": 9,
+      "documented_methods": 9,
+      "all_have_response_schema": true
+    },
+    "gorilla_file_system": {
+      "public_methods": [
+        "pwd",
+        "ls",
+        "cd",
+        "mkdir",
+        "touch",
+        "echo",
+        "cat",
+        "find",
+        "wc",
+        "sort",
+        "grep",
+        "du",
+        "tail",
+        "diff",
+        "mv",
+        "rm",
+        "rmdir",
+        "cp"
+      ],
+      "count": 18
+    }
+  },
+  "readme_claims_not_independent_counts": {
+    "v3_base": 200,
+    "v3_augmented": 800,
+    "missing_functions_shares_core_action_sequence": true
+  },
+  "findings": [
+    "state_and_response_correctness_is_not_flow_or_delivery_proof",
+    "send_message_updates_in_memory_inbox_only",
+    "ticket_login_checks_nonempty_strings_not_trusted_identity",
+    "ticket_get_and_update_are_not_owner_scoped",
+    "runner_dynamically_imports_classes_and_evaluates_call_strings",
+    "v2_live_is_real_world_data_excluded_from_collection",
+    "public_release_does_not_prove_prior_nonuse"
+  ],
+  "decision": "not_direct_F02_import; audit selected operation contracts before isolated synthetic execution",
+  "independence_verified": false,
+  "prior_nonuse_verified": false
+}
