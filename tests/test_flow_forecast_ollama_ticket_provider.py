@@ -104,3 +104,26 @@ def test_plan_receipt_binds_proposal():
     receipt = provider.receipt(value, 'a' * 32, 12, plan)
     with pytest.raises(LabError):
         validate(receipt, Plan('refused', (), 'public'), provider.MODEL_ID)
+    with pytest.raises(LabError, match='local_generation_plan_mismatch'):
+        provider.receipt(value, 'a' * 32, 12, Plan('propose', ('resolve', 'query', 'send'), 'include_private'))
+
+
+def test_resealed_plan_cannot_replace_actual_generated_plan(tmp_path, monkeypatch):
+    from hook_monitor.evaluation.flow_forecast.prefix import digest
+    from hook_monitor.evaluation.flow_lab.generation_evidence import proposal_sha
+    out = tmp_path / 'prepared'
+    replay(monkeypatch, out, response())
+    generated_ticket.prepare(provider.OllamaTicketProvider('qwen3:8b', out), out)
+    path = out / 'generated-plan.json'
+    frozen = json.loads(path.read_text())
+    frozen['plan']['export'] = 'include_private'
+    frozen['generation']['proposal_sha'] = proposal_sha(Plan.parse(frozen['plan']))
+    frozen['prepared_sha'] = digest({k: v for k, v in frozen.items() if k != 'prepared_sha'})
+    path.write_text(json.dumps(frozen))
+    path = out / 'call-result.json'
+    result = json.loads(path.read_text())
+    result['call']['proposal'] = frozen['plan']
+    result['call']['generation'] = frozen['generation']
+    path.write_text(json.dumps(result))
+    with pytest.raises(ForecastDataError):
+        generated_ticket.load(out)

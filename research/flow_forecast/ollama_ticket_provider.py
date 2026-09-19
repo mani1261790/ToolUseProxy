@@ -21,6 +21,13 @@ MODEL_ID = 'ollama-qwen3-8b'
 def receipt(observation, call_id, elapsed_ms, proposal=None):
     metadata = local.metadata(observation)
     raw = observation['response']
+    if proposal is not None:
+        try:
+            observed_plan = Plan.parse(json.loads(raw['response']))
+            if observed_plan != proposal:
+                raise ValueError
+        except (TypeError, ValueError, LabError):
+            raise LabError('local_generation_plan_mismatch') from None
     # Older servers may omit cache usage. Do not invent a zero for those calls.
     usage = None
     if 'prompt_eval_cached_count' in raw:
