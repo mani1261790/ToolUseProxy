@@ -13,5 +13,7 @@ API内の因果関係はunknown、送信した実本文とreceiverとの対応�
 horizon=4のprotected-arrivalラベルは全てunknownであり、採用評価の正例・正常例には加算しない。
 読込による新規trial/model呼出しは0、採用独立群0。
 
-22件のテストで改変されたcall、receiver、状態、guard、予約、成功・途中停止の不整合を拒否し、後の保護出力が前のprefixに漏れないことを確認した。
-collection CLIへの接続、モデル証跡、API内の因果関係の検証、独立holdoutの受入は引き続き必要。
+関連37件のテストで改変されたcall、receiver、状態、guard、予約、成功・途中停止の不整合を拒否し、後の保護出力が前のprefixに漏れないことを確認した。
+既存collection CLIには `--ticket-captures INPUTS.json --ticket-source PINNED_TICKET_API.py --output NEW_DIRECTORY` で接続した。
+実測2captureの封印・再読込は1関連群・6prefix・12branch。ハッシュ分割の名前はcalibrationになるが、development_used=true、independence_verified=false、prior_nonuse_verified=falseを保持する。未使用の調整群として採用しない。
+モデル証跡、API内の因果関係の検証、独立holdoutの受入は引き続き必要。

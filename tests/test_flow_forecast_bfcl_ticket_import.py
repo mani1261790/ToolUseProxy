@@ -1,5 +1,6 @@
 from copy import deepcopy
 import hashlib
+import json
 from pathlib import Path
 
 import pytest
@@ -266,3 +267,32 @@ def test_wrong_upstream_source_rejected(tmp_path):
     capture(path)
     with pytest.raises(importer.LabError, match='ticket_source_digest_mismatch'):
         importer.read_capture(path, SOURCE + 'changed')
+
+
+def test_collection_seals_related_ticket_variants(tmp_path, monkeypatch):
+    from research.flow_forecast import task_catalog, bfcl_ticket_reference
+    monkeypatch.setattr(bfcl_ticket_reference, 'SOURCE_SHA', importer.SOURCE_SHA)
+    source = tmp_path / 'source.py'
+    source.write_text(SOURCE)
+    paths = []
+    for n, variant in enumerate(('public', 'include_private'), 1):
+        path = tmp_path / variant
+        capture(path, variant, str(n) * 32)
+        paths.append(str(path))
+    inputs = tmp_path / 'inputs.json'
+    inputs.write_text(json.dumps(paths))
+    output = tmp_path / 'collection'
+    task_catalog.main(['--ticket-captures', str(inputs), '--ticket-source', str(source), '--output', str(output)])
+    data, _, audit = task_catalog.read_collection(output)
+    assert audit['grouped_root_count'] == 1
+    assert audit['independence_verified'] is False and audit['prior_nonuse_verified'] is False
+    assert audit['development_used'] is True
+    assert len(audit['ticket_captures']) == 2 and len(data.branches) == 12
+
+
+@pytest.mark.parametrize('args', [ ['--ticket-captures', 'absent'], ['--ticket-source', 'absent', '--agenda-captures', 'absent'] ])
+def test_ticket_source_cli_pairing_rejected_before_read(tmp_path, args):
+    from research.flow_forecast import task_catalog
+    with pytest.raises(SystemExit):
+        task_catalog.main(args + ['--output', str(tmp_path/'output')])
+    assert not (tmp_path/'output').exists()

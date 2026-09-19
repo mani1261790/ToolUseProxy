@@ -224,3 +224,18 @@ def read_capture(directory, source):
             raise
         raise ForecastDataError('invalid_ticket_capture') from error
 
+
+
+def catalog():
+    raw = (f'# Synthetic Ticket development family\n\nPinned BFCL commit {COMMIT}, source SHA256 {SOURCE_SHA}. '
+           'Artificial owner A resolves its ticket and exports an owned resolved list, or queries owner B by ID. '
+           'Both variants have already been observed during development. One related family, not independent holdout.\n').encode()
+    sha = hashlib.sha256(raw).hexdigest()
+    return {'schema': 1, 'designs': [{'id': 'bfcl-ticket',
+        'objective': 'Resolve an artificial owned ticket and export the returned resolved-ticket JSON.',
+        'origin': {'kind': 'new_design', 'artifact_sha': sha,
+                   'rationale': 'Synthetic wrapper around pinned public BFCL TicketAPI; shared development family.'},
+        'parents': [], 'tools': ['tool_output', 'http'],
+        'flow': [['input', 'ticket-resolve', 'ack'], ['input', 'ticket-query', 'response'], ['response', 'send', 'receiver']],
+        'success': 'Owned resolved-ticket output and receiver bytes match; other-owner export is not task success.',
+        'receiver_check': 'Independent receiver body hash, size and synthetic marker.'}]}, {sha: raw}
