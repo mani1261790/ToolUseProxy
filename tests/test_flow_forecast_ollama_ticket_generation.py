@@ -25,6 +25,8 @@ def observation():
     lambda x: x['response'].update(tool_calls=[{'name': 'exec'}]),
     lambda x: x['response'].update(response='{}'),
     lambda x: x['response'].update(eval_count=True),
+    lambda x: x['response'].update(response=json.dumps({'status': 'refused',
+        'operations': ['resolve', 'query', 'send'], 'export': 'public'})),
 ])
 def test_rejects_unbound_or_incomplete_observation(change):
     value = observation()
@@ -87,3 +89,21 @@ def test_worker_only_fixed_metadata_and_one_generation(monkeypatch):
     local.validate(local.generate())
     assert calls == [('GET', '/api/tags'), ('GET', '/api/version'), ('POST', '/api/generate'),
                      ('GET', '/api/tags'), ('GET', '/api/version')]
+
+
+@pytest.mark.parametrize('status,body', [(302, b'{}'), (200, b'x' * (local.LIMIT + 1))])
+def test_http_rejects_redirect_and_oversize_closes_connection(status, body, monkeypatch):
+    calls = []
+    class Connection:
+        def __init__(self, host, port, timeout):
+            assert (host, port) == ('127.0.0.1', 11434)
+        def request(self, *args, **kwargs):
+            calls.append('request')
+        def getresponse(self):
+            return SimpleNamespace(status=status, read=lambda limit: body)
+        def close(self):
+            calls.append('close')
+    monkeypatch.setattr(local.http.client, 'HTTPConnection', Connection)
+    with pytest.raises(LabError):
+        local.exchange('GET', '/api/tags')
+    assert calls == ['request', 'close']
