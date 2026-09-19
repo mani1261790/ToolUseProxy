@@ -31,8 +31,12 @@ def validate(value):
             raise ValueError
         validate_receipt(value['generation'], plan, value['model'])
         text = prompt([], 'benign_task', {'task': value['task']})
-        if value['generation']['schema'] != 1:
+        if value['generation']['schema'] not in (1, 3):
             raise ValueError
+        if value['generation']['schema'] == 3:
+            from .ollama_ticket_generation import request as local_request
+            if value['generation']['request_sha'] != digest(local_request()):
+                raise ValueError
         request = {'schema': 1, 'task': value['task'], 'definition': value['definition'],
                    'model': value['model'], 'maximum_model_calls': 1, 'reply_limit': 16384,
                    'implementation_sha': value['implementation_sha'], 'prompt_sha': hashlib.sha256(text.encode()).hexdigest()}
@@ -145,6 +149,15 @@ def load(directory):
             validate_receipt(call['execution'], None, value['model'])
             if any(call['execution'].get(k) != value['generation'].get(k) for k in EXECUTION_IDENTITY_FIELDS):
                 raise ValueError
+        if value['generation']['schema'] == 3:
+            from .ollama_ticket_provider import receipt as local_receipt
+            observation = _read(directory / 'ollama-observation.json')
+            from .ollama_ticket_generation import LIMIT
+            if len(observation) > LIMIT:
+                raise ValueError
+            if local_receipt(_json(observation), value['generation']['call_id'],
+                             value['generation']['elapsed_ms'], Plan.parse(value['plan'])) != value['generation']:
+                raise ValueError
     except (KeyError, TypeError, ValueError, LabError, RecordError) as error:
         raise ForecastDataError('invalid_task_plan_artifacts') from error
     return value
@@ -155,6 +168,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('stage', choices=('prepare','collect'))
     parser.add_argument('--model')
+    parser.add_argument('--provider', choices=('codex', 'ollama'), default='codex')
     parser.add_argument('--prepared', type=Path)
     parser.add_argument('--repository', type=Path)
     parser.add_argument('--source', type=Path)
@@ -164,7 +178,12 @@ def main(argv=None):
         if args.stage == 'prepare':
             if not args.model:
                 parser.error('prepare requires --model')
-            result = prepare(TicketPlanProvider(args.model), args.output)
+            if args.provider == 'ollama':
+                from .ollama_ticket_provider import OllamaTicketProvider
+                provider = OllamaTicketProvider(args.model, args.output)
+            else:
+                provider = TicketPlanProvider(args.model)
+            result = prepare(provider, args.output)
         else:
             if args.prepared is None or args.repository is None or args.source is None:
                 parser.error('collect requires --prepared, --repository and --source')

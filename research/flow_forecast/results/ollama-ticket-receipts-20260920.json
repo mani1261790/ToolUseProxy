@@ -1,0 +1,67 @@
+{
+  "schema": 1,
+  "source_commit": "090edd8cff3bc2518abe8ed44471cf840be08377",
+  "directory": "/private/tmp/tooluseproxy-204-ollama-ticket-prepared-v1",
+  "reservation_sha": "9d156dc321cb05c014dd98bee00a7153cd66aa3a2ebf3b7b3805fc15aeeccc7e",
+  "request_sha": "3f3168c1ca714c73f76b29471be15ff98ed2d6120c9f82b06303ef07144d01ba",
+  "call_result_sha": "9ebeebb6703876b4aa729d03880edd2af677d2c18481110399b0478b9960252c",
+  "observation_sha": "c26d24ef2e4ba23975bc7d9396dce751333a1028312a877b390d6d50e6c5f63e",
+  "status": "not_prepared",
+  "rejection": "invalid_model_proposal",
+  "execution": {
+    "call_id": "efc1c05883e241b09d22b964308e30c5",
+    "cli_version": null,
+    "elapsed_ms": 25370,
+    "endpoint": "http://127.0.0.1:11434/api/generate",
+    "events_sha": "c26d24ef2e4ba23975bc7d9396dce751333a1028312a877b390d6d50e6c5f63e",
+    "model_identity_after": {
+      "manifest_digest": "500a1f067a9f782620b40bee6f7b0c89e17ae61f686b92c24933e4ca4b2b8b41",
+      "model": "qwen3:8b",
+      "server_version": "0.34.2",
+      "size": 5225388164
+    },
+    "model_identity_before": {
+      "manifest_digest": "500a1f067a9f782620b40bee6f7b0c89e17ae61f686b92c24933e4ca4b2b8b41",
+      "model": "qwen3:8b",
+      "server_version": "0.34.2",
+      "size": 5225388164
+    },
+    "prompt_sha": "e46bab416a582e9af54f2b68afd96b4480c33d95fbb553d1c3a64e61fea1f59e",
+    "proposal_sha": null,
+    "reported_model": "qwen3:8b",
+    "request_sha": "9b283a18e911e129801877d31a58fb33075c475106885f4c0a83f28913d5dbeb",
+    "requested_model": "ollama-qwen3-8b",
+    "resolved_model": null,
+    "resolved_model_verified": false,
+    "schema": 3,
+    "scope": "local_ollama_observed_manifest_not_weight_attestation",
+    "thread_sha": null,
+    "usage": {
+      "cached_input_tokens": 0,
+      "input_tokens": 316,
+      "output_tokens": 37
+    }
+  },
+  "costs": {
+    "call_history_complete": true,
+    "call_time_complete": true,
+    "calls_with_usage": 1,
+    "calls_without_usage": 0,
+    "charged_calls": 1,
+    "failed_calls": 1,
+    "known_token_totals": {
+      "cached_input_tokens": 0,
+      "input_tokens": 316,
+      "output_tokens": 37
+    },
+    "observed_call_milliseconds": 25377,
+    "pending_calls": 0,
+    "pricing_source": null,
+    "provider_cost": null,
+    "recorded_calls": 1,
+    "token_totals_complete": true
+  },
+  "trial_charges": 0,
+  "accepted_independent_groups": 0,
+  "offline_verification_new_model_calls": 0
+}

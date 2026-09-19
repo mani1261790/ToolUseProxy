@@ -129,6 +129,29 @@ def test_closed_planner_rejects_extra_fields_and_unrelated_context():
         prompt([], 'benign_task', {'task':'other'})
 
 
+def test_local_receipt_retains_observed_identity_through_collection(tmp_path, monkeypatch):
+    from research.flow_forecast.ollama_ticket_provider import OllamaTicketProvider
+    from test_flow_forecast_ollama_ticket_provider import replay, response
+    out = tmp_path / 'prepared'
+    replay(monkeypatch, out, response())
+    assert module.prepare(OllamaTicketProvider('qwen3:8b', out), out)['status'] == 'prepared'
+    frozen = module.load(out)
+    path = tmp_path / 'capture'
+    generated_capture(path, frozen, '1' * 32)
+    inputs = tmp_path / 'inputs.json'
+    inputs.write_text(json.dumps([str(path)]))
+    directory = tmp_path / 'collection'
+    task_catalog.main(['--ticket-captures', str(inputs), '--ticket-source', str(tmp_path / 'source.py'),
+                       '--output', str(directory)])
+    data, _, _ = task_catalog.read_collection(directory)
+    result = generator_strata.load(data, directory, generator_strata.collection_identity(directory))
+    assert result['summary']['validated_plan_receipts'] == 1
+    assert result['summary']['resolved_model_versions_verified'] is False
+    observed = result['summary']['local_observed_identities_by_partition']
+    assert [identity for identities in observed.values() for identity in identities] == [
+        frozen['generation']['model_identity_before']]
+
+
 def test_checked_collection_receipt_retains_projection_proof_binding(tmp_path,monkeypatch):
     from research.flow_forecast import checked_ticket
     from test_flow_forecast_checked_ticket import fake_binding

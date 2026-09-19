@@ -13,11 +13,14 @@ from .preflight import LabError
 
 EXECUTION_IDENTITY_FIELDS = ('schema', 'call_id', 'requested_model', 'cli_version', 'thread_sha',
                              'events_sha', 'prompt_sha', 'usage', 'scope', 'reported_model',
-                             'endpoint', 'request_sha', 'response_id_sha')
+                             'endpoint', 'request_sha', 'response_id_sha',
+                             'model_identity_before', 'model_identity_after')
 
 
 VALIDATION_DIAGNOSTICS = {'event_or_text_invalid', 'completion_count_invalid',
                           'message_count_invalid', 'proposal_json_invalid', 'proposal_schema_invalid'}
+
+LOCAL_MODEL_ALIASES = {'ollama-qwen3-8b': 'qwen3:8b'}
 
 
 def sha(raw: bytes):
@@ -63,19 +66,34 @@ def capture(*, events: bytes, prompt: bytes, proposal: Proposal | None, model: s
 def validate(evidence, proposal, model):
     try:
         api = type(evidence) is dict and type(evidence.get('schema')) is int and evidence['schema'] == 2
-        extra = {'reported_model', 'endpoint', 'request_sha', 'response_id_sha'} if api else set()
+        local = type(evidence) is dict and type(evidence.get('schema')) is int and evidence['schema'] == 3
+        extra = ({'reported_model', 'endpoint', 'request_sha', 'response_id_sha'} if api else
+                 {'reported_model', 'endpoint', 'request_sha', 'model_identity_before', 'model_identity_after'} if local else set())
         if (type(evidence) is not dict or set(evidence) != {
                 'schema', 'call_id', 'requested_model', 'resolved_model', 'resolved_model_verified',
                 'cli_version', 'thread_sha', 'events_sha', 'prompt_sha', 'proposal_sha', 'usage',
-                'elapsed_ms', 'scope'} | extra or type(evidence['schema']) is not int or evidence['schema'] not in (1, 2)
+                'elapsed_ms', 'scope'} | extra or type(evidence['schema']) is not int or evidence['schema'] not in (1, 2, 3)
                 or evidence['requested_model'] != model or evidence['resolved_model'] is not None
                 or evidence['resolved_model_verified'] is not False
-                or evidence['scope'] != ('local_https_response_metadata' if api else 'local_cli_execution_not_provider_attestation')
+                or evidence['scope'] != ('local_https_response_metadata' if api else
+                    'local_ollama_observed_manifest_not_weight_attestation' if local else 'local_cli_execution_not_provider_attestation')
                 or evidence['proposal_sha'] != (proposal_sha(proposal) if proposal is not None else None)):
             raise ValueError
         version(evidence['requested_model'])
         identifier(evidence['call_id'])
-        if api:
+        if local:
+            before = evidence['model_identity_before']
+            if (evidence['endpoint'] != 'http://127.0.0.1:11434/api/generate'
+                    or evidence['cli_version'] is not None or evidence['thread_sha'] is not None
+                    or LOCAL_MODEL_ALIASES.get(model) != evidence['reported_model']
+                    or type(before) is not dict or set(before) != {'model', 'manifest_digest', 'size', 'server_version'}
+                    or before != evidence['model_identity_after'] or before['model'] != evidence['reported_model']
+                    or type(before['manifest_digest']) is not str or re.fullmatch('[a-f0-9]{64}', before['manifest_digest']) is None
+                    or type(before['size']) is not int or before['size'] <= 0
+                    or type(before['server_version']) is not str
+                    or re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+', before['server_version']) is None):
+                raise ValueError
+        elif api:
             version(evidence['reported_model'])
             if (evidence['endpoint'] != 'https://api.openai.com/v1/responses'
                     or evidence['cli_version'] is not None or evidence['thread_sha'] is not None):
@@ -83,7 +101,8 @@ def validate(evidence, proposal, model):
         elif (not isinstance(evidence['cli_version'], str)
                 or re.fullmatch(r'codex-cli [0-9]+\.[0-9]+\.[0-9]+', evidence['cli_version']) is None):
             raise ValueError
-        for key in ('events_sha', 'prompt_sha', 'proposal_sha', 'thread_sha') + (('request_sha', 'response_id_sha') if api else ()):
+        for key in ('events_sha', 'prompt_sha', 'proposal_sha', 'thread_sha') + (
+                ('request_sha', 'response_id_sha') if api else ('request_sha',) if local else ()):
             value = evidence[key]
             if value is None and (key == 'thread_sha' or (key == 'proposal_sha' and proposal is None)):
                 continue
