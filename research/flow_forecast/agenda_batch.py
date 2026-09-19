@@ -51,10 +51,16 @@ def verify(case, raw):
         raise LabError('agenda_oracle_mismatch') from None
 
 
-def run(repository, output, *, seconds=180, clock=time.monotonic):
+def run(repository, output, *, seconds=180, clock=time.monotonic, suite='api'):
     if type(seconds) is not int or not 1 <= seconds <= 1800:
         raise LabError('invalid_agenda_budget')
-    selected = cases()
+    if suite not in ('api', 'projection'):
+        raise LabError('unknown_agenda_suite')
+    selected, make_script, verify_observation = cases(), script, verify
+    if suite == 'projection':
+        from . import agenda_projection
+        selected = agenda_projection.cases()
+        make_script, verify_observation = agenda_projection.script, agenda_projection.verify
     planned = sum(len(case['calls']) for case in selected)
     if planned > 20:
         raise LabError('agenda_trial_limit')
@@ -62,7 +68,7 @@ def run(repository, output, *, seconds=180, clock=time.monotonic):
     implementation = source_provenance(root)
     start = clock()
     output.mkdir(mode=0o700)
-    intent = {'schema': 1, 'cases': selected, 'planned_trials': planned,
+    intent = {'schema': 1, 'suite': suite, 'cases': selected, 'planned_trials': planned,
               'implementation_sha': digest(implementation),
               'limits': {'trials': 20, 'seconds': seconds, 'bytes': 1024 ** 3}}
     def save(name, value):
@@ -85,7 +91,7 @@ def run(repository, output, *, seconds=180, clock=time.monotonic):
         charged, rows = 0, []
         for index, case in enumerate(selected, 1):
             check()
-            source = script(case)
+            source = make_script(case)
             for number, call in enumerate(case['calls'], 1):
                 charged += 1
                 if charged > 20:
@@ -95,7 +101,7 @@ def run(repository, output, *, seconds=180, clock=time.monotonic):
             name = 'tup-lab-' + uuid.uuid4().hex
             save(f'container-{index}', {'name': name, 'image': image})
             raw = execute(image, source, name=name)
-            row = verify(case, raw)
+            row = verify_observation(case, raw)
             _write_private(output / f'observation-{index}.json', raw)
             save(f'result-{index}', row)
             rows.append(row)
@@ -107,7 +113,8 @@ def run(repository, output, *, seconds=180, clock=time.monotonic):
                   'elapsed_seconds': elapsed, 'artifact_bytes_before_report': size,
                   'new_model_calls': 0, 'independent_new_tasks_accepted': 0,
                   'receiver_observed': False, 'native_hook_tested': False,
-                  'scope': 'closed_stateful_api_development_not_F01_or_unseen_evaluation'}
+                  'scope': 'closed_stateful_api_development_not_F01_or_unseen_evaluation',
+                  'suite': suite, 'semantic_truth_promoted': False}
         save('report', report)
         return report
     except BaseException:
@@ -127,8 +134,9 @@ def main(argv=None):
     parser.add_argument('--repository', required=True, type=Path)
     parser.add_argument('--output', required=True, type=Path)
     parser.add_argument('--seconds', default=180, type=int)
+    parser.add_argument('--suite', choices=('api', 'projection'), default='api')
     args = parser.parse_args(argv)
-    print(canonical(run(args.repository, args.output, seconds=args.seconds)))
+    print(canonical(run(args.repository, args.output, seconds=args.seconds, suite=args.suite)))
 
 
 if __name__ == '__main__':
