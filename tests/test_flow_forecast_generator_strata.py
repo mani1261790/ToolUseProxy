@@ -57,6 +57,9 @@ def test_aliases_are_descriptive_and_related_roots_are_not_split(tmp_path, monke
     assert result['summary']['groups_with_mixed_requested_models'] == 1
     assert result['summary']['resolved_model_versions_verified'] is False
     assert result['summary']['evaluated'] is False
+    assert all(not names for names in result['summary']['requested_models_by_partition'].values())
+    observed = result['summary']['observed_requested_models_by_partition']
+    assert {name for names in observed.values() for name in names} == {'fixture-model-0', 'fixture-model-1'}
     audit['assigned_searches'].pop()
     assert set(gs.load(data, path, gs.collection_identity(path))['group_labels'].values()) == {gs.UNKNOWN}
 

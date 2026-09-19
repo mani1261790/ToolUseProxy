@@ -161,11 +161,16 @@ def load(dataset, directory, expected_identity, *, check_budget=lambda: None):
     by_partition = {part: sorted({labels[group][len(PREFIX):] for _, group, selected in dataset.split.assignments
                                  if selected == part and labels[group].startswith(PREFIX)})
                     for part in ('train', 'calibration', 'test')}
+    observed_by_partition = {part: sorted({models[by_prefix[prefix_id]]
+                                          for prefix_id, _, selected in dataset.split.assignments
+                                          if selected == part and by_prefix[prefix_id] in models})
+                             for part in ('train', 'calibration', 'test')}
     return {'group_labels': labels, 'summary': {
         'status': 'requested_model_aliases_only', 'evaluated': False,
         'resolved_model_versions_verified': False, 'collection_identity': expected_identity,
         'requested_models_by_partition': by_partition,
-        'unseen_test_requested_aliases': sorted(set(by_partition['test']) - set(by_partition['train'])),
+        'observed_requested_models_by_partition': observed_by_partition,
+        'unseen_test_requested_aliases': sorted(set(by_partition['test']) - set(observed_by_partition['train'])),
         'groups_with_missing_evidence': sum(label == UNKNOWN for label in labels.values()),
         'groups_with_mixed_requested_models': sum(label == MIXED for label in labels.values()),
         'validated_plan_receipts': len(seen_calls)}}
