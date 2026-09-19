@@ -22,7 +22,7 @@ IDENTITY = ('mode', 'number', 'step_id', 'call_sha', 'call', 'receiver_address',
 def validate(intent, execution, report):
     try:
         if (type(intent['schema']) is not int or intent['schema'] != 1 or intent['task'] != 'closed_agenda_dispatch_v1'
-                or intent['variant'] not in ('public', 'include_private') or intent['generator'] is not None
+                or intent['variant'] not in ('public', 'include_private')
                 or not re.fullmatch('[a-f0-9]{32}', intent['root'])
                 or type(report['schema']) is not int or report['schema'] != 1 or report['status'] != 'completed'
                 or report['intent_sha'] != digest(intent) or execution['intent_sha'] != digest(intent)
@@ -35,6 +35,11 @@ def validate(intent, execution, report):
                 or report['post_tool_hook_delivery'] != 'not_tested'
                 or report['native_codex_hook_delivery'] != 'not_tested'):
             raise ValueError
+        if intent['generator'] is not None:
+            from .generated_agenda import validate as validate_generation
+            validate_generation(intent['generator'])
+            if intent['generator']['task'] != intent['task'] or intent['generator']['plan']['export'] != intent['variant']:
+                raise ValueError
         limits = intent['limits']
         if (set(limits) != {'trials', 'seconds', 'bytes'} or any(type(v) is not int for v in limits.values())
                 or limits['trials'] != 20 or limits['bytes'] != 1024**3 or not 1 <= limits['seconds'] <= 1800
@@ -210,7 +215,7 @@ def read_capture(directory):
                     raise ValueError
         data = dataset(intent, execution, report)
         return data, {'intent': intent, 'execution': execution, 'report': report,
-                      'dataset_sha': digest(asdict(data)), 'generator_evidence': None}
+                      'dataset_sha': digest(asdict(data)), 'generator_evidence': intent['generator']}
     except (KeyError, TypeError, ValueError) as error:
         if isinstance(error, ForecastDataError):
             raise
