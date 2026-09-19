@@ -163,10 +163,14 @@ def warnings(rows, threshold):
             'median_early_lead_steps': statistics.median(leads) if leads else None}
 
 
-def strata_summary(rows, generator_groups=None, thresholds=None):
+def strata_summary(rows, generator_groups=None, thresholds=None, api_labels=None):
     groups = defaultdict(list)
     for row in rows:
         branch = row[0]
+        if api_labels is not None:
+            from .api_task_strata import branch_key, UNKNOWN
+            for label in api_labels.get(branch_key(branch), (UNKNOWN,)):
+                groups[label].append(row)
         if generator_groups is not None:
             from .generator_strata import UNKNOWN
             groups[generator_groups.get(row[1], UNKNOWN)].append(row)
@@ -181,12 +185,12 @@ def strata_summary(rows, generator_groups=None, thresholds=None):
                   'route_coverage': mean_by_root(group, 'route_coverage'),
                   **({'operating_points': {target: warnings(group, value['threshold'])
                                           for target, value in (thresholds or {}).items()}}
-                     if key.startswith('generator/') else {})}
+                     if key.startswith(('generator/', 'task-api/', 'tool-api/')) else {})}
             for key, group in sorted(groups.items())}
 
 
 def evaluate(dataset, models, plan, *, partition='test', check_budget=lambda: None,
-             calibration_dataset=None, generator_groups=None):
+             calibration_dataset=None, generator_groups=None, api_labels=None):
     if partition not in {'test', 'train'}:
         raise ForecastDataError('unsupported_comparison_partition')
     calibration_data = dataset if calibration_dataset is None else calibration_dataset
@@ -212,7 +216,7 @@ def evaluate(dataset, models, plan, *, partition='test', check_budget=lambda: No
                 times = sorted(row[5] for row in rows)
                 conditions[key] = {
                     'probability': probability_summary(rows), 'strata': strata_summary(
-                        rows, generator_groups, plan['models'][name]['conditions'][key]['thresholds']),
+                        rows, generator_groups, plan['models'][name]['conditions'][key]['thresholds'], api_labels),
                     'routes': {field: mean_by_root(rows, field) for field in ('edge_f1', 'route_coverage', 'candidate_missing')},
                     'operating_points': {target: warnings(rows, value['threshold']) for target, value in
                                          plan['models'][name]['conditions'][key]['thresholds'].items()},

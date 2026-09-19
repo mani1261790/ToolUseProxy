@@ -59,10 +59,16 @@ def evaluate_once(directory, plan, ledger, *, budget=None, collection=None, prio
         raise ForecastDataError('bundle_source_mismatch')
     generators = (generator_strata.load(dataset, collection, plan['generator_collection_sha'],
                                          check_budget=budget.check) if collection is not None else None)
+    from .api_task_strata import load as load_apis
+    apis = (load_apis(dataset, collection, plan['generator_collection_sha'], check_budget=budget.check)
+            if collection is not None else None)
     result = evaluate(dataset, models, plan['calibration_plan'], calibration_dataset=development,
-                      check_budget=budget.check, generator_groups=generators['group_labels'] if generators else None)
+                      check_budget=budget.check, generator_groups=generators['group_labels'] if generators else None,
+                      api_labels=apis['branch_labels'] if apis else None)
     attach_assessment(result, dataset, models, costs, budget.snapshot(), plan['calibration_plan'],
                       generator_evidence=generators)
+    if apis is not None:
+        result['generalization']['closed_api_tasks'] = apis['summary']
     result['holdout'] = {'reservation': reservation, 'prior_access': manifest['prior_access'],
                          'bundle_sha': manifest['bundle_sha']}
     # A converted dataset was accessible before sealing; the ledger cannot erase that.
