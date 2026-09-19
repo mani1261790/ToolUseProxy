@@ -22,7 +22,8 @@ class Transport(Base):
             body['private'] = CANARY
         row = observe_bytes(self.name, number, self.variant, encoded(body), CANARY)
         if number == 4:
-            row['receiver'] = {'protected': self.variant == 'include_private', 'body_sha': row['body_sha']}
+            row['receiver'] = {'kind': 'received', 'step_id': step, 'body_size': row['body_size'],
+                               'protected': self.variant == 'include_private', 'body_sha': row['body_sha']}
         return row
 
 

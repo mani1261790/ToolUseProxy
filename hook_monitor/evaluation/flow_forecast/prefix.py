@@ -15,7 +15,7 @@ SCHEMA = 1
 MAX_STEPS = 100
 MAX_OBJECTS = 256
 TOOLS = frozenset({'file', 'shell', 'http', 'tool_output'})
-OPERATIONS = frozenset({'read', 'copy', 'encode', 'save', 'send', 'branch', 'finish'})
+OPERATIONS = frozenset({'read', 'copy', 'encode', 'compute', 'save', 'send', 'branch', 'finish'})
 OBJECT_KINDS = frozenset({'source', 'file', 'bytes', 'message', 'sink'})
 RESULTS = frozenset({'none', 'ok', 'local', 'send', 'save_then_send', 'unknown'})
 
