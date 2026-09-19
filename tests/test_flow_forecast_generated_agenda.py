@@ -117,3 +117,27 @@ def test_closed_planner_rejects_extra_fields_and_unrelated_context():
         Plan.parse(value)
     with pytest.raises(LabError):
         prompt([], 'benign_task', {'task':'other'})
+
+
+def test_checked_collection_receipt_retains_projection_proof_binding(tmp_path,monkeypatch):
+    from research.flow_forecast import checked_agenda
+    from test_flow_forecast_checked_agenda import fake_binding
+    out = tmp_path/'prepared'
+    module.prepare(provider(tmp_path),out,timeout=2)
+    frozen = module.load(out)
+    path = tmp_path/'capture'
+    generated_capture(path,frozen,'1'*32)
+    _, capture_audit = agenda_import.read_capture(path)
+    monkeypatch.setattr(checked_agenda,'bind_capture',lambda *a:fake_binding(capture_audit))
+    pairs = tmp_path/'pairs.json'
+    pairs.write_text(json.dumps([{'capture':str(path),'interventions':'fixture'}]))
+    directory = tmp_path/'checked'
+    task_catalog.main(['--checked-agenda-captures',str(pairs),'--output',str(directory)])
+    data,catalog,audit = task_catalog.read_collection(directory)
+    identity = generator_strata.collection_identity(directory)
+    assert generator_strata.load(data,directory,identity)['summary']['validated_plan_receipts'] == 1
+    changed = deepcopy(audit)
+    changed['agenda_captures'][0]['closed_agenda_projection_evidence']['creation'] = 'different claim'
+    monkeypatch.setattr(generator_strata,'read_collection',lambda *a:(data,catalog,changed))
+    with pytest.raises(ForecastDataError,match='branch_mismatch'):
+        generator_strata.load(data,directory,identity)
