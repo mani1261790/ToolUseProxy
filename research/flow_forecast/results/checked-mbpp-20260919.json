@@ -1,0 +1,298 @@
+{
+  "schema": 1,
+  "source_commit": "3bd1e6980624cfcf5e2112faeb667e0c3c7e3c08",
+  "collection_directory": "/private/tmp/tooluseproxy-204-checked-mbpp-collection-v1",
+  "collection_seal": {
+    "catalog_sha": "9abbec36d9296ecce1f2fd763a931e9e87e9825f879c0ca20e1f0808e231d513",
+    "dataset_digest": "4d404ef908fffbb29d9a7771372f261b75ce3273eb513142ec033405ada955f0",
+    "evidence_sha": "25cf209f0a1070c23f6325e52d8cc1b8f8b83d5f1d3968e5efbf89b360e597b6",
+    "origin_shas": [
+      "42196546a1d0e1cb2509ad513ea46a008cf9d438a9f81fb84911ca7b7add57b8",
+      "9057ce3894acfc55b7f6a60e9385d260bd21f36ce996b0bca9a63385d16751a3",
+      "a83af2a974f4c4f586797030c17535d9869e4cdd9af3c9c97e312a2c349937af"
+    ],
+    "schema": 1
+  },
+  "dataset_summary": {
+    "continuation_count": 36,
+    "deferred_scope": [
+      "semantic_origin",
+      "selection_influence",
+      "cross_task_state"
+    ],
+    "group_count": 1,
+    "label_counts": {
+      "enforce/1/no": 9,
+      "enforce/1/unknown": 9,
+      "enforce/2/no": 9,
+      "enforce/2/unknown": 9,
+      "enforce/4/no": 9,
+      "enforce/4/unknown": 9,
+      "enforce/8/no": 9,
+      "enforce/8/unknown": 9,
+      "observe/1/no": 15,
+      "observe/1/yes": 3,
+      "observe/2/no": 12,
+      "observe/2/yes": 6,
+      "observe/4/no": 9,
+      "observe/4/yes": 9,
+      "observe/8/no": 9,
+      "observe/8/yes": 9
+    },
+    "prefix_count": 18,
+    "provenance": "synthetic-flow-lab-v1",
+    "root_count": 6,
+    "sampling_counts": {
+      "fixed_distribution": 36
+    },
+    "schema": 1,
+    "split_prefix_counts": {
+      "train": 18
+    },
+    "synthetic_only": true,
+    "termination_counts": {
+      "blocked": 9,
+      "completed": 27
+    },
+    "unknown_relation_counts": {
+      "selection": 0,
+      "semantic": 0,
+      "task_boundary": 0,
+      "unknown": 0
+    },
+    "unpaired_adaptive_count": 0
+  },
+  "comparison_sha": "53ddfebe9913ea0c99455bc4a7d9a94e457815e4874589f658ac93b4e89477da",
+  "plan_sha": "6bd1ada487961039befa5c66e1fac9fe3e01550206f8b06dc265ec6694a69c2d",
+  "acceptance": {
+    "gates": [
+      {
+        "comparison": "ge",
+        "kind": "sample",
+        "metric": "training_roots",
+        "status": "insufficient",
+        "threshold": 20,
+        "value": 1
+      },
+      {
+        "comparison": "ge",
+        "kind": "sample",
+        "metric": "calibration_normal_roots",
+        "status": "insufficient",
+        "threshold": 100,
+        "value": 0
+      },
+      {
+        "comparison": "ge",
+        "kind": "sample",
+        "metric": "test_normal_roots",
+        "status": "insufficient",
+        "threshold": 300,
+        "value": 0
+      },
+      {
+        "comparison": "ge",
+        "kind": "sample",
+        "metric": "test_positive_roots",
+        "status": "insufficient",
+        "threshold": 100,
+        "value": 1
+      },
+      {
+        "comparison": "ge",
+        "kind": "coverage",
+        "metric": "truth_coverage",
+        "status": "pass",
+        "threshold": 0.95,
+        "value": 1.0
+      },
+      {
+        "comparison": "ge",
+        "kind": "coverage",
+        "metric": "prediction_coverage",
+        "status": "pass",
+        "threshold": 0.95,
+        "value": 1.0
+      },
+      {
+        "comparison": "le",
+        "kind": "performance",
+        "metric": "fpr_upper",
+        "status": "missing",
+        "threshold": 0.01,
+        "value": null
+      },
+      {
+        "comparison": "ge",
+        "kind": "performance",
+        "metric": "recall_lower",
+        "status": "missing",
+        "threshold": 0.8,
+        "value": null
+      },
+      {
+        "comparison": "ge",
+        "kind": "performance",
+        "metric": "brier_improvement",
+        "status": "missing",
+        "threshold": 0.01,
+        "value": null
+      },
+      {
+        "comparison": "gt",
+        "kind": "performance",
+        "metric": "paired_brier_lower",
+        "status": "missing",
+        "threshold": 0.0,
+        "value": null
+      },
+      {
+        "comparison": "ge",
+        "kind": "performance",
+        "metric": "edge_f1_improvement",
+        "status": "pass",
+        "threshold": 0.05,
+        "value": 0.3333333333333333
+      },
+      {
+        "comparison": "gt",
+        "kind": "performance",
+        "metric": "paired_edge_f1_lower",
+        "status": "missing",
+        "threshold": 0.0,
+        "value": null
+      },
+      {
+        "comparison": "ge",
+        "kind": "performance",
+        "metric": "positive_top3_route_coverage",
+        "status": "pass",
+        "threshold": 0.9,
+        "value": 1.0
+      },
+      {
+        "comparison": "ge",
+        "kind": "performance",
+        "metric": "median_early_lead_steps",
+        "status": "missing",
+        "threshold": 1,
+        "value": null
+      },
+      {
+        "comparison": "le",
+        "kind": "cost",
+        "metric": "training_seconds",
+        "status": "pass",
+        "threshold": 300,
+        "value": 0.00600779200613033
+      },
+      {
+        "comparison": "le",
+        "kind": "cost",
+        "metric": "peak_memory_bytes",
+        "status": "pass",
+        "threshold": 1073741824,
+        "value": 28180480
+      },
+      {
+        "comparison": "le",
+        "kind": "cost",
+        "metric": "prediction_p95_ms",
+        "status": "pass",
+        "threshold": 50,
+        "value": 0.3587909959605895
+      },
+      {
+        "comparison": "le",
+        "kind": "cost",
+        "metric": "model_bytes",
+        "status": "pass",
+        "threshold": 67108864,
+        "value": 4111
+      },
+      {
+        "kind": "experimental_design",
+        "metric": "unused_test_partition",
+        "status": "fail",
+        "value": false
+      },
+      {
+        "kind": "experimental_design",
+        "metric": "frozen_calibration_selection",
+        "status": "missing",
+        "value": null
+      },
+      {
+        "kind": "experimental_design",
+        "metric": "independent_root_groups",
+        "status": "missing",
+        "value": null
+      },
+      {
+        "kind": "experimental_design",
+        "metric": "different_tools_evaluated",
+        "status": "missing",
+        "value": null
+      },
+      {
+        "kind": "experimental_design",
+        "metric": "different_tasks_evaluated",
+        "status": "missing",
+        "value": null
+      },
+      {
+        "kind": "experimental_design",
+        "metric": "different_agent_models_evaluated",
+        "status": "missing",
+        "value": null
+      },
+      {
+        "kind": "experimental_design",
+        "metric": "object_identity_ablation_benefit",
+        "status": "missing",
+        "value": null
+      },
+      {
+        "kind": "experimental_design",
+        "metric": "parent_relation_ablation_benefit",
+        "status": "missing",
+        "value": null
+      },
+      {
+        "kind": "experimental_design",
+        "metric": "multistep_ablation_benefit",
+        "status": "missing",
+        "value": null
+      }
+    ],
+    "missing_or_insufficient": [
+      "training_roots",
+      "calibration_normal_roots",
+      "test_normal_roots",
+      "test_positive_roots",
+      "fpr_upper",
+      "recall_lower",
+      "brier_improvement",
+      "paired_brier_lower",
+      "paired_edge_f1_lower",
+      "median_early_lead_steps",
+      "frozen_calibration_selection",
+      "independent_root_groups",
+      "different_tools_evaluated",
+      "different_tasks_evaluated",
+      "different_agent_models_evaluated",
+      "object_identity_ablation_benefit",
+      "parent_relation_ablation_benefit",
+      "multistep_ablation_benefit"
+    ],
+    "performance_failures": [
+      "unused_test_partition"
+    ],
+    "product_activation_authorized": false,
+    "protocol_sha256": "b4047e93e69b1959c36db2f9d61f71df54c46f82a7043bc7b1068f0f04fe983c",
+    "status": "inconclusive_do_not_adopt"
+  },
+  "new_model_calls": 0,
+  "new_trials": 0,
+  "independent_new_tasks_accepted": 0
+}
