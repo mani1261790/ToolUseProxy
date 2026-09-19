@@ -1,0 +1,95 @@
+{
+  "schema": 1,
+  "execution_source_commit": "d74bb41fb3a81b57bb0625687f27599699e0d965",
+  "summary_fix_commit": "61ecd7e",
+  "prepared": "/private/tmp/tooluseproxy-204-terra-prepare-v1",
+  "prepared_sha": "438a655a81aed0ba1507bc99ab5b32d007bd15b3c1625698843091c1ddd3ebea",
+  "generation": {
+    "call_id": "d8acd8093f824d65929da07e0922501e",
+    "cli_version": "codex-cli 0.153.4",
+    "elapsed_ms": 5968,
+    "events_sha": "328894bc90334c0f3d8b9d4344b2f5958b5b62f4d44650a7482a285b10da96cf",
+    "prompt_sha": "4c7e499c0d9ac2c1cf213733d85d25b35739fef9d4ec0b57f5792f00a3fa0d64",
+    "proposal_sha": "a508da1406808e3059cfbfd3c571eed05496e83a8651b319c29a60addb3818a3",
+    "requested_model": "gpt-5.6-terra",
+    "resolved_model": null,
+    "resolved_model_verified": false,
+    "schema": 1,
+    "scope": "local_cli_execution_not_provider_attestation",
+    "thread_sha": "0fc9f673ad529e554258fe4241160a15b28860279b33d16bbf4321f08e0e26a4",
+    "usage": {
+      "cached_input_tokens": 0,
+      "input_tokens": 5844,
+      "output_tokens": 61
+    }
+  },
+  "costs": {
+    "call_history_complete": true,
+    "call_time_complete": true,
+    "calls_with_usage": 1,
+    "calls_without_usage": 0,
+    "charged_calls": 1,
+    "failed_calls": 0,
+    "known_token_totals": {
+      "cached_input_tokens": 0,
+      "input_tokens": 5844,
+      "output_tokens": 61
+    },
+    "observed_call_milliseconds": 5990,
+    "pending_calls": 0,
+    "pricing_source": null,
+    "provider_cost": null,
+    "recorded_calls": 1,
+    "token_totals_complete": true
+  },
+  "capture": "/private/tmp/tooluseproxy-204-terra-capture-v1",
+  "capture_report_sha": "5c4d44625a6b4ee20dff1f11a0b37aac5bfcde94e791c626689c9644321edb6f",
+  "trial_charges": 11,
+  "elapsed_seconds": 13.834019750000152,
+  "artifact_bytes_before_report": 110176,
+  "conditions": [
+    {
+      "mode": "observe",
+      "termination": "completed",
+      "task_achieved": true,
+      "protected_received": false
+    },
+    {
+      "mode": "enforce",
+      "termination": "blocked",
+      "task_achieved": false,
+      "protected_received": null
+    }
+  ],
+  "collection": "/private/tmp/tooluseproxy-204-two-model-collection-v1",
+  "collection_identity": "1c6a54fb8efa386cec68a3d579b90d01461f73b35629884d0c1fafa2876d2ff3",
+  "groups": 1,
+  "generators": {
+    "status": "requested_model_aliases_only",
+    "evaluated": false,
+    "resolved_model_versions_verified": false,
+    "collection_identity": "1c6a54fb8efa386cec68a3d579b90d01461f73b35629884d0c1fafa2876d2ff3",
+    "requested_models_by_partition": {
+      "train": [],
+      "calibration": [],
+      "test": []
+    },
+    "observed_requested_models_by_partition": {
+      "train": [
+        "gpt-5.5",
+        "gpt-5.6-terra"
+      ],
+      "calibration": [],
+      "test": []
+    },
+    "unseen_test_requested_aliases": [],
+    "groups_with_missing_evidence": 0,
+    "groups_with_mixed_requested_models": 1,
+    "validated_plan_receipts": 2
+  },
+  "comparison_report_sha": "d8f592ddd6023657cc91690f2685bce82a3a71c42866431d12946b4bde16f51f",
+  "acceptance": "inconclusive_do_not_adopt",
+  "new_model_calls": 1,
+  "new_independent_tasks": 0,
+  "scope": "same_development_task_two_requested_aliases_not_unseen_model_generalization"
+}
