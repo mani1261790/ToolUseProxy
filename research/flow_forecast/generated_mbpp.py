@@ -63,6 +63,8 @@ def validate(value):
 def prepare(task, provider, output, *, timeout=60, clock=time.monotonic, cohort=None):
     task_definition = definition(task)
     binding = cohort_binding(cohort, task) if cohort is not None else None
+    if binding is not None and binding['partition'] != 'train' and cohort['schema'] != 2:
+        raise ForecastDataError('cohort_history_required_for_holdout')
     version(provider.model_id)
     if type(timeout) is not int or not 1 <= timeout <= 60:
         raise ForecastDataError('invalid_task_generation_budget')
