@@ -142,3 +142,14 @@ def test_unknown_or_ambiguous_observation_revision_is_rejected(revision):
     value['request_revision'] = revision
     with pytest.raises(LabError):
         local.metadata(value)
+
+
+def test_new_probe_does_not_bind_legacy_worker_output_to_current_reservation(tmp_path, monkeypatch):
+    value = observation()
+    value.pop('request_revision')
+    monkeypatch.setattr(local.subprocess, 'run', lambda *a, **k: SimpleNamespace(
+        returncode=0, stdout=json.dumps(value).encode()))
+    result = local.run(tmp_path / 'run')
+    assert result['status'] == 'not_completed'
+    assert 'evidence' not in result
+    assert result['generation_observation']['usage']['eval_count'] == 20

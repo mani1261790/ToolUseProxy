@@ -169,6 +169,8 @@ def run(output, *, timeout=60):
         # Invalid plans still consumed tokens; keep their validated metadata.
         result['generation_observation'] = metadata(observation)
         evidence = validate(observation)
+        if observation.get('request_revision') != 2:
+            raise LabError('local_generation_request_mismatch')
         if source_provenance(root) != implementation:
             raise LabError('local_generation_implementation_changed')
         result.update(status='completed', observation_sha=digest(observation), evidence=evidence)
