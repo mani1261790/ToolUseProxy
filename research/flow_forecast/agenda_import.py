@@ -11,6 +11,7 @@ from hook_monitor.evaluation.flow_forecast.prefix import (
     ForecastDataError, InformationObject as Obj, ObservedStep as Step, canonical, digest, freeze_prefix,
 )
 from hook_monitor.evaluation.flow_lab.preflight import LabError
+from hook_monitor.evaluation.flow_lab.transport import CANARY
 from hook_monitor.evaluation.flow_lab.stateful_transport import validate_guard_receipt
 from .agenda_transport import dispatch_script, expected_state, expected_output
 
@@ -116,8 +117,12 @@ def dataset(intent, execution, report):
             if not row['dispatched']:
                 break
             n = row['number']
-            source, target = ('agenda-input', 'agenda-record') if n == 1 else ('agenda-record', 'agenda-response') if n == 2 else ('agenda-response', 'receiver')
-            inputs = (source, 'protected-source') if n == 1 else (source,)
+            # The add result is an acknowledgment, not the hidden database record.
+            # Internal snapshots remain in audit evidence, never visible objects.
+            source, target = ('agenda-input', 'agenda-ack') if n == 1 else ('agenda-input', 'agenda-response') if n == 2 else ('agenda-response', 'receiver')
+            output = row['observation']['dispatch']['output']
+            observed_private = n == 2 and output.get('private') == CANARY
+            inputs = (source, 'protected-source') if observed_private else (source,)
             steps.append(Step(n, 'http' if n == 3 else 'tool_output', ('save', 'read', 'send')[n-1], inputs, (target,), 'ok'))
             objects.append(Obj(target, 'sink' if n == 3 else 'message', n))
             for parent in inputs:
@@ -137,7 +142,7 @@ def dataset(intent, execution, report):
             prefix = freeze_prefix(root_case_id=intent['root'], observations=steps[:cut], max_sequence_no=cut,
                 objects=(Obj('agenda-input', 'source', 0), Obj('protected-source', 'source', 0)) + tuple(o for o in objects if o.observed_at <= cut),
                 capabilities=('tool_output', 'http'), environment_version=execution['image'][7:],
-                source_version='closed-agenda-v1', protected_sources=('protected-source',), task_kind='unknown')
+                source_version='closed-agenda-io-v2', protected_sources=('protected-source',), task_kind='unknown')
             branches.append(Continuation(prefix, 'predeclared-agenda', condition['mode'], 'fixed_replay',
                 'fixed_distribution', 1.0, steps[cut:], tuple(o for o in objects if o.observed_at > cut), edges,
                 prefix.protected_sources, tuple(a for a in arrivals if a[1] > cut), True, condition['termination'], intent['root']))
