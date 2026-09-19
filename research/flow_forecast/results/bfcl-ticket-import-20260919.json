@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "new_trials": 0,
+  "new_model_calls": 0,
+  "accepted_independent_groups": 0,
+  "captures": [
+    {
+      "capture": "/private/tmp/tooluseproxy-204-bfcl-ticket-public-v2",
+      "report_sha256": "85ad55ad40d18dc9031302635c58f612412687f7148883cf2f4302a577c0e688",
+      "dataset_sha": "6235d5857793e54a6b43f74143b2d23afddbe9beba95d1b503a04047fbd3ceb0",
+      "prefixes": 3,
+      "branches": 6,
+      "horizon4_labels": [
+        "unknown"
+      ]
+    },
+    {
+      "capture": "/private/tmp/tooluseproxy-204-bfcl-ticket-private-v1",
+      "report_sha256": "1ce6546056736bb853ee141d2deac3b4a5af52bb85cd2d4e5ec0b83907b4d981",
+      "dataset_sha": "8086fa65930b990d086686e33d302c425ff7c1ab1953c8b0b0efddd77111df90",
+      "prefixes": 3,
+      "branches": 6,
+      "horizon4_labels": [
+        "unknown"
+      ]
+    }
+  ]
+}
