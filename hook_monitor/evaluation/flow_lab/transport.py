@@ -157,6 +157,8 @@ def python_command(address: str, step_id: str, *, source: str, encoding: str = "
 
 
 class FixedTransport:
+    receiver_script = RECEIVER
+
     def __init__(self, image_id: str):
         self.image_id = image_id
         self.network = "tup-lab-net-" + uuid.uuid4().hex
@@ -179,7 +181,7 @@ class FixedTransport:
                 "--opt", f"{MASQUERADE_OPTION}=false", self.network,
             ])
             self.check_network()
-            self._create(self.receiver, RECEIVER, network=self.network)
+            self._create(self.receiver, self.receiver_script, network=self.network)
             command(["docker", "start", self.receiver])
             for _ in range(30):
                 if {"kind": "ready"} in self.records():
