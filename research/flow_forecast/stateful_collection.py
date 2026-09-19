@@ -132,8 +132,29 @@ def dataset_from_traces(intent, conditions):
     return assemble(tuple(branches), provenance='synthetic-flow-lab-v1')
 
 
-def run(repository, plan, output, *, seconds=600, clock=time.monotonic):
+def generated_completion(generation, plan, condition):
+    contract = generation['assignment'].get('completion') if generation else None
+    if contract is None:
+        return {'status': 'unavailable', 'reason': 'no_pretrial_completion_contract'}
+    # The closed translator permits one send only. Validate actual independent
+    # receipt/byte proof before using this projection, not the model's status.
+    validate_trace(plan, condition)
+    delivered = int(condition['termination'] == 'completed' and plan['source'] == 'public')
+    encoding = 'base64' if 'encode' in plan['operations'] else 'plain'
+    achieved = delivered == contract['deliveries'] and contract['encoding'] in ('any', encoding)
+    return {'status': 'achieved' if achieved else 'not_achieved',
+            'contract': contract, 'observed_public_deliveries': delivered,
+            'observed_encoding': encoding if delivered else None,
+            'evidence_sha': digest(condition['steps']), 'scope': 'closed_public_delivery_contract'}
+
+
+def run(repository, plan, output, *, seconds=600, clock=time.monotonic, generation=None):
     plan = validate_plan(plan)
+    if generation is not None:
+        from .generated_stateful import validate as validate_generated
+        validate_generated(generation)
+        if generation['plan'] != plan:
+            raise ForecastDataError('stateful_generated_plan_mismatch')
     if type(seconds) is not int or not 1 <= seconds <= 1800:
         raise ForecastDataError('invalid_stateful_time_budget')
     started, charged = clock(), 0
@@ -143,7 +164,7 @@ def run(repository, plan, output, *, seconds=600, clock=time.monotonic):
     _write_private(output / 'implementation.json', (canonical(implementation) + '\n').encode())
     intent = {'schema': 1, 'plan': plan, 'root': uuid.uuid4().hex,
               'sampling': 'one_predeclared_deterministic_pipeline_not_agent_behavior',
-              'generator_evidence': None, 'probability': 1.0,
+              'generator_evidence': generation, 'probability': 1.0,
               'max_trials': 20, 'planned_trial_charges': 6 + 2 * len(plan['operations']),
               'seconds': seconds, 'storage_bytes': 1024 * 1024 * 1024,
               'implementation': digest(implementation)}
@@ -222,6 +243,7 @@ def run(repository, plan, output, *, seconds=600, clock=time.monotonic):
             store.finish(spec, utc_now())
             condition = {'mode': mode, 'termination': termination, 'steps': rows,
                          'controls': [asdict(c) for c in controls]}
+            condition['task_completion'] = generated_completion(generation, plan, condition)
             _write_private(output / (mode + '.json'), (canonical(condition) + '\n').encode())
             conditions.append(condition)
     check()
@@ -237,7 +259,9 @@ def run(repository, plan, output, *, seconds=600, clock=time.monotonic):
               'artifact_bytes_before_report': last_bytes, 'conditions': conditions, 'independent_new_task_count': 0,
               'generator_model_verified': False, 'unused_holdout': False, 'new_model_calls': 0,
               'scope': 'instrumented_deterministic_synthetic_pipeline_not_agent_population',
-              'native_codex_hook_delivery': 'not_tested'}
+              'native_codex_hook_delivery': 'not_tested',
+              'prepared_generation_sha': generation['prepared_sha'] if generation else None,
+              'source_generation_calls': 1 if generation else 0}
     _write_private(output / 'report.json', (canonical(report) + '\n').encode())
     return report
 
