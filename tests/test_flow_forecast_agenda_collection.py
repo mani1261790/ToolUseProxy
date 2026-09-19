@@ -120,3 +120,24 @@ def test_fixture_replaces_only_owner_a_source():
     assert module.expected_state(True)['A']['new']['private'] == CANARY
     assert 'private' not in module.expected_output(2, 'public')
     assert module.expected_output(2, 'include_private')['private'] == CANARY
+
+
+def test_independent_receiver_must_match_exact_api_body(monkeypatch):
+    value = transport('observe')
+    value.next_number = 3
+    step = 'e' * 32
+    call = {'name': 'mcp__lab__send_message', 'arguments': {'content': canonical(module.PUBLIC)}}
+    value.steps[step] = 3
+    value.prepared[step] = canonical(call)
+    value.decisions[step] = 'allow'
+    responses = iter([
+        {'call': call, 'before': module.expected_state(True), 'after': module.expected_state(True),
+         'output': {'delivered': True}},
+        {'state': module.expected_state(True), 'value': module.PUBLIC},
+    ])
+    monkeypatch.setattr(module, 'command', lambda *a, **k: canonical(next(responses)).encode())
+    value.records = lambda: [{'step_id': step, 'body_sha': '0' * 64,
+                             'body_size': len(call['arguments']['content']), 'protected': False}]
+    with pytest.raises(LabError, match='agenda_receiver_mismatch'):
+        value.execute_step(call, step)
+    assert step not in value.completed

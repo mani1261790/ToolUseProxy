@@ -80,7 +80,7 @@ def run(repository, variant, output, *, seconds=180, clock=time.monotonic):
                         step_id = uuid.uuid4().hex
                         cmd = transport.prepare_step(number, step_id)
                         identity = {'mode': mode, 'number': number, 'step_id': step_id,
-                                    'call_sha': digest(cmd), 'call': cmd,
+                                    'call_sha': digest(cmd), 'call': cmd, 'receiver_address': transport.address,
                                     'script_sha': hashlib.sha256(dispatch_script(cmd, number, variant, transport.address, step_id).encode()).hexdigest()}
                         charge(identity)
                         decision = transport.guard_step(cmd, intent['root'], step_id)
