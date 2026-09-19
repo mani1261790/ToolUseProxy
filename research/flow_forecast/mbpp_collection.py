@@ -20,7 +20,7 @@ from .provenance import source_provenance
 from .task_catalog import _write_private
 
 
-def run(repository, source_path, task_id, variant, output, *, seconds=180, clock=time.monotonic):
+def run(repository, source_path, task_id, variant, output, *, seconds=180, clock=time.monotonic, generation=None):
     if variant not in ('public', 'include_private') or type(seconds) is not int or not 1 <= seconds <= 1800:
         raise LabError('invalid_mbpp_batch')
     rows = selected(source_path)
@@ -29,6 +29,11 @@ def run(repository, source_path, task_id, variant, output, *, seconds=180, clock
         raise LabError('unknown_mbpp_collection_task')
     row = matches[0]
     source_row = row
+    if generation is not None:
+        from .generated_mbpp import validate
+        validate(generation)
+        if generation['task'] != source_row or generation['plan']['export'] != variant:
+            raise LabError('mbpp_generation_plan_mismatch')
     origin = {'source_commit': COMMIT, 'source_sha': SOURCE_SHA, 'candidate': checked(row), 'case_index': 0}
     started, charged = clock(), 0
     source_root = Path(__file__).resolve().parents[2]
@@ -38,7 +43,7 @@ def run(repository, source_path, task_id, variant, output, *, seconds=180, clock
     intent = {'schema': 1, 'task': 'pinned_mbpp_dispatch_v1', 'variant': variant,
               'root': uuid.uuid4().hex, 'implementation_sha': digest(implementation),
               'limits': {'trials': 20, 'seconds': seconds, 'bytes': 1024 * 1024 * 1024},
-              'planned_trials': 12, 'generator': None, 'origin': origin}
+              'planned_trials': 12, 'generator': generation, 'origin': origin}
     _write_private(output / 'intent.json', canonical(intent).encode())
 
     def check():

@@ -184,6 +184,40 @@ def load(dataset, directory, expected_identity, *, check_budget=lambda: None):
                 raise ForecastDataError('generation_receipt_reused')
             seen_calls.add(call_id)
             models[root] = frozen['model']
+        for item in audit.get('mbpp_captures', []):
+            from .generated_mbpp import validate as validate_mbpp_generation
+            from .mbpp_import import dataset as mbpp_dataset
+            check_budget()
+            intent, frozen = item['intent'], item['intent']['generator']
+            if frozen is None:
+                continue
+            validate_mbpp_generation(frozen)
+            root = intent['root']
+            if root not in roots or root in models or item.get('generator_evidence') != frozen:
+                raise ForecastDataError('generation_root_mismatch')
+            bindings = [row for row in audit['bindings'] if row['root_case_id'] == root]
+            if len(bindings) != 1 or bindings[0]['design_id'] != 'mbpp-' + str(frozen['task']['task_id']):
+                raise ForecastDataError('generation_assignment_mismatch')
+            rebuilt = mbpp_dataset(intent, item['execution'], item['report'], frozen['task'])
+            actual = [b for b in dataset.branches if b.prefix.root_case_id == root]
+            proof = item.get('closed_mbpp_projection_evidence')
+            normalized = []
+            for branch in actual:
+                edges = []
+                for edge in branch.transfers:
+                    if edge.relation == 'json_projection':
+                        if proof is None or edge.evidence_digest != digest(proof):
+                            raise ForecastDataError('generation_branch_mismatch')
+                        edge = replace(edge, relation='selection', evidence='unknown', evidence_digest=None)
+                    edges.append(edge)
+                normalized.append(replace(branch, transfers=tuple(edges)))
+            if sorted(digest(asdict(b)) for b in normalized) != sorted(digest(asdict(b)) for b in rebuilt.branches):
+                raise ForecastDataError('generation_branch_mismatch')
+            call_id = frozen['generation']['call_id']
+            if call_id in seen_calls:
+                raise ForecastDataError('generation_receipt_reused')
+            seen_calls.add(call_id)
+            models[root] = frozen['model']
     except (KeyError, TypeError, ValueError, LabError) as error:
         if isinstance(error, ForecastDataError):
             raise
