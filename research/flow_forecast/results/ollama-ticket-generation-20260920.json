@@ -1,0 +1,33 @@
+{
+  "schema": 1,
+  "source_commit": "5e8dc8857346982b516ae94b5bfcf7a79a229634",
+  "artifact_directory": "/private/tmp/tooluseproxy-204-ollama-ticket-generation-v1",
+  "reservation_sha": "2162c8b61fedcfdfe178523e0e4823c88a09bf7efdc080d95061cd3507b3a5b6",
+  "observation_sha": "6936f5823df055f7331ffcdac6e4bc4b7f42542eeb7e5ce88a9dea639570ee50",
+  "result_sha": "a997e540bd034c68206073bcdde3e541a797476339f35986230e047600ca93a2",
+  "elapsed_ms": 27597,
+  "generation_observation": {
+    "identity": {
+      "manifest_digest": "500a1f067a9f782620b40bee6f7b0c89e17ae61f686b92c24933e4ca4b2b8b41",
+      "model": "qwen3:8b",
+      "server_version": "0.34.2",
+      "size": 5225388164
+    },
+    "observed_manifest_unchanged": true,
+    "resolved_model_verified": false,
+    "accepted_independent_groups": 0,
+    "usage": {
+      "prompt_eval_count": 316,
+      "eval_count": 37,
+      "total_duration": 27085452167,
+      "load_duration": 21324506250
+    },
+    "provider_cost": null,
+    "pricing_source": null
+  },
+  "plan_rejection": "invalid_local_generation_plan",
+  "actual_generation_requests": 1,
+  "trial_charges": 0,
+  "accepted_independent_groups": 0,
+  "offline_revalidation_new_model_calls": 0
+}
