@@ -19,3 +19,7 @@ horizon 4はno=6、yes=3、unknown=3。新規trial/model呼出し0。
 関連43テストとRuff成功。可視prefixを変えないこと、保護経路のedge欠落・状態変更・transport変更を拒否することを検証した。
 Python標準ライブラリとDocker controllerを信頼し、異なる入力・例外・時間経路・一般的非干渉は対象外。
 ハッシュ分割名はcalibrationでも、開発使用済み・独立性未検証のまま。採用独立群0、未使用holdoutの達成ではない。
+
+比較評価のprepareも実行したが、`no_fixed_distribution_training_roots`で拒否された。
+学習用群が存在しないため計画ファイルは作られていない。追加trial/model呼出し0。
+分割を変更してこの不足を隠さず、F02の必要データ不足として残す。

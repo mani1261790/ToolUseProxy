@@ -19,5 +19,13 @@
   "independence_verified": false,
   "prior_nonuse_verified": false,
   "catalog_sha": "8cc81b767b22734412da5aa873329075564ba41be44c1ec550902ccc65a256c0",
-  "collection_identity": "1d4d81a1f860f566a55e8d22fea05a3d3dcf2eadb61024ec21f8ece6732a24b2"
+  "collection_identity": "1d4d81a1f860f566a55e8d22fea05a3d3dcf2eadb61024ec21f8ece6732a24b2",
+  "comparison_prepare": {
+    "status": "not_prepared",
+    "reason": "no_fixed_distribution_training_roots",
+    "output_exists": false,
+    "elapsed_seconds": 0.012225749989738688,
+    "new_trials": 0,
+    "new_model_calls": 0
+  }
 }
