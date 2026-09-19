@@ -1,0 +1,276 @@
+{
+  "schema": 1,
+  "execution_source_commit": "9a8de05",
+  "reader_source_commit": "db7624d6931bb981f9e25ff8129f726658421c36",
+  "interventions": [
+    {
+      "task_id": 602,
+      "execution": {
+        "context_sha": "2059fed3c0064a5d67050bb9065ee4fc52bc51acbf64c2a1fcb0962daff4b907",
+        "image": "sha256:f0cba9af59eb40d3fb4f7b6fdc6d25f6a6598f5158bb00c434920816986b6b5f",
+        "intent_sha": "1f051ede3bc39b24362d617c07c817aadd24a9dd2cec7c787e62baa742129589"
+      },
+      "report": {
+        "artifact_bytes_before_report": 42652,
+        "elapsed_seconds": 4.188666583002487,
+        "execution_sha": "43ca7b4d77b9ef187640f0bf02a6d60dc8c93ec66953db5828f3324f092c18a9",
+        "independent_new_tasks_accepted": 0,
+        "intent_sha": "1f051ede3bc39b24362d617c07c817aadd24a9dd2cec7c787e62baa742129589",
+        "native_hook_tested": false,
+        "new_model_calls": 0,
+        "receiver_observed": false,
+        "results": [
+          {
+            "calls_observed": 3,
+            "case": "baseline",
+            "final_state_sha": "e3e35066055ea2dd33cc2f0b2695f0038ab3b7eacc7506bb88a30f5dd681f4af",
+            "input_sha": "29b5c79c718594236f1707d84da0ac6de7cc3e9dbfdb32054c8bd0b7335d13a1",
+            "observation_sha": "58204667611a0f436882c5bf352852e6c17fa0d31b6fbaf1ba05565b3881faa7",
+            "oracle_matched": true,
+            "private_output_sha": "e3e35066055ea2dd33cc2f0b2695f0038ab3b7eacc7506bb88a30f5dd681f4af",
+            "public_output_sha": "91ecabcecc7bb818f3ab23850f6a059b069cb27598c3cf1cd8cce1edd9fb936e",
+            "task_id": 602
+          },
+          {
+            "calls_observed": 3,
+            "case": "change-private",
+            "final_state_sha": "249410e0ceb1b60c63209a222586bdb67666a702a1dee24d31ed66c36b39371c",
+            "input_sha": "22ac9a9160db0e6e251e1a5f89ab7eb9571a29345b60b497287c5852c8b63ffd",
+            "observation_sha": "806f59c690a3923aead15f7bcf5e396fe5c063d00a301b176af6666f71153d58",
+            "oracle_matched": true,
+            "private_output_sha": "249410e0ceb1b60c63209a222586bdb67666a702a1dee24d31ed66c36b39371c",
+            "public_output_sha": "91ecabcecc7bb818f3ab23850f6a059b069cb27598c3cf1cd8cce1edd9fb936e",
+            "task_id": 602
+          },
+          {
+            "calls_observed": 3,
+            "case": "change-input",
+            "final_state_sha": "8742bd62951df5b307b324a5481f9bd63fde782e83d5b3743421c068e1115dca",
+            "input_sha": "ab0f6d9917be880c68af75849ebafcdab98194de0039c93d0e3b19a75865ca65",
+            "observation_sha": "3ff358c3080d7cb8ac0380e56a26ebd5ffa78682bbe41f3646b9a14a07d00a35",
+            "oracle_matched": true,
+            "private_output_sha": "8742bd62951df5b307b324a5481f9bd63fde782e83d5b3743421c068e1115dca",
+            "public_output_sha": "4934a0209aeebe2eed11b392f3ea95433debff583e6e759cf76fbe30a93d3414",
+            "task_id": 602
+          }
+        ],
+        "schema": 1,
+        "scope": "pinned_mbpp_field_interventions_not_universal_truth",
+        "semantic_truth_promoted": false,
+        "status": "completed",
+        "suite": "mbpp-field-projection",
+        "trial_charges": 9
+      }
+    },
+    {
+      "task_id": 603,
+      "execution": {
+        "context_sha": "2059fed3c0064a5d67050bb9065ee4fc52bc51acbf64c2a1fcb0962daff4b907",
+        "image": "sha256:d7bd614e6239fe7a1249e872ad3dc4b15040fdbc8d286320b07939590c6ccefa",
+        "intent_sha": "727f3db3f0cdc20b29d418e052827acfe49489786f2957dea5fd1f6bfe32a401"
+      },
+      "report": {
+        "artifact_bytes_before_report": 43056,
+        "elapsed_seconds": 1.638401124997472,
+        "execution_sha": "60edc3049706eb2088b8e522caa372f7056a70d70f2d7b252674ccc841cbbdb5",
+        "independent_new_tasks_accepted": 0,
+        "intent_sha": "727f3db3f0cdc20b29d418e052827acfe49489786f2957dea5fd1f6bfe32a401",
+        "native_hook_tested": false,
+        "new_model_calls": 0,
+        "receiver_observed": false,
+        "results": [
+          {
+            "calls_observed": 3,
+            "case": "baseline",
+            "final_state_sha": "1cf550ae8ed598af72d8a2698c372baa4ec9303d7736a5ee80f5ef839348733e",
+            "input_sha": "b97a369abe56ac0a16ca656044cf3c162de1d1bafc6be2e35f582aeeef703f8b",
+            "observation_sha": "4c1332975c21348a2064207e0e0de150fd819d379c51dc4df6e7549fa8349040",
+            "oracle_matched": true,
+            "private_output_sha": "1cf550ae8ed598af72d8a2698c372baa4ec9303d7736a5ee80f5ef839348733e",
+            "public_output_sha": "4fa15da68c84c798f3ffdcf09b53682edfadcebc512c726a0694d3a12b65c67e",
+            "task_id": 603
+          },
+          {
+            "calls_observed": 3,
+            "case": "change-private",
+            "final_state_sha": "c4f7ac34a7038bda31bf1f6d2b920695bbea3e4e75e46ebc707842163c116458",
+            "input_sha": "c928dbba0ad8fa1ac6c6e2b3aaa69a1590c386aa54384163a87b877e6e1733dd",
+            "observation_sha": "be6bbcb62843cfa7b0eebde6a87d6829cdc06ec550ff61545af4613b571cf9cf",
+            "oracle_matched": true,
+            "private_output_sha": "c4f7ac34a7038bda31bf1f6d2b920695bbea3e4e75e46ebc707842163c116458",
+            "public_output_sha": "4fa15da68c84c798f3ffdcf09b53682edfadcebc512c726a0694d3a12b65c67e",
+            "task_id": 603
+          },
+          {
+            "calls_observed": 3,
+            "case": "change-input",
+            "final_state_sha": "8defe05ba86510cdaa29bd203e3d903197e728aad484d4d359f74ee655505ab1",
+            "input_sha": "975e0063c575ccdfff12a9687d30ed7d79f6884a4107ae57548da3493f85075d",
+            "observation_sha": "769028e273a83582eff6d36598343fe5f2796c6fef8e81687917f4442ba356d8",
+            "oracle_matched": true,
+            "private_output_sha": "8defe05ba86510cdaa29bd203e3d903197e728aad484d4d359f74ee655505ab1",
+            "public_output_sha": "c41ce3f84f9788718a4cf0dd156c12d24bac0c435dd48f0cab961e6d95073440",
+            "task_id": 603
+          }
+        ],
+        "schema": 1,
+        "scope": "pinned_mbpp_field_interventions_not_universal_truth",
+        "semantic_truth_promoted": false,
+        "status": "completed",
+        "suite": "mbpp-field-projection",
+        "trial_charges": 9
+      }
+    },
+    {
+      "task_id": 604,
+      "execution": {
+        "context_sha": "2059fed3c0064a5d67050bb9065ee4fc52bc51acbf64c2a1fcb0962daff4b907",
+        "image": "sha256:c927d9e801d310f2b2731d68551208e3d4a09b1f1271f552147e2548fc0ea051",
+        "intent_sha": "5791ac9a77431943400241d37803e9af881da51680c90d513cea41b86e2b16b1"
+      },
+      "report": {
+        "artifact_bytes_before_report": 43136,
+        "elapsed_seconds": 1.2669102500003646,
+        "execution_sha": "926b54f2a7484523ad82038eb277fa765ab418cba39e806907899046533899bf",
+        "independent_new_tasks_accepted": 0,
+        "intent_sha": "5791ac9a77431943400241d37803e9af881da51680c90d513cea41b86e2b16b1",
+        "native_hook_tested": false,
+        "new_model_calls": 0,
+        "receiver_observed": false,
+        "results": [
+          {
+            "calls_observed": 3,
+            "case": "baseline",
+            "final_state_sha": "2bb81c3efd83ee900349fd0fe3c5a0196f6ea2c771f038afb884a74923db2860",
+            "input_sha": "9d7869a872196dff62f820d4cce9500d00e507948fc6a59d12e8a094f5b41d11",
+            "observation_sha": "7c367f6771499a2c17304654b0b9dffd8e063a7a1a9c13c7f8b3e5242c2699b9",
+            "oracle_matched": true,
+            "private_output_sha": "2bb81c3efd83ee900349fd0fe3c5a0196f6ea2c771f038afb884a74923db2860",
+            "public_output_sha": "b865b86f21967cb9f87b01ede66ecce9c585d5b359925d5dbcdc222991bfd046",
+            "task_id": 604
+          },
+          {
+            "calls_observed": 3,
+            "case": "change-private",
+            "final_state_sha": "dc97ea017444bb5bac099498c07d664f6f2ab02016d7c7e9473121c18ab69e1f",
+            "input_sha": "cf70d24424cf0b72db5e61efb816b87ea95b388a907c4901844460f9b4d8c556",
+            "observation_sha": "4b942a6f368825a26a4dcbb55922c41f09a0440d7aff57dc1c3a2a3c8016d9ca",
+            "oracle_matched": true,
+            "private_output_sha": "dc97ea017444bb5bac099498c07d664f6f2ab02016d7c7e9473121c18ab69e1f",
+            "public_output_sha": "b865b86f21967cb9f87b01ede66ecce9c585d5b359925d5dbcdc222991bfd046",
+            "task_id": 604
+          },
+          {
+            "calls_observed": 3,
+            "case": "change-input",
+            "final_state_sha": "f16adfbcc3964c7a6ad7488a8ae3b9d91e070b52b3c3b70af5efb87a192c9e97",
+            "input_sha": "e32a127b90f78cf71797b2cf938e5f9bf0b25ad5100636d92581afe8dcf370df",
+            "observation_sha": "7c9e1f2bedc6785b9a231b2592e65aa484b5752564a4fe75eb0b81afc61dbbc9",
+            "oracle_matched": true,
+            "private_output_sha": "f16adfbcc3964c7a6ad7488a8ae3b9d91e070b52b3c3b70af5efb87a192c9e97",
+            "public_output_sha": "fc9867afb0648c25a1b930fd1caab3b468487058ab7a442b269015674e3dca64",
+            "task_id": 604
+          }
+        ],
+        "schema": 1,
+        "scope": "pinned_mbpp_field_interventions_not_universal_truth",
+        "semantic_truth_promoted": false,
+        "status": "completed",
+        "suite": "mbpp-field-projection",
+        "trial_charges": 9
+      }
+    }
+  ],
+  "bindings": [
+    {
+      "schema": 1,
+      "capture_root": "0d7e802001214e35a232bfd13c274d25",
+      "capture_report_sha": "ef52285ef4e5313c65ba2333864fa1ab1f7c3380a2a8c10f64e08a5831fed813",
+      "intervention_report_sha": "9ed7d2c81a11a5c2a4113b66f607fa168b79bf33cc89182eee2021c1cc84db91",
+      "transport_source_sha": "5b5b24fe2af2cf0196ab82d64af03f1be07afcb616ea649be92318b22815cbb2",
+      "record_sha": "da99ce1c7e293ec99062af8fe62d0752fab4cdebe9a1eb8cc8f977c9d69297c7",
+      "query_observations_bound": 2,
+      "semantic_truth_promoted": false,
+      "capture_image": "sha256:ac7e81237a7f92291e83d6ab57904128f2c5257c248056703db6de206b79d032",
+      "intervention_image": "sha256:f0cba9af59eb40d3fb4f7b6fdc6d25f6a6598f5158bb00c434920816986b6b5f",
+      "identical_image_verified": false,
+      "scope": "finite_mbpp_field_interventions_not_universal_noninterference"
+    },
+    {
+      "schema": 1,
+      "capture_root": "071d1ebc9a3442668d8de38003fe6776",
+      "capture_report_sha": "11f3a8875123fefcaa1f8c39a7e9748c8e86ae683995379f98bdae16ce36e6f7",
+      "intervention_report_sha": "9ed7d2c81a11a5c2a4113b66f607fa168b79bf33cc89182eee2021c1cc84db91",
+      "transport_source_sha": "5b5b24fe2af2cf0196ab82d64af03f1be07afcb616ea649be92318b22815cbb2",
+      "record_sha": "da99ce1c7e293ec99062af8fe62d0752fab4cdebe9a1eb8cc8f977c9d69297c7",
+      "query_observations_bound": 2,
+      "semantic_truth_promoted": false,
+      "capture_image": "sha256:8b2d4233b6f41e4f7a64dc1b7008a7323cc9fb323dcecd9c7b95a171dcd74838",
+      "intervention_image": "sha256:f0cba9af59eb40d3fb4f7b6fdc6d25f6a6598f5158bb00c434920816986b6b5f",
+      "identical_image_verified": false,
+      "scope": "finite_mbpp_field_interventions_not_universal_noninterference"
+    },
+    {
+      "schema": 1,
+      "capture_root": "34ed001e13fe493aa27c0ac806e66f63",
+      "capture_report_sha": "bd6fe4168fc492f840ff9ec4453b27289f0d09078cfad9993d623eae8e67472b",
+      "intervention_report_sha": "01f1f0680e480ccdeb99b9d1f3b48881a0b9f6c17471299b3248e932c53463ac",
+      "transport_source_sha": "5b5b24fe2af2cf0196ab82d64af03f1be07afcb616ea649be92318b22815cbb2",
+      "record_sha": "796a6b33281e636e65fef77c1e9ba270b782c60a7874b63a9102788ac62f7041",
+      "query_observations_bound": 2,
+      "semantic_truth_promoted": false,
+      "capture_image": "sha256:772d64c6a4558c306428d006d2ce8b05eac4198c9fe5c0b0b341514749102d84",
+      "intervention_image": "sha256:d7bd614e6239fe7a1249e872ad3dc4b15040fdbc8d286320b07939590c6ccefa",
+      "identical_image_verified": false,
+      "scope": "finite_mbpp_field_interventions_not_universal_noninterference"
+    },
+    {
+      "schema": 1,
+      "capture_root": "8687c980bb4e49bca3a06f38a83ef3d9",
+      "capture_report_sha": "7f9f26f3a43310373300ee36901763239e584b38ffe238527305a0e2023730b1",
+      "intervention_report_sha": "01f1f0680e480ccdeb99b9d1f3b48881a0b9f6c17471299b3248e932c53463ac",
+      "transport_source_sha": "5b5b24fe2af2cf0196ab82d64af03f1be07afcb616ea649be92318b22815cbb2",
+      "record_sha": "796a6b33281e636e65fef77c1e9ba270b782c60a7874b63a9102788ac62f7041",
+      "query_observations_bound": 2,
+      "semantic_truth_promoted": false,
+      "capture_image": "sha256:cafbc96b94ff319f5b44e2f69e907e900a325e984048ada5ed9e21cb76d9deb1",
+      "intervention_image": "sha256:d7bd614e6239fe7a1249e872ad3dc4b15040fdbc8d286320b07939590c6ccefa",
+      "identical_image_verified": false,
+      "scope": "finite_mbpp_field_interventions_not_universal_noninterference"
+    },
+    {
+      "schema": 1,
+      "capture_root": "e74505ad63ff4bb98e5f33c1a4e0f8d3",
+      "capture_report_sha": "aef8213e50e7e617b29b78a24a48854457c95b01a3cb819949f253e545581a49",
+      "intervention_report_sha": "774121cb46cf5c455408e42c027d5749cecc1208f06a5e70a4113118f246c41a",
+      "transport_source_sha": "5b5b24fe2af2cf0196ab82d64af03f1be07afcb616ea649be92318b22815cbb2",
+      "record_sha": "5fe759bd237edee78c0aae690bf680709540918cc668e500c68e6e41fa6f9771",
+      "query_observations_bound": 2,
+      "semantic_truth_promoted": false,
+      "capture_image": "sha256:2056a6c4c1a9e8595f3d964fe2f10d9178648a3819dd021fa924ba294ac9fb27",
+      "intervention_image": "sha256:c927d9e801d310f2b2731d68551208e3d4a09b1f1271f552147e2548fc0ea051",
+      "identical_image_verified": false,
+      "scope": "finite_mbpp_field_interventions_not_universal_noninterference"
+    },
+    {
+      "schema": 1,
+      "capture_root": "a74e9e76546549f491e0e7a73baa7ac6",
+      "capture_report_sha": "e3b395e6864165d787425ca091a44c92af8f5348c5f446f3377b6ca5c27da337",
+      "intervention_report_sha": "774121cb46cf5c455408e42c027d5749cecc1208f06a5e70a4113118f246c41a",
+      "transport_source_sha": "5b5b24fe2af2cf0196ab82d64af03f1be07afcb616ea649be92318b22815cbb2",
+      "record_sha": "5fe759bd237edee78c0aae690bf680709540918cc668e500c68e6e41fa6f9771",
+      "query_observations_bound": 2,
+      "semantic_truth_promoted": false,
+      "capture_image": "sha256:c47a784ee28c4d5bf82add56aff6bcc65e784c759ed3dc6cf2e1e6ff4c1c5a49",
+      "intervention_image": "sha256:c927d9e801d310f2b2731d68551208e3d4a09b1f1271f552147e2548fc0ea051",
+      "identical_image_verified": false,
+      "scope": "finite_mbpp_field_interventions_not_universal_noninterference"
+    }
+  ],
+  "trial_charges": 27,
+  "elapsed_seconds": 7.093977958000323,
+  "artifact_bytes_before_reports": 128844,
+  "new_model_calls": 0,
+  "independent_new_tasks_accepted": 0,
+  "semantic_truth_promoted": false
+}
