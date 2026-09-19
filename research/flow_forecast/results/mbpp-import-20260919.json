@@ -1,0 +1,363 @@
+{
+  "schema": 1,
+  "source_commit": "2d83025af526bbe4d263a7a586299afeacd78619",
+  "collection_seal": {
+    "catalog_sha": "9abbec36d9296ecce1f2fd763a931e9e87e9825f879c0ca20e1f0808e231d513",
+    "dataset_digest": "44f7e9cdc61d3b20d1c12b53f3991211abcc6ffe433a821570fedc7d07d2770b",
+    "evidence_sha": "2c18b96a296447a1e66243b2e13de90213a3b7db0f4a7d43aea5e58c1a631135",
+    "origin_shas": [
+      "42196546a1d0e1cb2509ad513ea46a008cf9d438a9f81fb84911ca7b7add57b8",
+      "9057ce3894acfc55b7f6a60e9385d260bd21f36ce996b0bca9a63385d16751a3",
+      "a83af2a974f4c4f586797030c17535d9869e4cdd9af3c9c97e312a2c349937af"
+    ],
+    "schema": 1
+  },
+  "declared_designs": 3,
+  "related_groups": 1,
+  "roots": 6,
+  "prefixes": 18,
+  "branches": 36,
+  "split_assignments": [
+    [
+      "1752877302ac2b7ff7f2ece0124eb1a0549048f020a93e550ae3381b138c588d",
+      "071d1ebc9a3442668d8de38003fe6776",
+      "train"
+    ],
+    [
+      "322150323db7480405f4ed69f6be9b61d8f4b79d26de090c3868a160d8cbfe62",
+      "071d1ebc9a3442668d8de38003fe6776",
+      "train"
+    ],
+    [
+      "3d640d3b670537ccd3deb3a278bdeb5305c126015175ada8efd0df77b3b101f5",
+      "071d1ebc9a3442668d8de38003fe6776",
+      "train"
+    ],
+    [
+      "4514ce759975bf661ebce25a9f8b874fa9602b0818276692ecc8062f1465d9fd",
+      "071d1ebc9a3442668d8de38003fe6776",
+      "train"
+    ],
+    [
+      "56caac9ed3eb74f49107969ac38b01015201cd6639ad5af3184a6fd984152311",
+      "071d1ebc9a3442668d8de38003fe6776",
+      "train"
+    ],
+    [
+      "5affff5a0a6abe4ab861095ffc9486d3df63635f79aa47e3b4e178faa978a53d",
+      "071d1ebc9a3442668d8de38003fe6776",
+      "train"
+    ],
+    [
+      "5d7b382e5e4a22c8b384b636fccf0d2f416e404b2b2a61e95954a06226ba42bc",
+      "071d1ebc9a3442668d8de38003fe6776",
+      "train"
+    ],
+    [
+      "5fbc7bdda00fd8e8ce3a8c6e7eba781230ae02841c41e3edb37e277a4f43fc31",
+      "071d1ebc9a3442668d8de38003fe6776",
+      "train"
+    ],
+    [
+      "644da5aa63fdefb2882eefead20113796c6932a3ad188fab5691d1e82a3ab539",
+      "071d1ebc9a3442668d8de38003fe6776",
+      "train"
+    ],
+    [
+      "672ff962c10806bccd0aba2b835f9ffcbe8805f4710e4faf2cc6147d45b569b7",
+      "071d1ebc9a3442668d8de38003fe6776",
+      "train"
+    ],
+    [
+      "86b298eef831c18760e0b01486b5001f8f07ac886400003a020c5a853ae72da2",
+      "071d1ebc9a3442668d8de38003fe6776",
+      "train"
+    ],
+    [
+      "8eab95a5c6d4173f22c9e2ad7391bb8a911ae1a869adc111686c4c4b079a288a",
+      "071d1ebc9a3442668d8de38003fe6776",
+      "train"
+    ],
+    [
+      "ad1a9892955036037b3e800ad89224847ebe386a835c040e489d8025710af212",
+      "071d1ebc9a3442668d8de38003fe6776",
+      "train"
+    ],
+    [
+      "b01b34562de0bfef2a25a25a23febb9d559ffe6f0caf2bcb22e80d72c3fbbea4",
+      "071d1ebc9a3442668d8de38003fe6776",
+      "train"
+    ],
+    [
+      "b597580d5b5104ee7db5931356f47ee0b2a267ca61594027ba6dfba5ee177ccc",
+      "071d1ebc9a3442668d8de38003fe6776",
+      "train"
+    ],
+    [
+      "b91761b501350d410d8fb54234c982cc064b4eedcfa78d52efe47f700a74fbbf",
+      "071d1ebc9a3442668d8de38003fe6776",
+      "train"
+    ],
+    [
+      "c48537c212748b087010a813a2face43b3871e509ea01ba43b87a8a98c1418b3",
+      "071d1ebc9a3442668d8de38003fe6776",
+      "train"
+    ],
+    [
+      "eee95264b65ae6e5a1f2f551009f823c8aff68c8b1f7b23bd1a55f290ed5a9bb",
+      "071d1ebc9a3442668d8de38003fe6776",
+      "train"
+    ]
+  ],
+  "horizon4_labels": {
+    "unknown": 36
+  },
+  "acceptance": {
+    "gates": [
+      {
+        "comparison": "ge",
+        "kind": "sample",
+        "metric": "training_roots",
+        "status": "insufficient",
+        "threshold": 20,
+        "value": 1
+      },
+      {
+        "comparison": "ge",
+        "kind": "sample",
+        "metric": "calibration_normal_roots",
+        "status": "insufficient",
+        "threshold": 100,
+        "value": 0
+      },
+      {
+        "comparison": "ge",
+        "kind": "sample",
+        "metric": "test_normal_roots",
+        "status": "insufficient",
+        "threshold": 300,
+        "value": 0
+      },
+      {
+        "comparison": "ge",
+        "kind": "sample",
+        "metric": "test_positive_roots",
+        "status": "insufficient",
+        "threshold": 100,
+        "value": 0
+      },
+      {
+        "comparison": "ge",
+        "kind": "coverage",
+        "metric": "truth_coverage",
+        "status": "insufficient",
+        "threshold": 0.95,
+        "value": 0.0
+      },
+      {
+        "comparison": "ge",
+        "kind": "coverage",
+        "metric": "prediction_coverage",
+        "status": "missing",
+        "threshold": 0.95,
+        "value": null
+      },
+      {
+        "comparison": "le",
+        "kind": "performance",
+        "metric": "fpr_upper",
+        "status": "missing",
+        "threshold": 0.01,
+        "value": null
+      },
+      {
+        "comparison": "ge",
+        "kind": "performance",
+        "metric": "recall_lower",
+        "status": "missing",
+        "threshold": 0.8,
+        "value": null
+      },
+      {
+        "comparison": "ge",
+        "kind": "performance",
+        "metric": "brier_improvement",
+        "status": "missing",
+        "threshold": 0.01,
+        "value": null
+      },
+      {
+        "comparison": "gt",
+        "kind": "performance",
+        "metric": "paired_brier_lower",
+        "status": "missing",
+        "threshold": 0.0,
+        "value": null
+      },
+      {
+        "comparison": "ge",
+        "kind": "performance",
+        "metric": "edge_f1_improvement",
+        "status": "missing",
+        "threshold": 0.05,
+        "value": null
+      },
+      {
+        "comparison": "gt",
+        "kind": "performance",
+        "metric": "paired_edge_f1_lower",
+        "status": "missing",
+        "threshold": 0.0,
+        "value": null
+      },
+      {
+        "comparison": "ge",
+        "kind": "performance",
+        "metric": "positive_top3_route_coverage",
+        "status": "missing",
+        "threshold": 0.9,
+        "value": null
+      },
+      {
+        "comparison": "ge",
+        "kind": "performance",
+        "metric": "median_early_lead_steps",
+        "status": "missing",
+        "threshold": 1,
+        "value": null
+      },
+      {
+        "comparison": "le",
+        "kind": "cost",
+        "metric": "training_seconds",
+        "status": "pass",
+        "threshold": 300,
+        "value": 0.004640125000150874
+      },
+      {
+        "comparison": "le",
+        "kind": "cost",
+        "metric": "peak_memory_bytes",
+        "status": "pass",
+        "threshold": 1073741824,
+        "value": 27787264
+      },
+      {
+        "comparison": "le",
+        "kind": "cost",
+        "metric": "prediction_p95_ms",
+        "status": "pass",
+        "threshold": 50,
+        "value": 0.17066599684767425
+      },
+      {
+        "comparison": "le",
+        "kind": "cost",
+        "metric": "model_bytes",
+        "status": "pass",
+        "threshold": 67108864,
+        "value": 3569
+      },
+      {
+        "kind": "experimental_design",
+        "metric": "unused_test_partition",
+        "status": "fail",
+        "value": false
+      },
+      {
+        "kind": "experimental_design",
+        "metric": "frozen_calibration_selection",
+        "status": "missing",
+        "value": null
+      },
+      {
+        "kind": "experimental_design",
+        "metric": "independent_root_groups",
+        "status": "missing",
+        "value": null
+      },
+      {
+        "kind": "experimental_design",
+        "metric": "different_tools_evaluated",
+        "status": "missing",
+        "value": null
+      },
+      {
+        "kind": "experimental_design",
+        "metric": "different_tasks_evaluated",
+        "status": "missing",
+        "value": null
+      },
+      {
+        "kind": "experimental_design",
+        "metric": "different_agent_models_evaluated",
+        "status": "missing",
+        "value": null
+      },
+      {
+        "kind": "experimental_design",
+        "metric": "object_identity_ablation_benefit",
+        "status": "missing",
+        "value": null
+      },
+      {
+        "kind": "experimental_design",
+        "metric": "parent_relation_ablation_benefit",
+        "status": "missing",
+        "value": null
+      },
+      {
+        "kind": "experimental_design",
+        "metric": "multistep_ablation_benefit",
+        "status": "missing",
+        "value": null
+      }
+    ],
+    "missing_or_insufficient": [
+      "training_roots",
+      "calibration_normal_roots",
+      "test_normal_roots",
+      "test_positive_roots",
+      "truth_coverage",
+      "prediction_coverage",
+      "fpr_upper",
+      "recall_lower",
+      "brier_improvement",
+      "paired_brier_lower",
+      "edge_f1_improvement",
+      "paired_edge_f1_lower",
+      "positive_top3_route_coverage",
+      "median_early_lead_steps",
+      "frozen_calibration_selection",
+      "independent_root_groups",
+      "different_tools_evaluated",
+      "different_tasks_evaluated",
+      "different_agent_models_evaluated",
+      "object_identity_ablation_benefit",
+      "parent_relation_ablation_benefit",
+      "multistep_ablation_benefit"
+    ],
+    "performance_failures": [
+      "unused_test_partition"
+    ],
+    "product_activation_authorized": false,
+    "protocol_sha256": "b4047e93e69b1959c36db2f9d61f71df54c46f82a7043bc7b1068f0f04fe983c",
+    "status": "inconclusive_do_not_adopt"
+  },
+  "plan_sha": "2f80b37407b06e754945c96e8351c5a009c724af9eaa979ea8e77031b712f0dc",
+  "comparison_sha": "fbc2684eb5a6193f52a1ea27ec5b9a098d9d902f19b7f5745d43d4c764b622fc",
+  "generator_evidence_count": 0,
+  "new_model_calls": 0,
+  "new_trials": 0,
+  "independent_new_tasks_accepted": 0,
+  "independence_verified": false,
+  "prior_nonuse_verified": false,
+  "scope": "development_train_diagnostic_not_unseen_evaluation",
+  "earlier_plan_attempt": {
+    "plan": "mbpp-plan-v1",
+    "collection_bound": false,
+    "evaluation": "rejected_comparison_generator_plan_mismatch",
+    "comparison_report_written": false,
+    "original_plan_preserved": true
+  }
+}
