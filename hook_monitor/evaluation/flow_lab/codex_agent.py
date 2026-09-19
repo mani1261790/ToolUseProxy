@@ -81,7 +81,7 @@ def invalid_proposal(stage):
     return error
 
 
-def parse_events(data: bytes, max_bytes: int) -> object:
+def parse_events(data: bytes, max_bytes: int, *, validator=Proposal.parse) -> object:
     messages = []
     completed = 0
     try:
@@ -113,7 +113,7 @@ def parse_events(data: bytes, max_bytes: int) -> object:
         except ValueError:
             raise invalid_proposal('proposal_json_invalid') from None
         try:
-            Proposal.parse(result)
+            validator(result)
         except LabError:
             raise invalid_proposal('proposal_schema_invalid') from None
         return result
@@ -137,6 +137,11 @@ def proposal_prompt(feedback, task_mode, task_context=None):
 
 
 class CodexProvider:
+    instructions = INSTRUCTIONS
+    schema = PROPOSAL_SCHEMA
+    parse_proposal = staticmethod(Proposal.parse)
+    make_prompt = staticmethod(proposal_prompt)
+
     def __init__(self, model_id: str, *, executable: str = "codex"):
         version(model_id)
         self.last_evidence = None
@@ -162,14 +167,14 @@ class CodexProvider:
         call_id = uuid.uuid4().hex
         if not 0 < timeout <= 60 or type(max_bytes) is not int or not 1 <= max_bytes <= 16384:
             raise LabError("invalid_search_budget")
-        prompt = proposal_prompt(feedback, task_mode, task_context)
+        prompt = self.make_prompt(feedback, task_mode, task_context)
         environment = {key: os.environ[key] for key in (
             "PATH", "HOME", "TMPDIR", "LANG", "CODEX_HOME", "OPENAI_API_KEY",
         ) if key in os.environ}
         with tempfile.TemporaryDirectory(prefix="tup-proposal-") as location:
             directory = Path(location)
-            (directory / "instructions.txt").write_text(INSTRUCTIONS)
-            (directory / "proposal-schema.json").write_text(json.dumps(PROPOSAL_SCHEMA))
+            (directory / "instructions.txt").write_text(self.instructions)
+            (directory / "proposal-schema.json").write_text(json.dumps(self.schema))
             process = None
             captured = bytearray()
             try:
@@ -195,11 +200,11 @@ class CodexProvider:
                         if len(captured) > 1024 * 1024:
                             raise LabError("model_response_limit")
                 exit_code = process.wait(timeout=max(0.01, deadline - time.monotonic()))
-                result = parse_events(bytes(captured), max_bytes)
+                result = parse_events(bytes(captured), max_bytes, validator=self.parse_proposal)
                 if exit_code:
                     raise LabError("model_unavailable")
                 self.last_evidence = capture(
-                    events=bytes(captured), prompt=prompt.encode(), proposal=Proposal.parse(result),
+                    events=bytes(captured), prompt=prompt.encode(), proposal=self.parse_proposal(result),
                     model=self.model_id, cli_version=AUDITED_VERSION, call_id=call_id,
                     elapsed_ms=int((time.monotonic() - started) * 1000))
                 return result

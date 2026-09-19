@@ -70,8 +70,13 @@ class WorldTransport(StatefulTransport):
         return evidence
 
 
-def run(repository, name, variant, output, *, seconds=180, clock=time.monotonic):
+def run(repository, name, variant, output, *, seconds=180, clock=time.monotonic, generation=None):
     world = definition(name)
+    if generation is not None:
+        from .generated_world_plan import validate
+        validate(generation)
+        if generation['world'] != name or generation['plan']['export'] != variant:
+            raise LabError('world_generation_plan_mismatch')
     if variant not in ('public', 'include_private') or type(seconds) is not int or not 1 <= seconds <= 1800:
         raise LabError('invalid_task_world_batch')
     started, charged = clock(), 0
@@ -82,7 +87,7 @@ def run(repository, name, variant, output, *, seconds=180, clock=time.monotonic)
     intent = {'schema': 1, 'world': name, 'variant': variant, 'definition': world,
               'root': uuid.uuid4().hex, 'implementation_sha': digest(implementation),
               'limits': {'trials': 20, 'seconds': seconds, 'bytes': 1024 * 1024 * 1024},
-              'planned_trials': 14, 'generator': None}
+              'planned_trials': 14, 'generator': generation}
     _write_private(output / 'intent.json', canonical(intent).encode())
 
     def check():
