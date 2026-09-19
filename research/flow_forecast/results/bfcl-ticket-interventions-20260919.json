@@ -1,0 +1,49 @@
+{
+  "schema": 1,
+  "source_commit": "a90a0b1d266a08ae72e133a883e604fdb84dda90",
+  "artifact_directory": "/private/tmp/tooluseproxy-204-ticket-interventions-v1",
+  "report": {
+    "accepted_independent_groups": 0,
+    "all_oracles_matched": true,
+    "api_calls": 15,
+    "artifact_bytes_before_report": 49394,
+    "elapsed_seconds": 7.221144499999355,
+    "execution_sha": "f493ab5dd17b205c2cd401b1ae8d722fa2943655aa3d5d847cb2eb21311e9705",
+    "intent_sha": "a2b17706be39434280ebd1f37b225a32df780d95578a954c332f7cd184cb0d66",
+    "new_model_calls": 0,
+    "receiver_observed": false,
+    "results": [
+      {
+        "case_sha": "314e7697e1040eb5fceed3bcd553f181d3919306a3fddf87176cf2ae882cc1db",
+        "observation_sha": "2efdea37e6dc2ebfd8d345a9eb5618ecd995f0026dc8f46733ffcdd91ca552e6",
+        "oracle_matched": true
+      },
+      {
+        "case_sha": "79247d688f04709ac4e1f513d8022df3628ad099b833571d94edb0fa70c601b6",
+        "observation_sha": "ce726fdf9a04f37aab37f4295993642e2d166f3e327f7bac01b0981279da5110",
+        "oracle_matched": true
+      },
+      {
+        "case_sha": "cbc56949111f8c3154ab23615fb102f8891d52f2e8752b46181ed065bbb3f20e",
+        "observation_sha": "2b4a5caac296e23144a54a8b77ca3f1495fb5e095431757201adbd042d6eb75d",
+        "oracle_matched": true
+      },
+      {
+        "case_sha": "22b1d7e377bf9a35ddc146d0ffa775243c7451a2d29741321a87478b94e71ebf",
+        "observation_sha": "fd88de55e6ec1233eb06ed01af39bc42cb76ed5ae58b0238bc19aad5862f9e4a",
+        "oracle_matched": true
+      },
+      {
+        "case_sha": "641e022f3203e4050af327abccef14fb49527f654ef24c45506a74af9a07bcea",
+        "observation_sha": "14fc4dd06e2db6a53ea7559d97e45e86a7d75b55104bdb4f8ae8ddbf74475201",
+        "oracle_matched": true
+      }
+    ],
+    "schema": 1,
+    "scope": "finite_ticket_interventions_not_universal_truth_or_unseen_evaluation",
+    "status": "completed",
+    "trial_charges": 20
+  },
+  "artifact_bindings_rechecked": true,
+  "recorded_containers_absent": true
+}
