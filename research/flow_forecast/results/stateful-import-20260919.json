@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "source_capture": "/private/tmp/tooluseproxy-204-generated-stateful-capture-v1",
+  "collection": "/private/tmp/tooluseproxy-204-stateful-import-collection-v1",
+  "collection_identity": "6b2f2128d7bbb61fd11e08d37e238e77b2234e8f8633886fa8021c123baf4f8d",
+  "branches": 2,
+  "groups": 1,
+  "requested_models_by_partition": {"train": ["gpt-5.5"], "calibration": [], "test": []},
+  "validated_plan_receipts": 1,
+  "resolved_model_versions_verified": false,
+  "independent_new_tasks": 0,
+  "new_model_calls": 0,
+  "new_trials": 0,
+  "effectiveness_evaluated": false
+}
