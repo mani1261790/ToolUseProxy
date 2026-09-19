@@ -1,0 +1,90 @@
+{
+  "schema": 1,
+  "source_commit": "dcc31233b67c1b5e5538b8cb753eeea987872005",
+  "directory": "/private/tmp/tooluseproxy-204-agenda-api-v2",
+  "report_sha": "6cc3c9ce89f9e170d104edc176f36cbcc1f2dfe1fa1a3085a126604424de85b3",
+  "report": {
+    "artifact_bytes_before_report": 49283,
+    "elapsed_seconds": 2.5878014999980223,
+    "execution_sha": "ae12adeb4c68f5565977b7eaafdca2d89f6370e352505f596e21938c82ee3773",
+    "independent_new_tasks_accepted": 0,
+    "intent_sha": "b39d7bbf4586b8099ae95f081b162c47f249cf4bd0785e365c17d1a2579f35d4",
+    "native_hook_tested": false,
+    "new_model_calls": 0,
+    "receiver_observed": false,
+    "results": [
+      {
+        "calls_observed": 3,
+        "case": "add-get-public",
+        "final_state_sha": "928e02b8a991dd2948500b3f5aefedd4e27b33f921e06f5a7a446b0cd7c2d1e5",
+        "input_sha": "35743b62785f23ee2eb0df361797b89362bdda42a92cd64e5f77fe41a9c43df7",
+        "observation_sha": "45668b2a466d35290d48e0fa088d577ddf68f5a487ad27beba5c1bb8cbf31c3f",
+        "oracle_matched": true
+      },
+      {
+        "calls_observed": 1,
+        "case": "same-id-owner-a",
+        "final_state_sha": "dbd4f4a88da39b3fa005567d8a564f1997fcba5a07144ad0273c4c9bffbd1a9a",
+        "input_sha": "c39ed6f4e5bc422f6a513a8d9b8704ff553ca80a56bf291f77f959707b3038e0",
+        "observation_sha": "33abf482930fee411ff429e92752d33c9e80f737ae3e9ab9f5b716a5c7b8d233",
+        "oracle_matched": true
+      },
+      {
+        "calls_observed": 1,
+        "case": "same-id-owner-b",
+        "final_state_sha": "dbd4f4a88da39b3fa005567d8a564f1997fcba5a07144ad0273c4c9bffbd1a9a",
+        "input_sha": "c39ed6f4e5bc422f6a513a8d9b8704ff553ca80a56bf291f77f959707b3038e0",
+        "observation_sha": "7bce928346dfcd38995e1636df4bb59d0b5104d2716f2801937a2d73e6d3cb8e",
+        "oracle_matched": true
+      },
+      {
+        "calls_observed": 1,
+        "case": "reject-owner-argument",
+        "final_state_sha": "dbd4f4a88da39b3fa005567d8a564f1997fcba5a07144ad0273c4c9bffbd1a9a",
+        "input_sha": "7e5bcd3bd6d29cc2607304d69c85d187c01ff0fc92660682fb39314a45b2ab79",
+        "observation_sha": "b1b2f22f7c9ae094c31858857057dda9422400cdb3e2662feafa99464b4422bd",
+        "oracle_matched": true
+      },
+      {
+        "calls_observed": 2,
+        "case": "reject-overwrite",
+        "final_state_sha": "dbd4f4a88da39b3fa005567d8a564f1997fcba5a07144ad0273c4c9bffbd1a9a",
+        "input_sha": "94a1f167d58019ffe0e7d1509d2154b462069c285c016f50e9de56c29cd57900",
+        "observation_sha": "c82152fef9b0f80a58fe12b4561f8f1b385e0baa46e5269339b7043b5ae1a5b5",
+        "oracle_matched": true
+      },
+      {
+        "calls_observed": 1,
+        "case": "reject-invalid-date",
+        "final_state_sha": "dbd4f4a88da39b3fa005567d8a564f1997fcba5a07144ad0273c4c9bffbd1a9a",
+        "input_sha": "b4e986c1307c292ebc7acaa81fa5d6b83453792f0b2384951b6362c5ae116ad4",
+        "observation_sha": "fe83f63be7601c4af5d9b3dfca6e8c7f35701af7a0561aa9b7e0e03f989edd15",
+        "oracle_matched": true
+      },
+      {
+        "calls_observed": 1,
+        "case": "missing-record",
+        "final_state_sha": "dbd4f4a88da39b3fa005567d8a564f1997fcba5a07144ad0273c4c9bffbd1a9a",
+        "input_sha": "761ba0f0c2ceb9059455798eb8f84f20acd46afd06b49bd8ad82cfc2cc5b423b",
+        "observation_sha": "924e3d396984f2c8d15516ae8b2d2a2556f936a2f20f4aa7c91747f87ba8606e",
+        "oracle_matched": true
+      }
+    ],
+    "schema": 1,
+    "scope": "closed_stateful_api_development_not_F01_or_unseen_evaluation",
+    "status": "completed",
+    "trial_charges": 10
+  },
+  "prior_failed_batch": {
+    "source_commit": "d46774d173117870dedf908c8ec6ba8bb3681b70",
+    "directory": "/private/tmp/tooluseproxy-204-agenda-api-v1",
+    "reserved_calls": 3,
+    "confirmed_api_observations": 0,
+    "elapsed_seconds": null,
+    "cause": "evaluation_module_excluded_from_image",
+    "failure_report_available": false
+  },
+  "total_trial_reservations": 13,
+  "new_model_calls": 0,
+  "new_independent_tasks_accepted": 0
+}
