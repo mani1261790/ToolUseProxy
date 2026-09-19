@@ -20,3 +20,9 @@ python -m research.flow_forecast.task_world_interventions \
 2026-09-19、source bf2507af4d7a977f5bd87832d7411fc21475c151 で各課題を最大180秒の明示的別バッチとして実行。全9試行で正解と一致し、各課題の2介入ともbaselineと出力が変化した。実測は results/task-interventions-20260919.json。実行時点ではコンテナ名の事前永続化は未追加で、後続修正のテストで保証した。
 
 観測の用途は同じ課題の依存検証であり、独立課題数には加算しない。semantic truthの既知化、モデル一般化、未使用holdoutの評価は行っていない。次は実測のhashと実行前課題定義を結び付け、固定された計算コードが参照できる入力を検査する契約と組み合わせる。有限の差分観測だけで任意の計算に真値ラベルを与えない。
+
+## 保存済み証跡の照合
+
+`intervention_evidence.read_interventions` は課題定義・介入の入力/正解・実装・実行・試行予約のscript hash・個別結果・report・有限バッチ制約を再検証する。コンテナ名は旧資料では未記録として区別し、一部だけの欠落や重複した識別子は拒否する。
+
+`bind_capture(capture_directory, intervention_directory)` は元のtask_world実測を既存readerで検証してから、同じ課題定義・Docker context・computeコマンドhash・baseline出力へ結び付ける。任意の課題名や成功フラグだけでは接続しない。3実測課題の接続結果とvalidator source hashは results/intervention-bindings-20260919.json。新規trial/モデル呼出なし。有限介入の範囲を超えてsemantic truthを既知にする処理はない。
