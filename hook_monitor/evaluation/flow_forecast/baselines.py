@@ -128,9 +128,10 @@ class Baseline:
                       min(1.0, max(0.0, cohort['unknown_path'])))
 
 
-def fit_baseline(dataset: Dataset, kind: str) -> Baseline:
+def fit_baseline(dataset: Dataset, kind: str, *, check_budget=lambda: None) -> Baseline:
     if type(dataset) is not Dataset or kind not in KINDS:
         raise ForecastDataError('unknown_baseline')
+    check_budget()
     assignments = {prefix_id: (component, partition) for prefix_id, component, partition in dataset.split.assignments}
     train = [(b, assignments[b.prefix.prefix_id][0], b.probability) for b in dataset.branches
              if assignments[b.prefix.prefix_id][1] == 'train' and b.sampling == 'fixed_distribution']
@@ -141,6 +142,7 @@ def fit_baseline(dataset: Dataset, kind: str) -> Baseline:
         raise ForecastDataError('no_fixed_distribution_training_roots')
     grouped, risk_rows = defaultdict(list), defaultdict(list)
     for branch, root, weight in train:
+        check_budget()
         for horizon in ((1,) if kind == 'one_step' else HORIZONS):
             grouped[(branch.policy_mode, horizon, _context(branch.prefix))].append((branch, root, weight))
             risk_rows[(branch.policy_mode, horizon)].append((branch, root, weight))
@@ -148,6 +150,7 @@ def fit_baseline(dataset: Dataset, kind: str) -> Baseline:
     for key, rows in grouped.items():
         cohort = {'positive': 0.0, 'unknown_label': 0.0, 'unknown_path': 0.0, 'outcomes': defaultdict(float)}
         for branch, weight in _weighted(rows):
+            check_budget()
             label = label_future(branch, key[1])
             if label.protected_arrival == 'unknown':
                 cohort['unknown_label'] += weight
@@ -171,6 +174,7 @@ def fit_baseline(dataset: Dataset, kind: str) -> Baseline:
             weights = [0.0] * 9
             # Fixed deterministic small logistic regression: no tuning on holdout.
             for _ in range(200):
+                check_budget()
                 gradient = [0.0] * len(weights)
                 for features, target, weight in points:
                     error = _sigmoid(sum(w * x for w, x in zip(weights, features))) - target
@@ -181,5 +185,7 @@ def fit_baseline(dataset: Dataset, kind: str) -> Baseline:
             weights_by_condition[key] = tuple(weights)
     frozen = {key: MappingProxyType({**value, 'outcomes': MappingProxyType(dict(value['outcomes']))})
               for key, value in cohorts.items()}
+    check_budget()
     training_digest = digest([kind, 'v1', [asdict(b) for b, _, _ in train], roots])
+    check_budget()
     return Baseline(kind, roots, MappingProxyType(frozen), MappingProxyType(weights_by_condition), training_digest)

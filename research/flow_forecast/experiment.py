@@ -27,7 +27,7 @@ def build_models(dataset, *, check_budget=lambda: None):
     for name in KINDS:
         check_budget()
         start = time.perf_counter()
-        models[name] = fit_baseline(dataset, name)
+        models[name] = fit_baseline(dataset, name, check_budget=check_budget)
         costs[name] = time.perf_counter() - start
     start = time.perf_counter()
     models['sequence'] = fit(dataset, check_budget=check_budget)
