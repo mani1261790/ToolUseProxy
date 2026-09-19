@@ -128,3 +128,15 @@ call_recordsへ残せる。proposal_sha=nullは「採用可能な提案の証跡
 usageだけを保存する。usageの欠落・不正、曖昧な複数turnや切断出力は既知の0に置換しない。
 executionとgenerationの識別/usageの不一致、呼出を跨ぐ同じreceipt IDの再利用を拒否する。
 旧失敗runの未取得usageはそのまま不明とし、後から補完しない。
+
+修正後の別バッチ`/private/tmp/tooluseproxy-204-call-costs-v2`（head fa8bb5a、同じ上限）では、
+対照全項目成功後、最初の提案がinvalid_model_proposalとなり、試験操作は0件だった。
+その失敗呼出のinput3,707/cached0/output272 tokensを保存し、token_totals_complete=trueを
+実確認した。料金額・モデル版・研究受入は未検証のまま。v1の不明な消費は変更していない。
+
+1回/45秒/試行0件の別形式診断では、JSON提案1件が正常に返り、エラーは再現しなかった。
+入力3,703/cached2,560/output111 tokens。検証を緩めず、今後のエラーには
+event_or_text_invalid / completion_count_invalid / message_count_invalid /
+proposal_json_invalid / proposal_schema_invalid の閉じた分類を記録する。
+生の文章は保存しない。results/generation-costs-v2-20260919.jsonと
+results/proposal-shape-20260919.jsonに閉じた証拠を保存した。

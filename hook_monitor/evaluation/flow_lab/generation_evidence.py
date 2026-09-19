@@ -11,6 +11,10 @@ from .models import RecordError, canonical, identifier, version
 from .preflight import LabError
 
 
+VALIDATION_DIAGNOSTICS = {'event_or_text_invalid', 'completion_count_invalid',
+                          'message_count_invalid', 'proposal_json_invalid', 'proposal_schema_invalid'}
+
+
 def sha(raw: bytes):
     return hashlib.sha256(raw).hexdigest()
 

@@ -205,6 +205,7 @@ def run_search(journal: SearchJournal, store: TrialStore, spec: RunSpec,
                     if execution is not None:
                         validate_generation_evidence(execution, None, provider.model_id)
                     call.update(outcome='error', error=reason, execution=execution,
+                                validation_stage=getattr(provider, 'last_validation_stage', None),
                                 elapsed_ms=int((time.monotonic() - call_started) * 1000))
                 state["phase"] = "ready"
                 return stop(reason)

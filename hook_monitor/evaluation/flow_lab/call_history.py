@@ -1,6 +1,6 @@
 """Every charged generation call, including unknown outcomes and missing usage."""
 from .agent import Proposal
-from .generation_evidence import validate as validate_generation
+from .generation_evidence import VALIDATION_DIAGNOSTICS, validate as validate_generation
 from .models import identifier, timestamp
 from .preflight import LabError
 
@@ -16,11 +16,14 @@ def validate_history(state, budget):
         raise LabError('invalid_call_history')
     ids, receipt_ids = set(), set()
     for number, record in enumerate(records, 1):
-        if type(record) is not dict or (set(record) != {
-                'number', 'call_id', 'started_at', 'reply_limit', 'elapsed_ms',
-                'outcome', 'error', 'proposal', 'generation'} and set(record) != {
-                'number', 'call_id', 'started_at', 'reply_limit', 'elapsed_ms',
-                'outcome', 'error', 'proposal', 'generation', 'execution'}):
+        required = {'number', 'call_id', 'started_at', 'reply_limit', 'elapsed_ms',
+                    'outcome', 'error', 'proposal', 'generation'}
+        if (type(record) is not dict or not required <= set(record)
+                or set(record) - required - {'execution', 'validation_stage'}):
+            raise LabError('invalid_call_history')
+        stage = record.get('validation_stage')
+        if stage is not None and (stage not in VALIDATION_DIAGNOSTICS
+                                  or record['outcome'] != 'error' or record['error'] != 'invalid_model_proposal'):
             raise LabError('invalid_call_history')
         identifier(record['call_id'])
         timestamp(record['started_at'])

@@ -1,0 +1,38 @@
+{
+  "scope": "one_bounded_cli_shape_diagnostic",
+  "model_calls_limit": 1,
+  "timeout_seconds": 45,
+  "trials_executed": 0,
+  "raw_text_retained": false,
+  "shape": {
+    "agent_messages": [
+      {
+        "bytes": 116,
+        "valid_json": true,
+        "valid_proposal": true
+      }
+    ],
+    "completed_turns": 1,
+    "other_items": 0
+  },
+  "status": "proposal_accepted_not_executed",
+  "execution": {
+    "schema": 1,
+    "call_id": "9f398b9f148c45af949f12a173fb41db",
+    "requested_model": "gpt-5.5",
+    "resolved_model": null,
+    "resolved_model_verified": false,
+    "cli_version": "codex-cli 0.153.4",
+    "thread_sha": "2dbf841ceb31ddfde3dc5d6408b54262409cb64e4d118fd15d8cd2eda12e994f",
+    "events_sha": "0ff2b37afe2ffd842878210d9ed6cd150d3d04ed247ba1b087c6402117cb9a19",
+    "prompt_sha": "c5e2bb006028d257fbae7cd096e6316c1c00f490184a8c5c9c470dd38e988cdb",
+    "proposal_sha": null,
+    "usage": {
+      "input_tokens": 3703,
+      "cached_input_tokens": 2560,
+      "output_tokens": 111
+    },
+    "elapsed_ms": 7371,
+    "scope": "local_cli_execution_not_provider_attestation"
+  }
+}

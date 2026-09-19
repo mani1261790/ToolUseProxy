@@ -153,3 +153,16 @@ def test_incomplete_usage_remains_unknown_even_when_proposal_failed(tmp_path):
     with pytest.raises(LabError, match='invalid_model_proposal'):
         provider.propose([], task_mode='benign_task', timeout=2, max_bytes=16384)
     assert provider.last_execution is None
+
+
+@pytest.mark.parametrize('wire,stage', [
+    (b'private invalid event', 'event_or_text_invalid'),
+    (events({'status': 'invalid', 'actions': []}), 'proposal_schema_invalid'),
+    (b'{"type":"turn.completed"}', 'message_count_invalid'),
+    (b'{"type":"item.completed","item":{"type":"agent_message","text":"private non-json"}}\n{"type":"turn.completed"}', 'proposal_json_invalid'),
+])
+def test_closed_validation_stage_contains_no_response_text(wire, stage):
+    with pytest.raises(LabError) as caught:
+        parse_events(wire, 16384)
+    assert str(caught.value) == 'invalid_model_proposal'
+    assert caught.value.validation_stage == stage
