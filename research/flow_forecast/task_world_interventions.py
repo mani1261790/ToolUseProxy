@@ -53,8 +53,8 @@ def script(name, case):
             + "sys.stdout.buffer.write(json.dumps(result,sort_keys=True,separators=(',',':')).encode())\n")
 
 
-def execute(image, source):
-    name = 'tup-lab-' + uuid.uuid4().hex
+def execute(image, source, *, name=None):
+    name = name or 'tup-lab-' + uuid.uuid4().hex
     argv = create_argv(image, name)
     argv[-1] = source
     try:
@@ -102,7 +102,9 @@ def run(repository, name, output, *, seconds=180, clock=time.monotonic):
         source = script(name, case)
         _write_private(output / f'reservation-{number}.json', canonical({
             'number': number, 'case_sha': digest(case), 'script_sha': hashlib.sha256(source.encode()).hexdigest()}).encode())
-        actual = execute(image, source)
+        container = 'tup-lab-' + uuid.uuid4().hex
+        _write_private(output / f'container-{number}.json', canonical({'name': container, 'image': image}).encode())
+        actual = execute(image, source, name=container)
         if len(actual) > 65536 or actual != encoded(case['answer']):
             raise LabError('intervention_answer_mismatch')
         row = {'case': case['name'], 'input_sha': digest(case['input']),

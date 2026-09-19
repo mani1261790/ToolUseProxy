@@ -1,0 +1,40 @@
+{
+  "schema": 1,
+  "source_commit": "bf2507a",
+  "batches": [
+    {
+      "world": "inventory",
+      "directory": "/private/tmp/tooluseproxy-204-inventory-interventions-v1",
+      "report_sha": "489d05bbfc18f9c7ef10111c0476aba03057b045632bb224918e565479394339",
+      "trial_charges": 3,
+      "elapsed_seconds": 3.9180781249961,
+      "artifact_bytes_before_report": 33012,
+      "answers_matched": true,
+      "changed_results": 2
+    },
+    {
+      "world": "calendar",
+      "directory": "/private/tmp/tooluseproxy-204-calendar-interventions-v1",
+      "report_sha": "79aa834e914cba01e36b2da8e862cb92b858cadb29ddb795d7d9a57ca6bc24b2",
+      "trial_charges": 3,
+      "elapsed_seconds": 1.2127977499985718,
+      "artifact_bytes_before_report": 32652,
+      "answers_matched": true,
+      "changed_results": 2
+    },
+    {
+      "world": "ledger",
+      "directory": "/private/tmp/tooluseproxy-204-ledger-interventions-v1",
+      "report_sha": "9e91c182f58568795241a6c67a89c1688ee68a83d1dc7ff3ce9660d3b65ee7db",
+      "trial_charges": 3,
+      "elapsed_seconds": 1.2700467499962542,
+      "artifact_bytes_before_report": 33008,
+      "answers_matched": true,
+      "changed_results": 2
+    }
+  ],
+  "new_model_calls": 0,
+  "independent_new_tasks_accepted": 0,
+  "semantic_truth_promoted": false,
+  "scope": "finite_input_interventions"
+}
