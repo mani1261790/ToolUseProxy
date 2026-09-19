@@ -1,0 +1,35 @@
+{
+  "schema": 1,
+  "source_commit": "baa060b379b0ebe5ffa7580f3097ba5e6ab29417",
+  "collection": "/private/tmp/tooluseproxy-204-checked-world-collection-v1",
+  "collection_identity": "0d27e06c4cb9b01e5f9cece8a5a419f08455445241563ec6c58ea4c95b7604c2",
+  "comparison_report": "/private/tmp/tooluseproxy-204-checked-world-comparison-v1.json",
+  "comparison_report_sha": "52283c55bc91f88e8e4da84990a60aa4f3c38ef9b1dc361b9c59287cc59f51a8",
+  "partition": "train",
+  "observe_labels": {
+    "no": 2,
+    "yes": 1,
+    "unknown": 0
+  },
+  "enforce_labels": {
+    "unknown": 3
+  },
+  "primary_sequence_probability": {
+    "abstained_labeled_rows": 0,
+    "brier": 0.0,
+    "coverage": 1.0,
+    "labeled_rows": 3,
+    "log_loss": 0.0,
+    "log_loss_status": "scored",
+    "root_count": 3,
+    "row_count": 3,
+    "scored_roots": 3,
+    "scored_rows": 3,
+    "unknown_label_rows": 0
+  },
+  "acceptance": "inconclusive_do_not_adopt",
+  "new_model_calls": 0,
+  "new_trials": 0,
+  "independent_new_tasks_accepted": 0,
+  "scope": "closed_world_v1_coarse_object_dependency_development_diagnostic"
+}
