@@ -8,7 +8,7 @@ import re
 from .prefix import ForecastDataError, InformationObject, ObservedStep, Prefix, identifier, sequence
 
 
-KNOWN_RELATIONS = frozenset({'copy', 'base64', 'save', 'send'})
+KNOWN_RELATIONS = frozenset({'copy', 'base64', 'save', 'send', 'closed_compute', 'json_projection'})
 UNKNOWN_RELATIONS = frozenset({'semantic', 'selection', 'task_boundary', 'unknown'})
 
 
@@ -29,8 +29,11 @@ class Transfer:
             raise ForecastDataError('self_transfer')
         if self.relation not in KNOWN_RELATIONS | UNKNOWN_RELATIONS:
             raise ForecastDataError('unknown_relation')
-        if self.evidence not in {'checked_bytes', 'receiver', 'unknown'}:
+        if self.evidence not in {'checked_bytes', 'receiver', 'unknown', 'checked_computation', 'checked_json_projection'}:
             raise ForecastDataError('invalid_truth_evidence')
+        for relation, evidence in (('closed_compute', 'checked_computation'), ('json_projection', 'checked_json_projection')):
+            if (self.relation == relation) != (self.evidence == evidence):
+                raise ForecastDataError('transformation_evidence_mismatch')
         if self.relation in UNKNOWN_RELATIONS and self.evidence != 'unknown':
             raise ForecastDataError('unsupported_truth_relation')
         if self.evidence == 'receiver' and self.relation != 'send':

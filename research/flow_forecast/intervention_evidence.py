@@ -10,6 +10,7 @@ import re
 from hook_monitor.evaluation.flow_forecast.dataset import _json, _read
 from hook_monitor.evaluation.flow_forecast.prefix import ForecastDataError, digest
 from hook_monitor.evaluation.flow_lab.preflight import LabError
+from .computation_contract import validate_program
 from .task_world_import import read_capture
 from .task_world_interventions import cases, script
 from .task_worlds import definition, encoded, operation_script
@@ -101,6 +102,7 @@ def bind_capture(capture_directory, intervention_directory):
     return {'schema': 1, 'world': left['world'], 'capture_root': left['root'],
             'capture_report_sha': digest(capture['report']), 'intervention_report_sha': digest(evidence['report']),
             'definition_sha': digest(left['definition']), 'matched_compute_command_sha': observed[1]['command_sha'],
+            'input_contract': validate_program(left['definition']['program']),
             'changed_cases': [r['case'] for r in evidence['report']['results'] if r['changed_from_baseline']],
             'semantic_truth_promoted': False, 'independent_new_tasks_accepted': 0,
             'scope': 'same_closed_computation_finite_input_dependence_only'}
