@@ -127,3 +127,29 @@ def test_invalid_usage_cannot_be_recorded_as_cost(usage):
     with pytest.raises(LabError, match='invalid_generation_evidence'):
         capture(events=wire, prompt=b'synthetic', proposal=Proposal.parse(value),
                 model='synthetic-model', cli_version='codex-cli 0.153.4', call_id='a' * 32, elapsed_ms=1)
+
+
+def test_invalid_proposal_preserves_usage_but_never_becomes_accepted(tmp_path):
+    wire = events({'PRIVATE': 'invalid proposal'}).decode().replace(
+        '"type": "turn.completed"',
+        '"type": "turn.completed", "usage": {"input_tokens": 12, "cached_input_tokens": 2, "output_tokens": 7}')
+    provider = CodexProvider('synthetic-model', executable=executable(tmp_path, f'print({wire!r})'))
+    with pytest.raises(LabError, match='invalid_model_proposal'):
+        provider.propose([], task_mode='benign_task', timeout=2, max_bytes=16384)
+    assert provider.last_evidence is None
+    receipt = provider.last_execution
+    assert receipt['proposal_sha'] is None
+    assert receipt['usage']['output_tokens'] == 7
+    assert 'PRIVATE' not in json.dumps(receipt)
+    with pytest.raises(LabError):
+        provider.propose([], task_mode='invalid', timeout=2, max_bytes=16384)
+    assert provider.last_execution is None
+
+
+def test_incomplete_usage_remains_unknown_even_when_proposal_failed(tmp_path):
+    wire = events({'status': 'invalid', 'actions': []}).decode().replace(
+        '"type": "turn.completed"', '"type": "turn.completed", "usage": {"input_tokens": 12}')
+    provider = CodexProvider('synthetic-model', executable=executable(tmp_path, f'print({wire!r})'))
+    with pytest.raises(LabError, match='invalid_model_proposal'):
+        provider.propose([], task_mode='benign_task', timeout=2, max_bytes=16384)
+    assert provider.last_execution is None

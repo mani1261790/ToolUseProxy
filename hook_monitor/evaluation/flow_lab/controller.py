@@ -151,6 +151,7 @@ def run_search(journal: SearchJournal, store: TrialStore, spec: RunSpec,
 
         def stop(reason):
             state["status"] = reason
+            validate_state(state, budget)
             journal.write(state)
             if reason in TERMINAL:
                 store.finish(spec, utc_now(), exhausted=reason.endswith("budget_exhausted"))
@@ -189,7 +190,7 @@ def run_search(journal: SearchJournal, store: TrialStore, spec: RunSpec,
             if 'call_records' in state:
                 call = {'number': state['calls'], 'call_id': uuid.uuid4().hex, 'started_at': utc_now(),
                         'reply_limit': reply_limit, 'elapsed_ms': None, 'outcome': 'pending',
-                        'error': None, 'proposal': None, 'generation': None}
+                        'error': None, 'proposal': None, 'generation': None, 'execution': None}
                 state['call_records'].append(call)
             journal.write(state)
             call_started = time.monotonic()
@@ -200,7 +201,10 @@ def run_search(journal: SearchJournal, store: TrialStore, spec: RunSpec,
             except LabError as exc:
                 reason = str(exc) if str(exc) in PROVIDER_ERRORS else "model_unavailable"
                 if call is not None:
-                    call.update(outcome='error', error=reason,
+                    execution = deepcopy(getattr(provider, 'last_execution', None))
+                    if execution is not None:
+                        validate_generation_evidence(execution, None, provider.model_id)
+                    call.update(outcome='error', error=reason, execution=execution,
                                 elapsed_ms=int((time.monotonic() - call_started) * 1000))
                 state["phase"] = "ready"
                 return stop(reason)
@@ -212,7 +216,10 @@ def run_search(journal: SearchJournal, store: TrialStore, spec: RunSpec,
                        for row in earlier):
                     raise LabError("generation_call_reused")
             if call is not None:
-                call.update(outcome='response', proposal={'status': proposal.status,
+                execution = deepcopy(getattr(provider, 'last_execution', None))
+                if execution is not None:
+                    validate_generation_evidence(execution, None, provider.model_id)
+                call.update(outcome='response', execution=execution, proposal={'status': proposal.status,
                             'actions': [asdict(action) for action in proposal.actions]},
                             generation=generation, elapsed_ms=int((time.monotonic() - call_started) * 1000))
             state["phase"] = "ready"
@@ -236,4 +243,5 @@ def run_search(journal: SearchJournal, store: TrialStore, spec: RunSpec,
                                    "steps": [uuid.uuid4().hex for _ in proposal.actions],
                                    "actions": [asdict(a) for a in proposal.actions],
                                    **({"generation": generation} if generation is not None else {})})
+            validate_state(state, budget)
             journal.write(state)

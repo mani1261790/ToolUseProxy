@@ -97,3 +97,21 @@ def test_history_tampering_and_missing_plan_receipt_rejected(context):
     validate_state(legacy, context[4])
     assert summarize(legacy)['call_history_complete'] is False
     assert summarize(legacy)['known_token_totals'] is None
+
+
+def test_failed_call_can_have_reported_usage_without_an_accepted_proposal(context):
+    class FailedWithUsage(Provider):
+        def propose(self, *args, **kwargs):
+            self.last_execution = capture(
+                events=b'{"type":"turn.completed","usage":{"input_tokens":12,"cached_input_tokens":2,"output_tokens":7}}',
+                prompt=b'synthetic', proposal=None, model=self.model_id,
+                cli_version='codex-cli 0.153.4', call_id=uuid.uuid4().hex, elapsed_ms=1)
+            raise LabError('invalid_model_proposal')
+    result = run(context, FailedWithUsage([]))
+    assert result['status'] == 'invalid_model_proposal'
+    assert result['generation_costs']['token_totals_complete'] is True
+    assert result['generation_costs']['known_token_totals']['output_tokens'] == 7
+    assert context[0].read()['plans'] == []
+    assert context[3].guards == 0
+    assert context[0].read()['call_records'][0]['generation'] is None
+    validate_state(context[0].read(), context[4])

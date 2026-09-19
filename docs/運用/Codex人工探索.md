@@ -116,3 +116,15 @@ results/generation-costs-20260919.jsonへ人工試験の閉じたcall/planと集
 controllerプロセスは終了しており、残るrunning状態は再開可能な失敗記録を表す。
 自動再試行や上限延長は行っていない。次はproposalの検証失敗とCLI usageの抽出を分離し、
 無効な提案でも取得できた消費証跡を落とさないようにする。過去の失敗usageは推測で埋めない。
+
+### 提案の検証と使用量の抽出を分離
+
+CodexProviderはproposalの採否とは別に`last_execution`を作る。CLIのturn.completedが
+1件あり、usageの構造・値が正しければ、提案不正やプロセス失敗の場合でもexecution記録を
+call_recordsへ残せる。proposal_sha=nullは「採用可能な提案の証跡ではない」を意味し、
+試験実行を許可しない。提案の正当性検査は従来どおり必要。
+
+生の応答文・診断文は保存せず、入力/出力hash、指定モデル、CLI版、call ID、取得できた
+usageだけを保存する。usageの欠落・不正、曖昧な複数turnや切断出力は既知の0に置換しない。
+executionとgenerationの識別/usageの不一致、呼出を跨ぐ同じreceipt IDの再利用を拒否する。
+旧失敗runの未取得usageはそのまま不明とし、後から補完しない。

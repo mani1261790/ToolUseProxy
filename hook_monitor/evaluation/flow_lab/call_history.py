@@ -14,11 +14,13 @@ def validate_history(state, budget):
     records = state['call_records']
     if type(records) is not list or len(records) != state['calls']:
         raise LabError('invalid_call_history')
-    ids, generation_ids = set(), set()
+    ids, receipt_ids = set(), set()
     for number, record in enumerate(records, 1):
-        if type(record) is not dict or set(record) != {
+        if type(record) is not dict or (set(record) != {
                 'number', 'call_id', 'started_at', 'reply_limit', 'elapsed_ms',
-                'outcome', 'error', 'proposal', 'generation'}:
+                'outcome', 'error', 'proposal', 'generation'} and set(record) != {
+                'number', 'call_id', 'started_at', 'reply_limit', 'elapsed_ms',
+                'outcome', 'error', 'proposal', 'generation', 'execution'}):
             raise LabError('invalid_call_history')
         identifier(record['call_id'])
         timestamp(record['started_at'])
@@ -27,9 +29,16 @@ def validate_history(state, budget):
                 or record['reply_limit'] != budget.reply_allowance(number - 1)):
             raise LabError('invalid_call_history')
         ids.add(record['call_id'])
+        execution = record.get('execution')
+        if execution is not None:
+            validate_generation(execution, None, state['identity']['model'])
+            if record['generation'] is not None and any(
+                    record['generation'].get(key) != execution[key] for key in (
+                        'call_id', 'requested_model', 'cli_version', 'events_sha', 'prompt_sha', 'usage')):
+                raise LabError('execution_generation_mismatch')
         outcome = record['outcome']
         if outcome == 'pending':
-            if (number != len(records) or state['phase'] != 'requesting'
+            if (number != len(records) or state['phase'] != 'requesting' or execution is not None
                     or any(record[key] is not None for key in ('elapsed_ms', 'error', 'proposal', 'generation'))):
                 raise LabError('invalid_call_history')
             continue
@@ -45,12 +54,13 @@ def validate_history(state, budget):
             proposal = Proposal.parse(record['proposal'])
             if record['generation'] is not None:
                 validate_generation(record['generation'], proposal, state['identity']['model'])
-                identity = record['generation']['call_id']
-                if identity in generation_ids:
-                    raise LabError('invalid_call_history')
-                generation_ids.add(identity)
         else:
             raise LabError('invalid_call_history')
+        receipt = execution or record['generation']
+        if receipt is not None:
+            if receipt['call_id'] in receipt_ids:
+                raise LabError('invalid_call_history')
+            receipt_ids.add(receipt['call_id'])
     if state['phase'] == 'requesting' and (not records or records[-1]['outcome'] != 'pending'):
         raise LabError('invalid_call_history')
     saved = {row['generation']['call_id']: row['generation'] for row in records if row['generation']}
@@ -62,8 +72,8 @@ def validate_history(state, budget):
 def summarize(state):
     """Input must have passed controller validation; missing tokens are not zero."""
     records = state.get('call_records', [])
-    known = [r['generation']['usage'] for r in records
-             if r['generation'] is not None and r['generation']['usage'] is not None]
+    receipts = [r.get('execution') or r['generation'] for r in records]
+    known = [receipt['usage'] for receipt in receipts if receipt and receipt['usage'] is not None]
     complete = len(records) == state['calls'] and 'call_records' in state
     totals = {key: sum(row[key] for row in known)
               for key in ('input_tokens', 'cached_input_tokens', 'output_tokens')}

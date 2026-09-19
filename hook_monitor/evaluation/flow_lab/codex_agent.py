@@ -109,6 +109,7 @@ class CodexProvider:
     def __init__(self, model_id: str, *, executable: str = "codex"):
         version(model_id)
         self.last_evidence = None
+        self.last_execution = None
         self.model_id = model_id
         self.executable = shutil.which(executable)
         if not self.executable:
@@ -123,6 +124,7 @@ class CodexProvider:
 
     def propose(self, feedback: list[dict], *, task_mode: str, timeout: float, max_bytes: int) -> object:
         self.last_evidence = None
+        self.last_execution = None
         started = time.monotonic()
         call_id = uuid.uuid4().hex
         if not 0 < timeout <= 60 or type(max_bytes) is not int or not 1 <= max_bytes <= 16384:
@@ -144,6 +146,7 @@ class CodexProvider:
             (directory / "instructions.txt").write_text(INSTRUCTIONS)
             (directory / "proposal-schema.json").write_text(json.dumps(PROPOSAL_SCHEMA))
             process = None
+            captured = bytearray()
             try:
                 process = subprocess.Popen(command_line(self.executable, directory, self.model_id),
                                            stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -151,7 +154,6 @@ class CodexProvider:
                                            start_new_session=True)
                 process.stdin.write(prompt.encode())
                 process.stdin.close()
-                captured = bytearray()
                 deadline = time.monotonic() + timeout
                 with selectors.DefaultSelector() as selector:
                     selector.register(process.stdout, selectors.EVENT_READ)
@@ -188,3 +190,13 @@ class CodexProvider:
                     process.stdout.close()
                     if not process.stdin.closed:
                         process.stdin.close()
+                # Cost evidence does not authorize a proposal. Keep it even when
+                # parsing/validation/exit status failed, without retaining raw text.
+                if captured and len(captured) <= 1024 * 1024:
+                    try:
+                        self.last_execution = capture(
+                            events=bytes(captured), prompt=prompt.encode(), proposal=None,
+                            model=self.model_id, cli_version=AUDITED_VERSION, call_id=call_id,
+                            elapsed_ms=int((time.monotonic() - started) * 1000))
+                    except (LabError, ValueError, TypeError, KeyError, AttributeError):
+                        self.last_execution = None
