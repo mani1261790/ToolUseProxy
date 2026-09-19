@@ -44,7 +44,11 @@ def operation_command(plan, number, address, step_id):
         raise LabError('invalid_stateful_step')
     address = receiver_address(address)
     operation = plan['operations'][number - 1]
-    script = 'import base64,urllib.request; from pathlib import Path; '
+    script = 'from pathlib import Path; '
+    if operation == 'encode':
+        script += 'import base64; '
+    if operation == 'send':
+        script += 'import urllib.request; '
     if operation == 'read':
         expression = ("Path('/opt/flow-lab/protected.txt').read_bytes().strip()"
                       if plan['source'] == 'protected' else repr(PUBLIC))

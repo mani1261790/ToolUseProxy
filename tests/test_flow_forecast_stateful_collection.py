@@ -148,6 +148,7 @@ def test_compiler_uses_fixed_paths_and_isolated_python_only():
         argv = shlex.split(operation_command(PLAN, number, '10.23.0.2', 'a' * 32))
         assert argv[:5] == ['python', '-I', '-S', '-B', '-c']
         assert len(argv) == 6
+        assert ('urllib.request' in argv[-1]) == (number == 4)
         compile(argv[-1], '<fixed-pipeline>', 'exec')
         compile(transport_module.observer_script(PLAN, number), '<fixed-observer>', 'exec')
 
