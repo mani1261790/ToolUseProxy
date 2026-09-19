@@ -298,10 +298,41 @@ def collect_assigned_searches(directories):
     return data, evidence, catalog, origins
 
 
+def collect_stateful_captures(directories):
+    """Bind captured flows using the assignment sealed before proposal generation."""
+    from .stateful_import import read_capture
+    if type(directories) is not tuple or not 1 <= len(directories) <= MAX_INPUTS:
+        raise ForecastDataError('invalid_collection_inputs')
+    catalog, origins, samples, audits = None, None, [], []
+    total = 0
+    for directory in directories:
+        data, audit = read_capture(directory)
+        generation = audit['execution']['generator_evidence']
+        if generation is None:
+            raise ForecastDataError('capture_has_no_pretrial_assignment')
+        assignment = generation['assignment']
+        if catalog is None:
+            catalog = assignment['catalog']
+            origins = {key: value.encode() for key, value in assignment['origins'].items()}
+        elif catalog != assignment['catalog']:
+            raise ForecastDataError('collection_catalog_changed')
+        total += len(canonical(audit).encode()) + len(canonical(asdict(data)).encode())
+        if total > MAX_ARTIFACT_BYTES:
+            raise ForecastDataError('collection_size_limit')
+        samples.append((data, {prefix.root_case_id: assignment['design_id'] for prefix in data.prefixes}))
+        audits.append(audit)
+    data, evidence = collect(catalog, tuple(samples))
+    evidence['stateful_captures'] = audits
+    if len(canonical(evidence).encode()) > MAX_ARTIFACT_BYTES:
+        raise ForecastDataError('collection_size_limit')
+    return data, evidence, catalog, origins
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--catalog', type=Path)
     inputs_group = parser.add_mutually_exclusive_group(required=True)
+    inputs_group.add_argument('--stateful-captures', type=Path, help='JSON list of completed generated capture directories')
     inputs_group.add_argument('--assigned-searches', type=Path, help='JSON list of completed assigned search directories')
     inputs_group.add_argument('--inputs', type=Path,
                         help='JSON list of {directory, roots} bindings for synthetic datasets')
@@ -309,14 +340,15 @@ def main(argv=None):
     parser.add_argument('--origins', type=Path,
                         help='Synthetic design documents named by SHA-256 with .md suffix')
     args = parser.parse_args(argv)
-    if args.assigned_searches:
+    if args.assigned_searches or args.stateful_captures:
         if args.catalog or args.origins:
-            parser.error('assigned searches use their recorded catalogs and origins')
-        paths = _json(_read(args.assigned_searches))
+            parser.error('assigned captures use their recorded catalogs and origins')
+        paths = _json(_read(args.assigned_searches or args.stateful_captures))
         if (type(paths) is not list or not 1 <= len(paths) <= MAX_INPUTS
                 or any(type(path) is not str or not path for path in paths)):
             raise ForecastDataError('invalid_collection_inputs')
-        data, audit, catalog, origins = collect_assigned_searches(tuple(Path(path) for path in paths))
+        collector = collect_assigned_searches if args.assigned_searches else collect_stateful_captures
+        data, audit, catalog, origins = collector(tuple(Path(path) for path in paths))
     else:
         if args.catalog is None or args.origins is None:
             parser.error('manual inputs require --catalog and --origins')

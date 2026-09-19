@@ -83,6 +83,28 @@ def load(dataset, directory, expected_identity, *, check_budget=lambda: None):
                     raise ForecastDataError('generation_receipt_reused')
                 seen_calls.add(generation['call_id'])
             models[root] = requested if complete else None
+        for item in audit.get('stateful_captures', []):
+            from .generated_stateful import validate as validate_generated
+            from .stateful_collection import dataset_from_traces
+            check_budget()
+            execution, report = item['execution'], item['report']
+            root = execution['root']
+            if root not in roots or root in models or report['execution_sha'] != digest(execution):
+                raise ForecastDataError('generation_root_mismatch')
+            frozen = execution['generator_evidence']
+            validate_generated(frozen)
+            if frozen['plan'] != execution['plan'] or report['prepared_generation_sha'] != frozen['prepared_sha']:
+                raise ForecastDataError('generation_plan_mismatch')
+            rebuilt = dataset_from_traces(execution, report['conditions'])
+            expected = sorted(digest(asdict(b)) for b in dataset.branches if b.prefix.root_case_id == root)
+            if (sorted(digest(asdict(b)) for b in rebuilt.branches) != expected
+                    or item['dataset_sha'] != digest(asdict(rebuilt))):
+                raise ForecastDataError('generation_branch_mismatch')
+            call_id = frozen['generation']['call_id']
+            if call_id in seen_calls:
+                raise ForecastDataError('generation_receipt_reused')
+            seen_calls.add(call_id)
+            models[root] = frozen['model']
     except (KeyError, TypeError, ValueError, LabError) as error:
         if isinstance(error, ForecastDataError):
             raise
