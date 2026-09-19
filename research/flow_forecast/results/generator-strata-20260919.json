@@ -1,0 +1,66 @@
+{
+  "schema": 1,
+  "scope": "existing_synthetic_codex_receipt_wiring_only",
+  "source_revision": "69fe8feca7ecc547e46f1e755d3ada6b779b2f09",
+  "new_model_calls": 0,
+  "new_trials": 0,
+  "accepted_independent_f02_roots": 0,
+  "actual_resolved_model_version_verified": false,
+  "unused_holdout": false,
+  "checks": [
+    {
+      "source_collection": "/private/tmp/tooluseproxy-204-assigned-collection-v1",
+      "generator_evidence": {
+        "group_labels": {
+          "8287602e29bf4166af6bc48c3197acdd": "generator/requested/gpt-5.5"
+        },
+        "summary": {
+          "status": "requested_model_aliases_only",
+          "evaluated": false,
+          "resolved_model_versions_verified": false,
+          "collection_identity": "e5b22f81b9bf2542914cbda7deda925648063e2e287f722c12c30132e4686e26",
+          "requested_models_by_partition": {
+            "train": [
+              "gpt-5.5"
+            ],
+            "calibration": [],
+            "test": []
+          },
+          "unseen_test_requested_aliases": [],
+          "groups_with_missing_evidence": 0,
+          "groups_with_mixed_requested_models": 0,
+          "validated_plan_receipts": 1
+        }
+      },
+      "comparison_rejected": "no_fixed_distribution_training_roots",
+      "scored_fixed_distribution_rows": 0
+    },
+    {
+      "source_collection": "/private/tmp/tooluseproxy-204-completion-collection-v1",
+      "generator_evidence": {
+        "group_labels": {
+          "6de841287c1044d6bc32fc04a845e172": "generator/requested/gpt-5.5"
+        },
+        "summary": {
+          "status": "requested_model_aliases_only",
+          "evaluated": false,
+          "resolved_model_versions_verified": false,
+          "collection_identity": "44bc6bebf2eb4e94536d898437324593a8d75d564ea5a149d21079433201c041",
+          "requested_models_by_partition": {
+            "train": [
+              "gpt-5.5"
+            ],
+            "calibration": [],
+            "test": []
+          },
+          "unseen_test_requested_aliases": [],
+          "groups_with_missing_evidence": 0,
+          "groups_with_mixed_requested_models": 0,
+          "validated_plan_receipts": 1
+        }
+      },
+      "comparison_rejected": "no_fixed_distribution_training_roots",
+      "scored_fixed_distribution_rows": 0
+    }
+  ]
+}

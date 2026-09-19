@@ -37,7 +37,7 @@ def _ablation_benefit(report, variant):
             'scope': 'inference_component_removal_not_architecture_retraining'}
 
 
-def attach_assessment(report, dataset, models, costs, resources, plan):
+def attach_assessment(report, dataset, models, costs, resources, plan, *, generator_evidence=None):
     primary = report['models']['sequence']['observe/4']
     probability = primary['probability']
     operating = primary['operating_points']['0.01']
@@ -77,6 +77,15 @@ def attach_assessment(report, dataset, models, costs, resources, plan):
         'test_prior_use': 'not_proven_by_a_partition_label',
         'independence': 'component_grouping_verified_but_new_root_ids_are_not_independence_proof',
     }
+    if generator_evidence is not None:
+        from .generator_strata import PREFIX
+        scored = sorted({key[len(PREFIX):] for conditions in report['models'].values()
+                         for condition in conditions.values() for key, stratum in condition['strata'].items()
+                         if key.startswith(PREFIX) and stratum['probability']['row_count'] > 0})
+        generalization['agent_models'] = {**generator_evidence['summary'],
+                                          'scored_requested_aliases': scored,
+                                          'requested_alias_strata_scored': bool(scored),
+                                          'scored_partition': report['partition']}
     conditions = {
         'unused_test_partition': False if report['partition'] == 'train' else None,
         'frozen_calibration_selection': True if chosen else None,
@@ -101,6 +110,7 @@ def main(argv=None):
     parser.add_argument('--dataset', required=True, type=Path)
     parser.add_argument('--output', required=True, type=Path)
     parser.add_argument('--plan', type=Path)
+    parser.add_argument('--collection', type=Path)
     parser.add_argument('--partition', choices=('test', 'train'), default='test')
     args = parser.parse_args(argv)
     if args.output.exists():
@@ -112,16 +122,30 @@ def main(argv=None):
     budget = Budget()
     dataset = read_dataset(args.dataset)
     models, costs = build_models(dataset, check_budget=budget.check)
+    from . import generator_strata
+    collection_sha = generator_strata.collection_identity(args.collection) if args.collection else None
     if args.stage == 'prepare':
         result = freeze_plan(dataset, models, check_budget=budget.check)
+        if collection_sha is not None:
+            result = {'schema': 1, 'calibration_plan': result, 'generator_collection_sha': collection_sha}
     else:
         with args.plan.open('rb') as stream:
             raw = stream.read(1024 * 1024 + 1)
         if len(raw) > 1024 * 1024:
             raise ForecastDataError('comparison_plan_size_limit')
         plan = json.loads(raw)
-        result = evaluate(dataset, models, plan, partition=args.partition, check_budget=budget.check)
-        attach_assessment(result, dataset, models, costs, budget.snapshot(), plan)
+        generators = None
+        if collection_sha is not None:
+            if (type(plan) is not dict or set(plan) != {
+                    'schema', 'calibration_plan', 'generator_collection_sha'}
+                    or type(plan['schema']) is not int or plan['schema'] != 1
+                    or plan['generator_collection_sha'] != collection_sha):
+                raise ForecastDataError('comparison_generator_plan_mismatch')
+            generators = generator_strata.load(dataset, args.collection, collection_sha, check_budget=budget.check)
+            plan = plan['calibration_plan']
+        result = evaluate(dataset, models, plan, partition=args.partition, check_budget=budget.check,
+                          generator_groups=generators['group_labels'] if generators else None)
+        attach_assessment(result, dataset, models, costs, budget.snapshot(), plan, generator_evidence=generators)
     budget.check()
     encoded = canonical(result) + '\n'
     if len(encoded.encode()) > MAX_REPORT_BYTES:
