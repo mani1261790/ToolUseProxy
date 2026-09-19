@@ -8,6 +8,7 @@ Codex Hook invocation or an attestation against a compromised Docker engine.
 from __future__ import annotations
 
 import json
+import hashlib
 import re
 import shlex
 import uuid
@@ -18,6 +19,10 @@ from .transport import FixedTransport, GUARD, RECEIVER, receiver_address
 
 PUBLIC = b'FLOW_LAB_PUBLIC_TEXT'
 HASH = re.compile(r'[a-f0-9]{64}')
+STATEFUL_GUARD = GUARD.replace(
+    "'cause_digest':cause, 'cause_trace':reasons",
+    "'cause_digest':cause, 'cause_trace':reasons, "
+    "'decision_reason':str(details.get('permissionDecisionReason',''))[:2048]")
 
 
 def validate_plan(plan):
@@ -91,6 +96,7 @@ class StatefulTransport(FixedTransport):
         self.next_number = 1
         self.steps = {}
         self.decisions = {}
+        self.guard_receipts = {}
         self.attempted = set()
         self.completed = set()
 
@@ -140,7 +146,7 @@ class StatefulTransport(FixedTransport):
             raise LabError('unprepared_stateful_command')
         self.check_network()
         self.inspect(self.sender, network=self.network)
-        raw = command(['docker', 'exec', '--interactive', self.sender, 'python', '-I', '-B', '-c', GUARD],
+        raw = command(['docker', 'exec', '--interactive', self.sender, 'python', '-I', '-B', '-c', STATEFUL_GUARD],
                       data=json.dumps({'command': cmd, 'session_id': session_id, 'step_id': step_id}).encode(),
                       timeout=10)
         try:
@@ -149,6 +155,16 @@ class StatefulTransport(FixedTransport):
                     or type(row.get('receipt_count')) is not int or row['receipt_count'] != 1
                     or type(row.get('exit_code')) is not int or row['exit_code'] != 0):
                 raise ValueError
+            trace = row.get('cause_trace')
+            if (type(trace) is not list or len(trace) > 100
+                    or any(type(item) is not list or len(item) != 5
+                           or any(type(value) is not str or len(value) > 1024 for value in item) for item in trace)
+                    or type(row.get('decision_reason')) is not str or len(row['decision_reason']) > 2048):
+                raise ValueError
+            expected = hashlib.sha256(json.dumps(trace, separators=(',', ':')).encode()).hexdigest() if trace else None
+            if row.get('cause_digest') != expected:
+                raise ValueError
+            self.guard_receipts[step_id] = {**row, 'trace_scope': 'cumulative_session_policy_trace'}
             self.decisions[step_id] = row['decision']
             return row['decision']
         except (ValueError, TypeError) as error:

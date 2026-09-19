@@ -41,12 +41,14 @@ class Transport(ControlTransport):
         self.plan, self.mode = plan, mode
         self.receiver, self.network = 'fixture', 'fixture'
         self.numbers = {}
+        self.guard_receipts = {}
 
     def prepare_step(self, number, step):
         self.numbers[step] = number
         return step
 
     def guard_step(self, cmd, session_id, step):
+        self.guard_receipts[step] = {'fixture': True}
         return 'deny' if self.plan['source'] == 'protected' and self.numbers[step] == len(self.plan['operations']) else 'allow'
 
     def execute_step(self, cmd, step):

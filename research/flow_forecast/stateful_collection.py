@@ -193,7 +193,8 @@ def run(repository, plan, output, *, seconds=600, clock=time.monotonic):
                     if not dispatched and transport.delivery(step) != ('no', 'no'):
                         raise ForecastDataError('stateful_denied_dispatch_mismatch')
                     row = {'number': number, 'step_id': step, 'command_sha': hashlib.sha256(cmd.encode()).hexdigest(),
-                           'decision': decision, 'dispatched': dispatched, 'observation': observation}
+                           'decision': decision, 'dispatched': dispatched, 'observation': observation,
+                           'guard_receipt': transport.guard_receipts[step]}
                     _write_private(output / f'{mode}-step-{number}.json', (canonical(row) + '\n').encode())
                     rows.append(row)
                     if not dispatched:
