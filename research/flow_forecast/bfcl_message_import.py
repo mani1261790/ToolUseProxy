@@ -221,7 +221,7 @@ def read_capture(directory, source):
         data = dataset(intent, execution, report, source)
         return data, {'intent': intent, 'execution': execution, 'report': report,
                       'dataset_sha': digest(asdict(data)), 'generator_evidence': intent['generator'],
-                      **({'source_text':source} if intent['generator'] is not None else {})}
+                      'source_text':source}
     except (KeyError, TypeError, ValueError) as error:
         if isinstance(error, ForecastDataError):
             raise
