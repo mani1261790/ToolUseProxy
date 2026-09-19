@@ -54,8 +54,9 @@ def test_runner_cannot_add_or_remove_assignment_from_a_completed_run(lab, tmp_pa
 
 
 def test_unsupported_tools_and_tampered_origin_rejected_before_run(lab, tmp_path):
-    with pytest.raises(LabError, match='unsupported_task_tools'):
-        binding('mail')
+    for tool in ('mail', 'tool_output'):
+        with pytest.raises(LabError, match='unsupported_task_tools'):
+            binding(tool)
     assignment = binding()
     key = next(iter(assignment['origins']))
     assignment['origins'][key] = 'changed'

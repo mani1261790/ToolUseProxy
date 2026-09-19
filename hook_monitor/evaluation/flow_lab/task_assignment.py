@@ -39,7 +39,7 @@ def validate(value):
             if type(document) is not str or not document or hashlib.sha256(document.encode()).hexdigest() != key:
                 raise ValueError
         selected = next(row for row in value['catalog']['designs'] if row['id'] == value['design_id'])
-        if not set(selected['tools']) <= {'http', 'file', 'tool_output'}:
+        if not set(selected['tools']) <= {'http', 'file'}:
             raise LabError('unsupported_task_tools')
         return {'assignment_sha': value['assignment_sha'], 'catalog_sha': identity(value['catalog']),
                 'design': deepcopy(selected), 'declared_group': groups[selected['id']],
