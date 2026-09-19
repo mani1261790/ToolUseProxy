@@ -181,6 +181,9 @@ def read_capture(directory, source_path):
             raise ValueError
         reference = matches[0]
         validate(intent, execution, report, reference)
+        if 'cohort_assignment' in intent:
+            from .cohort_plan import validate_binding
+            validate_binding(intent['cohort_assignment'], catalog(references)[0], 'mbpp-' + str(reference['task_id']))
         implementation = read('implementation')
         if digest(implementation) != intent['implementation_sha']:
             raise ValueError
