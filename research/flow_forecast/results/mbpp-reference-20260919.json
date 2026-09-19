@@ -1,0 +1,105 @@
+{
+  "schema": 1,
+  "source_commit": "56277da63d1dd22f8b26e7b3c9c524d0db6a0e77",
+  "execution": {
+    "context_sha": "2059fed3c0064a5d67050bb9065ee4fc52bc51acbf64c2a1fcb0962daff4b907",
+    "image": "sha256:d9d926af5ef185c1fd1b94e45170771a443ab427dd271c118106b69abc3f3094",
+    "intent_sha": "b81942cdb626fc126415267b7bd8e1d3166d4602c6a4b5b153e5b0f4c32b39ca"
+  },
+  "report": {
+    "all_oracles_matched": true,
+    "artifact_bytes_before_report": 40519,
+    "elapsed_seconds": 5.646066916000564,
+    "execution_sha": "bd5392db894e947de27bdee2c1df7e12a23557af892f46653bd249a42ffef99d",
+    "independent_new_tasks_accepted": 0,
+    "intent_sha": "b81942cdb626fc126415267b7bd8e1d3166d4602c6a4b5b153e5b0f4c32b39ca",
+    "native_hook_tested": false,
+    "new_model_calls": 0,
+    "receiver_observed": false,
+    "results": [
+      {
+        "case_index": 0,
+        "case_sha": "06eb5cc90ef51801b4107d707c9b12cb7e842bdb1a747d1cdd6e95c20ad18e4b",
+        "observation_sha": "ee195db0cd14979ece92e4ac42d91fef87d1ee254f8df170907cd674dab12d44",
+        "oracle_matched": true,
+        "record_sha": "da99ce1c7e293ec99062af8fe62d0752fab4cdebe9a1eb8cc8f977c9d69297c7",
+        "task_id": 602
+      },
+      {
+        "case_index": 1,
+        "case_sha": "fc9f95aaaf170a8e862ef636cc25f7bc5f4d55b9bcd9fd14a4052edd188e16d1",
+        "observation_sha": "096938ce6ca6ab8881a1e9cd318a25e8b0eeab2beb42e077767e9d2939146d31",
+        "oracle_matched": true,
+        "record_sha": "da99ce1c7e293ec99062af8fe62d0752fab4cdebe9a1eb8cc8f977c9d69297c7",
+        "task_id": 602
+      },
+      {
+        "case_index": 2,
+        "case_sha": "460d9a290efc5240a7ad51b1c57fcea172948d0ded63089ecbe62781d7e6a087",
+        "observation_sha": "ee0ce7db9ce2f1d4d2e01f0e96d73fa2399a99d825d8a9898947539a8d8e1742",
+        "oracle_matched": true,
+        "record_sha": "da99ce1c7e293ec99062af8fe62d0752fab4cdebe9a1eb8cc8f977c9d69297c7",
+        "task_id": 602
+      },
+      {
+        "case_index": 0,
+        "case_sha": "caf8137a240e96d41799613f070c2ba467169853d64daa4900660ba9d87ff307",
+        "observation_sha": "c5cb2ce6634bd43c3d5f8469cd1b5f0b96f6fa5ec63ae548991442c838832dbd",
+        "oracle_matched": true,
+        "record_sha": "796a6b33281e636e65fef77c1e9ba270b782c60a7874b63a9102788ac62f7041",
+        "task_id": 603
+      },
+      {
+        "case_index": 1,
+        "case_sha": "e5854a6fb91edb3d3fe94e54436c1b6e5aadec79c5ae56bbd8cf46b956bdebc2",
+        "observation_sha": "506100056ce4c1bff073d3f6103c23c7bdc4feabfb495e382c1447bc0d6f97b4",
+        "oracle_matched": true,
+        "record_sha": "796a6b33281e636e65fef77c1e9ba270b782c60a7874b63a9102788ac62f7041",
+        "task_id": 603
+      },
+      {
+        "case_index": 2,
+        "case_sha": "adf0eab83b631849b59aaf97119f15036850dcc976c5cbf50272ba79c4bf25f7",
+        "observation_sha": "c8d51a12a8238bc75b8ba7d8b5c07b36da919ef944e48de16d99926693e1df04",
+        "oracle_matched": true,
+        "record_sha": "796a6b33281e636e65fef77c1e9ba270b782c60a7874b63a9102788ac62f7041",
+        "task_id": 603
+      },
+      {
+        "case_index": 0,
+        "case_sha": "d7a6d62d2da6360f100cdf01ec996a412bc6dc3bf1c9f5a12b101ada261ad908",
+        "observation_sha": "81a0a34f813dfa22d40e99f712bc2cbbd759aa77a9db77483ddba720d503c72d",
+        "oracle_matched": true,
+        "record_sha": "5fe759bd237edee78c0aae690bf680709540918cc668e500c68e6e41fa6f9771",
+        "task_id": 604
+      },
+      {
+        "case_index": 1,
+        "case_sha": "bf9b655af62cdc8b58e2935160184d943d82775ca27eddf95aa658a305619974",
+        "observation_sha": "97b0b0ae1fac18ea4f32de5d946f4cc43766155ee2442b3791201fbdbebdda6c",
+        "oracle_matched": true,
+        "record_sha": "5fe759bd237edee78c0aae690bf680709540918cc668e500c68e6e41fa6f9771",
+        "task_id": 604
+      },
+      {
+        "case_index": 2,
+        "case_sha": "90e171b3755a7e36c179b43b32bc688ae425ae8bc3b95bd7095ab4fbc2ad8611",
+        "observation_sha": "daec97b078f417aa44e85fc11ad18c8986872092eb0bc6dc30e199dcd7e8cedf",
+        "oracle_matched": true,
+        "record_sha": "5fe759bd237edee78c0aae690bf680709540918cc668e500c68e6e41fa6f9771",
+        "task_id": 604
+      }
+    ],
+    "schema": 1,
+    "scope": "pinned_reference_development_not_flow_truth_or_unseen_evaluation",
+    "status": "completed",
+    "trial_charges": 9
+  },
+  "saved_observations_rechecked": 9,
+  "script_reservations_rechecked": 9,
+  "unique_containers": 9,
+  "python_version": "3.11.14",
+  "python_implementation": "CPython",
+  "source_files_sha": "d2985ce1ee2ed79f90c61461210e88420b161267a3fbc050b21b0ae924e6b021",
+  "implementation_sha": "c1d72e95a63d64c8be16921b124cd379906339cfb919dd77afd981b7e38302db"
+}
