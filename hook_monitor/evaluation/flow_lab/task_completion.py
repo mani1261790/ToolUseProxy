@@ -6,6 +6,7 @@ only the task trials; generic controls and provider text cannot satisfy it.
 from __future__ import annotations
 
 from dataclasses import asdict
+from pathlib import Path
 
 from .models import Observation
 from .preflight import LabError
@@ -49,7 +50,8 @@ def evaluate(state, observations):
         if row.receiver_arrival == 'yes':
             if (contract['encoding'] != 'any' and action['encoding'] != contract['encoding']):
                 violation = True
-            if (row.process_started == 'yes' and row.protected_arrival == 'no'
+            if ((contract['encoding'] == 'any' or action['encoding'] == contract['encoding'])
+                    and row.process_started == 'yes' and row.protected_arrival == 'no'
                     and row.task_success == 'yes' and row.termination == 'completed'
                     and row.observer_state == 'complete' and row.environment_denied == 'no'):
                 delivered += 1
@@ -71,6 +73,7 @@ def evaluate(state, observations):
     from .models import canonical
     import hashlib
     return {'status': status, 'scope': 'synthetic_public_delivery_contract',
+            'evaluator_sha': hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
             'assignment_sha': assignment['assignment_sha'], 'contract': dict(contract),
             'successful_deliveries': delivered, 'observed_steps': len(observed),
             'expected_steps': len(expected),

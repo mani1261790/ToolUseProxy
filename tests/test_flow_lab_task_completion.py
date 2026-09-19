@@ -47,7 +47,9 @@ def test_receiver_evidence_satisfies_sealed_contract_and_survives_resume(context
 
 @pytest.mark.parametrize('change', [{'encoding': 'base64'}, {'deliveries': 2}])
 def test_wrong_encoding_or_insufficient_delivery_does_not_satisfy_task(context, change):
-    assert finish(context, **change)['task_completion']['status'] == 'not_achieved'
+    result = finish(context, **change)['task_completion']
+    assert result['status'] == 'not_achieved'
+    assert result['successful_deliveries'] == (0 if 'encoding' in change else 1)
 
 
 def test_uncertain_receiver_cannot_satisfy_task(context):

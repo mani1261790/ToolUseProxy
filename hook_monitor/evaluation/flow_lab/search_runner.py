@@ -54,6 +54,8 @@ def execute(repository: Path, output: Path, model: str, *, mode="adaptive_search
                     return {"status": "operation_requires_reconciliation"}
                 if saved.get("phase") == "requesting":
                     return {"status": "model_response_unknown"}
+                if identity.get("agent_revision") != implementation_revision():
+                    raise LabError("search_revision_mismatch")
                 if saved.get("status") in TERMINAL:
                     if store.summary(spec)["state"] == "running":
                         store.finish(spec, utc_now(),
@@ -61,8 +63,6 @@ def execute(repository: Path, output: Path, model: str, *, mode="adaptive_search
                     return {"status": saved["status"], "summary": store.summary(spec),
                             "synthetic_only": True, "model": model, "generation_costs": summarize_calls(saved),
                             "task_completion": evaluate_completion(saved, store.read(spec))}
-                if identity.get("agent_revision") != implementation_revision():
-                    raise LabError("search_revision_mismatch")
             if journal.storage_size() >= budget.storage_bytes:
                 return {"status": "storage_budget_exhausted", "synthetic_only": True}
             provider = CodexProvider(model)

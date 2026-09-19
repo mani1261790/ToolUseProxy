@@ -135,6 +135,8 @@ def import_search(directory: Path):
             'generation_calls': state.get('call_records'),
             'task_assignment': state['identity'].get('task_assignment'),
             'task_completion': evaluate_completion(state, tuple(observations.values())),
+            'task_completion_evaluation': 'derived_on_import_not_original_result',
+            'source_agent_revision': state['identity'].get('agent_revision'),
             'limitations': ['no_paired_counterfactual', 'no_recorded_intermediate_truth',
                             'independent_fresh_guard_actions', 'not_natural_frequencies'],
         }
