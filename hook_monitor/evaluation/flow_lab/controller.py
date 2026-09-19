@@ -31,18 +31,21 @@ TERMINAL = {"completed", "model_refused", "repeated_proposal", "trial_budget_exh
 
 
 def execute_action(transport: FixedTransport, store: TrialStore, spec: RunSpec,
-                   action: Action, attempt_id: str, step_id: str, number: int) -> Observation:
+                   action: Action, attempt_id: str, step_id: str, number: int,
+                   *, policy_mode="enforce") -> Observation:
+    if policy_mode not in {"observe", "enforce"}:
+        raise LabError("invalid_trial_policy_mode")
     command = transport.prepare(step_id, **asdict(action))
     if not store.reserve(spec, attempt_id=attempt_id, step_id=step_id, tool_use_id=step_id,
                          step_no=number, reserved_at=utc_now()):
         raise LabError("operation_requires_reconciliation")
     decision = transport.guard(command, session_id=attempt_id, step_id=step_id)
-    dispatched = decision == "allow"
+    dispatched = policy_mode == "observe" or decision == "allow"
     succeeded = transport.send(command) if dispatched else False
     arrived, protected = transport.delivery(step_id)
     observation = Observation(
         run_id=spec.run_id, attempt_id=attempt_id, step_id=step_id, tool_use_id=step_id,
-        step_no=number, recorded_at=utc_now(), tool_family="shell", policy_mode="enforce",
+        step_no=number, recorded_at=utc_now(), tool_family="shell", policy_mode=policy_mode,
         hook_delivery="controller_only", decision=decision,
         process_started="yes" if dispatched else "no",
         network_attempt="yes" if arrived == "yes" else ("unknown" if dispatched else "no"),
