@@ -33,7 +33,7 @@ def receipt(observation, call_id, elapsed_ms, proposal=None):
     if 'prompt_eval_cached_count' in raw:
         usage = {'input_tokens': raw['prompt_eval_count'], 'output_tokens': raw['eval_count'],
                  'cached_input_tokens': raw['prompt_eval_cached_count']}
-    payload = local.request()
+    payload = local.request(observation.get('request_revision', 1))
     result = {'schema': 3, 'call_id': call_id, 'requested_model': MODEL_ID,
               'resolved_model': None, 'resolved_model_verified': False,
               'reported_model': raw['model'], 'endpoint': 'http://127.0.0.1:11434/api/generate',
@@ -75,6 +75,8 @@ class OllamaTicketProvider:
             raise LabError('model_unavailable')
         try:
             observation = json.loads(process.stdout)
+            if observation.get('request_revision') != 2:
+                raise LabError('local_generation_request_mismatch')
             # Preserve the observed response even when its plan is invalid.
             _write_private(self.output / 'ollama-observation.json', canonical(observation).encode())
             elapsed = int((time.monotonic() - started) * 1000)
