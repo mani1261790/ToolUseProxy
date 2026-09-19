@@ -37,7 +37,12 @@ def validate(intent, execution, report, source):
                 or report['post_tool_hook_delivery'] != 'not_tested'
                 or report['native_codex_hook_delivery'] != 'not_tested'):
             raise ValueError
-        if intent['generator'] is not None or intent['source_commit'] != COMMIT or intent['source_sha'] != SOURCE_SHA:
+        if intent['generator'] is not None:
+            from .generated_ticket import validate as validate_generation
+            validate_generation(intent['generator'])
+            if intent['generator']['task'] != intent['task'] or intent['generator']['plan']['export'] != intent['variant']:
+                raise ValueError
+        if intent['source_commit'] != COMMIT or intent['source_sha'] != SOURCE_SHA:
             raise ValueError
         limits = intent['limits']
         if (set(limits) != {'trials', 'seconds', 'bytes'} or any(type(v) is not int for v in limits.values())
@@ -218,7 +223,8 @@ def read_capture(directory, source):
                     raise ValueError
         data = dataset(intent, execution, report, source)
         return data, {'intent': intent, 'execution': execution, 'report': report,
-                      'dataset_sha': digest(asdict(data)), 'generator_evidence': intent['generator']}
+                      'dataset_sha': digest(asdict(data)), 'generator_evidence': intent['generator'],
+                      **({'source_text':source} if intent['generator'] is not None else {})}
     except (KeyError, TypeError, ValueError) as error:
         if isinstance(error, ForecastDataError):
             raise

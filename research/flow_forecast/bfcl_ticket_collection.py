@@ -19,9 +19,14 @@ from .provenance import source_provenance
 from .task_catalog import _write_private
 
 
-def run(repository, source_path, variant, output, *, seconds=180, clock=time.monotonic):
+def run(repository, source_path, variant, output, *, seconds=180, clock=time.monotonic, generation=None):
     if variant not in ('public', 'include_private') or type(seconds) is not int or not 1 <= seconds <= 1800:
         raise LabError('invalid_ticket_batch')
+    if generation is not None:
+        from .generated_ticket import validate
+        validate(generation)
+        if generation['plan']['export'] != variant:
+            raise LabError('ticket_generation_plan_mismatch')
     source = source_text(source_path)
     started, charged = clock(), 0
     source_root = Path(repository).resolve(strict=True)
@@ -33,7 +38,7 @@ def run(repository, source_path, variant, output, *, seconds=180, clock=time.mon
     intent = {'schema': 1, 'task': 'closed_ticket_dispatch_v1', 'variant': variant,
               'root': uuid.uuid4().hex, 'implementation_sha': digest(implementation),
               'limits': {'trials': 20, 'seconds': seconds, 'bytes': 1024 * 1024 * 1024},
-              'planned_trials': 18, 'generator': None, 'source_commit': COMMIT, 'source_sha': SOURCE_SHA}
+              'planned_trials': 18, 'generator': generation, 'source_commit': COMMIT, 'source_sha': SOURCE_SHA}
     _write_private(output / 'intent.json', canonical(intent).encode())
 
     def check():
