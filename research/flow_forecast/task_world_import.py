@@ -19,7 +19,7 @@ def validate_evidence(intent, execution, report):
     try:
         world = definition(intent['world'])
         if (type(intent['schema']) is not int or intent['schema'] != 1 or intent['definition'] != world
-                or intent['variant'] not in ('public', 'include_private') or intent['generator'] is not None
+                or intent['variant'] not in ('public', 'include_private')
                 or type(intent['root']) is not str or not re.fullmatch('[a-f0-9]{32}', intent['root'])
                 or type(report['schema']) is not int or report['schema'] != 1 or report['status'] != 'completed'
                 or report['intent_sha'] != digest(intent) or execution['intent_sha'] != digest(intent)
@@ -29,6 +29,11 @@ def validate_evidence(intent, execution, report):
                 or type(report['independent_new_tasks_accepted']) is not int
                 or report['independent_new_tasks_accepted'] != 0):
             raise ValueError
+        if intent['generator'] is not None:
+            from .generated_world_plan import validate
+            generation = validate(intent['generator'])
+            if generation['world'] != intent['world'] or generation['plan']['export'] != intent['variant']:
+                raise ValueError
         limits = intent['limits']
         if (type(limits) is not dict or set(limits) != {'trials', 'seconds', 'bytes'}
                 or any(type(value) is not int for value in limits.values())
@@ -174,7 +179,7 @@ def read_capture(directory):
                     raise ForecastDataError('task_world_step_mismatch')
         data = dataset_from_evidence(intent, execution, report)
         return data, {'intent': intent, 'execution': execution, 'report': report,
-                      'dataset_sha': digest(asdict(data)), 'generator_evidence': None}
+                      'dataset_sha': digest(asdict(data)), 'generator_evidence': intent['generator']}
     except (KeyError, TypeError, ValueError) as error:
         if isinstance(error, ForecastDataError):
             raise
