@@ -11,6 +11,11 @@ from .models import RecordError, canonical, identifier, version
 from .preflight import LabError
 
 
+EXECUTION_IDENTITY_FIELDS = ('schema', 'call_id', 'requested_model', 'cli_version', 'thread_sha',
+                             'events_sha', 'prompt_sha', 'usage', 'scope', 'reported_model',
+                             'endpoint', 'request_sha', 'response_id_sha')
+
+
 VALIDATION_DIAGNOSTICS = {'event_or_text_invalid', 'completion_count_invalid',
                           'message_count_invalid', 'proposal_json_invalid', 'proposal_schema_invalid'}
 
@@ -57,21 +62,28 @@ def capture(*, events: bytes, prompt: bytes, proposal: Proposal | None, model: s
 
 def validate(evidence, proposal, model):
     try:
+        api = type(evidence) is dict and type(evidence.get('schema')) is int and evidence['schema'] == 2
+        extra = {'reported_model', 'endpoint', 'request_sha', 'response_id_sha'} if api else set()
         if (type(evidence) is not dict or set(evidence) != {
                 'schema', 'call_id', 'requested_model', 'resolved_model', 'resolved_model_verified',
                 'cli_version', 'thread_sha', 'events_sha', 'prompt_sha', 'proposal_sha', 'usage',
-                'elapsed_ms', 'scope'} or type(evidence['schema']) is not int or evidence['schema'] != 1
+                'elapsed_ms', 'scope'} | extra or type(evidence['schema']) is not int or evidence['schema'] not in (1, 2)
                 or evidence['requested_model'] != model or evidence['resolved_model'] is not None
                 or evidence['resolved_model_verified'] is not False
-                or evidence['scope'] != 'local_cli_execution_not_provider_attestation'
+                or evidence['scope'] != ('local_https_response_metadata' if api else 'local_cli_execution_not_provider_attestation')
                 or evidence['proposal_sha'] != (proposal_sha(proposal) if proposal is not None else None)):
             raise ValueError
         version(evidence['requested_model'])
         identifier(evidence['call_id'])
-        if (not isinstance(evidence['cli_version'], str)
+        if api:
+            version(evidence['reported_model'])
+            if (evidence['endpoint'] != 'https://api.openai.com/v1/responses'
+                    or evidence['cli_version'] is not None or evidence['thread_sha'] is not None):
+                raise ValueError
+        elif (not isinstance(evidence['cli_version'], str)
                 or re.fullmatch(r'codex-cli [0-9]+\.[0-9]+\.[0-9]+', evidence['cli_version']) is None):
             raise ValueError
-        for key in ('events_sha', 'prompt_sha', 'proposal_sha', 'thread_sha'):
+        for key in ('events_sha', 'prompt_sha', 'proposal_sha', 'thread_sha') + (('request_sha', 'response_id_sha') if api else ()):
             value = evidence[key]
             if value is None and (key == 'thread_sha' or (key == 'proposal_sha' and proposal is None)):
                 continue

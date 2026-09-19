@@ -10,7 +10,7 @@ import uuid
 from hook_monitor.evaluation.flow_forecast.dataset import _json, _read
 from hook_monitor.evaluation.flow_forecast.prefix import ForecastDataError, canonical, digest
 from hook_monitor.evaluation.flow_lab.call_history import summarize
-from hook_monitor.evaluation.flow_lab.generation_evidence import validate as validate_receipt
+from hook_monitor.evaluation.flow_lab.generation_evidence import EXECUTION_IDENTITY_FIELDS, validate as validate_receipt
 from hook_monitor.evaluation.flow_lab.models import utc_now, version, identifier, timestamp, RecordError
 from hook_monitor.evaluation.flow_lab.preflight import LabError
 from .provenance import source_provenance
@@ -32,6 +32,10 @@ def validate(value):
             raise ValueError
         validate_receipt(value['generation'], plan, value['model'])
         text = prompt([], 'benign_task', {'world': value['world']})
+        if value['generation']['schema'] == 2:
+            from .api_world_plan import encoded, request as api_request
+            if value['generation']['request_sha'] != hashlib.sha256(encoded(api_request(value['model'], text))).hexdigest():
+                raise ValueError
         request = {'schema': 1, 'world': value['world'], 'definition': value['definition'],
                    'model': value['model'], 'maximum_model_calls': 1, 'reply_limit': 16384,
                    'implementation_sha': value['implementation_sha'], 'prompt_sha': hashlib.sha256(text.encode()).hexdigest()}
@@ -97,8 +101,7 @@ def prepare(world, provider, output, *, timeout=60, clock=time.monotonic):
             try:
                 validate_receipt(execution, None, provider.model_id)
                 if execution['prompt_sha'] != request['prompt_sha'] or (record['generation'] is not None and any(
-                        execution[k] != record['generation'][k] for k in ('call_id', 'requested_model', 'cli_version',
-                                                                        'events_sha', 'prompt_sha', 'usage'))):
+                        execution.get(k) != record['generation'].get(k) for k in EXECUTION_IDENTITY_FIELDS)):
                     raise LabError('world_execution_mismatch')
                 record['execution'] = execution
             except LabError:
@@ -137,8 +140,7 @@ def load(directory):
             raise ValueError
         if call['execution'] is not None:
             validate_receipt(call['execution'], None, value['model'])
-            if any(call['execution'][k] != value['generation'][k] for k in (
-                    'call_id', 'requested_model', 'cli_version', 'events_sha', 'prompt_sha', 'usage')):
+            if any(call['execution'].get(k) != value['generation'].get(k) for k in EXECUTION_IDENTITY_FIELDS):
                 raise ValueError
     except (KeyError, TypeError, ValueError, LabError, RecordError) as error:
         raise ForecastDataError('invalid_world_plan_artifacts') from error
@@ -150,6 +152,7 @@ def main(argv=None):
     parser.add_argument('stage', choices=('prepare', 'collect'))
     parser.add_argument('--world', choices=tuple(WORLDS))
     parser.add_argument('--model')
+    parser.add_argument('--provider', choices=('codex', 'openai-api'), default='codex')
     parser.add_argument('--prepared', type=Path)
     parser.add_argument('--repository', type=Path)
     parser.add_argument('--output', required=True, type=Path)
@@ -157,7 +160,9 @@ def main(argv=None):
     if args.stage == 'prepare':
         if not args.world or not args.model:
             parser.error('prepare requires --world and --model')
-        result = prepare(args.world, WorldPlanProvider(args.model), args.output)
+        from .api_world_plan import APIWorldPlanProvider
+        provider = APIWorldPlanProvider if args.provider == 'openai-api' else WorldPlanProvider
+        result = prepare(args.world, provider(args.model), args.output)
     else:
         if args.prepared is None or args.repository is None:
             parser.error('collect requires --prepared and --repository')

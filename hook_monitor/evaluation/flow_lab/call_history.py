@@ -1,6 +1,6 @@
 """Every charged generation call, including unknown outcomes and missing usage."""
 from .agent import Proposal
-from .generation_evidence import VALIDATION_DIAGNOSTICS, validate as validate_generation
+from .generation_evidence import EXECUTION_IDENTITY_FIELDS, VALIDATION_DIAGNOSTICS, validate as validate_generation
 from .models import identifier, timestamp
 from .preflight import LabError
 
@@ -36,8 +36,7 @@ def validate_history(state, budget):
         if execution is not None:
             validate_generation(execution, None, state['identity']['model'])
             if record['generation'] is not None and any(
-                    record['generation'].get(key) != execution[key] for key in (
-                        'call_id', 'requested_model', 'cli_version', 'events_sha', 'prompt_sha', 'usage')):
+                    record['generation'].get(key) != execution.get(key) for key in EXECUTION_IDENTITY_FIELDS):
                 raise LabError('execution_generation_mismatch')
         outcome = record['outcome']
         if outcome == 'pending':
