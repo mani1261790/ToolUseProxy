@@ -9,6 +9,7 @@ import argparse
 from dataclasses import asdict
 import hashlib
 import math
+import sqlite3
 from pathlib import Path
 import time
 import uuid
@@ -21,11 +22,11 @@ from hook_monitor.evaluation.flow_forecast.prefix import ForecastDataError, cano
 from hook_monitor.evaluation.flow_lab.adaptive_transport import AdaptiveTransport
 from hook_monitor.evaluation.flow_lab.agent import Proposal
 from hook_monitor.evaluation.flow_lab.controller import execute_action
-from hook_monitor.evaluation.flow_lab.models import RunSpec, utc_now
-from hook_monitor.evaluation.flow_lab.preflight import build_context, build_image, check_isolation
+from hook_monitor.evaluation.flow_lab.models import RecordError, RunSpec, utc_now
+from hook_monitor.evaluation.flow_lab.preflight import LabError, build_context, build_image, check_isolation
 from hook_monitor.evaluation.flow_lab.revision import implementation_revision
 from hook_monitor.evaluation.flow_lab.runner import Scenario, run_scenario
-from hook_monitor.evaluation.flow_lab.storage import TrialStore
+from hook_monitor.evaluation.flow_lab.storage import StoreError, TrialStore
 from hook_monitor.evaluation.flow_lab.task_assignment import validate as validate_assignment
 from hook_monitor.evaluation.flow_lab.task_completion import evaluate as evaluate_completion
 from research.flow_forecast.task_catalog import _write_private
@@ -189,9 +190,16 @@ def main(argv=None):
     parser.add_argument('--attempt', default=1, type=int)
     parser.add_argument('--seconds', default=600, type=int)
     args = parser.parse_args(argv)
-    print(canonical(run(args.repository, args.search_directory, args.output,
-                        attempt=args.attempt, seconds=args.seconds)))
+    try:
+        report = run(args.repository, args.search_directory, args.output,
+                     attempt=args.attempt, seconds=args.seconds)
+    except (ForecastDataError, LabError, RecordError, StoreError, OSError, sqlite3.Error) as error:
+        reason = str(error) if isinstance(error, (ForecastDataError, LabError, RecordError, StoreError)) else 'pair_io_error'
+        print(canonical({'status': 'not_completed', 'reason': reason}))
+        return 1
+    print(canonical(report))
+    return 0
 
 
 if __name__ == '__main__':
-    main()
+    raise SystemExit(main())

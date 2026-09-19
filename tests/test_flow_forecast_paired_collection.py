@@ -164,3 +164,11 @@ def test_multiple_actions_count_operations_separately_from_trial_plans(lab, tmp_
     result = module.run(tmp_path, lab, tmp_path / 'pair')
     assert result['operation_count'] == 10
     assert result['trial_count'] == 8
+
+
+def test_cli_returns_closed_failure_without_dispatch(lab, tmp_path, capsys):
+    assert module.main(['--repository', str(tmp_path), '--search-directory', str(lab),
+                        '--output', str(tmp_path / 'pair'), '--seconds', '0']) == 1
+    assert json.loads(capsys.readouterr().out) == {
+        'status': 'not_completed', 'reason': 'invalid_pair_time_budget'}
+    assert not Transport.instances and not (tmp_path / 'pair').exists()
