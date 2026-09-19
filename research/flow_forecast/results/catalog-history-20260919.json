@@ -1,0 +1,75 @@
+{
+  "schema": 1,
+  "source_commit": "782bfda00c5bf576814a77d8ff106a2efae5ca2f",
+  "audit": {
+    "audit_sha": "ae0ace142467c8a6d4da516389579852862bcbf3abab0c11f5d11cf953826dd5",
+    "candidate_collection": "87914068d5fe9caa3dd57fe700b705a20f59b61d853fd08fbed024f52326f77e",
+    "history_complete": false,
+    "independence_verified": false,
+    "overlap": [
+      {
+        "design": "mbpp-602",
+        "prior": [
+          {
+            "collection": "99038699a8bb346dd5e833ae1299921e344afb9a588c4d60ff097ea05e2a195d",
+            "design": "mbpp-602"
+          },
+          {
+            "collection": "99038699a8bb346dd5e833ae1299921e344afb9a588c4d60ff097ea05e2a195d",
+            "design": "mbpp-603"
+          },
+          {
+            "collection": "99038699a8bb346dd5e833ae1299921e344afb9a588c4d60ff097ea05e2a195d",
+            "design": "mbpp-604"
+          }
+        ]
+      },
+      {
+        "design": "mbpp-603",
+        "prior": [
+          {
+            "collection": "99038699a8bb346dd5e833ae1299921e344afb9a588c4d60ff097ea05e2a195d",
+            "design": "mbpp-602"
+          },
+          {
+            "collection": "99038699a8bb346dd5e833ae1299921e344afb9a588c4d60ff097ea05e2a195d",
+            "design": "mbpp-603"
+          },
+          {
+            "collection": "99038699a8bb346dd5e833ae1299921e344afb9a588c4d60ff097ea05e2a195d",
+            "design": "mbpp-604"
+          }
+        ]
+      },
+      {
+        "design": "mbpp-604",
+        "prior": [
+          {
+            "collection": "99038699a8bb346dd5e833ae1299921e344afb9a588c4d60ff097ea05e2a195d",
+            "design": "mbpp-602"
+          },
+          {
+            "collection": "99038699a8bb346dd5e833ae1299921e344afb9a588c4d60ff097ea05e2a195d",
+            "design": "mbpp-603"
+          },
+          {
+            "collection": "99038699a8bb346dd5e833ae1299921e344afb9a588c4d60ff097ea05e2a195d",
+            "design": "mbpp-604"
+          }
+        ]
+      }
+    ],
+    "prior_collections": [
+      "99038699a8bb346dd5e833ae1299921e344afb9a588c4d60ff097ea05e2a195d"
+    ],
+    "prior_nonuse_verified": false,
+    "schema": 1,
+    "scope": "all_declared_catalog_designs_conservative",
+    "status": "known_related_origins",
+    "targets_read": false
+  },
+  "holdout_prepare_rejection": "holdout_known_related_origins",
+  "new_trials": 0,
+  "new_model_calls": 0,
+  "independent_new_tasks_accepted": 0
+}
