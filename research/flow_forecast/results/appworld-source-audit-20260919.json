@@ -1,0 +1,82 @@
+{
+  "schema": 1,
+  "repository": "StonyBrookNLP/appworld",
+  "commit": "42b5bcf3cd334fee33f0c37c02070a9f5807add5",
+  "tree": "dfce7142b8669fc11467c89a3f571b1f47d52dcf",
+  "scope": "six_pinned_public_plaintext_files_static_review_only",
+  "source_urls": [
+    "https://aclanthology.org/2024.acl-long.850.pdf",
+    "https://github.com/StonyBrookNLP/appworld",
+    "https://github.com/StonyBrookNLP/appworld/blob/42b5bcf3cd334fee33f0c37c02070a9f5807add5/guides/developing_new_task_generators.md"
+  ],
+  "paper_scenarios": 250,
+  "paper_tasks_per_scenario": 3,
+  "paper_tasks": 750,
+  "independent_groups_accepted": 0,
+  "paper_api_calls": {
+    "normal_average": 42.5,
+    "normal_max": 244,
+    "challenge_average": 46.8,
+    "challenge_max": 649
+  },
+  "findings": [
+    "Task variants cannot be counted as independent groups.",
+    "Benchmark alone has fewer scenarios than the 520-group F02 minimum, before independence review.",
+    "Default execution is in the caller process, so do not run it on the host.",
+    "Bundled source and data have separate distribution terms; do not extract or publish them before checking those terms.",
+    "API call counts often exceed the 20-trial batch cap; cannot silently extend the cap.",
+    "Task generator guide maps one generator to multiple task IDs; preserve generator-level lineage before assigning partitions.",
+    "SafetyGuard uses syntax checks and reversible in-process monkey patches; it is not an OS authorization or isolation boundary.",
+    "read_only_open restricts write modes but does not establish a task-specific readable-path allowlist.",
+    "skip_stdio changes patch coverage; caller configuration must be captured in any future execution manifest.",
+    "Public source license was inspected; bundled API implementation and its complete dependency closure remain unaudited."
+  ],
+  "new_model_calls": 0,
+  "new_trials": 0,
+  "task_data_downloaded": false,
+  "bundled_code_downloaded": false,
+  "source_blobs_verified": true,
+  "verified_files": [
+    {
+      "path": "README.md",
+      "git_blob_sha": "4798bdc3727107bc0c47fccb4f297bdff1e22f33",
+      "sha256": "f4049141b6e520217395b7ccd9f27048c8e0f90331690dcbef300d2bc4ff7bdd",
+      "bytes": 81334
+    },
+    {
+      "path": "LICENSE",
+      "git_blob_sha": "261eeb9e9f8b2b4b0d119366dda99c6fd7d35c64",
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+      "bytes": 11357
+    },
+    {
+      "path": "guides/developing_new_task_generators.md",
+      "git_blob_sha": "3aa01133d1c17e2b07c2403157a3cb94feaa8e64",
+      "sha256": "2bbadc820a11cabab036cdc217d7a2f5307812ec6bf62824ebc277c44b44f5da",
+      "bytes": 57094
+    },
+    {
+      "path": "guides/generating_base_database_and_tasks.md",
+      "git_blob_sha": "037a7eb17473212354e9290e3a7a42ef2c3d0abf",
+      "sha256": "5af30ce17068543c4ab58607a9ed63609c11ec51d49c1984bb994acf5ba1feea",
+      "bytes": 4221
+    },
+    {
+      "path": "src/appworld/common/safety_guard.py",
+      "git_blob_sha": "2e84afd545d35b9dc93cc07fa18563ce81893e51",
+      "sha256": "b03ef606d8e01a2f5bb93812473e32429f1e4d91cd0a40b6cdf851c8a2d3eeb3",
+      "bytes": 10880
+    },
+    {
+      "path": "tests/package/test_safety_guard.py",
+      "git_blob_sha": "622db749e28ff1f14147a4c771c219fb1edb371f",
+      "sha256": "5138175bad96df948d1ce5801a8b2fb8e6bcd87c0ca07ec5172078495c90d54f",
+      "bytes": 19756
+    }
+  ],
+  "upstream_code_executed": false,
+  "upstream_tests_executed": false,
+  "bundled_license_independently_verified": false,
+  "prior_nonuse_verified": false,
+  "independence_verified": false
+}
