@@ -115,3 +115,23 @@ def test_binding_records_different_images_without_claiming_equivalence(captured_
     audit['execution']['context_sha'] = '0'*64
     with pytest.raises(ForecastDataError, match='context_mismatch'):
         evidence.bind_capture(path, captured_interventions)
+
+
+def test_rehashed_observation_with_duplicate_keys_is_rejected(captured_interventions):
+    import hashlib
+    from hook_monitor.evaluation.flow_forecast.prefix import ForecastDataError
+    from research.flow_forecast.agenda_projection_evidence import read_interventions
+    path = captured_interventions / 'observation-1.json'
+    original = path.read_bytes()
+    modified = b'{"initial":{"conflicting":"value"},' + original[1:]
+    path.write_bytes(modified)
+    result_path = captured_interventions / 'result-1.json'
+    result = json.loads(result_path.read_text())
+    result['observation_sha'] = hashlib.sha256(modified).hexdigest()
+    result_path.write_text(canonical(result))
+    report_path = captured_interventions / 'report.json'
+    report = json.loads(report_path.read_text())
+    report['results'][0] = result
+    report_path.write_text(canonical(report))
+    with pytest.raises(ForecastDataError):
+        read_interventions(captured_interventions)

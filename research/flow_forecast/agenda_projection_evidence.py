@@ -63,7 +63,9 @@ def read_interventions(directory):
                     or not re.fullmatch('tup-lab-[a-f0-9]{32}', container['name']) or container['name'] in containers):
                 raise ValueError
             containers.add(container['name'])
-            result = verify(case, raw(f'observation-{index}'))
+            observation = raw(f'observation-{index}')
+            _json(observation)  # Reject ambiguous duplicate keys before oracle comparison.
+            result = verify(case, observation)
             if read(f'result-{index}') != result:
                 raise ValueError
             rows.append(result)
