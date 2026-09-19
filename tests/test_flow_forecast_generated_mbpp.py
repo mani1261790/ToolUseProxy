@@ -65,6 +65,24 @@ def test_changed_sealed_artifacts_rejected(tmp_path, name, reference):
         module.load(out)
 
 
+@pytest.mark.parametrize('field', ['elapsed_ms', 'error', 'proposal', 'generation', 'execution'])
+@pytest.mark.parametrize('mutation', ['completed_value', 'missing', 'extra'])
+def test_reservation_must_be_exact_pre_call_record(tmp_path, reference, field, mutation):
+    out = tmp_path / 'prepared'
+    result = module.prepare(reference, provider(tmp_path), out, timeout=2)
+    path = out / 'reservation.json'
+    reservation = json.loads(path.read_text())
+    if mutation == 'completed_value':
+        reservation[field] = result['call'][field] if result['call'][field] is not None else 'changed'
+    elif mutation == 'missing':
+        del reservation[field]
+    else:
+        reservation['unexpected_' + field] = None
+    path.write_text(json.dumps(reservation))
+    with pytest.raises(ForecastDataError, match='invalid_task_plan_artifacts'):
+        module.load(out)
+
+
 def test_capture_binds_generation_before_trials_and_rejects_variant_mismatch(tmp_path,monkeypatch, reference):
     out = tmp_path/'prepared'
     module.prepare(reference, provider(tmp_path), out, timeout=2)

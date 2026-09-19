@@ -130,7 +130,12 @@ def load(directory):
                 or result['status'] != 'prepared' or result['rejection'] is not None
                 or call['proposal'] != value['plan'] or call['generation'] != value['generation']
                 or call['outcome'] != 'response' or call['error'] is not None
-                or reservation['outcome'] != 'pending' or type(call['number']) is not int or call['number'] != 1
+                or type(reservation) is not dict or set(reservation) != {
+                    'number', 'call_id', 'started_at', 'reply_limit', 'elapsed_ms', 'outcome',
+                    'error', 'proposal', 'generation', 'execution'}
+                or reservation['outcome'] != 'pending'
+                or any(reservation[k] is not None for k in ('elapsed_ms', 'error', 'proposal', 'generation', 'execution'))
+                or type(call['number']) is not int or call['number'] != 1
                 or type(call['reply_limit']) is not int or call['reply_limit'] != 16384
                 or any(call[k] != reservation[k] for k in ('number', 'call_id', 'started_at', 'reply_limit'))
                 or type(call['elapsed_ms']) is not int or not 0 <= call['elapsed_ms'] <= 120000
