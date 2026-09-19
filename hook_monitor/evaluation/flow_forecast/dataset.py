@@ -13,7 +13,7 @@ import stat
 from .branches import Continuation, Transfer, UNKNOWN_RELATIONS
 from .labels import label_future
 from .prefix import ForecastDataError, InformationObject, ObservedStep, Prefix, canonical, digest
-from .splits import SplitManifest, split_prefixes, verify_split
+from .splits import SplitManifest, PlannedSplitManifest, split_prefixes, split_planned, verify_split
 
 
 FILES = ('inputs.json', 'targets.json', 'splits.json', 'summary.json')
@@ -96,11 +96,14 @@ class Dataset:
 
 
 def assemble(branches: tuple[Continuation, ...], *, seed='split-v1', related_roots=(),
-             provenance='synthetic-reference-v1') -> Dataset:
+             provenance='synthetic-reference-v1', planned=None) -> Dataset:
     if (type(branches) is not tuple or not 1 <= len(branches) <= MAX_BRANCHES
             or any(type(branch) is not Continuation for branch in branches)):
         raise ForecastDataError('invalid_dataset')
     prefixes = tuple({b.prefix.prefix_id: b.prefix for b in branches}.values())
+    if planned is not None:
+        return Dataset(branches, split_planned(prefixes, seed=seed, related_roots=related_roots,
+                       plan_sha=planned[0], root_assignments=planned[1]), related_roots, provenance)
     return Dataset(branches, split_prefixes(prefixes, seed=seed,
                                            related_roots=related_roots), related_roots, provenance)
 
@@ -229,7 +232,11 @@ def read_dataset(directory: Path) -> Dataset:
         split_data = dict(documents['splits.json'])
         related = tuple(tuple(x) for x in split_data.pop('related_roots'))
         split_data['assignments'] = tuple(tuple(x) for x in split_data['assignments'])
-        dataset = Dataset(tuple(branches), SplitManifest(**split_data), related, manifest['provenance'])
+        manifest_type = SplitManifest
+        if 'plan_sha' in split_data:
+            manifest_type = PlannedSplitManifest
+            split_data['root_assignments'] = tuple(tuple(x) for x in split_data['root_assignments'])
+        dataset = Dataset(tuple(branches), manifest_type(**split_data), related, manifest['provenance'])
         if ({p.prefix_id for p in dataset.prefixes} != set(prefixes)
                 or dataset.split.digest != manifest['split_digest']
                 or dataset.summary() != documents['summary.json']):

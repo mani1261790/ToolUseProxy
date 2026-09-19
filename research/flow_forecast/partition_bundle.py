@@ -13,14 +13,16 @@ from hook_monitor.evaluation.flow_forecast.dataset import (
     Dataset, _json, _read, assemble, read_dataset, write_dataset,
 )
 from hook_monitor.evaluation.flow_forecast.prefix import ForecastDataError, canonical, digest
-from hook_monitor.evaluation.flow_forecast.splits import PARTITIONS
+from hook_monitor.evaluation.flow_forecast.splits import PARTITIONS, PlannedSplitManifest
 from .holdout import _sha
 
 
 def _subset(dataset, partitions):
     branches = tuple(b for b in dataset.branches if dataset.split.partition(b.prefix) in partitions)
     roots = {b.prefix.root_case_id for b in branches}
-    return assemble(branches, seed=dataset.split.seed, provenance=dataset.provenance,
+    planned = ((dataset.split.plan_sha, tuple(r for r in dataset.split.root_assignments if r[0] in roots))
+               if type(dataset.split) is PlannedSplitManifest else None)
+    return assemble(branches, seed=dataset.split.seed, provenance=dataset.provenance, planned=planned,
                     related_roots=tuple(pair for pair in dataset.related_roots if set(pair) <= roots))
 
 
@@ -92,7 +94,12 @@ def combine(parts):
     first = parts[0]
     if any((p.split.seed, p.provenance) != (first.split.seed, first.provenance) for p in parts):
         raise ForecastDataError('inconsistent_partition_metadata')
-    result = assemble(tuple(b for p in parts for b in p.branches), seed=first.split.seed,
+    planned = None
+    if any(type(p.split) is PlannedSplitManifest for p in parts):
+        if any(type(p.split) is not PlannedSplitManifest for p in parts) or len({p.split.plan_sha for p in parts}) != 1:
+            raise ForecastDataError('inconsistent_cohort_plan')
+        planned = (first.split.plan_sha, tuple(r for p in parts for r in p.split.root_assignments))
+    result = assemble(tuple(b for p in parts for b in p.branches), seed=first.split.seed, planned=planned,
                       provenance=first.provenance,
                       related_roots=tuple(pair for p in parts for pair in p.related_roots))
     # Recompute across parts to detect equivalence groups that cross the boundary.
