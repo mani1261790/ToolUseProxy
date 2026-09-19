@@ -54,3 +54,37 @@ INPUTS.jsonは`[{"directory":"人工artifactのディレクトリ","roots":{"roo
 （capacity.md参照）。80/10/10のhash分割で必要なクラス数が揃う保証はなく、実課題の
 長い観測では32MiBを超え得る。実行バッチ上限を延長したりfixtureを水増ししたりせず、
 実際の収集量・分割・容量を確認して進める。
+
+## 試行開始前の割当
+
+`flow_lab.task_assignment`でcatalog・設計元文書・選択したdesign IDを最大64KiBの
+assignmentへ封印する。元文書のhashを照合し、現行の人工HTTP runnerが扱えない道具を
+要求する設計は拒否する。モデルに渡すのは選択設計の文脈で、元文書全体は送らない。
+
+```sh
+python -m hook_monitor.evaluation.flow_lab.task_assignment \
+  --catalog CATALOG.json --origins ORIGINS --design-id DESIGN --output ASSIGNMENT.json
+python -m hook_monitor.evaluation.flow_lab.search_runner \
+  --repository REPOSITORY --output-directory NEW_RUN --model MODEL \
+  --mode benign_task --trials 15 --seconds 180 --model-calls 2 \
+  --task-assignment ASSIGNMENT.json
+```
+
+assignmentは対照試験前に検証し、モデル呼出前にrunのidentityへ全文保存する。
+選択設計の文脈を生成promptに含め、prompt hashにも反映する。再開時は同じassignmentを
+要求し、追加・削除・変更を拒否する。旧runへ後から割当を足さない。
+これは生成文脈と試験の対応付けであり、任意の設計の完了条件を実行・検証する機能ではない。
+現行の実行言語はcontrolled HTTPと人工sourceの組合せに限定される。
+
+完了したrunのディレクトリをJSON配列で指定し、保存された割当から収集できる。
+このモードではposthocのcatalogやroot mappingを受け付けず、異なるcatalog版も混ぜない。
+元のcall・実行・割当の証拠を成果物へ引き継ぎ、旧データや未完了runは昇格させない。
+
+```sh
+python -m research.flow_forecast.task_catalog \
+  --assigned-searches COMPLETED_RUN_DIRECTORIES.json --output NEW_COLLECTION
+```
+
+examples/pretrial-public-httpは既存の公開人工HTTP課題を同じ群として扱う接続確認用。
+独立した新課題の収集実績や未使用testには数えない。価格・解決モデル版・意味上の独立性・
+固定分布の対照分岐・未開封評価の確認は引き続き別途必要。

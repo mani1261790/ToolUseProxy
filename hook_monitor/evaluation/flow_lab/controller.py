@@ -20,6 +20,7 @@ from .search_state import SearchJournal
 from .revision import implementation_revision
 from .storage import TrialStore
 from .transport import FixedTransport
+from .task_assignment import validate as validate_assignment
 
 
 PROVIDER_ERRORS = {"model_auth_required", "model_quota_exhausted", "model_refused",
@@ -113,6 +114,8 @@ def validate_state(state: dict, budget: Budget) -> None:
                 if value in identifiers:
                     raise ValueError
                 identifiers.add(value)
+        if 'task_assignment' in state['identity']:
+            validate_assignment(state['identity']['task_assignment'])
         validate_history(state, budget)
     except (ValueError, TypeError, KeyError, RecordError, LabError):
         raise LabError("invalid_search_state") from None
@@ -120,7 +123,7 @@ def validate_state(state: dict, budget: Budget) -> None:
 
 def run_search(journal: SearchJournal, store: TrialStore, spec: RunSpec,
                transport: FixedTransport, provider: ProposalProvider, budget: Budget,
-               *, clock=time.time, control_trials=0, started_at=None) -> dict:
+               *, clock=time.time, control_trials=0, started_at=None, task_assignment=None) -> dict:
     """Resume saved completed steps; never re-dispatch an unresolved reservation."""
     if spec.mode not in {"adaptive_search", "benign_task"}:
         raise LabError("search_mode_required")
@@ -130,6 +133,9 @@ def run_search(journal: SearchJournal, store: TrialStore, spec: RunSpec,
         raise LabError("invalid_search_budget")
     identity = {"spec": asdict(spec), "budget": asdict(budget), "model": provider.model_id,
                 "agent_revision": implementation_revision()}
+    if task_assignment is not None:
+        validate_assignment(task_assignment)
+        identity['task_assignment'] = deepcopy(task_assignment)
     with journal.lease():
         state = journal.read()
         if state is None:
@@ -195,8 +201,10 @@ def run_search(journal: SearchJournal, store: TrialStore, spec: RunSpec,
             journal.write(state)
             call_started = time.monotonic()
             try:
+                context = ({'task_context': validate_assignment(identity['task_assignment'])}
+                           if 'task_assignment' in identity else {})
                 response = provider.propose(feedback(store, spec, state["plans"]), task_mode=spec.mode,
-                                            timeout=min(60, remaining), max_bytes=reply_limit)
+                                            timeout=min(60, remaining), max_bytes=reply_limit, **context)
                 proposal = Proposal.parse(response)
             except LabError as exc:
                 reason = str(exc) if str(exc) in PROVIDER_ERRORS else "model_unavailable"

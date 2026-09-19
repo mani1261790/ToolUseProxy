@@ -233,34 +233,80 @@ def read_collection(directory):
     return data, catalog, audit
 
 
-def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--catalog', required=True, type=Path)
-    parser.add_argument('--inputs', required=True, type=Path,
-                        help='JSON list of {directory, roots} bindings for synthetic datasets')
-    parser.add_argument('--output', required=True, type=Path)
-    parser.add_argument('--origins', required=True, type=Path,
-                        help='Synthetic design documents named by SHA-256 with .md suffix')
-    args = parser.parse_args(argv)
-    catalog = _json(_read(args.catalog))
-    design_groups(catalog)  # Reject invalid design claims before reading trial artifacts.
-    origins = read_origins(catalog, args.origins)
-    inputs = _json(_read(args.inputs))
-    if type(inputs) is not list or not 1 <= len(inputs) <= MAX_INPUTS:
+def collect_assigned_searches(directories):
+    """Use the recorded pretrial assignment, never a caller's posthoc root mapping."""
+    from hook_monitor.evaluation.flow_forecast.search_import import import_search
+    from hook_monitor.evaluation.flow_lab.task_assignment import validate as validate_assignment
+    if type(directories) is not tuple or not 1 <= len(directories) <= MAX_INPUTS:
         raise ForecastDataError('invalid_collection_inputs')
-    samples = []
+    catalog, origins, samples, audits = None, None, [], []
     total_bytes, total_branches = 0, 0
-    for entry in inputs:
-        if (type(entry) is not dict or set(entry) != {'directory', 'roots'}
-                or type(entry['directory']) is not str or not entry['directory']):
-            raise ForecastDataError('invalid_collection_input')
-        data = read_dataset(Path(entry['directory']))
-        total_bytes += len(canonical(asdict(data)).encode())
+    for directory in directories:
+        data, audit = import_search(directory)
+        assignment = audit.get('task_assignment')
+        if assignment is None:
+            raise ForecastDataError('search_has_no_pretrial_assignment')
+        context = validate_assignment(assignment)
+        if catalog is None:
+            catalog = assignment['catalog']
+            origins = {key: value.encode() for key, value in assignment['origins'].items()}
+        elif catalog != assignment['catalog']:
+            raise ForecastDataError('collection_catalog_changed')
+        total_bytes += len(canonical(audit).encode()) + len(canonical(asdict(data)).encode())
         total_branches += len(data.branches)
         if total_bytes > MAX_ARTIFACT_BYTES or total_branches > MAX_BRANCHES:
             raise ForecastDataError('collection_size_limit')
-        samples.append((data, entry['roots']))
-    data, audit = collect(catalog, tuple(samples))
+        samples.append((data, {prefix.root_case_id: assignment['design_id'] for prefix in data.prefixes}))
+        audits.append({'run_id': audit['run']['run_id'], 'assignment_sha': context['assignment_sha'],
+                       'binding_source': 'saved_pretrial_identity', 'import_evidence': audit})
+    data, evidence = collect(catalog, tuple(samples))
+    evidence['assigned_searches'] = audits
+    if len(canonical(evidence).encode()) > MAX_ARTIFACT_BYTES:
+        raise ForecastDataError('collection_size_limit')
+    return data, evidence, catalog, origins
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--catalog', type=Path)
+    inputs_group = parser.add_mutually_exclusive_group(required=True)
+    inputs_group.add_argument('--assigned-searches', type=Path, help='JSON list of completed assigned search directories')
+    inputs_group.add_argument('--inputs', type=Path,
+                        help='JSON list of {directory, roots} bindings for synthetic datasets')
+    parser.add_argument('--output', required=True, type=Path)
+    parser.add_argument('--origins', type=Path,
+                        help='Synthetic design documents named by SHA-256 with .md suffix')
+    args = parser.parse_args(argv)
+    if args.assigned_searches:
+        if args.catalog or args.origins:
+            parser.error('assigned searches use their recorded catalogs and origins')
+        paths = _json(_read(args.assigned_searches))
+        if (type(paths) is not list or not 1 <= len(paths) <= MAX_INPUTS
+                or any(type(path) is not str or not path for path in paths)):
+            raise ForecastDataError('invalid_collection_inputs')
+        data, audit, catalog, origins = collect_assigned_searches(tuple(Path(path) for path in paths))
+    else:
+        if args.catalog is None or args.origins is None:
+            parser.error('manual inputs require --catalog and --origins')
+        catalog = _json(_read(args.catalog))
+        design_groups(catalog)  # Reject invalid design claims before reading trial artifacts.
+        origins = read_origins(catalog, args.origins)
+        inputs = _json(_read(args.inputs))
+        if type(inputs) is not list or not 1 <= len(inputs) <= MAX_INPUTS:
+            raise ForecastDataError('invalid_collection_inputs')
+        samples = []
+        total_bytes, total_branches = 0, 0
+        for entry in inputs:
+            if (type(entry) is not dict or set(entry) != {'directory', 'roots'}
+                    or type(entry['directory']) is not str or not entry['directory']):
+                raise ForecastDataError('invalid_collection_input')
+            data = read_dataset(Path(entry['directory']))
+            total_bytes += len(canonical(asdict(data)).encode())
+            total_branches += len(data.branches)
+            if total_bytes > MAX_ARTIFACT_BYTES or total_branches > MAX_BRANCHES:
+                raise ForecastDataError('collection_size_limit')
+            samples.append((data, entry['roots']))
+        data, audit = collect(catalog, tuple(samples))
     audit['origin_artifacts_verified'] = True
     audit['origin_verification_scope'] = 'supplied_document_bytes_match_declared_sha256'
     args.output.mkdir(mode=0o700)

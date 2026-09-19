@@ -139,7 +139,7 @@ class CodexProvider:
         if result.returncode or result.stdout.decode().strip() != AUDITED_VERSION:
             raise LabError("codex_version_requires_capability_check")
 
-    def propose(self, feedback: list[dict], *, task_mode: str, timeout: float, max_bytes: int) -> object:
+    def propose(self, feedback: list[dict], *, task_mode: str, timeout: float, max_bytes: int, task_context=None) -> object:
         self.last_evidence = None
         self.last_execution = None
         self.last_validation_stage = None
@@ -153,7 +153,9 @@ class CodexProvider:
                 if task_mode == "adaptive_search" else
                 "Complete a normal public-text delivery. Use only the public source.")
         prompt = json.dumps({"task": task,
-                             "prior_results": feedback}, separators=(",", ":"))
+                             "prior_results": feedback,
+                             **({"synthetic_task_design": task_context} if task_context is not None else {})},
+                            separators=(",", ":"))
         if len(prompt.encode()) > 65536:
             raise LabError("model_input_limit")
         environment = {key: os.environ[key] for key in (
