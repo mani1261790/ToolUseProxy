@@ -1,0 +1,127 @@
+{
+  "schema": 1,
+  "source_commit": "6282a2615280fee06c677b6cdb01678beb5f1a03",
+  "interventions": "/private/tmp/tooluseproxy-204-message-interventions-v1",
+  "intervention_report": {
+    "accepted_independent_groups": 0,
+    "all_oracles_matched": true,
+    "api_calls": 15,
+    "artifact_bytes_before_report": 46866,
+    "elapsed_seconds": 5.512439499987522,
+    "execution_sha": "6b7a26c49a3e67a1a47fc59f7715d6d56e3d356fbf7690414bcffbce57287187",
+    "intent_sha": "aa4142b90e6268729242e80d158e716d121221514cc96dd5d74513a168b9ef63",
+    "new_model_calls": 0,
+    "receiver_observed": false,
+    "results": [
+      {
+        "case_sha": "1d2469e4f92edbe24421e4b03a5c2b4840f60e1ff963fac5f10b7be0264f9326",
+        "observation_sha": "ff5575aaa167ccb9912716ed784c7f1d36f84dd39299bd180282b267000b8638",
+        "oracle_matched": true
+      },
+      {
+        "case_sha": "30fef32dbaf33fea79d5439983ee9fa67a8a70df0e8fdeaf79493c810cff1594",
+        "observation_sha": "a4c6fc23bcbb69695b2787898415ae8af414960908ddb58aff24a6843cd23717",
+        "oracle_matched": true
+      },
+      {
+        "case_sha": "8cb32663d895900a075fb27ac7484a35dd8ba46fdf7a0f6fc3e49c1cbd6be29c",
+        "observation_sha": "7b40df69757f3da552876cc9d2d5ae1f6c4e34e85c98da84631902b880be301f",
+        "oracle_matched": true
+      },
+      {
+        "case_sha": "aa280324f1b035ad1bac61c9e934fee4ae88a7d6e9512e307cca5e546a92f6d4",
+        "observation_sha": "26e8539f9781deff54ae99574705700ace92be67802156ee543dd09b89e044da",
+        "oracle_matched": true
+      },
+      {
+        "case_sha": "84a70343b3ad4face74d791b2e698fb53cdbc5f90a5984d521b2a1a879e3f8d8",
+        "observation_sha": "8eac0efb413391f32061bf7fa176b94a20f49badf0598e2f114d272e29cc0151",
+        "oracle_matched": true
+      }
+    ],
+    "schema": 1,
+    "scope": "finite_message_interventions_not_universal_truth_or_unseen_evaluation",
+    "status": "completed",
+    "trial_charges": 20
+  },
+  "intervention_report_sha": "ac604d3709237caec3ab61eeee433c6ba9d68adf50eeee271562d68e6a7508a5",
+  "bindings": [
+    {
+      "schema": 1,
+      "capture_root": "c9c22ea2c6244e96b858a02c55e8181c",
+      "capture_report_sha": "655899126135c8ea8805d143374cc272886dcb817fe2445359f0f0be9c74db11",
+      "intervention_report_sha": "ac604d3709237caec3ab61eeee433c6ba9d68adf50eeee271562d68e6a7508a5",
+      "source_sha": "cf72af1635654147af17df1891a7fb354549e78a61930139f741a31f4be21121",
+      "query_observations_bound": 2,
+      "semantic_truth_promoted": false,
+      "capture_image": "sha256:37e0d447f411825d7152329c36b254ff8dbc17692f91dcccdf352080211168a8",
+      "intervention_image": "sha256:c9c5a16ba2baf74989e921bc116f010060c518cb8e080e831468b3b15715cdbf",
+      "identical_image_verified": false,
+      "scope": "finite_message_field_interventions_not_universal_noninterference"
+    },
+    {
+      "schema": 1,
+      "capture_root": "907e64b8b6534cffbe0707d292617a81",
+      "capture_report_sha": "21bde613c543133319fee7e00bae82db0152e7fc80375973d96225b6b174ba8a",
+      "intervention_report_sha": "ac604d3709237caec3ab61eeee433c6ba9d68adf50eeee271562d68e6a7508a5",
+      "source_sha": "cf72af1635654147af17df1891a7fb354549e78a61930139f741a31f4be21121",
+      "query_observations_bound": 2,
+      "semantic_truth_promoted": false,
+      "capture_image": "sha256:f608713d9ec87bfc6236aa5ebaf0a3d88400e5a407ee26d049045af755331010",
+      "intervention_image": "sha256:c9c5a16ba2baf74989e921bc116f010060c518cb8e080e831468b3b15715cdbf",
+      "identical_image_verified": false,
+      "scope": "finite_message_field_interventions_not_universal_noninterference"
+    }
+  ],
+  "collection": "/private/tmp/tooluseproxy-204-checked-message-collection-v1",
+  "collection_identity": "5c20e65e7d9281b3d04a364203cf96342fa8ebdc8fddec718e26bc4f1f38e8f1",
+  "groups": 1,
+  "prefixes": 6,
+  "branches": 12,
+  "h4_labels": {
+    "no": 6,
+    "yes": 3,
+    "unknown": 3
+  },
+  "partitions": [
+    "train"
+  ],
+  "development_used": true,
+  "independence_verified": false,
+  "prior_nonuse_verified": false,
+  "recorded_containers_absent": true,
+  "accepted_independent_groups": 0,
+  "new_model_calls": 0,
+  "training_smoke": {
+    "partition": "train",
+    "status": "inconclusive_do_not_adopt",
+    "product_activation_authorized": false,
+    "missing_or_insufficient": [
+      "training_roots",
+      "calibration_normal_roots",
+      "test_normal_roots",
+      "test_positive_roots",
+      "fpr_upper",
+      "recall_lower",
+      "brier_improvement",
+      "paired_brier_lower",
+      "paired_edge_f1_lower",
+      "median_early_lead_steps",
+      "frozen_calibration_selection",
+      "independent_root_groups",
+      "different_tools_evaluated",
+      "different_tasks_evaluated",
+      "different_agent_models_evaluated",
+      "object_identity_ablation_benefit",
+      "parent_relation_ablation_benefit",
+      "multistep_ablation_benefit"
+    ],
+    "unused_test_partition": false,
+    "actual_test_groups": 0,
+    "plan": "/private/tmp/tooluseproxy-204-checked-message-plan-v1.json",
+    "report": "/private/tmp/tooluseproxy-204-checked-message-training-evaluation-v1.json",
+    "elapsed_seconds": 0.2881338750012219,
+    "new_model_generation_calls": 0,
+    "new_trials": 0
+  }
+}
