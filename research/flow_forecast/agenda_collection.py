@@ -18,9 +18,14 @@ from .provenance import source_provenance
 from .task_catalog import _write_private
 
 
-def run(repository, variant, output, *, seconds=180, clock=time.monotonic):
+def run(repository, variant, output, *, seconds=180, clock=time.monotonic, generation=None):
     if variant not in ('public', 'include_private') or type(seconds) is not int or not 1 <= seconds <= 1800:
         raise LabError('invalid_agenda_batch')
+    if generation is not None:
+        from .generated_agenda import validate
+        validate(generation)
+        if generation['plan']['export'] != variant:
+            raise LabError('agenda_generation_plan_mismatch')
     started, charged = clock(), 0
     source_root = Path(__file__).resolve().parents[2]
     implementation = source_provenance(source_root)
@@ -29,7 +34,7 @@ def run(repository, variant, output, *, seconds=180, clock=time.monotonic):
     intent = {'schema': 1, 'task': 'closed_agenda_dispatch_v1', 'variant': variant,
               'root': uuid.uuid4().hex, 'implementation_sha': digest(implementation),
               'limits': {'trials': 20, 'seconds': seconds, 'bytes': 1024 * 1024 * 1024},
-              'planned_trials': 12, 'generator': None}
+              'planned_trials': 12, 'generator': generation}
     _write_private(output / 'intent.json', canonical(intent).encode())
 
     def check():
