@@ -356,14 +356,21 @@ def collect_task_worlds(directories, *, checked=False):
     return data, evidence, catalog, origins
 
 
-def collect_agenda_captures(directories):
+def collect_agenda_captures(directories, *, checked=False):
     from .agenda_import import catalog as agenda_catalog, read_capture
     if type(directories) is not tuple or not 1 <= len(directories) <= MAX_INPUTS:
         raise ForecastDataError('invalid_collection_inputs')
     catalog, origins = agenda_catalog()
     samples, audits, total = [], [], 0
     for directory in directories:
-        data, audit = read_capture(directory)
+        if checked:
+            from .checked_agenda import read_checked_capture
+            if (type(directory) is not dict or set(directory) != {'capture', 'interventions'}
+                    or any(type(value) is not str or not value for value in directory.values())):
+                raise ForecastDataError('invalid_checked_agenda_input')
+            data, audit = read_checked_capture(Path(directory['capture']), Path(directory['interventions']))
+        else:
+            data, audit = read_capture(directory)
         total += len(canonical(audit).encode()) + len(canonical(asdict(data)).encode())
         if total > MAX_ARTIFACT_BYTES:
             raise ForecastDataError('collection_size_limit')
@@ -381,6 +388,7 @@ def main(argv=None):
     parser.add_argument('--catalog', type=Path)
     inputs_group = parser.add_mutually_exclusive_group(required=True)
     inputs_group.add_argument('--checked-task-worlds', type=Path, help='JSON list of capture/interventions directory pairs')
+    inputs_group.add_argument('--checked-agenda-captures', type=Path, help='JSON list of agenda capture/interventions pairs')
     inputs_group.add_argument('--agenda-captures', type=Path, help='JSON list of completed agenda captures with endpoint evidence')
     inputs_group.add_argument('--task-worlds', type=Path, help='JSON list of completed task world capture directories')
     inputs_group.add_argument('--stateful-captures', type=Path, help='JSON list of completed generated capture directories')
@@ -391,7 +399,14 @@ def main(argv=None):
     parser.add_argument('--origins', type=Path,
                         help='Synthetic design documents named by SHA-256 with .md suffix')
     args = parser.parse_args(argv)
-    if args.checked_task_worlds:
+    if args.checked_agenda_captures:
+        if args.catalog or args.origins:
+            parser.error('checked agenda captures use their captured definitions')
+        pairs = _json(_read(args.checked_agenda_captures))
+        if type(pairs) is not list:
+            raise ForecastDataError('invalid_checked_agenda_input')
+        data, audit, catalog, origins = collect_agenda_captures(tuple(pairs), checked=True)
+    elif args.checked_task_worlds:
         if args.catalog or args.origins:
             parser.error('checked task worlds use their captured definitions')
         pairs = _json(_read(args.checked_task_worlds))
