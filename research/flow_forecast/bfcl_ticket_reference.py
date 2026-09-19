@@ -77,8 +77,10 @@ def run(repository, source_path, output, *, seconds=180, clock=time.monotonic):
         raise LabError('invalid_ticket_budget')
     source = source_text(source_path)
     selected = cases()
-    root = Path(__file__).resolve().parents[2]
+    root = Path(repository).resolve(strict=True)
     implementation = source_provenance(root)
+    if implementation != source_provenance(Path(__file__).resolve().parents[2]):
+        raise LabError('ticket_repository_implementation_mismatch')
     start = clock()
     output.mkdir(mode=0o700)
     intent = dict(schema=1, source_commit=COMMIT, source_sha=SOURCE_SHA, cases=selected,
@@ -98,8 +100,8 @@ def run(repository, source_path, output, *, seconds=180, clock=time.monotonic):
     charged, results = 0, []
     try:
         check()
-        context = build_context(repository)
-        image = build_image(repository, context=context)
+        context = build_context(root)
+        image = build_image(root, context=context)
         check_isolation(image)
         execution = dict(intent_sha=digest(intent), image=image, context_sha=hashlib.sha256(context).hexdigest())
         save('execution', execution)
@@ -108,10 +110,10 @@ def run(repository, source_path, output, *, seconds=180, clock=time.monotonic):
             program = script(source, case)
             if charged + 2 > intent['limits']['trials']:
                 raise LabError('ticket_trial_limit')
-            charged += 2
             name = 'tup-lab-' + uuid.uuid4().hex
             save(f'reservation-{index}', dict(case_sha=digest(case), script_sha=hashlib.sha256(program.encode()).hexdigest(),
                  trial_charges=2, operations=['synthetic_state_setup', 'ticket_api_call'], container=name, image=image))
+            charged += 2
             raw = execute(image, program, name=name)
             _write_private(output / f'observation-{index}.json', raw)
             result = verify(case, raw)

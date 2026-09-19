@@ -13,6 +13,7 @@ from research.flow_forecast import bfcl_ticket_reference as module
 def lab(tmp_path, monkeypatch):
     source = tmp_path / 'ticket.py'
     source.write_text('# synthetic source; never executed on host\n')
+    monkeypatch.setattr(module, 'source_provenance', lambda root: {'fixture': 'same code'})
     monkeypatch.setattr(module, 'SOURCE_SHA', hashlib.sha256(source.read_bytes()).hexdigest())
     monkeypatch.setattr(module, 'build_context', lambda *a: b'fixture context')
     monkeypatch.setattr(module, 'build_image', lambda *a, **k: 'fixture image')
@@ -76,3 +77,24 @@ def test_expired_budget_does_not_dispatch(lab, tmp_path, monkeypatch):
     with pytest.raises(LabError, match='budget_exhausted'):
         module.run(tmp_path, lab, tmp_path / 'batch', clock=lambda: next(times))
     assert json.loads((tmp_path / 'batch/failure.json').read_text())['trial_reservations'] == 0
+
+
+def test_repository_mismatch_rejected_before_output(lab, tmp_path, monkeypatch):
+    monkeypatch.setattr(module, 'source_provenance', lambda root: {'root': str(root)})
+    with pytest.raises(LabError, match='repository_implementation_mismatch'):
+        module.run(tmp_path, lab, tmp_path / 'batch')
+    assert not (tmp_path / 'batch').exists()
+
+
+def test_failed_reservation_write_does_not_charge_or_execute(lab, tmp_path, monkeypatch):
+    write = module._write_private
+    def fail_reservation(path, data):
+        if path.name.startswith('reservation-'):
+            raise OSError('fixture write failed')
+        write(path, data)
+    monkeypatch.setattr(module, '_write_private', fail_reservation)
+    monkeypatch.setattr(module, 'execute', lambda *a, **k: pytest.fail('unreserved execution'))
+    out = tmp_path / 'batch'
+    with pytest.raises(OSError, match='fixture write failed'):
+        module.run(tmp_path, lab, out)
+    assert json.loads((out / 'failure.json').read_text())['trial_reservations'] == 0
