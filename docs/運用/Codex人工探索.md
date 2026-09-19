@@ -102,3 +102,17 @@ summaryとF01 import auditのgeneration_costsは全呼出数、記録数、usage
 上記の「採用提案だけ」の費用制約は旧runの記録を指し、新規runは終了・棄却応答のusageも
 集計する。ただし未取得usageや単価は推測しない。provider_cost/pricing_sourceはnullで、
 provider請求や課金単価の証拠がなければ全料金を記録できたとは扱わない。
+
+### 実CLIでの有限確認（2026-09-19）
+
+`/private/tmp/tooluseproxy-204-call-costs-v1`でgpt-5.5指定、benign_task、上限15試行・
+180秒・model call 2回の1バッチを実行した。対照確認は全項目成功、公開の人工データを
+受信側へ送る試験1件が完了。2回目の生成はinvalid_model_proposalで終了した。
+呼出2件、失敗1件、既知usageはinput 3,703 / cached 0 / output 114 tokens、
+呼出時間14,630ms。失敗した呼出のusageは不明なのでtoken_totals_complete=false。
+価格/請求額、解決されたモデル版、独立課題の一般化は未検証。
+
+results/generation-costs-20260919.jsonへ人工試験の閉じたcall/planと集計を保存した。
+controllerプロセスは終了しており、残るrunning状態は再開可能な失敗記録を表す。
+自動再試行や上限延長は行っていない。次はproposalの検証失敗とCLI usageの抽出を分離し、
+無効な提案でも取得できた消費証跡を落とさないようにする。過去の失敗usageは推測で埋めない。
