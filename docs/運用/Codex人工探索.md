@@ -87,3 +87,56 @@ F01の`search_import`でも`import-evidence.json`へgenerationを引き継ぎ、
 run/attempt/stepと予測データのprefix/branchを対応付ける。モデル入力へは混入させない。
 旧データはgeneration=null。採用提案の記録数と課金済み呼出回数を別々に出力し、
 終了応答や失敗呼出の費用が欠けることも明示する。
+
+### 全呼出の消費記録
+
+新規runでは採用planに加え`call_records`へ全model callを記録する。呼出数とreply上限を
+先に消費し、pending記録を同じcheckpointへ保存してからproviderを呼ぶ。応答があれば
+終了/拒否/重複/棄却の場合も閉じたproposalと取得できたgenerationを残し、失敗は閉じた
+error分類と経過時間を残す。採用されたplanと履歴は試験開始前に一緒に保存する。
+途中でプロセスが落ちればpendingのまま結果不明とし、自動で呼出を繰り返さない。
+
+summaryとF01 import auditのgeneration_costsは全呼出数、記録数、usageあり/なしの件数、
+既知トークンの合計、計測した呼出時間、その完全性を返す。失敗でusageが取得できない場合、
+0消費とはせずtoken_totals_complete=falseとする。旧runの履歴もplanから逆算しない。
+上記の「採用提案だけ」の費用制約は旧runの記録を指し、新規runは終了・棄却応答のusageも
+集計する。ただし未取得usageや単価は推測しない。provider_cost/pricing_sourceはnullで、
+provider請求や課金単価の証拠がなければ全料金を記録できたとは扱わない。
+
+### 実CLIでの有限確認（2026-09-19）
+
+`/private/tmp/tooluseproxy-204-call-costs-v1`でgpt-5.5指定、benign_task、上限15試行・
+180秒・model call 2回の1バッチを実行した。対照確認は全項目成功、公開の人工データを
+受信側へ送る試験1件が完了。2回目の生成はinvalid_model_proposalで終了した。
+呼出2件、失敗1件、既知usageはinput 3,703 / cached 0 / output 114 tokens、
+呼出時間14,630ms。失敗した呼出のusageは不明なのでtoken_totals_complete=false。
+価格/請求額、解決されたモデル版、独立課題の一般化は未検証。
+
+results/generation-costs-20260919.jsonへ人工試験の閉じたcall/planと集計を保存した。
+controllerプロセスは終了しており、残るrunning状態は再開可能な失敗記録を表す。
+自動再試行や上限延長は行っていない。次はproposalの検証失敗とCLI usageの抽出を分離し、
+無効な提案でも取得できた消費証跡を落とさないようにする。過去の失敗usageは推測で埋めない。
+
+### 提案の検証と使用量の抽出を分離
+
+CodexProviderはproposalの採否とは別に`last_execution`を作る。CLIのturn.completedが
+1件あり、usageの構造・値が正しければ、提案不正やプロセス失敗の場合でもexecution記録を
+call_recordsへ残せる。proposal_sha=nullは「採用可能な提案の証跡ではない」を意味し、
+試験実行を許可しない。提案の正当性検査は従来どおり必要。
+
+生の応答文・診断文は保存せず、入力/出力hash、指定モデル、CLI版、call ID、取得できた
+usageだけを保存する。usageの欠落・不正、曖昧な複数turnや切断出力は既知の0に置換しない。
+executionとgenerationの識別/usageの不一致、呼出を跨ぐ同じreceipt IDの再利用を拒否する。
+旧失敗runの未取得usageはそのまま不明とし、後から補完しない。
+
+修正後の別バッチ`/private/tmp/tooluseproxy-204-call-costs-v2`（head fa8bb5a、同じ上限）では、
+対照全項目成功後、最初の提案がinvalid_model_proposalとなり、試験操作は0件だった。
+その失敗呼出のinput3,707/cached0/output272 tokensを保存し、token_totals_complete=trueを
+実確認した。料金額・モデル版・研究受入は未検証のまま。v1の不明な消費は変更していない。
+
+1回/45秒/試行0件の別形式診断では、JSON提案1件が正常に返り、エラーは再現しなかった。
+入力3,703/cached2,560/output111 tokens。検証を緩めず、今後のエラーには
+event_or_text_invalid / completion_count_invalid / message_count_invalid /
+proposal_json_invalid / proposal_schema_invalid の閉じた分類を記録する。
+生の文章は保存しない。results/generation-costs-v2-20260919.jsonと
+results/proposal-shape-20260919.jsonに閉じた証拠を保存した。

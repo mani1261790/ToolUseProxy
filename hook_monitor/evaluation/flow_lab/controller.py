@@ -5,12 +5,14 @@ The provider proposes a closed language; only FixedTransport creates commands.
 """
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import asdict
 import time
 import uuid
 
 from .agent import Action, Proposal, ProposalProvider
 from .budget import Budget
+from .call_history import summarize as summarize_calls, validate_history
 from .generation_evidence import validate as validate_generation_evidence
 from .models import Observation, RecordError, RunSpec, identifier, utc_now
 from .preflight import LabError
@@ -71,7 +73,8 @@ def validate_state(state: dict, budget: Budget) -> None:
     try:
         if type(state.get("schema")) is not int or state["schema"] != 1:
             raise ValueError
-        if set(state) != {"schema", "identity", "started", "calls", "plans", "phase", "status"}:
+        required = {"schema", "identity", "started", "calls", "plans", "phase", "status"}
+        if set(state) not in (required, required | {"call_records"}):
             raise ValueError
         if type(state["calls"]) is not int or not 0 <= state["calls"] <= budget.model_calls:
             raise ValueError
@@ -110,6 +113,7 @@ def validate_state(state: dict, budget: Budget) -> None:
                 if value in identifiers:
                     raise ValueError
                 identifiers.add(value)
+        validate_history(state, budget)
     except (ValueError, TypeError, KeyError, RecordError, LabError):
         raise LabError("invalid_search_state") from None
 
@@ -130,7 +134,7 @@ def run_search(journal: SearchJournal, store: TrialStore, spec: RunSpec,
         state = journal.read()
         if state is None:
             state = {"schema": 1, "identity": identity, "started": clock() if started_at is None else started_at, "calls": 0,
-                     "plans": [], "phase": "ready", "status": "running"}
+                     "plans": [], "phase": "ready", "status": "running", "call_records": []}
             store.start(spec)
             journal.write(state)
         elif state.get("schema") != 1 or state.get("identity") != identity:
@@ -139,18 +143,19 @@ def run_search(journal: SearchJournal, store: TrialStore, spec: RunSpec,
         if state["status"] in TERMINAL:
             if store.summary(spec)["state"] == "running":
                 store.finish(spec, utc_now(), exhausted=state["status"].endswith("budget_exhausted"))
-            return {"status": state["status"], "summary": store.summary(spec)}
+            return {"status": state["status"], "summary": store.summary(spec), "generation_costs": summarize_calls(state)}
         if store.pending(spec):
-            return {"status": "operation_requires_reconciliation", "summary": store.summary(spec)}
+            return {"status": "operation_requires_reconciliation", "summary": store.summary(spec), "generation_costs": summarize_calls(state)}
         if state["phase"] == "requesting":
-            return {"status": "model_response_unknown", "summary": store.summary(spec)}
+            return {"status": "model_response_unknown", "summary": store.summary(spec), "generation_costs": summarize_calls(state)}
 
         def stop(reason):
             state["status"] = reason
+            validate_state(state, budget)
             journal.write(state)
             if reason in TERMINAL:
                 store.finish(spec, utc_now(), exhausted=reason.endswith("budget_exhausted"))
-            return {"status": reason, "summary": store.summary(spec)}
+            return {"status": reason, "summary": store.summary(spec), "generation_costs": summarize_calls(state)}
 
         while True:
             remaining = budget.remaining_seconds(state["started"], clock())
@@ -181,15 +186,46 @@ def run_search(journal: SearchJournal, store: TrialStore, spec: RunSpec,
             # Charge one call and its full reply allowance before asking, including failed calls.
             state["calls"] += 1
             state["phase"] = "requesting"
+            call = None
+            if 'call_records' in state:
+                call = {'number': state['calls'], 'call_id': uuid.uuid4().hex, 'started_at': utc_now(),
+                        'reply_limit': reply_limit, 'elapsed_ms': None, 'outcome': 'pending',
+                        'error': None, 'proposal': None, 'generation': None, 'execution': None}
+                state['call_records'].append(call)
             journal.write(state)
+            call_started = time.monotonic()
             try:
                 response = provider.propose(feedback(store, spec, state["plans"]), task_mode=spec.mode,
                                             timeout=min(60, remaining), max_bytes=reply_limit)
                 proposal = Proposal.parse(response)
             except LabError as exc:
+                reason = str(exc) if str(exc) in PROVIDER_ERRORS else "model_unavailable"
+                if call is not None:
+                    execution = deepcopy(getattr(provider, 'last_execution', None))
+                    if execution is not None:
+                        validate_generation_evidence(execution, None, provider.model_id)
+                    call.update(outcome='error', error=reason, execution=execution,
+                                validation_stage=getattr(provider, 'last_validation_stage', None),
+                                elapsed_ms=int((time.monotonic() - call_started) * 1000))
                 state["phase"] = "ready"
-                return stop(str(exc) if str(exc) in PROVIDER_ERRORS else "model_unavailable")
+                return stop(reason)
+            generation = deepcopy(getattr(provider, "last_evidence", None))
+            if generation is not None:
+                validate_generation_evidence(generation, proposal, provider.model_id)
+                earlier = state.get('call_records', [])[:-1]
+                if any(row['generation'] and row['generation']['call_id'] == generation['call_id']
+                       for row in earlier):
+                    raise LabError("generation_call_reused")
+            if call is not None:
+                execution = deepcopy(getattr(provider, 'last_execution', None))
+                if execution is not None:
+                    validate_generation_evidence(execution, None, provider.model_id)
+                call.update(outcome='response', execution=execution, proposal={'status': proposal.status,
+                            'actions': [asdict(action) for action in proposal.actions]},
+                            generation=generation, elapsed_ms=int((time.monotonic() - call_started) * 1000))
             state["phase"] = "ready"
+            # stop() checkpoints every terminal response; accepted plans and receipts
+            # share the final checkpoint before any trial dispatch.
             if proposal.status != "propose":
                 return stop("completed" if proposal.status == "complete" else "model_refused")
             if len(proposal.actions) > budget.steps:
@@ -198,7 +234,7 @@ def run_search(journal: SearchJournal, store: TrialStore, spec: RunSpec,
                 return stop("repeated_proposal")
             if spec.mode == "benign_task" and any(a.source != "public" for a in proposal.actions):
                 return stop("invalid_model_proposal")
-            generation = getattr(provider, "last_evidence", None)
+            generation = deepcopy(getattr(provider, "last_evidence", None))
             if generation is not None:
                 validate_generation_evidence(generation, proposal, provider.model_id)
                 if any(p.get("generation", {}).get("call_id") == generation["call_id"]
@@ -208,4 +244,5 @@ def run_search(journal: SearchJournal, store: TrialStore, spec: RunSpec,
                                    "steps": [uuid.uuid4().hex for _ in proposal.actions],
                                    "actions": [asdict(a) for a in proposal.actions],
                                    **({"generation": generation} if generation is not None else {})})
+            validate_state(state, budget)
             journal.write(state)

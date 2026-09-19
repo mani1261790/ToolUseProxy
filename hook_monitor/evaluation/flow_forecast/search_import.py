@@ -15,6 +15,7 @@ import sqlite3
 import time
 
 from hook_monitor.evaluation.flow_lab.agent import Proposal
+from hook_monitor.evaluation.flow_lab.call_history import summarize as summarize_calls
 from hook_monitor.evaluation.flow_lab.budget import Budget
 from hook_monitor.evaluation.flow_lab.controller import TERMINAL, validate_state
 from hook_monitor.evaluation.flow_lab.models import Observation, RunSpec, version
@@ -129,7 +130,8 @@ def import_search(directory: Path):
                           'resolved_model_verified': False, 'charged_model_calls': state['calls'],
                           'recorded_trial_calls': len({p['generation']['call_id'] for p in state['plans']
                                                      if 'generation' in p}),
-                          'complete_run_cost_recorded': False},
+                          'complete_run_cost_recorded': False, 'generation_costs': summarize_calls(state)},
+            'generation_calls': state.get('call_records'),
             'limitations': ['no_paired_counterfactual', 'no_recorded_intermediate_truth',
                             'independent_fresh_guard_actions', 'not_natural_frequencies'],
         }

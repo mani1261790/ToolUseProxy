@@ -11,6 +11,7 @@ import time
 import uuid
 
 from .budget import Budget
+from .call_history import summarize as summarize_calls
 from .codex_agent import CodexProvider
 from .controller import TERMINAL, run_search, validate_state
 from .models import RecordError, RunSpec, from_mapping, utc_now
@@ -50,7 +51,7 @@ def execute(repository: Path, output: Path, model: str, *, mode="adaptive_search
                         store.finish(spec, utc_now(),
                                      exhausted=saved["status"].endswith("budget_exhausted"))
                     return {"status": saved["status"], "summary": store.summary(spec),
-                            "synthetic_only": True, "model": model}
+                            "synthetic_only": True, "model": model, "generation_costs": summarize_calls(saved)}
                 if identity.get("agent_revision") != implementation_revision():
                     raise LabError("search_revision_mismatch")
             if journal.storage_size() >= budget.storage_bytes:

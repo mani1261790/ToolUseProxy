@@ -121,5 +121,9 @@ def test_import_preserves_generator_to_trial_mapping_outside_prediction_inputs(t
     assert record['generation']['requested_model'] == 'synthetic-test'
     assert audit['generator']['recorded_trial_calls'] == 1
     assert audit['generator']['charged_model_calls'] == 2
+    assert len(audit['generation_calls']) == 2
+    assert audit['generation_calls'][1]['proposal']['status'] == 'complete'
+    assert audit['generator']['generation_costs']['call_history_complete'] is True
+    assert audit['generator']['generation_costs']['token_totals_complete'] is False
     assert audit['generator']['resolved_model_verified'] is False
     assert 'generation' not in branch.prefix.model_input()

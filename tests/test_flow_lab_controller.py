@@ -255,6 +255,7 @@ def test_generation_evidence_is_bound_to_trial_before_dispatch(context):
         assert saved['generation'] == evidence
         assert saved['attempt'] == kwargs['session_id']
         assert kwargs['step_id'] in saved['steps']
+        provider.last_evidence = None  # This fixture's later completion has no execution evidence.
         return original(*args, **kwargs)
 
     context[3].guard = guarded

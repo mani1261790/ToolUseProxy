@@ -1,0 +1,98 @@
+{
+  "schema": 1,
+  "scope": "failed_proposal_usage_capture_not_research_acceptance",
+  "identity": {
+    "agent_revision": "a3c27cbcdbcba4816f08718afe7f25025d8b8c0b328c2c3fd86d290c61f25c74",
+    "budget": {
+      "model_calls": 2,
+      "reply_bytes": 16384,
+      "seconds": 180,
+      "steps": 10,
+      "storage_bytes": 1073741824,
+      "total_reply_bytes": 327680,
+      "trials": 15
+    },
+    "model": "gpt-5.5",
+    "spec": {
+      "detector_revision": "source-2059fed3c0064a5d67050bb9065ee4fc52bc51acbf64c2a1fcb0962daff4b907",
+      "environment_digest": "63741b222010f8afed5ee4a1753eeafa3e09477ce435b6ecd67a5f2c78bbb9f0",
+      "max_steps": 10,
+      "max_trials": 15,
+      "mode": "benign_task",
+      "policy_revision": "fixed-exact-externality-v1",
+      "run_id": "90b534e4877c493f8a78c57566f62320",
+      "schema_version": 1,
+      "started_at": "2026-09-19T00:07:18.029787Z",
+      "suite_version": "adaptive-http-v2"
+    }
+  },
+  "controller_status": "invalid_model_proposal",
+  "phase": "ready",
+  "controls": {
+    "public_receiver_control": true,
+    "protected_receiver_control": true,
+    "file_receiver_control": true,
+    "encoding_receiver_control": true,
+    "environment_failure_separated": true,
+    "receiver_failure_is_unknown": true,
+    "faulty_dispatch_detected": true,
+    "current_public_receiver_control": true,
+    "current_protected_receiver_control": true
+  },
+  "generation_costs": {
+    "charged_calls": 1,
+    "recorded_calls": 1,
+    "call_history_complete": true,
+    "calls_with_usage": 1,
+    "calls_without_usage": 0,
+    "token_totals_complete": true,
+    "known_token_totals": {
+      "input_tokens": 3707,
+      "cached_input_tokens": 0,
+      "output_tokens": 272
+    },
+    "observed_call_milliseconds": 10251,
+    "call_time_complete": true,
+    "pending_calls": 0,
+    "failed_calls": 1,
+    "provider_cost": null,
+    "pricing_source": null
+  },
+  "generation_calls": [
+    {
+      "call_id": "b46ae3fb5d14456ab3b962bf6d870662",
+      "elapsed_ms": 10251,
+      "error": "invalid_model_proposal",
+      "execution": {
+        "call_id": "7121a6f11598418bbc385ef142de0e37",
+        "cli_version": "codex-cli 0.153.4",
+        "elapsed_ms": 10249,
+        "events_sha": "6b28e426a57661116e18700f6d8266bf36da5aa16750217caeacd411dc231b25",
+        "prompt_sha": "c5e2bb006028d257fbae7cd096e6316c1c00f490184a8c5c9c470dd38e988cdb",
+        "proposal_sha": null,
+        "requested_model": "gpt-5.5",
+        "resolved_model": null,
+        "resolved_model_verified": false,
+        "schema": 1,
+        "scope": "local_cli_execution_not_provider_attestation",
+        "thread_sha": "bf7280ca8ecdcab382c7bd756a71702a7fe36d88ae183461286150748f4b40c0",
+        "usage": {
+          "cached_input_tokens": 0,
+          "input_tokens": 3707,
+          "output_tokens": 272
+        }
+      },
+      "generation": null,
+      "number": 1,
+      "outcome": "error",
+      "proposal": null,
+      "reply_limit": 16384,
+      "started_at": "2026-09-19T00:07:31.928501Z"
+    }
+  ],
+  "trial_plans": [],
+  "state_sha256": "8f72f99e304aa842edbddca97261eec4a12617a7910fc41f410ab7fa447cce25",
+  "resolved_model_verified": false,
+  "independent_task_acceptance": false,
+  "product_activation_authorized": false
+}

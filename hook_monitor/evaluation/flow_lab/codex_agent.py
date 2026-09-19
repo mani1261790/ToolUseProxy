@@ -75,16 +75,22 @@ def error_reason(error: object) -> str:
     return "model_unavailable"
 
 
+def invalid_proposal(stage):
+    error = LabError("invalid_model_proposal")
+    error.validation_stage = stage
+    return error
+
+
 def parse_events(data: bytes, max_bytes: int) -> object:
     messages = []
-    completed = False
+    completed = 0
     try:
         for line in data.splitlines():
             event = json.loads(line)
             if not isinstance(event, dict):
                 raise ValueError
             if event.get("type") == "turn.completed":
-                completed = True
+                completed += 1
             if event.get("type") in {"turn.failed", "error"}:
                 raise LabError(error_reason(event.get("error", event.get("message"))))
             if event.get("type") == "item.completed":
@@ -94,21 +100,33 @@ def parse_events(data: bytes, max_bytes: int) -> object:
                     messages.append(item["text"])
                 elif kind not in {"reasoning", "error"}:
                     raise LabError("model_tool_request_rejected")
-        if not completed or len(messages) != 1 or not isinstance(messages[0], str):
+        if completed != 1:
+            raise invalid_proposal('completion_count_invalid')
+        if len(messages) != 1:
+            raise invalid_proposal('message_count_invalid')
+        if not isinstance(messages[0], str):
             raise ValueError
         if len(messages[0].encode()) > max_bytes:
             raise LabError("model_response_limit")
-        result = json.loads(messages[0])
-        Proposal.parse(result)
+        try:
+            result = json.loads(messages[0])
+        except ValueError:
+            raise invalid_proposal('proposal_json_invalid') from None
+        try:
+            Proposal.parse(result)
+        except LabError:
+            raise invalid_proposal('proposal_schema_invalid') from None
         return result
     except (ValueError, TypeError, KeyError, UnicodeDecodeError):
-        raise LabError("invalid_model_proposal") from None
+        raise invalid_proposal('event_or_text_invalid') from None
 
 
 class CodexProvider:
     def __init__(self, model_id: str, *, executable: str = "codex"):
         version(model_id)
         self.last_evidence = None
+        self.last_execution = None
+        self.last_validation_stage = None
         self.model_id = model_id
         self.executable = shutil.which(executable)
         if not self.executable:
@@ -123,6 +141,8 @@ class CodexProvider:
 
     def propose(self, feedback: list[dict], *, task_mode: str, timeout: float, max_bytes: int) -> object:
         self.last_evidence = None
+        self.last_execution = None
+        self.last_validation_stage = None
         started = time.monotonic()
         call_id = uuid.uuid4().hex
         if not 0 < timeout <= 60 or type(max_bytes) is not int or not 1 <= max_bytes <= 16384:
@@ -144,6 +164,7 @@ class CodexProvider:
             (directory / "instructions.txt").write_text(INSTRUCTIONS)
             (directory / "proposal-schema.json").write_text(json.dumps(PROPOSAL_SCHEMA))
             process = None
+            captured = bytearray()
             try:
                 process = subprocess.Popen(command_line(self.executable, directory, self.model_id),
                                            stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -151,7 +172,6 @@ class CodexProvider:
                                            start_new_session=True)
                 process.stdin.write(prompt.encode())
                 process.stdin.close()
-                captured = bytearray()
                 deadline = time.monotonic() + timeout
                 with selectors.DefaultSelector() as selector:
                     selector.register(process.stdout, selectors.EVENT_READ)
@@ -176,6 +196,9 @@ class CodexProvider:
                     model=self.model_id, cli_version=AUDITED_VERSION, call_id=call_id,
                     elapsed_ms=int((time.monotonic() - started) * 1000))
                 return result
+            except LabError as error:
+                self.last_validation_stage = getattr(error, 'validation_stage', None)
+                raise
             except subprocess.TimeoutExpired:
                 raise LabError("model_timeout") from None
             except OSError:
@@ -188,3 +211,13 @@ class CodexProvider:
                     process.stdout.close()
                     if not process.stdin.closed:
                         process.stdin.close()
+                # Cost evidence does not authorize a proposal. Keep it even when
+                # parsing/validation/exit status failed, without retaining raw text.
+                if captured and len(captured) <= 1024 * 1024:
+                    try:
+                        self.last_execution = capture(
+                            events=bytes(captured), prompt=prompt.encode(), proposal=None,
+                            model=self.model_id, cli_version=AUDITED_VERSION, call_id=call_id,
+                            elapsed_ms=int((time.monotonic() - started) * 1000))
+                    except (LabError, ValueError, TypeError, KeyError, AttributeError):
+                        self.last_execution = None

@@ -11,6 +11,10 @@ from .models import RecordError, canonical, identifier, version
 from .preflight import LabError
 
 
+VALIDATION_DIAGNOSTICS = {'event_or_text_invalid', 'completion_count_invalid',
+                          'message_count_invalid', 'proposal_json_invalid', 'proposal_schema_invalid'}
+
+
 def sha(raw: bytes):
     return hashlib.sha256(raw).hexdigest()
 
@@ -19,7 +23,7 @@ def proposal_sha(proposal: Proposal):
     return sha(canonical(asdict(proposal)).encode())
 
 
-def capture(*, events: bytes, prompt: bytes, proposal: Proposal, model: str,
+def capture(*, events: bytes, prompt: bytes, proposal: Proposal | None, model: str,
             cli_version: str, call_id: str, elapsed_ms: int):
     """Keep only structural identities/costs; never store raw CLI diagnostics."""
     turns, threads = [], []
@@ -44,7 +48,7 @@ def capture(*, events: bytes, prompt: bytes, proposal: Proposal, model: str,
         'resolved_model': None, 'resolved_model_verified': False,
         'cli_version': cli_version, 'thread_sha': threads[0] if threads else None,
         'events_sha': sha(events), 'prompt_sha': sha(prompt),
-        'proposal_sha': proposal_sha(proposal), 'usage': usage, 'elapsed_ms': elapsed_ms,
+        'proposal_sha': proposal_sha(proposal) if proposal is not None else None, 'usage': usage, 'elapsed_ms': elapsed_ms,
         'scope': 'local_cli_execution_not_provider_attestation',
     }
     validate(evidence, proposal, model)
@@ -60,7 +64,7 @@ def validate(evidence, proposal, model):
                 or evidence['requested_model'] != model or evidence['resolved_model'] is not None
                 or evidence['resolved_model_verified'] is not False
                 or evidence['scope'] != 'local_cli_execution_not_provider_attestation'
-                or evidence['proposal_sha'] != proposal_sha(proposal)):
+                or evidence['proposal_sha'] != (proposal_sha(proposal) if proposal is not None else None)):
             raise ValueError
         version(evidence['requested_model'])
         identifier(evidence['call_id'])
@@ -69,7 +73,7 @@ def validate(evidence, proposal, model):
             raise ValueError
         for key in ('events_sha', 'prompt_sha', 'proposal_sha', 'thread_sha'):
             value = evidence[key]
-            if key == 'thread_sha' and value is None:
+            if value is None and (key == 'thread_sha' or (key == 'proposal_sha' and proposal is None)):
                 continue
             if not isinstance(value, str) or re.fullmatch(r'[a-f0-9]{64}', value) is None:
                 raise ValueError
