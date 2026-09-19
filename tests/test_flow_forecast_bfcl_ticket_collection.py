@@ -122,3 +122,33 @@ def test_failed_preflight_records_zero_charge(monkeypatch, tmp_path):
         batch.run(tmp_path, tmp_path/'source', 'public', tmp_path/'output')
     assert json.loads((tmp_path/'output/failure.json').read_text())['trial_reservations'] == 0
     assert not (tmp_path/'output/report.json').exists()
+
+
+def test_control_trials_do_not_replace_pinned_source_before_dispatch(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    monkeypatch.setattr(batch, 'source_text', lambda *a: SOURCE)
+    monkeypatch.setattr(batch, 'build_context', lambda *a: b'fixture context')
+    monkeypatch.setattr(batch, 'build_image', lambda *a, **k: 'sha256:' + 'a' * 64)
+    monkeypatch.setattr(batch, 'check_isolation', lambda *a: None)
+    controls = iter(['no', 'yes', 'no'])
+    monkeypatch.setattr(batch, 'run_scenario', lambda *a: SimpleNamespace(
+        observer_state='complete', task_success='yes', protected_arrival=next(controls),
+        decision='deny', process_started='no', receiver_arrival='no'))
+    class Transport:
+        sender, receiver, network, address = 'sender', 'receiver', 'network', '172.30.0.2'
+        def __init__(self, image, source, variant, mode):
+            assert source == SOURCE
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            pass
+        def prepare_step(self, number, step_id):
+            return module.call_for(SOURCE, number, 'public')
+        def guard_step(self, *a):
+            raise LabError('fixture_after_script_validation')
+    monkeypatch.setattr(batch, 'TicketTransport', Transport)
+    with pytest.raises(LabError, match='fixture_after_script_validation'):
+        batch.run(tmp_path, tmp_path/'source', 'public', tmp_path/'output')
+    assert json.loads((tmp_path/'output/failure.json').read_text())['trial_reservations'] == 5
+    reservation = json.loads((tmp_path/'output/reservation-5.json').read_text())
+    assert reservation['call']['name'] == 'mcp__ticket__resolve_ticket'

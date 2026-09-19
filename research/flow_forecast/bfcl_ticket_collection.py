@@ -69,9 +69,9 @@ def run(repository, source_path, variant, output, *, seconds=180, clock=time.mon
                     'image': image}).encode())
                 with transport:
                     controls = []
-                    for source, policy in (('public', 'observe'), ('protected', 'observe'), ('protected', 'enforce')):
-                        charge({'mode': mode, 'control': source + '-' + policy})
-                        controls.append(run_scenario(transport, store, spec, Scenario(source, policy, 'http_inline')))
+                    for control_source, policy in (('public', 'observe'), ('protected', 'observe'), ('protected', 'enforce')):
+                        charge({'mode': mode, 'control': control_source + '-' + policy})
+                        controls.append(run_scenario(transport, store, spec, Scenario(control_source, policy, 'http_inline')))
                     if not (all(c.observer_state == 'complete' for c in controls)
                             and controls[0].task_success == 'yes' and controls[0].protected_arrival == 'no'
                             and controls[1].protected_arrival == 'yes' and controls[2].decision == 'deny'
