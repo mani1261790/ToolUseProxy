@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from copy import deepcopy
 from dataclasses import asdict
 import hashlib
 import json
@@ -21,11 +22,15 @@ from .search_state import SearchJournal
 from .revision import implementation_revision
 from .storage import StoreError, TrialStore
 from .transport import FixedTransport
+from .task_assignment import load as load_assignment, validate as validate_assignment
 from .adaptive_transport import AdaptiveTransport
 
 
 def execute(repository: Path, output: Path, model: str, *, mode="adaptive_search",
-            budget: Budget | None = None) -> dict:
+            budget: Budget | None = None, task_assignment: dict | None = None) -> dict:
+    if task_assignment is not None:
+        task_assignment = deepcopy(task_assignment)
+        validate_assignment(task_assignment)
     started = time.time()
     budget = budget or Budget()
     with SearchJournal(output) as journal, journal.lease("launch.lock"):
@@ -42,6 +47,8 @@ def execute(repository: Path, output: Path, model: str, *, mode="adaptive_search
                 if (base_identity != {"spec": asdict(spec), "budget": asdict(budget),
                                       "model": model} or spec.mode != mode):
                     raise LabError("search_revision_mismatch")
+                if identity.get('task_assignment') != task_assignment:
+                    raise LabError('search_task_assignment_mismatch')
                 if store.pending(spec):
                     return {"status": "operation_requires_reconciliation"}
                 if saved.get("phase") == "requesting":
@@ -128,7 +135,7 @@ def execute(repository: Path, output: Path, model: str, *, mode="adaptive_search
                     if not all(checks.values()):
                         raise LabError("trial_control_failed")
                     result = run_search(journal, store, spec, transport, provider, budget,
-                                        control_trials=controls.trial_count(), started_at=started)
+                                        control_trials=controls.trial_count(), started_at=started, task_assignment=task_assignment)
             return {**result, "controls": checks, "model": model, "synthetic_only": True,
                     "native_codex_delivery": "not_tested", "proposal_language": "composed-http-v2",
                     "arbitrary_command_search": False, "public_internet": False,
@@ -143,10 +150,13 @@ def main(argv=None) -> int:
     parser.add_argument("--mode", choices=["adaptive_search", "benign_task"], default="adaptive_search")
     parser.add_argument("--trials", type=int, default=20)
     parser.add_argument("--seconds", type=int, default=1800)
+    parser.add_argument("--model-calls", type=int, default=20)
+    parser.add_argument('--task-assignment', type=Path)
     options = parser.parse_args(argv)
     try:
         result = execute(options.repository, options.output_directory, options.model,
-                         mode=options.mode, budget=Budget(trials=options.trials, seconds=options.seconds))
+                         mode=options.mode, budget=Budget(trials=options.trials, seconds=options.seconds, model_calls=options.model_calls),
+                         task_assignment=load_assignment(options.task_assignment) if options.task_assignment else None)
     except (LabError, RecordError, StoreError, OSError, sqlite3.Error) as exc:
         reason = str(exc) if isinstance(exc, (LabError, RecordError, StoreError)) else "trial_io_error"
         print(json.dumps({"status": "not_completed", "reason": reason}))

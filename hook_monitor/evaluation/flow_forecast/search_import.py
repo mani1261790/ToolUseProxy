@@ -132,6 +132,7 @@ def import_search(directory: Path):
                                                      if 'generation' in p}),
                           'complete_run_cost_recorded': False, 'generation_costs': summarize_calls(state)},
             'generation_calls': state.get('call_records'),
+            'task_assignment': state['identity'].get('task_assignment'),
             'limitations': ['no_paired_counterfactual', 'no_recorded_intermediate_truth',
                             'independent_fresh_guard_actions', 'not_natural_frequencies'],
         }

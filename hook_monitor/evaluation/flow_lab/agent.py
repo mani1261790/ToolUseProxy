@@ -85,4 +85,5 @@ class ProposalProvider(Protocol):
 
     model_id: str
 
-    def propose(self, feedback: list[dict], *, task_mode: str, timeout: float, max_bytes: int) -> object: ...
+    def propose(self, feedback: list[dict], *, task_mode: str, timeout: float, max_bytes: int,
+                task_context: dict | None = None) -> object: ...
