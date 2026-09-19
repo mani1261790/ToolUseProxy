@@ -1,0 +1,87 @@
+{
+  "schema": 1,
+  "source_commit": "4437d9f30dfa65b789363500ae825bf67cfe5d60",
+  "prepared": "/private/tmp/tooluseproxy-204-generated-ticket-prepare-v1",
+  "capture": "/private/tmp/tooluseproxy-204-generated-ticket-capture-v1",
+  "collection": "/private/tmp/tooluseproxy-204-generated-ticket-collection-v1",
+  "collection_identity": "c75db4aad8e6274481f65bc609190608ae3bd7a09a17a96b90f80780ca0bea79",
+  "generation": {
+    "call_id": "8b2b41011bda42f6bf6766144495ea42",
+    "cli_version": "codex-cli 0.153.4",
+    "elapsed_ms": 6537,
+    "events_sha": "542e18e2fe5c8e907cd3dbcbb74c4a11ef80ba7068abc02c742fb5fa35f9579f",
+    "prompt_sha": "e46bab416a582e9af54f2b68afd96b4480c33d95fbb553d1c3a64e61fea1f59e",
+    "proposal_sha": "231a304c24bc22e36a3619be68bd8bec12ca1faaaeeba81841b634a9113cd199",
+    "requested_model": "gpt-5.5",
+    "resolved_model": null,
+    "resolved_model_verified": false,
+    "schema": 1,
+    "scope": "local_cli_execution_not_provider_attestation",
+    "thread_sha": "cae3087d37cacb29fef9723405b738ae9a4d42553a87bd87a7b14be529d15e3c",
+    "usage": {
+      "cached_input_tokens": 0,
+      "input_tokens": 3709,
+      "output_tokens": 80
+    }
+  },
+  "costs": {
+    "call_history_complete": true,
+    "call_time_complete": true,
+    "calls_with_usage": 1,
+    "calls_without_usage": 0,
+    "charged_calls": 1,
+    "failed_calls": 0,
+    "known_token_totals": {
+      "cached_input_tokens": 0,
+      "input_tokens": 3709,
+      "output_tokens": 80
+    },
+    "observed_call_milliseconds": 6599,
+    "pending_calls": 0,
+    "pricing_source": null,
+    "provider_cost": null,
+    "recorded_calls": 1,
+    "token_totals_complete": true
+  },
+  "capture_metrics": {
+    "trial_charges": 18,
+    "elapsed_seconds": 18.500634417010588,
+    "artifact_bytes_before_report": 116495,
+    "intent_sha": "6fb2765c111fb7f922fb48d0a5cf664ad035165a231c94b1ba2f501fad13fb92",
+    "execution_sha": "dd733b87c130675f0134154f979e125ec787a142341227da60c9aa3f06dad242"
+  },
+  "groups": 1,
+  "prefixes": 3,
+  "branches": 6,
+  "strata_summary": {
+    "status": "requested_model_aliases_only",
+    "evaluated": false,
+    "resolved_model_versions_verified": false,
+    "collection_identity": "c75db4aad8e6274481f65bc609190608ae3bd7a09a17a96b90f80780ca0bea79",
+    "requested_models_by_partition": {
+      "train": [
+        "gpt-5.5"
+      ],
+      "calibration": [],
+      "test": []
+    },
+    "observed_requested_models_by_partition": {
+      "train": [
+        "gpt-5.5"
+      ],
+      "calibration": [],
+      "test": []
+    },
+    "provider_reported_models_by_partition": {
+      "train": [],
+      "calibration": [],
+      "test": []
+    },
+    "unseen_test_requested_aliases": [],
+    "groups_with_missing_evidence": 0,
+    "groups_with_mixed_requested_models": 0,
+    "validated_plan_receipts": 1
+  },
+  "accepted_independent_groups": 0,
+  "recorded_resources_absent": true
+}
