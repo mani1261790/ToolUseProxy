@@ -77,7 +77,7 @@ def generate():
     return {'before': before, 'response': raw, 'after': after}
 
 
-def validate(observation):
+def metadata(observation):
     try:
         if type(observation) is not dict or set(observation) != {'before', 'response', 'after'}:
             raise ValueError
@@ -93,16 +93,24 @@ def validate(observation):
         for key in ('prompt_eval_count', 'eval_count', 'total_duration', 'load_duration'):
             if type(raw[key]) is not int or raw[key] < 0:
                 raise ValueError
-        plan = Plan.parse(json.loads(raw['response']))
-        if not plan.executable():
-            raise ValueError
-        return {'plan': json.loads(canonical(asdict(plan))), 'identity': before,
+        return {'identity': before,
                 'observed_manifest_unchanged': True,
                 'resolved_model_verified': False, 'accepted_independent_groups': 0,
                 'usage': {k: raw[k] for k in ('prompt_eval_count', 'eval_count', 'total_duration', 'load_duration')},
                 'provider_cost': None, 'pricing_source': None}
     except (KeyError, TypeError, ValueError, LabError):
         raise LabError('invalid_local_generation_observation') from None
+
+
+def validate(observation):
+    evidence = metadata(observation)
+    try:
+        plan = Plan.parse(json.loads(observation['response']['response']))
+        if not plan.executable():
+            raise ValueError
+        return {**evidence, 'plan': json.loads(canonical(asdict(plan)))}
+    except (TypeError, ValueError, LabError):
+        raise LabError('invalid_local_generation_plan') from None
 
 
 def worker():
@@ -142,6 +150,9 @@ def run(output, *, timeout=60):
         observation = json.loads(process.stdout)
         _write_private(output / 'observation.json', canonical(observation).encode())
         result['actual_generation_requests'] = 1
+        result['observation_sha'] = digest(observation)
+        # Invalid plans still consumed tokens; keep their validated metadata.
+        result['generation_observation'] = metadata(observation)
         evidence = validate(observation)
         if source_provenance(root) != implementation:
             raise LabError('local_generation_implementation_changed')

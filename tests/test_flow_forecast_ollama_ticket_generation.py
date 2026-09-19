@@ -43,6 +43,18 @@ def test_matching_identity_does_not_attest_weights_or_price():
     assert result['accepted_independent_groups'] == 0
 
 
+def test_invalid_plan_preserves_observed_token_cost(tmp_path, monkeypatch):
+    value = observation()
+    value['response']['response'] = '{}'
+    monkeypatch.setattr(local.subprocess, 'run', lambda *a, **k: SimpleNamespace(
+        returncode=0, stdout=json.dumps(value).encode()))
+    result = local.run(tmp_path / 'run')
+    assert result['status'] == 'not_completed'
+    assert result['generation_observation']['usage']['eval_count'] == 20
+    assert result['observation_sha'] == local.digest(value)
+    assert 'evidence' not in result
+
+
 def test_reservation_precedes_only_child_and_cannot_overwrite(tmp_path, monkeypatch):
     output = tmp_path / 'run'
     calls = []
