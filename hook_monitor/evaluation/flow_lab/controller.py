@@ -21,6 +21,7 @@ from .revision import implementation_revision
 from .storage import TrialStore
 from .transport import FixedTransport
 from .task_assignment import validate as validate_assignment
+from .task_completion import evaluate as evaluate_completion
 
 
 PROVIDER_ERRORS = {"model_auth_required", "model_quota_exhausted", "model_refused",
@@ -149,11 +150,14 @@ def run_search(journal: SearchJournal, store: TrialStore, spec: RunSpec,
         if state["status"] in TERMINAL:
             if store.summary(spec)["state"] == "running":
                 store.finish(spec, utc_now(), exhausted=state["status"].endswith("budget_exhausted"))
-            return {"status": state["status"], "summary": store.summary(spec), "generation_costs": summarize_calls(state)}
+            return {"status": state["status"], "summary": store.summary(spec), "generation_costs": summarize_calls(state),
+                    "task_completion": evaluate_completion(state, store.read(spec))}
         if store.pending(spec):
-            return {"status": "operation_requires_reconciliation", "summary": store.summary(spec), "generation_costs": summarize_calls(state)}
+            return {"status": "operation_requires_reconciliation", "summary": store.summary(spec), "generation_costs": summarize_calls(state),
+                    "task_completion": evaluate_completion(state, store.read(spec))}
         if state["phase"] == "requesting":
-            return {"status": "model_response_unknown", "summary": store.summary(spec), "generation_costs": summarize_calls(state)}
+            return {"status": "model_response_unknown", "summary": store.summary(spec), "generation_costs": summarize_calls(state),
+                    "task_completion": evaluate_completion(state, store.read(spec))}
 
         def stop(reason):
             state["status"] = reason
@@ -161,7 +165,8 @@ def run_search(journal: SearchJournal, store: TrialStore, spec: RunSpec,
             journal.write(state)
             if reason in TERMINAL:
                 store.finish(spec, utc_now(), exhausted=reason.endswith("budget_exhausted"))
-            return {"status": reason, "summary": store.summary(spec), "generation_costs": summarize_calls(state)}
+            return {"status": reason, "summary": store.summary(spec), "generation_costs": summarize_calls(state),
+                    "task_completion": evaluate_completion(state, store.read(spec))}
 
         while True:
             remaining = budget.remaining_seconds(state["started"], clock())

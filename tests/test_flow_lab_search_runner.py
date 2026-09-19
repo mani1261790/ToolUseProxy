@@ -135,3 +135,13 @@ def test_unfinished_run_refuses_changed_search_implementation(lab, tmp_path, mon
     with pytest.raises(LabError, match="search_revision_mismatch"):
         module.execute(tmp_path, folder, "synthetic-model")
     assert len(calls) == 1
+
+
+def test_terminal_run_refuses_reassessment_after_implementation_change(lab, tmp_path, monkeypatch):
+    folder, calls, _, _ = lab
+    module.execute(tmp_path, folder, "synthetic-model")
+    monkeypatch.setattr(module, "implementation_revision", lambda: "b" * 64)
+    monkeypatch.setattr(module, "evaluate_completion", lambda *_: pytest.fail("stale run must not be reassessed"))
+    with pytest.raises(LabError, match="search_revision_mismatch"):
+        module.execute(tmp_path, folder, "synthetic-model")
+    assert len(calls) == 1

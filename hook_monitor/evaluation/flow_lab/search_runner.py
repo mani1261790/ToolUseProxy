@@ -23,6 +23,7 @@ from .revision import implementation_revision
 from .storage import StoreError, TrialStore
 from .transport import FixedTransport
 from .task_assignment import load as load_assignment, validate as validate_assignment
+from .task_completion import evaluate as evaluate_completion
 from .adaptive_transport import AdaptiveTransport
 
 
@@ -53,14 +54,15 @@ def execute(repository: Path, output: Path, model: str, *, mode="adaptive_search
                     return {"status": "operation_requires_reconciliation"}
                 if saved.get("phase") == "requesting":
                     return {"status": "model_response_unknown"}
+                if identity.get("agent_revision") != implementation_revision():
+                    raise LabError("search_revision_mismatch")
                 if saved.get("status") in TERMINAL:
                     if store.summary(spec)["state"] == "running":
                         store.finish(spec, utc_now(),
                                      exhausted=saved["status"].endswith("budget_exhausted"))
                     return {"status": saved["status"], "summary": store.summary(spec),
-                            "synthetic_only": True, "model": model, "generation_costs": summarize_calls(saved)}
-                if identity.get("agent_revision") != implementation_revision():
-                    raise LabError("search_revision_mismatch")
+                            "synthetic_only": True, "model": model, "generation_costs": summarize_calls(saved),
+                            "task_completion": evaluate_completion(saved, store.read(spec))}
             if journal.storage_size() >= budget.storage_bytes:
                 return {"status": "storage_budget_exhausted", "synthetic_only": True}
             provider = CodexProvider(model)
