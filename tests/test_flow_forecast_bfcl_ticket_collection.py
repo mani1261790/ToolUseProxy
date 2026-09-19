@@ -125,7 +125,8 @@ def test_failed_preflight_records_zero_charge(monkeypatch, tmp_path):
     assert not (tmp_path/'output/report.json').exists()
 
 
-def test_control_trials_do_not_replace_pinned_source_before_dispatch(monkeypatch, tmp_path):
+@pytest.mark.parametrize('failed_write', [False, True])
+def test_control_trials_do_not_replace_pinned_source_before_dispatch(monkeypatch, tmp_path, failed_write):
     from types import SimpleNamespace
     monkeypatch.setattr(batch, 'source_provenance', lambda root: {'fixture': 'same code'})
     monkeypatch.setattr(batch, 'source_text', lambda *a: SOURCE)
@@ -149,8 +150,29 @@ def test_control_trials_do_not_replace_pinned_source_before_dispatch(monkeypatch
         def guard_step(self, *a):
             raise LabError('fixture_after_script_validation')
     monkeypatch.setattr(batch, 'TicketTransport', Transport)
+    if failed_write:
+        write = batch._write_private
+        def fail_reservation(path, data):
+            if path.name == 'reservation-5.json':
+                raise OSError('fixture write failed')
+            write(path, data)
+        monkeypatch.setattr(batch, '_write_private', fail_reservation)
+        with pytest.raises(OSError, match='fixture write failed'):
+            batch.run(tmp_path, tmp_path/'source', 'public', tmp_path/'output')
+        assert json.loads((tmp_path/'output/failure.json').read_text())['trial_reservations'] == 4
+        assert not (tmp_path/'output/reservation-5.json').exists()
+        return
     with pytest.raises(LabError, match='fixture_after_script_validation'):
         batch.run(tmp_path, tmp_path/'source', 'public', tmp_path/'output')
     assert json.loads((tmp_path/'output/failure.json').read_text())['trial_reservations'] == 5
     reservation = json.loads((tmp_path/'output/reservation-5.json').read_text())
     assert reservation['call']['name'] == 'mcp__ticket__resolve_ticket'
+
+
+def test_mismatched_repository_rejected_before_collection(monkeypatch, tmp_path):
+    monkeypatch.setattr(batch, 'source_text', lambda *a: SOURCE)
+    monkeypatch.setattr(batch, 'source_provenance', lambda root: {'root': str(root)})
+    monkeypatch.setattr(batch, 'build_context', lambda *a: pytest.fail('mismatched image build'))
+    with pytest.raises(LabError, match='repository_implementation_mismatch'):
+        batch.run(tmp_path, tmp_path/'source', 'public', tmp_path/'output')
+    assert not (tmp_path/'output').exists()
