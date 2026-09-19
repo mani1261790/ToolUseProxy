@@ -16,7 +16,13 @@ from .partition_bundle import combine, read_development, read_manifest, read_par
 from .provenance import source_provenance
 
 
-def _prepare(directory, budget, collection=None):
+def _prepare(directory, budget, collection=None, prior_collections=()):
+    history = None
+    if prior_collections:
+        if collection is None:
+            raise ForecastDataError("history_requires_collection")
+        from .catalog_history import require_no_known_overlap
+        history = require_no_known_overlap(collection, prior_collections)
     manifest = read_manifest(directory)
     development = read_development(directory, manifest)
     models, costs = build_models(development, check_budget=budget.check)
@@ -27,16 +33,18 @@ def _prepare(directory, budget, collection=None):
                'evaluator_sha': digest(source_provenance(Path(__file__).resolve().parents[2]))}
     if collection is not None:
         content['generator_collection_sha'] = generator_strata.collection_identity(collection)
+    if history is not None:
+        content['catalog_history'] = history
     return manifest, development, models, costs, {**content, 'plan_sha': digest(content)}
 
 
-def prepare(directory, *, budget=None, collection=None):
-    return _prepare(directory, budget or Budget(), collection)[-1]
+def prepare(directory, *, budget=None, collection=None, prior_collections=()):
+    return _prepare(directory, budget or Budget(), collection, prior_collections)[-1]
 
 
-def evaluate_once(directory, plan, ledger, *, budget=None, collection=None):
+def evaluate_once(directory, plan, ledger, *, budget=None, collection=None, prior_collections=()):
     budget = budget or Budget()
-    manifest, development, models, costs, expected = _prepare(directory, budget, collection)
+    manifest, development, models, costs, expected = _prepare(directory, budget, collection, prior_collections)
     if plan != expected:
         raise ForecastDataError('holdout_plan_mismatch')
     seal = manifest['partitions']['test']
@@ -82,6 +90,7 @@ def main(argv=None):
         if stage in ('prepare', 'evaluate'):
             command.add_argument('--output', type=Path, required=True)
             command.add_argument('--collection', type=Path)
+            command.add_argument('--prior-collection', type=Path, action='append', default=[])
         if stage == 'evaluate':
             command.add_argument('--plan', type=Path, required=True)
         if stage == 'retire':
@@ -96,7 +105,7 @@ def main(argv=None):
         HoldoutLedger.create(args.ledger)
         return
     if args.stage == 'prepare':
-        result = prepare(args.bundle, collection=args.collection)
+        result = prepare(args.bundle, collection=args.collection, prior_collections=tuple(args.prior_collection))
     else:
         ledger = HoldoutLedger(args.ledger)
         seal = read_manifest(args.bundle)['partitions']['test']
@@ -106,7 +115,7 @@ def main(argv=None):
         if args.stage == 'retire':
             ledger.retire(dataset_sha=seal['dataset_sha'], reason=args.reason)
             return
-        result = evaluate_once(args.bundle, _json(_read(args.plan)), ledger, collection=args.collection)
+        result = evaluate_once(args.bundle, _json(_read(args.plan)), ledger, collection=args.collection, prior_collections=tuple(args.prior_collection))
     with args.output.open('x', encoding='utf-8') as stream:
         stream.write(canonical(result) + '\n')
 
