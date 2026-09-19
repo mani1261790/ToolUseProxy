@@ -20,6 +20,9 @@ python -m research.flow_forecast.stateful_collection \
 ```
 
 plan/実装の識別情報は開始前、各操作の予約は判断・実行前に排他的に保存する。
+予約にはstep IDとcommand hashを対応付け、Hook受領・判断もdispatch前に別保存する。
+dispatchや観測が失敗してもその対応を失わない。完了reportは実測経過秒と、report自身を
+書き込む前のartifact容量を記録する。過去の未計測値は後から推定して埋めない。
 途中失敗・時間切れでも記録を残し、既存ディレクトリへ再実行しない。observe/enforceを
 別のreceiver/senderで実行し、それぞれ公開到達・保護到達・保護停止の3対照を確認する。
 対照と各道具操作を1試行ずつ保守的に数え、最大20試行、1800秒、保存量1GiB以下。

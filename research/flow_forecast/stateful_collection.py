@@ -137,6 +137,7 @@ def run(repository, plan, output, *, seconds=600, clock=time.monotonic):
     if type(seconds) is not int or not 1 <= seconds <= 1800:
         raise ForecastDataError('invalid_stateful_time_budget')
     started, charged = clock(), 0
+    last_elapsed, last_bytes = 0.0, 0
     implementation = source_provenance(Path(__file__).resolve().parents[2])
     output.mkdir(mode=0o700)
     _write_private(output / 'implementation.json', (canonical(implementation) + '\n').encode())
@@ -150,20 +151,23 @@ def run(repository, plan, output, *, seconds=600, clock=time.monotonic):
     _write_private(output / 'intent.json', (canonical(intent) + '\n').encode())
 
     def check():
+        nonlocal last_elapsed, last_bytes
         elapsed = clock() - started
         if not math.isfinite(elapsed) or not 0 <= elapsed < seconds:
             raise ForecastDataError('stateful_time_budget_exhausted')
-        if sum(p.stat().st_size for p in output.rglob('*') if p.is_file()) >= intent['storage_bytes']:
+        used = sum(p.stat().st_size for p in output.rglob('*') if p.is_file())
+        if used >= intent['storage_bytes']:
             raise ForecastDataError('stateful_storage_budget_exhausted')
+        last_elapsed, last_bytes = elapsed, used
 
-    def charge(name):
+    def charge(name, **identity):
         nonlocal charged
         check()
         if charged >= 20:
             raise ForecastDataError('stateful_trial_budget_exhausted')
         charged += 1
         # Reservation exists before guard/dispatch. A crashed directory is never resumed.
-        _write_private(output / f'reservation-{charged}.json', canonical({'trial': name}).encode())
+        _write_private(output / f'reservation-{charged}.json', canonical({'trial': name, **identity}).encode())
 
     check()
     context = build_context(repository)
@@ -193,15 +197,19 @@ def run(repository, plan, output, *, seconds=600, clock=time.monotonic):
                 termination = 'completed'
                 for number in range(1, len(plan['operations']) + 1):
                     step = uuid.uuid4().hex
-                    charge(f'{mode}-step-{number}')
                     cmd = transport.prepare_step(number, step)
+                    command_sha = hashlib.sha256(cmd.encode()).hexdigest()
+                    charge(f'{mode}-step-{number}', step_id=step, command_sha=command_sha)
                     decision = transport.guard_step(cmd, intent['root'], step)
+                    _write_private(output / f'{mode}-guard-{number}.json', canonical({
+                        'step_id': step, 'command_sha': command_sha,
+                        'receipt': transport.guard_receipts[step]}).encode())
                     dispatched = mode == 'observe' or decision == 'allow'
                     check()
                     observation = transport.execute_step(cmd, step) if dispatched else None
                     if not dispatched and transport.delivery(step) != ('no', 'no'):
                         raise ForecastDataError('stateful_denied_dispatch_mismatch')
-                    row = {'number': number, 'step_id': step, 'command_sha': hashlib.sha256(cmd.encode()).hexdigest(),
+                    row = {'number': number, 'step_id': step, 'command_sha': command_sha,
                            'decision': decision, 'dispatched': dispatched, 'observation': observation,
                            'guard_receipt': transport.guard_receipts[step]}
                     _write_private(output / f'{mode}-step-{number}.json', (canonical(row) + '\n').encode())
@@ -225,7 +233,8 @@ def run(repository, plan, output, *, seconds=600, clock=time.monotonic):
         raise ForecastDataError('stateful_dataset_roundtrip_mismatch')
     check()
     report = {'schema': 1, 'status': 'completed', 'intent_sha': intent_sha, 'execution_sha': digest(intent), 'dataset_sha': dataset_sha,
-              'trial_charges': charged, 'conditions': conditions, 'independent_new_task_count': 0,
+              'trial_charges': charged, 'elapsed_seconds': last_elapsed,
+              'artifact_bytes_before_report': last_bytes, 'conditions': conditions, 'independent_new_task_count': 0,
               'generator_model_verified': False, 'unused_holdout': False, 'new_model_calls': 0,
               'scope': 'instrumented_deterministic_synthetic_pipeline_not_agent_population',
               'native_codex_hook_delivery': 'not_tested'}

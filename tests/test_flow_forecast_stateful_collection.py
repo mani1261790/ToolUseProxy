@@ -73,6 +73,9 @@ def test_pipeline_collects_observed_path_but_blocked_future_stays_unknown(lab, t
     report = module.run(tmp_path, PLAN, output)
     data = module.read_dataset(output / 'dataset')
     assert report['trial_charges'] == 14 and report['independent_new_task_count'] == 0
+    assert 0 <= report['elapsed_seconds'] < 600
+    assert report['artifact_bytes_before_report'] == sum(
+        p.stat().st_size for p in output.rglob('*') if p.is_file() and p.name != 'report.json')
     assert report['generator_model_verified'] is False and report['new_model_calls'] == 0
     assert {p.max_sequence_no for p in data.prefixes} == {0, 1, 2, 3}
     assert len(data.branches) == 8
@@ -120,7 +123,10 @@ def test_interruption_keeps_reservation_without_retry(lab, tmp_path, monkeypatch
     output = tmp_path / 'capture'
     def fail(*args):
         assert (output / 'intent.json').is_file()
-        assert (output / 'reservation-4.json').is_file()
+        reservation = json.loads((output / 'reservation-4.json').read_text())
+        guard = json.loads((output / 'observe-guard-1.json').read_text())
+        assert reservation['step_id'] == guard['step_id']
+        assert reservation['command_sha'] == guard['command_sha']
         raise KeyboardInterrupt
     monkeypatch.setattr(Transport, 'execute_step', fail)
     with pytest.raises(KeyboardInterrupt):
