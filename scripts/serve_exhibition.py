@@ -30,6 +30,20 @@ class LogReader:
         conn.set_progress_handler(lambda: int(monotonic() > deadline), 10000)
         return conn
 
+    def attach_forecasts(self, conn):
+        """Optional local audit only; missing/broken forecast storage is not activation."""
+        path = self.path.parent / "forecast.db"
+        if not path.is_file() or path.is_symlink():
+            return False
+        try:
+            conn.execute("ATTACH DATABASE ? AS forecast", (path.as_uri() + "?mode=ro",))
+            if conn.execute("PRAGMA forecast.user_version").fetchone()[0] != 1:
+                return False
+            conn.execute("SELECT id,workspace,body,application FROM forecast.requests LIMIT 0")
+            return True
+        except sqlite3.Error:
+            return False
+
     def scopes(self):
         with closing(self.connect()) as conn:
             tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master")}
@@ -78,6 +92,7 @@ class LogReader:
         with closing(self.connect()) as conn:
             conn.execute("BEGIN")
             tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master")}
+            forecasts = self.attach_forecasts(conn)
             cte = ""
             blocked = "0"
             if {"policy_decisions", "sink_candidates"} <= tables:
@@ -96,6 +111,26 @@ class LogReader:
                     "b.workspace_id IS e.workspace_id AND b.session_id=e.session_id "
                     "AND b.tool_use_id=e.tool_use_id))"
                 )
+            if forecasts:
+                forecast_select = (
+                    "SELECT b.event_id,b.workspace_id,b.session_id,b.tool_use_id "
+                    "FROM forecast.requests r JOIN events b "
+                    "ON b.event_id=json_extract(CASE WHEN json_valid(r.body) THEN r.body ELSE '{}' END,'$.structure.event') "
+                    "AND b.workspace_id=r.workspace "
+                    "AND b.session_id=json_extract(CASE WHEN json_valid(r.body) THEN r.body ELSE '{}' END,'$.structure.session') "
+                    "WHERE r.application='additional_stop'"
+                )
+                if cte:
+                    cte = cte[:-2] + " UNION " + forecast_select + ") "
+                else:
+                    cte = "WITH blocked_events AS (" + forecast_select + ") "
+                    blocked = (
+                        "EXISTS (SELECT 1 FROM blocked_events b WHERE b.event_id=e.event_id OR "
+                        "(e.session_id IS NOT NULL AND e.session_id!='' AND "
+                        "e.tool_use_id IS NOT NULL AND e.tool_use_id!='' AND "
+                        "b.workspace_id IS e.workspace_id AND b.session_id=e.session_id "
+                        "AND b.tool_use_id=e.tool_use_id))"
+                    )
             if blocked_only:
                 if cte:
                     clauses.append(
@@ -145,6 +180,7 @@ class LogReader:
                 (PAYLOAD_LIMIT, PAYLOAD_LIMIT, *params),
             ).fetchall()
             events, decisions = [], []
+            forecasts = self.attach_forecasts(conn)
             tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master")}
             for row in reversed(rows):
                 event = dict(row)
@@ -163,6 +199,18 @@ class LogReader:
                         "WHERE s.sequence_no=? AND json_valid(s.metadata_json) "
                         "AND json_extract(s.metadata_json,'$.event_id')=? LIMIT 100",
                         (event["sequence_no"], event["event_id"]),
+                    ))
+                if forecasts:
+                    decisions.extend({
+                        "decision_id": item["id"], "action": "block", "hook_event": "PreToolUse",
+                        "reason": "forecast_experimental_stop",
+                        "user_message": "将来予測による追加停止（試験機能）。予測の有効性は未検証です。",
+                        "created_at": None,
+                    } for item in conn.execute(
+                        "SELECT id FROM forecast.requests WHERE workspace=? AND application='additional_stop' "
+                        "AND json_valid(body) AND json_extract(body,'$.structure.event')=? "
+                        "AND json_extract(body,'$.structure.session')=? LIMIT 100",
+                        (event["workspace_id"], event["event_id"], event["session_id"]),
                     ))
             return {"events": events, "decisions": decisions, "event_limit": 50}
 
