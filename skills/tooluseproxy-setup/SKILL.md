@@ -371,7 +371,16 @@ Do not run this step after a failed setup gate. Manual Phase B harnesses retain
 their exact supplied commands and do not launch this additional server.
 
 Say: `設定を確認できました。このプロジェクトのログ画面を開きます。`
-Use the same installed launcher and verified workspace:
+Use the same installed launcher and verified workspace. The trusted management
+classification is not host filesystem permission. Apply the permission rules
+above to this command too: if Plugin data is outside the host's granted paths,
+request approval for this exact command before running it, with a short summary
+that this opens a read-only local log screen and does not change protection.
+If the current permission profile already grants access and approval is disabled,
+use that existing permission without asking again. If the required permission is
+unavailable, retain the successful setup result and report only the UI failure.
+For an approval request use this summary (and the identical justification):
+`ToolUseProxyの操作確認｜行うこと：確認済みのこのプロジェクトのログ画面を開きます｜変更されるもの：ありません｜外部通信：ありません｜確認が必要な理由：専用保存領域を読み取るためです｜この内容で実行してよいですか？`
 
 ```text
 sh "<PLUGIN_ROOT>/hooks/run_cli.sh" logs --workspace <workspace-root> --json

@@ -17,6 +17,7 @@ function readable(value) {
   return typeof value === 'string' ? value : JSON.stringify(value, null, 2);
 }
 function timeLabel(value) {
+  if (value === null || value === undefined || value === '') return '時刻未記録';
   const normalized = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(value) ? value.replace(' ', 'T') + 'Z' : value;
   const date = new Date(normalized);
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString('ja-JP');

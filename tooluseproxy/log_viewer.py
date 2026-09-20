@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import argparse
-from contextlib import closing
+from contextlib import closing, contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
@@ -17,11 +17,25 @@ PAYLOAD_LIMIT = 131072
 
 
 class LogReader:
-    def __init__(self, path: Path, workspace_id: str | None = None):
+    def __init__(self, path: Path, workspace_id: str | None = None,
+                 workspace_root: Path | None = None):
         self.path = path.resolve()
         self.workspace_id = workspace_id
+        self.workspace_root = workspace_root
         if self.path.name != "events.db":
             raise ValueError("Select the existing events.db")
+
+    @contextmanager
+    def access(self):
+        if self.workspace_root is None:
+            yield
+            return
+        from tooluseproxy.integrations.authority import workspace_authority_lease
+
+        with workspace_authority_lease(self.path, str(self.workspace_root)) as state:
+            if state is not None and state.phase != "active":
+                raise OSError("workspace administratively stopped")
+            yield
 
     def connect(self):
         conn = sqlite3.connect(self.path.as_uri() + "?mode=ro", uri=True, timeout=0.25)
@@ -245,16 +259,17 @@ def make_server(reader, port=0):
             if route in {"api/events", "api/detail", "api/scopes"}:
                 try:
                     query = parse_qs(path.query, keep_blank_values=True)
-                    if route == "api/scopes":
-                        result = reader.scopes()
-                    elif route == "api/events":
-                        filters = {}
-                        for name in ("workspace", "session"):
-                            if name in query:
-                                filters[name] = json.loads(query[name][0])
-                        result = reader.snapshot(**filters, blocked_only=query.get("blocked") == ["1"])
-                    else:
-                        result = reader.detail(query.get("id", [""])[0])
+                    with reader.access():
+                        if route == "api/scopes":
+                            result = reader.scopes()
+                        elif route == "api/events":
+                            filters = {}
+                            for name in ("workspace", "session"):
+                                if name in query:
+                                    filters[name] = json.loads(query[name][0])
+                            result = reader.snapshot(**filters, blocked_only=query.get("blocked") == ["1"])
+                        else:
+                            result = reader.detail(query.get("id", [""])[0])
                 except (ValueError, TypeError):
                     status, result = 400, {"error": "絞り込み条件が不正です。"}
                 except (sqlite3.Error, OSError):
@@ -288,12 +303,12 @@ def serve_workspace(db_path: Path, workspace: Path, *, as_json: bool = False) ->
     from hook_monitor.runtime.workspace import make_workspace_id
 
     root = workspace.resolve(strict=True)
-    reader = LogReader(db_path, make_workspace_id(str(root)))
+    reader = LogReader(db_path, make_workspace_id(str(root)), root)
     try:
         for name in ("index.html", "screen.js", "screen.css"):
             if not (ASSETS / name).is_file():
                 raise OSError("viewer asset missing")
-        with closing(reader.connect()) as conn:
+        with reader.access(), closing(reader.connect()) as conn:
             conn.execute("SELECT event_id FROM events LIMIT 0")
         server, url = make_server(reader)
     except (OSError, sqlite3.Error):

@@ -162,7 +162,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             authority = authority_state.AUTHORITY_DIRECTORY
             if authority.exists() or authority.is_symlink():
                 return _deny_administrator_managed_change(args)
-        if args.command in {"init", "setup", "status", "doctor", "config", "protect", "pilot"}:
+        if args.command in {"init", "setup", "status", "doctor", "config", "protect", "pilot", "logs"}:
             workspace_argument = getattr(args, "workspace", None)
             if workspace_argument is not None:
                 from tooluseproxy.integrations.authority import workspace_authority_lease
@@ -214,6 +214,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             from tooluseproxy.log_viewer import serve_workspace
 
             paths = resolve_runtime_paths(db_path=args.db, data_dir=args.data_dir)
+            authority_leases.close()  # The viewer takes short leases per read, not for its lifetime.
             return serve_workspace(paths.db_path, args.workspace, as_json=args.json)
         if args.command == "unsetup":
             return _run_unsetup(args)

@@ -96,3 +96,43 @@ def test_bind_failure_preserves_existing_database(tmp_path, monkeypatch, capsys)
     assert serve_workspace(path, tmp_path, as_json=True) == 1
     assert json.loads(capsys.readouterr().out)['status'] == 'viewer_unavailable'
     assert path.read_bytes() == before
+
+
+def test_stopped_project_does_not_open_database(tmp_path, monkeypatch, capsys):
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+    from tooluseproxy.cli import main
+
+    @contextmanager
+    def stopped(*args):
+        yield SimpleNamespace(phase='inactive', target=SimpleNamespace(workspace=str(tmp_path)))
+    monkeypatch.setattr('tooluseproxy.integrations.authority.workspace_authority_lease', stopped)
+    def forbidden(*args):
+        raise AssertionError('database must not be opened')
+    monkeypatch.setattr(LogReader, 'connect', forbidden)
+    assert main(['logs', '--workspace', str(tmp_path), '--data-dir', str(tmp_path), '--json']) == 1
+    assert json.loads(capsys.readouterr().out)['database_opened'] is False
+
+
+def test_viewer_rechecks_state_and_releases_each_read_lease(tmp_path, monkeypatch):
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+    import pytest
+    events = []
+    phase = 'active'
+    @contextmanager
+    def lease(*args):
+        events.append('enter')
+        try:
+            yield SimpleNamespace(phase=phase)
+        finally:
+            events.append('exit')
+    monkeypatch.setattr('tooluseproxy.integrations.authority.workspace_authority_lease', lease)
+    reader = LogReader(database(tmp_path), 'a', tmp_path)
+    with reader.access():
+        assert reader.snapshot()['calls']
+    assert events == ['enter', 'exit']
+    phase = 'inactive'
+    with pytest.raises(OSError), reader.access():
+        raise AssertionError('stopped workspace must not reach database read')
+    assert events == ['enter', 'exit', 'enter', 'exit']
