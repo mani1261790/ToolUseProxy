@@ -1,0 +1,65 @@
+# 評価データの使用履歴（#204）
+
+`holdout.py`は人工評価専用のSQLite台帳。新規台帳は排他的に作成し、既存の
+実利用DBの初期化・移行には使わない。dataset・manifest・splitのdigestを封印し、
+評価開始前にrun・plan・model・評価器のdigestを結び付けて最初の使用を予約する。
+同時実行でも1件しか予約できず、予約後に落ちた場合も未使用へ戻さない。
+結果digestは同じrunに一度だけ記録できる。調整後や汚染が判明した場合は退役する。
+
+台帳にはリセット/再封印APIを設けない。ただし、同じ権限を持つプロセスによる
+ファイル差替え・削除・別台帳作成や、この経路外で過去にデータを読んだことまで
+防ぐ仕組みではない。`prior_external_use_verified`と
+`independent_custody_verified`は常にfalse。hashや記録があるだけで独立性・未使用性を
+合格にしてはいけない。生成元証跡と独立した保管・開封履歴を併せて確認する。
+
+## 分割保存と評価経路
+
+`partition_bundle.py`はtrain/calibration/testを個別のF01 artifactとして保存する。
+トップのbundle.jsonは各artifactのdigestと分割の同一性を持ち、正解や集計は持たない。
+`compare_holdout prepare`はtrain/calibrationだけを読み、testディレクトリが
+アクセスできない場合も計画を凍結できる。`evaluate`も最初は同じ経路でモデルと
+計画を照合し、台帳の予約をcommitしてからtestを開く。再結合時に関連群と
+同じsnapshotが分割を跨いでいないこと、元のsplitと一致することを再検証する。
+読み込み・評価・出力に失敗しても開封済みの記録を戻さない。
+
+```sh
+python -m research.flow_forecast.compare_holdout export --dataset ARTIFACT --bundle BUNDLE
+python -m research.flow_forecast.compare_holdout create-ledger --ledger HOLDOUT.sqlite
+python -m research.flow_forecast.compare_holdout seal --bundle BUNDLE --ledger HOLDOUT.sqlite
+python -m research.flow_forecast.compare_holdout prepare --bundle BUNDLE --output PLAN.json
+python -m research.flow_forecast.compare_holdout evaluate --bundle BUNDLE --ledger HOLDOUT.sqlite --plan PLAN.json --output REPORT.json
+python -m research.flow_forecast.compare_holdout retire --bundle BUNDLE --ledger HOLDOUT.sqlite --reason tuning_after_open
+```
+
+出力は上書きしない。時間/メモリは既存のBudget、データ量はF01の制限に従う。
+コードまたはPython実行環境が変われば計画の作り直しが必要。旧compare.pyは従来の
+一体型artifact向けのままで、未使用性は証明しない。
+
+exportは既にアクセス可能なDatasetを変換する操作であり、未使用データを作る操作
+ではない。`prior_access=conversion_from_accessible_dataset`を記録し、受入条件の
+unused_test_partition、independent_root_groupsを合格へ変更しない。
+独立課題の収集、実生成モデルの証跡、独立した保管・過去の開封履歴は未完了。
+この機能だけで#204や後続Issueは閉じない。
+
+## 生成モデルの収集証跡と比較
+
+`compare_holdout prepare`と`evaluate`の両方に`--collection COLLECTION`を指定すると、
+task_catalogで封印した収集証跡を比較結果へ接続する。prepareはcollection.jsonの
+識別hashだけを固定し、課題本文・test・生成記録は読まない。evaluateは開封予約の
+commit後に証跡本体を読み、Dataset全体・各run/branch・計画と生成receiptの一致を確認する。
+別の収集物への変更やcollection指定の追加/削除は計画不一致になる。開封後の不正な
+証跡も開封を消費する。一体型の`compare`でも両段階に同じオプションを指定できるが、
+こちらは従来どおり未使用性を管理しない。
+
+レポートの`generalization.agent_models`は指定aliasの分割別一覧と検証した計画receipt数を
+返す。各予測方式・条件の`strata`には`generator/requested/ALIAS`を加え、確率・経路と
+凍結済みの全体閾値での警告性能を集計する。層別に閾値を選び直さない。
+関連群内に複数aliasがあれば`generator/mixed-requested-models`、欠測があれば
+`generator/missing-evidence`として群を分割しない。予測方式の数は生成モデル数ではない。
+
+これらはローカルCLIのrequested model証跡であり、実際の解決版やproviderの証明ではない。
+`evaluated=false`と`resolved_model_versions_verified=false`を保持し、F02の
+different_agent_models_evaluatedを合格にしない。`requested_alias_strata_scored`は
+固定分布の行を集計したかだけを示し、`scored_partition=train`は訓練上の動作確認。
+adaptive探索試料を固定分布へ変更しない。固定分布の訓練群がない収集物は従来どおり
+no_fixed_distribution_training_rootsで比較を拒否する。

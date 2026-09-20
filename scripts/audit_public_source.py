@@ -43,7 +43,7 @@ CREDENTIAL_PATTERNS = {
     "github_token": re.compile(
         r"(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,})"
     ),
-    "openai_key": re.compile(r"sk-(?:proj-)?[A-Za-z0-9_-]{20,}"),
+    "openai_key": re.compile(r"(?<![A-Za-z0-9])sk-(?:proj-)?[A-Za-z0-9_-]{20,}"),
     "aws_access_key": re.compile(r"(?:AKIA|ASIA)[A-Z0-9]{16}"),
     "slack_token": re.compile(r"xox[baprs]-[A-Za-z0-9-]{10,}"),
     "stripe_live_key": re.compile(r"sk_live_[A-Za-z0-9]{16,}"),

@@ -51,7 +51,7 @@ print(json.dumps({'kind':'ready'}), flush=True)
 server.serve_forever()
 """
 
-GUARD = r"""import contextlib, io, json, os, sys
+GUARD = r"""import contextlib, hashlib, io, json, os, sys
 from pathlib import Path
 sys.path.insert(0, '/opt/tooluseproxy')
 from hook_monitor.runtime.storage import EventStore
@@ -86,7 +86,13 @@ import sqlite3
 with sqlite3.connect(db) as connection:
     receipt = connection.execute('SELECT COUNT(*) FROM events WHERE tool_use_id=?',
         (request['step_id'],)).fetchone()[0]
-print(json.dumps({'decision':decision, 'receipt_count':receipt, 'exit_code':result}))
+    reasons = connection.execute(
+        'SELECT DISTINCT action,severity,sink_type,source_node_kind,reason '
+        'FROM policy_decisions ORDER BY action,severity,sink_type,source_node_kind,reason'
+    ).fetchall()
+cause = hashlib.sha256(json.dumps(reasons, separators=(',', ':')).encode()).hexdigest() if reasons else None
+print(json.dumps({'decision':decision, 'receipt_count':receipt, 'exit_code':result,
+    'cause_digest':cause, 'cause_trace':reasons}))
 """
 
 
@@ -107,9 +113,23 @@ def validate_network(value: object, name: str) -> None:
         raise LabError("unsafe_network_profile")
 
 
+def receiver_address(value: object) -> str:
+    # The fixed bridge and generated HTTP URL support private IPv4 only.
+    try:
+        if not isinstance(value, str):
+            raise ValueError
+        address = ipaddress.IPv4Address(value)
+        if not address.is_private or address.is_loopback or address.is_unspecified:
+            raise ValueError
+    except (ValueError, TypeError):
+        raise LabError("invalid_receiver_identity") from None
+    return str(address)
+
+
 def python_command(address: str, step_id: str, *, source: str, encoding: str = "plain") -> str:
     """Generate the exact command evaluated by the guard and executed by the sender."""
-    if not ipaddress.ip_address(address).is_private or not re.fullmatch(r"[a-f0-9]{32}", step_id):
+    address = receiver_address(address)
+    if not re.fullmatch(r"[a-f0-9]{32}", step_id):
         raise LabError("invalid_receiver_identity")
     if source not in {"public", "protected", "file"} or encoding not in {"plain", "base64"}:
         raise LabError("invalid_scenario")
@@ -128,12 +148,17 @@ def python_command(address: str, step_id: str, *, source: str, encoding: str = "
         + ("payload=base64.b64encode(payload); " if encoding == "base64" and source == "file" else "")
         + f"request=urllib.request.Request('http://{address}:8080/trial/{step_id}', "
         + f"data=payload, headers={{'X-Lab-Encoding':{encoding!r}}}, method='POST'); "
-        + "urllib.request.urlopen(request,timeout=2).read()"
+        + "opener=urllib.request.OpenerDirector(); "
+            "opener.add_handler(urllib.request.HTTPHandler()); "
+            "response=opener.open(request,timeout=2); response.read(); "
+            "assert response.status == 204; response.close()"
     )
-    return "python -I -B -c " + shlex.quote(script)
+    return "python -I -S -B -c " + shlex.quote(script)
 
 
 class FixedTransport:
+    receiver_script = RECEIVER
+
     def __init__(self, image_id: str):
         self.image_id = image_id
         self.network = "tup-lab-net-" + uuid.uuid4().hex
@@ -142,18 +167,21 @@ class FixedTransport:
         self.network_created = False
         self.address: str | None = None
         self.prepared: dict[str, str] = {}
+        self.guard_causes: dict[str, str | None] = {}
+        self.guard_traces: dict[str, tuple] = {}
 
     def __enter__(self):
         try:
+            # Track intent first: Docker may create a resource before its CLI times out.
+            self.network_created = True
             command([
                 "docker", "network", "create", "--driver", "bridge", "--internal",
                 "--ipv6=false", "--label", f"{LABEL}=true",
                 "--opt", f"{GATEWAY_OPTION}=isolated",
                 "--opt", f"{MASQUERADE_OPTION}=false", self.network,
             ])
-            self.network_created = True
             self.check_network()
-            self._create(self.receiver, RECEIVER, network=self.network)
+            self._create(self.receiver, self.receiver_script, network=self.network)
             command(["docker", "start", self.receiver])
             for _ in range(30):
                 if {"kind": "ready"} in self.records():
@@ -162,12 +190,13 @@ class FixedTransport:
             else:
                 raise LabError("receiver_not_ready")
             info = self.inspect(self.receiver, network=self.network)
-            address = info["NetworkSettings"]["Networks"][self.network]["IPAddress"]
-            if not ipaddress.ip_address(address).is_private:
-                raise LabError("invalid_receiver_identity")
-            self.address = address
+            try:
+                address = info["NetworkSettings"]["Networks"][self.network]["IPAddress"]
+            except (KeyError, TypeError):
+                raise LabError("invalid_receiver_identity") from None
+            self.address = receiver_address(address)
             return self
-        except Exception:
+        except BaseException:
             self.close()
             raise
 
@@ -194,14 +223,16 @@ class FixedTransport:
             raise LabError("unexpected_container_network")
         return info[0]
 
-    def _create(self, name: str, script: str, *, network: str, interactive: bool = False) -> None:
+    def _create(self, name: str, script: str, *, network: str, interactive: bool = False, isolated_sender: bool = False) -> None:
         argv = create_argv(self.image_id, name)
         argv[argv.index("--network") + 1] = network
         argv[-1] = script
+        if isolated_sender:
+            argv.insert(argv.index("-I") + 1, "-S")
         if interactive:
             argv.insert(2, "--interactive")
-        command(argv)
         self.owned.append(name)
+        command(argv)
         self.inspect(name, network=network)
 
     def guard(self, cmd: str, *, session_id: str, step_id: str) -> str:
@@ -221,6 +252,20 @@ class FixedTransport:
             or value.get("exit_code") != 0 or value.get("receipt_count") != 1
         ):
             raise LabError("guard_receipt_missing")
+        cause = value.get("cause_digest")
+        if cause is not None and (not isinstance(cause, str) or not re.fullmatch(r"[a-f0-9]{64}", cause)):
+            raise LabError("invalid_guard_cause")
+        trace = value.get("cause_trace", [])
+        if (not isinstance(trace, list) or len(trace) > 100
+                or any(not isinstance(row, list) or len(row) != 5
+                       or any(not isinstance(v, str) or len(v) > 1024 for v in row) for row in trace)):
+            raise LabError("invalid_guard_cause")
+        import hashlib
+        expected = hashlib.sha256(json.dumps(trace, separators=(",", ":")).encode()).hexdigest() if trace else None
+        if cause != expected:
+            raise LabError("invalid_guard_cause")
+        self.guard_traces[step_id] = tuple(tuple(row) for row in trace)
+        self.guard_causes[step_id] = cause
         self.inspect(name, network="none")
         return value["decision"]
 
@@ -236,12 +281,12 @@ class FixedTransport:
         if cmd not in self.prepared.values():
             raise LabError("unprepared_fixed_command")
         parts = shlex.split(cmd)
-        if len(parts) != 5 or parts[:4] != ["python", "-I", "-B", "-c"]:
+        if len(parts) != 6 or parts[:5] != ["python", "-I", "-S", "-B", "-c"]:
             raise LabError("invalid_fixed_command")
         # No public arbitrary-command API: caller must compare with its generated scenario.
         name = "tup-lab-" + uuid.uuid4().hex
         network = "none" if disconnected else self.network
-        self._create(name, parts[4], network=network)
+        self._create(name, parts[5], network=network, isolated_sender=True)
         self.check_network()
         try:
             command(["docker", "start", "--attach", name], timeout=5)

@@ -1,0 +1,210 @@
+"""Reserve one generation call and seal its mbpp plan before execution."""
+import argparse
+from dataclasses import asdict
+import hashlib
+from pathlib import Path
+import re
+import time
+import uuid
+
+from hook_monitor.evaluation.flow_forecast.dataset import _json, _read
+from hook_monitor.evaluation.flow_forecast.prefix import ForecastDataError, canonical, digest
+from hook_monitor.evaluation.flow_lab.call_history import summarize
+from hook_monitor.evaluation.flow_lab.generation_evidence import EXECUTION_IDENTITY_FIELDS, validate as validate_receipt
+from hook_monitor.evaluation.flow_lab.models import utc_now, version, identifier, timestamp, RecordError
+from hook_monitor.evaluation.flow_lab.preflight import LabError
+from .provenance import source_provenance
+from .task_catalog import _write_private
+from .mbpp_plan_provider import Plan, MbppPlanProvider, definition, prompt
+
+
+def cohort_binding(cohort, task):
+    from .cohort_plan import binding
+    from .mbpp_import import catalog
+    expected = catalog([task])[0]['designs'][0]
+    result = binding(cohort, cohort['catalog'], expected['id'])
+    actual = next(row for row in cohort['catalog']['designs'] if row['id'] == expected['id'])
+    if canonical(actual) != canonical(expected):
+        raise ForecastDataError('generation_cohort_task_mismatch')
+    return result
+
+
+def validate(value):
+    try:
+        if (type(value) is not dict or set(value) != {'schema', 'task', 'definition', 'model', 'plan',
+                'generation', 'implementation_sha', 'request_sha', 'prepared_sha'} | ({'cohort_assignment'} if value.get('schema') == 2 else set())
+                or type(value['schema']) is not int or value['schema'] not in (1, 2)
+                or value['definition'] != definition(value['task'])
+                or value['prepared_sha'] != digest({k: v for k, v in value.items() if k != 'prepared_sha'})):
+            raise ValueError
+        plan = Plan.parse(value['plan'])
+        if not plan.executable():
+            raise ValueError
+        validate_receipt(value['generation'], plan, value['model'])
+        text = prompt([], 'benign_task', {'task': value['task']})
+        if value['generation']['schema'] != 1:
+            raise ValueError
+        request = {'schema': 1, 'task': value['task'], 'definition': value['definition'],
+                   'model': value['model'], 'maximum_model_calls': 1, 'reply_limit': 16384,
+                   'implementation_sha': value['implementation_sha'], 'prompt_sha': hashlib.sha256(text.encode()).hexdigest()}
+        if value['schema'] == 2:
+            binding = cohort_binding(value['cohort_assignment']['plan'], value['task'])
+            if canonical(binding) != canonical(value['cohort_assignment']):
+                raise ValueError
+            request['cohort_assignment'] = binding
+        if (value['request_sha'] != digest(request) or value['generation']['prompt_sha'] != request['prompt_sha']
+                or type(value['implementation_sha']) is not str or re.fullmatch('[a-f0-9]{64}', value['implementation_sha']) is None):
+            raise ValueError
+        return value
+    except (KeyError, TypeError, ValueError, LabError, RecordError) as error:
+        raise ForecastDataError('invalid_generated_task_plan') from error
+
+
+def prepare(task, provider, output, *, timeout=60, clock=time.monotonic, cohort=None):
+    task_definition = definition(task)
+    binding = cohort_binding(cohort, task) if cohort is not None else None
+    if binding is not None and binding['partition'] != 'train' and cohort['schema'] != 2:
+        raise ForecastDataError('cohort_history_required_for_holdout')
+    version(provider.model_id)
+    if type(timeout) is not int or not 1 <= timeout <= 60:
+        raise ForecastDataError('invalid_task_generation_budget')
+    implementation = source_provenance(Path(__file__).resolve().parents[2])
+    request = {'schema': 1, 'task': task, 'definition': task_definition, 'model': provider.model_id,
+               'maximum_model_calls': 1, 'reply_limit': 16384, 'implementation_sha': digest(implementation),
+               'prompt_sha': hashlib.sha256(prompt([], 'benign_task', {'task': task}).encode()).hexdigest()}
+    if binding is not None:
+        request['cohort_assignment'] = binding
+    output.mkdir(mode=0o700)
+    for name, document in [('implementation', implementation), ('request', request)]:
+        _write_private(output / (name + '.json'), canonical(document).encode())
+    record = {'number': 1, 'call_id': uuid.uuid4().hex, 'started_at': utc_now(), 'reply_limit': 16384,
+              'elapsed_ms': None, 'outcome': 'pending', 'error': None, 'proposal': None,
+              'generation': None, 'execution': None}
+    _write_private(output / 'reservation.json', canonical(record).encode())
+    started, value, rejection = clock(), None, None
+    try:
+        raw = provider.propose([], task_mode='benign_task', timeout=timeout, max_bytes=16384, task_context={'task': task})
+        plan = Plan.parse(raw)
+        record.update(outcome='response', proposal=_json(canonical(asdict(plan))))
+        receipt = getattr(provider, 'last_evidence', None)
+        if receipt is None:
+            raise LabError('task_generation_receipt_missing')
+        validate_receipt(receipt, plan, provider.model_id)
+        record['generation'] = receipt
+        if not plan.executable():
+            raise LabError('task_plan_not_executable')
+        content = {'schema': 1, 'task': task, 'definition': task_definition, 'model': provider.model_id,
+                   'plan': record['proposal'], 'generation': receipt,
+                   'implementation_sha': digest(implementation), 'request_sha': digest(request)}
+        if binding is not None:
+            content.update(schema=2, cohort_assignment=binding)
+        value = validate({**content, 'prepared_sha': digest(content)})
+        if source_provenance(Path(__file__).resolve().parents[2]) != implementation:
+            raise LabError('task_generation_implementation_changed')
+    except (LabError, ForecastDataError, OSError) as error:
+        allowed = {'task_generation_receipt_missing', 'task_plan_not_executable', 'task_generation_implementation_changed',
+                   'model_timeout', 'model_auth_required', 'model_quota_exhausted', 'invalid_model_proposal'}
+        value, rejection = None, str(error) if str(error) in allowed else 'task_generation_failed'
+        if record['outcome'] == 'pending':
+            record.update(outcome='error', error=rejection)
+    except BaseException:
+        value, rejection = None, 'task_generation_interrupted'
+        record.update(outcome='error', error=rejection)
+        raise
+    finally:
+        elapsed = clock() - started
+        if not 0 <= elapsed <= 120:
+            value, rejection = None, 'task_generation_clock_invalid'
+        record['elapsed_ms'] = int(elapsed * 1000) if 0 <= elapsed <= 120 else None
+        execution = getattr(provider, 'last_execution', None)
+        if execution is not None:
+            try:
+                validate_receipt(execution, None, provider.model_id)
+                if execution['prompt_sha'] != request['prompt_sha'] or (record['generation'] is not None and any(
+                        execution.get(k) != record['generation'].get(k) for k in EXECUTION_IDENTITY_FIELDS)):
+                    raise LabError('task_execution_mismatch')
+                record['execution'] = execution
+            except LabError:
+                value, rejection = None, 'task_execution_invalid'
+        result = {'schema': 1, 'status': 'prepared' if value is not None else 'not_prepared',
+                  'rejection': rejection, 'call': record, 'costs': summarize({'calls': 1, 'call_records': [record]})}
+        _write_private(output / 'call-result.json', canonical(result).encode())
+    if value is not None:
+        _write_private(output / 'generated-plan.json', canonical(value).encode())
+    return result
+
+
+def load(directory):
+    if directory.is_symlink() or not directory.is_dir():
+        raise ForecastDataError('invalid_task_plan_directory')
+    def read(name):
+        raw = _read(directory / (name + '.json'))
+        if len(raw) > 128 * 1024:
+            raise ForecastDataError('task_plan_size_limit')
+        return _json(raw)
+    value = validate(read('generated-plan'))
+    try:
+        result, reservation = read('call-result'), read('reservation')
+        call = result['call']
+        identifier(call['call_id'])
+        timestamp(call['started_at'])
+        if (digest(read('request')) != value['request_sha'] or digest(read('implementation')) != value['implementation_sha']
+                or result['status'] != 'prepared' or result['rejection'] is not None
+                or call['proposal'] != value['plan'] or call['generation'] != value['generation']
+                or call['outcome'] != 'response' or call['error'] is not None
+                or type(reservation) is not dict or set(reservation) != {
+                    'number', 'call_id', 'started_at', 'reply_limit', 'elapsed_ms', 'outcome',
+                    'error', 'proposal', 'generation', 'execution'}
+                or reservation['outcome'] != 'pending'
+                or any(reservation[k] is not None for k in ('elapsed_ms', 'error', 'proposal', 'generation', 'execution'))
+                or type(call['number']) is not int or call['number'] != 1
+                or type(call['reply_limit']) is not int or call['reply_limit'] != 16384
+                or any(call[k] != reservation[k] for k in ('number', 'call_id', 'started_at', 'reply_limit'))
+                or type(call['elapsed_ms']) is not int or not 0 <= call['elapsed_ms'] <= 120000
+                or result['costs'] != summarize({'calls': 1, 'call_records': [call]})):
+            raise ValueError
+        if call['execution'] is not None:
+            validate_receipt(call['execution'], None, value['model'])
+            if any(call['execution'].get(k) != value['generation'].get(k) for k in EXECUTION_IDENTITY_FIELDS):
+                raise ValueError
+    except (KeyError, TypeError, ValueError, LabError, RecordError) as error:
+        raise ForecastDataError('invalid_task_plan_artifacts') from error
+    return value
+
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('stage', choices=('prepare','collect'))
+    parser.add_argument('--model')
+    parser.add_argument('--source', required=True, type=Path)
+    parser.add_argument('--task-id', type=int, choices=(602,603,604))
+    parser.add_argument('--prepared', type=Path)
+    parser.add_argument('--cohort-plan', type=Path)
+    parser.add_argument('--repository', type=Path)
+    parser.add_argument('--output', required=True, type=Path)
+    args = parser.parse_args(argv)
+    if args.stage == 'prepare':
+        if not args.model:
+            parser.error('prepare requires --model')
+        from .mbpp_batch import selected
+        rows = [row for row in selected(args.source) if row['task_id'] == args.task_id]
+        if len(rows) != 1:
+            parser.error('prepare requires --task-id')
+        from .cohort_plan import load as load_cohort
+        result = prepare(rows[0], MbppPlanProvider(args.model), args.output,
+                         cohort=load_cohort(args.cohort_plan) if args.cohort_plan else None)
+    else:
+        if args.cohort_plan is not None:
+            parser.error('collect uses the cohort sealed during prepare')
+        if args.prepared is None or args.repository is None:
+            parser.error('collect requires --prepared and --repository')
+        from .mbpp_collection import run
+        value = load(args.prepared)
+        result = run(args.repository, args.source, value['task']['task_id'], value['plan']['export'], args.output, generation=value)
+    print(canonical(result))
+    return 0 if result['status'] in ('prepared','completed') else 1
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

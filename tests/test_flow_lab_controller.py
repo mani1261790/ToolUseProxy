@@ -1,0 +1,298 @@
+from dataclasses import replace
+import uuid
+
+import pytest
+
+from hook_monitor.evaluation.flow_lab.agent import Proposal
+from hook_monitor.evaluation.flow_lab.budget import Budget
+from hook_monitor.evaluation.flow_lab.controller import run_search
+from hook_monitor.evaluation.flow_lab.models import RunSpec, utc_now
+from hook_monitor.evaluation.flow_lab.preflight import LabError
+from hook_monitor.evaluation.flow_lab.search_state import SearchJournal
+from hook_monitor.evaluation.flow_lab.storage import TrialStore
+
+
+def proposal(source="protected", encoding="plain"):
+    return {"status": "propose", "actions": [{"source": source, "encoding": encoding}]}
+
+
+class Provider:
+    model_id = "synthetic-fixture"
+
+    def __init__(self, values):
+        self.values = iter(values)
+        self.feedback = []
+
+    def propose(self, feedback, **limits):
+        self.feedback.append(feedback)
+        value = next(self.values)
+        if isinstance(value, BaseException):
+            raise value
+        return value
+
+
+class Transport:
+    def __init__(self):
+        self.sent = 0
+        self.guards = 0
+        self.fail = False
+
+    def prepare(self, step_id, **kwargs):
+        return "synthetic-command"
+
+    def guard(self, *args, **kwargs):
+        self.guards += 1
+        if self.fail:
+            raise LabError("guard_receipt_missing")
+        return "deny"
+
+    def send(self, *args):
+        self.sent += 1
+        return True
+
+    def delivery(self, step_id):
+        return "no", "no"
+
+
+@pytest.fixture
+def context(tmp_path):
+    budget = Budget()
+    spec = RunSpec(run_id=uuid.uuid4().hex, suite_version="adaptive-v1",
+                   detector_revision="fixture", policy_revision="fixture",
+                   environment_digest="a" * 64, started_at=utc_now(), mode="adaptive_search")
+    with SearchJournal(tmp_path / "search") as journal:
+        with TrialStore(journal.directory / "trials") as store:
+            yield journal, store, spec, Transport(), budget
+
+
+def run(context, provider, **kwargs):
+    journal, store, spec, transport, budget = context
+    return run_search(journal, store, spec, transport, provider, budget, **kwargs)
+
+
+def test_adapts_after_denial_and_finishes(context):
+    provider = Provider([proposal(), proposal(encoding="base64"), {"status": "complete", "actions": []}])
+    result = run(context, provider)
+    assert result["status"] == "completed"
+    assert result["summary"]["observation_count"] == 2
+    assert provider.feedback[1][0]["decision"] == "deny"
+    assert context[3].sent == 0
+    assert context[1].summary(context[2])["state"] == "complete"
+
+
+@pytest.mark.parametrize("value", [
+    {"status": "propose", "actions": [], "sudo": True},
+    {"status": "propose", "actions": [{"command": "sudo echo private"}]},
+    proposal("/real/path"), proposal(encoding="arbitrary-script"),
+    {"status": "complete", "actions": [{"source": "public", "encoding": "plain"}]},
+])
+def test_rejects_authority_or_arbitrary_commands(context, value):
+    assert run(context, Provider([value]))["status"] == "invalid_model_proposal"
+    assert context[3].guards == context[3].sent == 0
+
+
+def test_repeated_plan_stops_without_second_dispatch(context):
+    assert run(context, Provider([proposal(), proposal()]))["status"] == "repeated_proposal"
+    assert context[3].guards == 1
+
+
+@pytest.mark.parametrize("reason", ["model_auth_required", "model_quota_exhausted", "model_timeout"])
+def test_failure_is_charged_and_can_resume(context, reason):
+    assert run(context, Provider([LabError(reason)]))["status"] == reason
+    assert context[0].read()["calls"] == 1
+    result = run(context, Provider([proposal(), {"status": "complete", "actions": []}]))
+    assert result["status"] == "completed"
+    assert context[0].read()["calls"] == 3
+
+
+def test_interrupted_model_call_is_not_silently_repeated(context):
+    with pytest.raises(KeyboardInterrupt):
+        run(context, Provider([KeyboardInterrupt()]))
+    assert run(context, Provider([]))["status"] == "model_response_unknown"
+    assert context[0].read()["calls"] == 1
+
+
+def test_pending_dispatch_is_not_repeated_after_restart(context):
+    context[3].fail = True
+    with pytest.raises(LabError, match="guard_receipt_missing"):
+        run(context, Provider([proposal()]))
+    context[3].fail = False
+    assert run(context, Provider([]))["status"] == "operation_requires_reconciliation"
+    assert context[3].guards == 1
+    assert len(context[1].pending(context[2])) == 1
+
+
+def test_resume_after_observation_never_repeats_completed_step(context, monkeypatch):
+    original = context[0].write
+    def fail_on_second_request(state):
+        if state["calls"] == 2:
+            raise KeyboardInterrupt
+        original(state)
+    monkeypatch.setattr(context[0], "write", fail_on_second_request)
+    with pytest.raises(KeyboardInterrupt):
+        run(context, Provider([proposal()]))
+    monkeypatch.setattr(context[0], "write", original)
+    result = run(context, Provider([{"status": "complete", "actions": []}]))
+    assert result["status"] == "completed"
+    assert context[3].guards == 1
+
+
+def test_budget_stops_before_model_call(context):
+    limited = replace(context[-1], model_calls=1)
+    result = run((*context[:-1], limited), Provider([proposal()]))
+    assert result["status"] == "model_budget_exhausted"
+    assert context[3].guards == 1
+
+
+def test_trial_budget_stops(context):
+    budget = replace(context[-1], trials=1)
+    spec = replace(context[2], max_trials=1)
+    result = run((context[0], context[1], spec, context[3], budget), Provider([proposal()]))
+    assert result["status"] == "trial_budget_exhausted"
+
+
+def test_wallclock_budget_includes_interruption(context):
+    assert run(context, Provider([LabError("model_auth_required")]), clock=lambda: 100)["status"]
+    result = run(context, Provider([]), clock=lambda: 2000)
+    assert result["status"] == "time_budget_exhausted"
+
+
+def test_only_one_controller(context):
+    with context[0].lease():
+        with pytest.raises(LabError, match="search_already_running"):
+            run(context, Provider([]))
+
+
+def test_unrelated_directory_rejected(tmp_path):
+    (tmp_path / "user.txt").write_text("kept")
+    with pytest.raises(LabError, match="unrelated_search_storage"):
+        SearchJournal(tmp_path)
+    assert (tmp_path / "user.txt").read_text() == "kept"
+
+
+def test_proposal_schema_does_not_accept_missing_or_unbounded_actions():
+    with pytest.raises(LabError):
+        Proposal.parse({"status": "propose", "actions": proposal()["actions"] * 11})
+    with pytest.raises(LabError):
+        Proposal.parse({})
+
+
+def test_terminal_checkpoint_finishes_run_after_crash(context, monkeypatch):
+    original = context[1].finish
+    def interrupted(*args, **kwargs):
+        raise KeyboardInterrupt
+    monkeypatch.setattr(context[1], "finish", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        run(context, Provider([{"status": "complete", "actions": []}]))
+    monkeypatch.setattr(context[1], "finish", original)
+    result = run(context, Provider([]))
+    assert result["status"] == "completed"
+    assert result["summary"]["state"] == "complete"
+
+
+@pytest.mark.parametrize("key,value", [("calls", -1), ("calls", True), ("plans", {}),
+                                       ("started", "not-a-time"), ("phase", "sudo")])
+def test_corrupt_checkpoint_is_refused(context, key, value):
+    run(context, Provider([LabError("model_auth_required")]))
+    state = context[0].read()
+    state[key] = value
+    context[0].write(state)
+    with pytest.raises(LabError, match="invalid_search_state"):
+        run(context, Provider([]))
+    assert context[3].guards == 0
+
+
+def test_controls_consume_the_same_trial_budget(context):
+    result = run(context, Provider([proposal()]), control_trials=19)
+    assert result["status"] == "trial_budget_exhausted"
+    assert result["summary"]["attempt_count"] == 1
+
+
+def test_preflight_time_counts_toward_wallclock_limit(context):
+    result = run(context, Provider([]), started_at=100, clock=lambda: 2000)
+    assert result["status"] == "time_budget_exhausted"
+    assert context[0].read()["calls"] == 0
+
+
+def test_model_refusal_is_recorded_without_trial(context):
+    result = run(context, Provider([{"status": "refused", "actions": []}]))
+    assert result["status"] == "model_refused"
+    assert result["summary"]["observation_count"] == 0
+    assert context[3].guards == 0
+
+
+def test_per_trial_step_limit_is_checked_before_dispatch(context):
+    budget = replace(context[-1], steps=1)
+    spec = replace(context[2], max_steps=1)
+    value = proposal()
+    value["actions"] *= 2
+    result = run((context[0], context[1], spec, context[3], budget), Provider([value]))
+    assert result["status"] == "invalid_model_proposal"
+    assert context[3].guards == 0
+
+
+def test_storage_limit_preserves_observations_and_stops_new_model_calls(context):
+    budget = replace(context[-1], storage_bytes=1)
+    result = run((*context[:-1], budget), Provider([]))
+    assert result["status"] == "storage_budget_exhausted"
+    assert context[0].read()["calls"] == 0
+    assert context[1].read(context[2]) == []
+
+
+def test_generation_evidence_is_bound_to_trial_before_dispatch(context):
+    from hook_monitor.evaluation.flow_lab.generation_evidence import capture
+    from hook_monitor.evaluation.flow_lab.controller import validate_state
+    value = proposal()
+    provider = Provider([value, {'status': 'complete', 'actions': []}])
+    evidence = capture(events=b'{"type":"turn.completed"}', prompt=b'synthetic',
+                       proposal=Proposal.parse(value), model=provider.model_id,
+                       cli_version='codex-cli 0.153.4', call_id='a' * 32, elapsed_ms=1)
+    provider.last_evidence = evidence
+    original = context[3].guard
+
+    def guarded(*args, **kwargs):
+        saved = context[0].read()['plans'][0]
+        assert saved['generation'] == evidence
+        assert saved['attempt'] == kwargs['session_id']
+        assert kwargs['step_id'] in saved['steps']
+        provider.last_evidence = None  # This fixture's later completion has no execution evidence.
+        return original(*args, **kwargs)
+
+    context[3].guard = guarded
+    assert run(context, provider)['status'] == 'completed'
+    saved = context[0].read()
+    validate_state(saved, context[4])
+    saved['plans'][0]['generation']['requested_model'] = 'other-model'
+    with pytest.raises(LabError, match='invalid_search_state'):
+        validate_state(saved, context[4])
+
+
+def test_stale_provider_evidence_cannot_be_attached_to_different_proposal(context):
+    from hook_monitor.evaluation.flow_lab.generation_evidence import capture
+    provider = Provider([proposal(), proposal(encoding='base64')])
+    provider.last_evidence = capture(
+        events=b'{"type":"turn.completed"}', prompt=b'synthetic', proposal=Proposal.parse(proposal()),
+        model=provider.model_id, cli_version='codex-cli 0.153.4', call_id='b' * 32, elapsed_ms=1)
+    with pytest.raises(LabError, match='invalid_generation_evidence'):
+        run(context, provider)
+    assert len(context[0].read()['plans']) == 1
+    assert context[3].guards == 1
+
+
+def test_generation_call_id_cannot_be_reused_for_another_trial(context):
+    from hook_monitor.evaluation.flow_lab.generation_evidence import capture
+
+    class EvidenceProvider(Provider):
+        def propose(self, feedback, **limits):
+            value = super().propose(feedback, **limits)
+            self.last_evidence = capture(
+                events=b'{"type":"turn.completed"}', prompt=b'synthetic',
+                proposal=Proposal.parse(value), model=self.model_id,
+                cli_version='codex-cli 0.153.4', call_id='c' * 32, elapsed_ms=1)
+            return value
+
+    provider = EvidenceProvider([proposal(), proposal(encoding='base64')])
+    with pytest.raises(LabError, match='generation_call_reused'):
+        run(context, provider)
+    assert len(context[0].read()['plans']) == 1
+    assert context[3].guards == 1

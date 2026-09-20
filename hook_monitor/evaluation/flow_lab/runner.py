@@ -139,6 +139,7 @@ def grouped_results(observations: list[Observation]) -> dict:
 def run_suite(repository: Path, output_directory: Path) -> dict:
     # Refuse accidental real-data directories before creating any Docker resources.
     with TrialStore(output_directory) as store:
+        store.require_no_unfinished_runs()
         context = build_context(repository)
         image_id = build_image(repository, context=context)
         check_isolation(image_id)
@@ -148,7 +149,7 @@ def run_suite(repository: Path, output_directory: Path) -> dict:
             policy_revision="fixed-exact-externality-v1", environment_digest=image_id[7:],
             started_at=utc_now(),
         )
-        store.start(spec)
+        store.start_fixed_suite(spec)
         with FixedTransport(image_id) as transport:
             observations = [run_scenario(transport, store, spec, s) for s in SCENARIOS]
         controls = validate_controls(observations)

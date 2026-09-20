@@ -1,0 +1,280 @@
+{
+  "schema": 1,
+  "status": "pilot_costs_and_conditional_plan_only",
+  "protocol_sha256": "b4047e93e69b1959c36db2f9d61f71df54c46f82a7043bc7b1068f0f04fe983c",
+  "bindings": [
+    {
+      "schema": 1,
+      "world": "inventory",
+      "capture_root": "077041893cea463e8194d0a8a8789dbf",
+      "capture_report_sha": "d81c4a7e64d7ab931725c8d243ff412eb93459fe3f4f6e845d9705c00127ba87",
+      "intervention_report_sha": "489d05bbfc18f9c7ef10111c0476aba03057b045632bb224918e565479394339",
+      "definition_sha": "b06c96fbe77024eff79f83e0290ec7dbfaaf6246cd09a4cf64db08e675e8e5e7",
+      "matched_compute_command_sha": "63b9736d062c8f9589bdeac3959034d6be52e84d3f9fde21be1f7dfdf25373e5",
+      "input_contract": {
+        "schema": 1,
+        "contract": "json-input-only-computation-v1",
+        "program_sha": "407938861a24e2ba9fd020e9b64a5c6d05ab907e99d0efd87f1804c06185cf07",
+        "external_values": [
+          "source"
+        ],
+        "builtins": [
+          "all",
+          "any",
+          "dict",
+          "range",
+          "sum"
+        ],
+        "assumptions": [
+          "source_is_plain_json",
+          "unmodified_python_builtins",
+          "trusted_execution_wrapper"
+        ],
+        "scope": "syntactic_input_capabilities_not_field_level_causality",
+        "semantic_truth_promoted": false
+      },
+      "changed_cases": [
+        "increase-a-stock",
+        "reverse-first-two-orders"
+      ],
+      "semantic_truth_promoted": false,
+      "independent_new_tasks_accepted": 0,
+      "scope": "same_closed_computation_finite_input_dependence_only"
+    },
+    {
+      "schema": 1,
+      "world": "calendar",
+      "capture_root": "bb6179f359a04c1e9c4cb6197215cfb6",
+      "capture_report_sha": "818adcaf2d7949fac4616e0ff6770d1754b910b8fe20f0eb4161f8165f81015e",
+      "intervention_report_sha": "79aa834e914cba01e36b2da8e862cb92b858cadb29ddb795d7d9a57ca6bc24b2",
+      "definition_sha": "548b7b7590f77b5fbed1ee96e35f7a87cb23744ad6707c9adca8e69437faf7b2",
+      "matched_compute_command_sha": "980784e67571a1192068434af06c1302f20ef5f13fcf7fc9009654fe01ce92be",
+      "input_contract": {
+        "schema": 1,
+        "contract": "json-input-only-computation-v1",
+        "program_sha": "536d782b010651d7448edab96c6fa7df4da05c1909e8ee904f03447520c81ee4",
+        "external_values": [
+          "source"
+        ],
+        "builtins": [
+          "all",
+          "any",
+          "dict",
+          "range",
+          "sum"
+        ],
+        "assumptions": [
+          "source_is_plain_json",
+          "unmodified_python_builtins",
+          "trusted_execution_wrapper"
+        ],
+        "scope": "syntactic_input_capabilities_not_field_level_causality",
+        "semantic_truth_promoted": false
+      },
+      "changed_cases": [
+        "shorten-duration",
+        "remove-second-attendee-first-window"
+      ],
+      "semantic_truth_promoted": false,
+      "independent_new_tasks_accepted": 0,
+      "scope": "same_closed_computation_finite_input_dependence_only"
+    },
+    {
+      "schema": 1,
+      "world": "ledger",
+      "capture_root": "7d3e3e2b2cfd49788514e3d83b1b2261",
+      "capture_report_sha": "f0e78cb6907f9d55d4eba89941c76625b9724757492dfd6ae15817a23d27bacd",
+      "intervention_report_sha": "9e91c182f58568795241a6c67a89c1688ee68a83d1dc7ff3ce9660d3b65ee7db",
+      "definition_sha": "d3bfec300da57d30dd6768a4caa1d1c5fb2cfe59c14e8988e43b440cd6a5dcd4",
+      "matched_compute_command_sha": "a28d00e989115f199914fba0ed07ed9f9f8861ee8443a8ebc8ef2db9bb810a95",
+      "input_contract": {
+        "schema": 1,
+        "contract": "json-input-only-computation-v1",
+        "program_sha": "5da14903197404b044d3eb4bb41bc914d1c95673e0a553a1e376debad4775d8e",
+        "external_values": [
+          "source"
+        ],
+        "builtins": [
+          "all",
+          "any",
+          "dict",
+          "range",
+          "sum"
+        ],
+        "assumptions": [
+          "source_is_plain_json",
+          "unmodified_python_builtins",
+          "trusted_execution_wrapper"
+        ],
+        "scope": "syntactic_input_capabilities_not_field_level_causality",
+        "semantic_truth_promoted": false
+      },
+      "changed_cases": [
+        "increase-refund",
+        "unvoid-sale"
+      ],
+      "semantic_truth_promoted": false,
+      "independent_new_tasks_accepted": 0,
+      "scope": "same_closed_computation_finite_input_dependence_only"
+    },
+    {
+      "schema": 1,
+      "world": "routing",
+      "capture_root": "56da5e56fea94a76a27320eaff8685da",
+      "capture_report_sha": "a6340a0b3d8169fa61b006c7e7cf9c13ba53532170f5c264574d8de2071257ca",
+      "intervention_report_sha": "3e3aa8efad6a76c03e1d108287b37ed72dbe2b66ea0773f99e30ca7ffa94534c",
+      "definition_sha": "58ba11dfc54907993d323e470243b5376dfb46bdf0a68e871f457230826ba942",
+      "matched_compute_command_sha": "38ddbb76adadb6fd0419fe26d1e684ac6d41617e6269ff60ca159ba1e2c21ee8",
+      "input_contract": {
+        "schema": 1,
+        "contract": "json-input-only-computation-v1",
+        "program_sha": "f8488ee7da0fc24e7c43778576d1bab72e15ad91f4ce3755e1d58afc5f909db9",
+        "external_values": [
+          "source"
+        ],
+        "builtins": [
+          "all",
+          "any",
+          "dict",
+          "range",
+          "sum"
+        ],
+        "assumptions": [
+          "source_is_plain_json",
+          "unmodified_python_builtins",
+          "trusted_execution_wrapper"
+        ],
+        "scope": "syntactic_input_capabilities_not_field_level_causality",
+        "semantic_truth_promoted": false
+      },
+      "changed_cases": [
+        "lower-direct-edge",
+        "remove-cheap-transfer"
+      ],
+      "semantic_truth_promoted": false,
+      "independent_new_tasks_accepted": 0,
+      "scope": "same_closed_computation_finite_input_dependence_only"
+    },
+    {
+      "schema": 1,
+      "world": "revisions",
+      "capture_root": "fd46573b7bc443e1a3f6fd7a18e487a9",
+      "capture_report_sha": "c6b3f9356192da28157c080c7cc3bb90a8a5d9dfdaf9489f9f03790c25274ae1",
+      "intervention_report_sha": "51403148d9716f36e6b196731e363e99dce17b179fd4f741eb6b75e68d5eb27f",
+      "definition_sha": "de37fd9eecc01a823dcbf6ff74c9e2b6aaef8a816706056fe98a692df01dfbe7",
+      "matched_compute_command_sha": "44344c3e43f246ac0756ed0217c3743996523c4c20c7d450acb798bb69202b51",
+      "input_contract": {
+        "schema": 1,
+        "contract": "json-input-only-computation-v1",
+        "program_sha": "117e0ba219cf203250571d9965eb58b2cce9119a8880b6f2bff2c2075b50ee41",
+        "external_values": [
+          "source"
+        ],
+        "builtins": [
+          "all",
+          "any",
+          "dict",
+          "range",
+          "sum"
+        ],
+        "assumptions": [
+          "source_is_plain_json",
+          "unmodified_python_builtins",
+          "trusted_execution_wrapper"
+        ],
+        "scope": "syntactic_input_capabilities_not_field_level_causality",
+        "semantic_truth_promoted": false
+      },
+      "changed_cases": [
+        "newer-restoration",
+        "newer-title"
+      ],
+      "semantic_truth_promoted": false,
+      "independent_new_tasks_accepted": 0,
+      "scope": "same_closed_computation_finite_input_dependence_only"
+    },
+    {
+      "schema": 1,
+      "world": "prerequisites",
+      "capture_root": "69e1fcc0e6fd4a518e5a801b7d233922",
+      "capture_report_sha": "4520589cea951cf46d16969fbdcb6e775e4c8a2495578f5f1924885d15e453f1",
+      "intervention_report_sha": "7783a43aa478cc73ac2f31259790e76fe41da159edc105771403ef7038cb97b0",
+      "definition_sha": "6601ccd42fd0736766e94592207c8a042f35eb0401b4f2ff00f59304c18b7919",
+      "matched_compute_command_sha": "c754c18519c345a6d3935d878f482c1b1e4f14b595e88e03c233d75bc46f06d5",
+      "input_contract": {
+        "schema": 1,
+        "contract": "json-input-only-computation-v1",
+        "program_sha": "5cde28c430b62998efc07c33dd14af4fa6f86fd51f6114a0d23df0db9d162c8e",
+        "external_values": [
+          "source"
+        ],
+        "builtins": [
+          "all",
+          "any",
+          "dict",
+          "range",
+          "sum"
+        ],
+        "assumptions": [
+          "source_is_plain_json",
+          "unmodified_python_builtins",
+          "trusted_execution_wrapper"
+        ],
+        "scope": "syntactic_input_capabilities_not_field_level_causality",
+        "semantic_truth_promoted": false
+      },
+      "changed_cases": [
+        "complete-missing-prerequisite",
+        "remove-math-credit"
+      ],
+      "semantic_truth_promoted": false,
+      "independent_new_tasks_accepted": 0,
+      "scope": "same_closed_computation_finite_input_dependence_only"
+    }
+  ],
+  "observed_selected_completed_batches": {
+    "captures": 6,
+    "interventions": 6,
+    "trial_charges": 84,
+    "elapsed_seconds": 81.70007016799354,
+    "artifact_bytes_before_reports": 854011,
+    "blocked_enforce_captures": 6,
+    "includes_model_preparation": false,
+    "includes_failed_or_unlisted_batches": false,
+    "complete_storage_measurement": false
+  },
+  "conditional_collection_plan": {
+    "required_independent_roots_by_stratum": {
+      "training": 20,
+      "calibration_normal": 100,
+      "test_normal": 300,
+      "test_positive": 100
+    },
+    "required_independent_roots": 520,
+    "capture_batches_per_root": 1,
+    "intervention_batches_per_root": 1,
+    "capture_trial_reservations_per_root": 14,
+    "intervention_trial_reservations_per_root": 3,
+    "explicit_batches": 1040,
+    "trial_reservations": 8840,
+    "seconds_limit_per_batch": 180,
+    "storage_limit_bytes_per_batch": 1073741824,
+    "serial_batch_deadline_sum_seconds": 187200,
+    "model_calls_assuming_one_successful_plan_per_root": 520,
+    "estimated_end_to_end_seconds": null,
+    "estimated_total_storage_bytes": null,
+    "estimated_provider_cost": null,
+    "assumptions": [
+      "one_new_accepted_design_per_root",
+      "one_capture_and_one_intervention_batch_per_design",
+      "all_plans_succeed_without_retry",
+      "all_required_outcome_strata_filled",
+      "no_additional_tool_or_model_generalization_runs"
+    ]
+  },
+  "independence_verified": false,
+  "prior_nonuse_verified": false,
+  "automatic_batch_extension": false,
+  "trials_started": 0,
+  "scope": "completed_pilot_subset_not_total_project_cost_or_execution_authorization"
+}

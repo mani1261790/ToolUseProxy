@@ -25,6 +25,9 @@ FIXED_FILES = (
     "skills/tooluseproxy-setup/SKILL.md",
     "tooluseproxy_hook_watchdog.py",
     "tooluseproxy_plugin.py",
+    "tooluseproxy/viewer/index.html",
+    "tooluseproxy/viewer/screen.js",
+    "tooluseproxy/viewer/screen.css",
 )
 MARKETPLACE_DOCUMENTATION_FILES = (
     "LICENSE",

@@ -31,6 +31,9 @@ version = { attr = "tooluseproxy.__version__" }
 include = ["hook_monitor*", "tooluseproxy*"]
 exclude = ["hook_monitor.evaluation*"]
 
+[tool.setuptools.package-data]
+tooluseproxy = ["viewer/*.html", "viewer/*.js", "viewer/*.css"]
+
 [tool.ruff]
 target-version = "py311"
 line-length = 100

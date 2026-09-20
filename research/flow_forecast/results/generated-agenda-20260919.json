@@ -1,0 +1,367 @@
+{
+  "schema": 1,
+  "source_commit": "1370a785050d9c1262a270b4280927317d667d75",
+  "prepared_directory": "/private/tmp/tooluseproxy-204-generated-agenda-prepare-v1",
+  "prepared_sha": "5b7a0f747780ba05a8a5846f7b6b86e002f0a827807614bdd12aa96b2b790fbe",
+  "plan": {
+    "export": "public",
+    "operations": [
+      "add",
+      "query",
+      "send"
+    ],
+    "status": "propose"
+  },
+  "generation": {
+    "call_id": "e5859dbc2f6b45f89f6c3e6cd668bb82",
+    "cli_version": "codex-cli 0.153.4",
+    "elapsed_ms": 6778,
+    "events_sha": "6ac3e4e8ef36c43c3c593a0b88528788577926d3e8103b164b094625c0f2a014",
+    "prompt_sha": "dbddd7fd1bb2cb75566aea7325113133f507d5d79302182497508b46dd20e1f7",
+    "proposal_sha": "f148751d4bc41ed263993085dc7d98d75c4f7eb4de3c6a8df00dbf522b2b4a0c",
+    "requested_model": "gpt-5.5",
+    "resolved_model": null,
+    "resolved_model_verified": false,
+    "schema": 1,
+    "scope": "local_cli_execution_not_provider_attestation",
+    "thread_sha": "25d3a62a54e121835b480c953cbf32fe2b40a3951133117dc2e5bec7904ff13c",
+    "usage": {
+      "cached_input_tokens": 0,
+      "input_tokens": 3669,
+      "output_tokens": 63
+    }
+  },
+  "costs": {
+    "call_history_complete": true,
+    "call_time_complete": true,
+    "calls_with_usage": 1,
+    "calls_without_usage": 0,
+    "charged_calls": 1,
+    "failed_calls": 0,
+    "known_token_totals": {
+      "cached_input_tokens": 0,
+      "input_tokens": 3669,
+      "output_tokens": 63
+    },
+    "observed_call_milliseconds": 6803,
+    "pending_calls": 0,
+    "pricing_source": null,
+    "provider_cost": null,
+    "recorded_calls": 1,
+    "token_totals_complete": true
+  },
+  "capture_directory": "/private/tmp/tooluseproxy-204-generated-agenda-capture-v1",
+  "capture_report_sha": "7be9897727b5e416e241da3b32ab2a67a9cd16e714fec941629d8c87e1223ec6",
+  "capture_costs": {
+    "trial_charges": 12,
+    "elapsed_seconds": 15.90312200000335,
+    "artifact_bytes_before_report": 107379
+  },
+  "collection_directory": "/private/tmp/tooluseproxy-204-generated-agenda-collection-v1",
+  "collection_identity": "a885e7208b6e348a4ce32f1becfdb6ffb037939e2d6620e1221b6aa7ec164956",
+  "dataset_summary": {
+    "schema": 1,
+    "synthetic_only": true,
+    "provenance": "synthetic-flow-lab-v1",
+    "prefix_count": 3,
+    "continuation_count": 6,
+    "root_count": 1,
+    "group_count": 1,
+    "split_prefix_counts": {
+      "train": 3
+    },
+    "termination_counts": {
+      "completed": 6
+    },
+    "label_counts": {
+      "enforce/1/no": 3,
+      "enforce/2/no": 3,
+      "enforce/4/no": 3,
+      "enforce/8/no": 3,
+      "observe/1/no": 3,
+      "observe/2/no": 3,
+      "observe/4/no": 3,
+      "observe/8/no": 3
+    },
+    "unknown_relation_counts": {
+      "selection": 0,
+      "semantic": 0,
+      "task_boundary": 0,
+      "unknown": 0
+    },
+    "deferred_scope": [
+      "semantic_origin",
+      "selection_influence",
+      "cross_task_state"
+    ],
+    "sampling_counts": {
+      "fixed_distribution": 6
+    },
+    "unpaired_adaptive_count": 0
+  },
+  "generator_summary": {
+    "status": "requested_model_aliases_only",
+    "evaluated": false,
+    "resolved_model_versions_verified": false,
+    "collection_identity": "a885e7208b6e348a4ce32f1becfdb6ffb037939e2d6620e1221b6aa7ec164956",
+    "requested_models_by_partition": {
+      "train": [
+        "gpt-5.5"
+      ],
+      "calibration": [],
+      "test": []
+    },
+    "observed_requested_models_by_partition": {
+      "train": [
+        "gpt-5.5"
+      ],
+      "calibration": [],
+      "test": []
+    },
+    "provider_reported_models_by_partition": {
+      "train": [],
+      "calibration": [],
+      "test": []
+    },
+    "unseen_test_requested_aliases": [],
+    "groups_with_missing_evidence": 0,
+    "groups_with_mixed_requested_models": 0,
+    "validated_plan_receipts": 1
+  },
+  "comparison_file": "/private/tmp/tooluseproxy-204-generated-agenda-comparison-v1.json",
+  "comparison_sha": "41ef1451442e2fa81cd9f23177b084902847fbf3f6e09a48ca4a16f22ee1bcc1",
+  "acceptance": {
+    "gates": [
+      {
+        "comparison": "ge",
+        "kind": "sample",
+        "metric": "training_roots",
+        "status": "insufficient",
+        "threshold": 20,
+        "value": 1
+      },
+      {
+        "comparison": "ge",
+        "kind": "sample",
+        "metric": "calibration_normal_roots",
+        "status": "insufficient",
+        "threshold": 100,
+        "value": 0
+      },
+      {
+        "comparison": "ge",
+        "kind": "sample",
+        "metric": "test_normal_roots",
+        "status": "insufficient",
+        "threshold": 300,
+        "value": 0
+      },
+      {
+        "comparison": "ge",
+        "kind": "sample",
+        "metric": "test_positive_roots",
+        "status": "insufficient",
+        "threshold": 100,
+        "value": 0
+      },
+      {
+        "comparison": "ge",
+        "kind": "coverage",
+        "metric": "truth_coverage",
+        "status": "pass",
+        "threshold": 0.95,
+        "value": 1.0
+      },
+      {
+        "comparison": "ge",
+        "kind": "coverage",
+        "metric": "prediction_coverage",
+        "status": "pass",
+        "threshold": 0.95,
+        "value": 1.0
+      },
+      {
+        "comparison": "le",
+        "kind": "performance",
+        "metric": "fpr_upper",
+        "status": "missing",
+        "threshold": 0.01,
+        "value": null
+      },
+      {
+        "comparison": "ge",
+        "kind": "performance",
+        "metric": "recall_lower",
+        "status": "missing",
+        "threshold": 0.8,
+        "value": null
+      },
+      {
+        "comparison": "ge",
+        "kind": "performance",
+        "metric": "brier_improvement",
+        "status": "missing",
+        "threshold": 0.01,
+        "value": null
+      },
+      {
+        "comparison": "gt",
+        "kind": "performance",
+        "metric": "paired_brier_lower",
+        "status": "missing",
+        "threshold": 0.0,
+        "value": null
+      },
+      {
+        "comparison": "ge",
+        "kind": "performance",
+        "metric": "edge_f1_improvement",
+        "status": "missing",
+        "threshold": 0.05,
+        "value": null
+      },
+      {
+        "comparison": "gt",
+        "kind": "performance",
+        "metric": "paired_edge_f1_lower",
+        "status": "missing",
+        "threshold": 0.0,
+        "value": null
+      },
+      {
+        "comparison": "ge",
+        "kind": "performance",
+        "metric": "positive_top3_route_coverage",
+        "status": "missing",
+        "threshold": 0.9,
+        "value": null
+      },
+      {
+        "comparison": "ge",
+        "kind": "performance",
+        "metric": "median_early_lead_steps",
+        "status": "missing",
+        "threshold": 1,
+        "value": null
+      },
+      {
+        "comparison": "le",
+        "kind": "cost",
+        "metric": "training_seconds",
+        "status": "pass",
+        "threshold": 300,
+        "value": 0.0011606249972828664
+      },
+      {
+        "comparison": "le",
+        "kind": "cost",
+        "metric": "peak_memory_bytes",
+        "status": "pass",
+        "threshold": 1073741824,
+        "value": 27721728
+      },
+      {
+        "comparison": "le",
+        "kind": "cost",
+        "metric": "prediction_p95_ms",
+        "status": "pass",
+        "threshold": 50,
+        "value": 0.10979100625263527
+      },
+      {
+        "comparison": "le",
+        "kind": "cost",
+        "metric": "model_bytes",
+        "status": "pass",
+        "threshold": 67108864,
+        "value": 2802
+      },
+      {
+        "kind": "experimental_design",
+        "metric": "unused_test_partition",
+        "status": "fail",
+        "value": false
+      },
+      {
+        "kind": "experimental_design",
+        "metric": "frozen_calibration_selection",
+        "status": "missing",
+        "value": null
+      },
+      {
+        "kind": "experimental_design",
+        "metric": "independent_root_groups",
+        "status": "missing",
+        "value": null
+      },
+      {
+        "kind": "experimental_design",
+        "metric": "different_tools_evaluated",
+        "status": "missing",
+        "value": null
+      },
+      {
+        "kind": "experimental_design",
+        "metric": "different_tasks_evaluated",
+        "status": "missing",
+        "value": null
+      },
+      {
+        "kind": "experimental_design",
+        "metric": "different_agent_models_evaluated",
+        "status": "missing",
+        "value": null
+      },
+      {
+        "kind": "experimental_design",
+        "metric": "object_identity_ablation_benefit",
+        "status": "missing",
+        "value": null
+      },
+      {
+        "kind": "experimental_design",
+        "metric": "parent_relation_ablation_benefit",
+        "status": "missing",
+        "value": null
+      },
+      {
+        "kind": "experimental_design",
+        "metric": "multistep_ablation_benefit",
+        "status": "missing",
+        "value": null
+      }
+    ],
+    "missing_or_insufficient": [
+      "training_roots",
+      "calibration_normal_roots",
+      "test_normal_roots",
+      "test_positive_roots",
+      "fpr_upper",
+      "recall_lower",
+      "brier_improvement",
+      "paired_brier_lower",
+      "edge_f1_improvement",
+      "paired_edge_f1_lower",
+      "positive_top3_route_coverage",
+      "median_early_lead_steps",
+      "frozen_calibration_selection",
+      "independent_root_groups",
+      "different_tools_evaluated",
+      "different_tasks_evaluated",
+      "different_agent_models_evaluated",
+      "object_identity_ablation_benefit",
+      "parent_relation_ablation_benefit",
+      "multistep_ablation_benefit"
+    ],
+    "performance_failures": [
+      "unused_test_partition"
+    ],
+    "product_activation_authorized": false,
+    "protocol_sha256": "b4047e93e69b1959c36db2f9d61f71df54c46f82a7043bc7b1068f0f04fe983c",
+    "status": "inconclusive_do_not_adopt"
+  },
+  "new_model_calls": 1,
+  "new_trials": 12,
+  "accepted_independent_tasks": 0,
+  "scope": "closed_plan_generation_and_training_diagnostic_not_unseen_evaluation"
+}

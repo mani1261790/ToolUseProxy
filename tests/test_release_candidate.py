@@ -106,13 +106,13 @@ class ReleaseCandidateTest(unittest.TestCase):
             first_files = {path.name: path.read_bytes() for path in first.iterdir()}
             second_files = {path.name: path.read_bytes() for path in second.iterdir()}
             self.assertEqual(first_files, second_files)
-            self.assertEqual(7, len(first_files))
+            self.assertEqual(8, len(first_files))
 
             manifest = json.loads(first_files["release-manifest.json"])
-            self.assertEqual(1, manifest["schema_version"])
+            self.assertEqual(2, manifest["schema_version"])
             self.assertEqual("candidate", manifest["status"])
             self.assertEqual({"id": "Apache-2.0"}, manifest["license"])
-            self.assertEqual(3, len(manifest["artifacts"]))
+            self.assertEqual(4, len(manifest["artifacts"]))
             license_present = (REPO_ROOT / "LICENSE").is_file()
             self.assertEqual(license_present, manifest["gates"]["license_present"])
             self.assertEqual(
@@ -135,15 +135,41 @@ class ReleaseCandidateTest(unittest.TestCase):
                 [{"license": {"id": "Apache-2.0"}}],
                 sbom["metadata"]["component"]["licenses"],
             )
-            self.assertEqual(3, len(sbom["components"]))
+            self.assertEqual(4, len(sbom["components"]))
 
             verified = _run("--verify", str(first))
             self.assertEqual(0, verified.returncode, verified.stderr)
             verified_payload = json.loads(verified.stdout)
             self.assertEqual("verified", verified_payload["status"])
-            self.assertEqual(3, verified_payload["artifact_count"])
-            self.assertEqual(6, verified_payload["checked_file_count"])
+            self.assertEqual(4, verified_payload["artifact_count"])
+            self.assertEqual(7, verified_payload["checked_file_count"])
             self.assertGreater(verified_payload["checked_archive_member_count"], 0)
+
+            # Existing immutable schema-1 candidates still support rollback.
+            manifest["schema_version"] = 1
+            manifest["artifacts"] = [item for item in manifest["artifacts"]
+                                     if item["role"] != "administrator-entrypoint"]
+            (first / "tooluseproxy-authority-admin.py").unlink()
+            _write_json(first / "release-manifest.json", manifest)
+            sbom["components"] = [item for item in sbom["components"]
+                                  if item["name"] != "tooluseproxy-authority-admin.py"]
+            _write_json(first / sbom_name, sbom)
+            _resign_candidate(first, next(first.glob("*.whl")))
+            legacy = _run("--verify", str(first))
+            self.assertEqual(0, legacy.returncode, legacy.stderr)
+            self.assertEqual(3, json.loads(legacy.stdout)["artifact_count"])
+
+    def test_verifier_rejects_rehashed_administrator_artifact_from_different_source(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            candidate = Path(temporary_directory) / "candidate"
+            built = _run("--outdir", str(candidate))
+            self.assertEqual(0, built.returncode, built.stderr)
+            artifact = candidate / "tooluseproxy-authority-admin.py"
+            artifact.write_bytes(artifact.read_bytes() + b"\n# changed artifact\n")
+            _resign_candidate(candidate, artifact)
+            verified = _run("--verify", str(candidate))
+            self.assertNotEqual(0, verified.returncode)
+            self.assertIn("administrator artifact differs from wheel source", verified.stderr)
 
     def test_verifier_rejects_tampering_and_unexpected_files(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

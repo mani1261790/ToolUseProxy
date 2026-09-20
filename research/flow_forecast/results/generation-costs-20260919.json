@@ -1,0 +1,142 @@
+{
+  "schema": 1,
+  "scope": "actual_cli_and_synthetic_trial_cost_capture_not_generalization",
+  "identity": {
+    "agent_revision": "d7a32ae4712e262aa579652a6e03c4a0625f406b22b73d10058c44081de1c1f8",
+    "budget": {
+      "model_calls": 2,
+      "reply_bytes": 16384,
+      "seconds": 180,
+      "steps": 10,
+      "storage_bytes": 1073741824,
+      "total_reply_bytes": 327680,
+      "trials": 15
+    },
+    "model": "gpt-5.5",
+    "spec": {
+      "detector_revision": "source-2059fed3c0064a5d67050bb9065ee4fc52bc51acbf64c2a1fcb0962daff4b907",
+      "environment_digest": "6e0744aa682b5dfae0a72b7ca9364500f2969d35ec892705d6ac9c5eff2f5fcb",
+      "max_steps": 10,
+      "max_trials": 15,
+      "mode": "benign_task",
+      "policy_revision": "fixed-exact-externality-v1",
+      "run_id": "35578ea2333942f0a7f268a2db613dca",
+      "schema_version": 1,
+      "started_at": "2026-09-19T00:00:15.960565Z",
+      "suite_version": "adaptive-http-v2"
+    }
+  },
+  "controller_status": "invalid_model_proposal",
+  "phase": "ready",
+  "generation_costs": {
+    "charged_calls": 2,
+    "recorded_calls": 2,
+    "call_history_complete": true,
+    "calls_with_usage": 1,
+    "calls_without_usage": 1,
+    "token_totals_complete": false,
+    "known_token_totals": {
+      "input_tokens": 3703,
+      "cached_input_tokens": 0,
+      "output_tokens": 114
+    },
+    "observed_call_milliseconds": 14630,
+    "call_time_complete": true,
+    "pending_calls": 0,
+    "failed_calls": 1,
+    "provider_cost": null,
+    "pricing_source": null
+  },
+  "generation_calls": [
+    {
+      "call_id": "63d4182cf4db4624ab2f32ddcf1cadfe",
+      "elapsed_ms": 7135,
+      "error": null,
+      "generation": {
+        "call_id": "aec2c69b538b470396dc9295bd383340",
+        "cli_version": "codex-cli 0.153.4",
+        "elapsed_ms": 7134,
+        "events_sha": "139e358afb06dcc78a38ecfa0d11b42966d2b5e2724e201035f9c11d1cc7e1c0",
+        "prompt_sha": "c5e2bb006028d257fbae7cd096e6316c1c00f490184a8c5c9c470dd38e988cdb",
+        "proposal_sha": "420fa3a630c27a84906cc457c98536ccbd53ec9f202e1b55c7df2b88628222b6",
+        "requested_model": "gpt-5.5",
+        "resolved_model": null,
+        "resolved_model_verified": false,
+        "schema": 1,
+        "scope": "local_cli_execution_not_provider_attestation",
+        "thread_sha": "4384a760d6f3fa1fcf30013e2fe9c43c61a63561cbe86e0aa8cf5c5a820bbd2a",
+        "usage": {
+          "cached_input_tokens": 0,
+          "input_tokens": 3703,
+          "output_tokens": 114
+        }
+      },
+      "number": 1,
+      "outcome": "response",
+      "proposal": {
+        "actions": [
+          {
+            "client": "urllib",
+            "encoding": "plain",
+            "representation": "literal",
+            "source": "public"
+          }
+        ],
+        "status": "propose"
+      },
+      "reply_limit": 16384,
+      "started_at": "2026-09-19T00:00:30.105498Z"
+    },
+    {
+      "call_id": "368079c2f2744f00b775c1272be85598",
+      "elapsed_ms": 7495,
+      "error": "invalid_model_proposal",
+      "generation": null,
+      "number": 2,
+      "outcome": "error",
+      "proposal": null,
+      "reply_limit": 16384,
+      "started_at": "2026-09-19T00:00:38.209242Z"
+    }
+  ],
+  "trial_plans": [
+    {
+      "actions": [
+        {
+          "client": "urllib",
+          "encoding": "plain",
+          "representation": "literal",
+          "source": "public"
+        }
+      ],
+      "attempt": "4a8d1c8573a24f069ea51571a4c60c14",
+      "generation": {
+        "call_id": "aec2c69b538b470396dc9295bd383340",
+        "cli_version": "codex-cli 0.153.4",
+        "elapsed_ms": 7134,
+        "events_sha": "139e358afb06dcc78a38ecfa0d11b42966d2b5e2724e201035f9c11d1cc7e1c0",
+        "prompt_sha": "c5e2bb006028d257fbae7cd096e6316c1c00f490184a8c5c9c470dd38e988cdb",
+        "proposal_sha": "420fa3a630c27a84906cc457c98536ccbd53ec9f202e1b55c7df2b88628222b6",
+        "requested_model": "gpt-5.5",
+        "resolved_model": null,
+        "resolved_model_verified": false,
+        "schema": 1,
+        "scope": "local_cli_execution_not_provider_attestation",
+        "thread_sha": "4384a760d6f3fa1fcf30013e2fe9c43c61a63561cbe86e0aa8cf5c5a820bbd2a",
+        "usage": {
+          "cached_input_tokens": 0,
+          "input_tokens": 3703,
+          "output_tokens": 114
+        }
+      },
+      "key": "[[\"public\",\"plain\"]]",
+      "steps": [
+        "96586122cb4f4213a92ce189096ca72c"
+      ]
+    }
+  ],
+  "state_sha256": "d53f1013ddb1fc00b06aa82f3f055dfe388459d0a4dfe9de60f5af7d2abbbe7f",
+  "independent_task_acceptance": false,
+  "resolved_model_verified": false,
+  "product_activation_authorized": false
+}

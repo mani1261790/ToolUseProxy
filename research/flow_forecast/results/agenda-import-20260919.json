@@ -1,0 +1,304 @@
+{
+  "schema": 1,
+  "source_commit": "7663b8c5d389e53f5333e4b3e53224f02a91fdd7",
+  "batches": [
+    {
+      "directory": "/private/tmp/tooluseproxy-204-agenda-public-v2",
+      "report_sha": "1a9ec2c28b86e1e7ccff8a2904d406e09083bc4c6eb25ef5622025caf7af7d29",
+      "trial_charges": 12,
+      "elapsed_seconds": 15.444180625003355,
+      "artifact_bytes_before_report": 105162,
+      "variant": "public"
+    },
+    {
+      "directory": "/private/tmp/tooluseproxy-204-agenda-private-v2",
+      "report_sha": "3c20a8a5c9de4091cd8a5430ed67fdeff651ea4cfdf9f3a710dbfc36acbaf9f8",
+      "trial_charges": 12,
+      "elapsed_seconds": 12.270549416003632,
+      "artifact_bytes_before_report": 109677,
+      "variant": "include_private"
+    }
+  ],
+  "new_trial_reservations": 24,
+  "agenda_guard_cumulative_trial_reservations": 48,
+  "new_model_calls": 0,
+  "accepted_independent_tasks": 0,
+  "collection_directory": "/private/tmp/tooluseproxy-204-agenda-collection-v1",
+  "collection_identity": "65e380ed1069b649eb4c547517e0d12724bf6fed839a2475e9f2998ef9ecd5f8",
+  "dataset_summary": {
+    "schema": 1,
+    "synthetic_only": true,
+    "provenance": "synthetic-flow-lab-v1",
+    "prefix_count": 6,
+    "continuation_count": 12,
+    "root_count": 2,
+    "group_count": 1,
+    "split_prefix_counts": {
+      "train": 6
+    },
+    "termination_counts": {
+      "completed": 9,
+      "blocked": 3
+    },
+    "label_counts": {
+      "enforce/1/unknown": 6,
+      "enforce/2/unknown": 6,
+      "enforce/4/unknown": 6,
+      "enforce/8/unknown": 6,
+      "observe/1/unknown": 6,
+      "observe/2/unknown": 6,
+      "observe/4/unknown": 6,
+      "observe/8/unknown": 6
+    },
+    "unknown_relation_counts": {
+      "selection": 36,
+      "semantic": 0,
+      "task_boundary": 0,
+      "unknown": 0
+    },
+    "deferred_scope": [
+      "semantic_origin",
+      "selection_influence",
+      "cross_task_state"
+    ],
+    "sampling_counts": {
+      "fixed_distribution": 12
+    },
+    "unpaired_adaptive_count": 0
+  },
+  "comparison": "/private/tmp/tooluseproxy-204-agenda-comparison-v1.json",
+  "comparison_sha": "dbe8f0c2d65489ce84e85a951889eee5bb66ea49d2bd8d82b663f8be874136ab",
+  "acceptance": {
+    "gates": [
+      {
+        "comparison": "ge",
+        "kind": "sample",
+        "metric": "training_roots",
+        "status": "insufficient",
+        "threshold": 20,
+        "value": 1
+      },
+      {
+        "comparison": "ge",
+        "kind": "sample",
+        "metric": "calibration_normal_roots",
+        "status": "insufficient",
+        "threshold": 100,
+        "value": 0
+      },
+      {
+        "comparison": "ge",
+        "kind": "sample",
+        "metric": "test_normal_roots",
+        "status": "insufficient",
+        "threshold": 300,
+        "value": 0
+      },
+      {
+        "comparison": "ge",
+        "kind": "sample",
+        "metric": "test_positive_roots",
+        "status": "insufficient",
+        "threshold": 100,
+        "value": 0
+      },
+      {
+        "comparison": "ge",
+        "kind": "coverage",
+        "metric": "truth_coverage",
+        "status": "insufficient",
+        "threshold": 0.95,
+        "value": 0.0
+      },
+      {
+        "comparison": "ge",
+        "kind": "coverage",
+        "metric": "prediction_coverage",
+        "status": "missing",
+        "threshold": 0.95,
+        "value": null
+      },
+      {
+        "comparison": "le",
+        "kind": "performance",
+        "metric": "fpr_upper",
+        "status": "missing",
+        "threshold": 0.01,
+        "value": null
+      },
+      {
+        "comparison": "ge",
+        "kind": "performance",
+        "metric": "recall_lower",
+        "status": "missing",
+        "threshold": 0.8,
+        "value": null
+      },
+      {
+        "comparison": "ge",
+        "kind": "performance",
+        "metric": "brier_improvement",
+        "status": "missing",
+        "threshold": 0.01,
+        "value": null
+      },
+      {
+        "comparison": "gt",
+        "kind": "performance",
+        "metric": "paired_brier_lower",
+        "status": "missing",
+        "threshold": 0.0,
+        "value": null
+      },
+      {
+        "comparison": "ge",
+        "kind": "performance",
+        "metric": "edge_f1_improvement",
+        "status": "missing",
+        "threshold": 0.05,
+        "value": null
+      },
+      {
+        "comparison": "gt",
+        "kind": "performance",
+        "metric": "paired_edge_f1_lower",
+        "status": "missing",
+        "threshold": 0.0,
+        "value": null
+      },
+      {
+        "comparison": "ge",
+        "kind": "performance",
+        "metric": "positive_top3_route_coverage",
+        "status": "missing",
+        "threshold": 0.9,
+        "value": null
+      },
+      {
+        "comparison": "ge",
+        "kind": "performance",
+        "metric": "median_early_lead_steps",
+        "status": "missing",
+        "threshold": 1,
+        "value": null
+      },
+      {
+        "comparison": "le",
+        "kind": "cost",
+        "metric": "training_seconds",
+        "status": "pass",
+        "threshold": 300,
+        "value": 0.001825542000005953
+      },
+      {
+        "comparison": "le",
+        "kind": "cost",
+        "metric": "peak_memory_bytes",
+        "status": "pass",
+        "threshold": 1073741824,
+        "value": 27197440
+      },
+      {
+        "comparison": "le",
+        "kind": "cost",
+        "metric": "prediction_p95_ms",
+        "status": "pass",
+        "threshold": 50,
+        "value": 0.11700000322889537
+      },
+      {
+        "comparison": "le",
+        "kind": "cost",
+        "metric": "model_bytes",
+        "status": "pass",
+        "threshold": 67108864,
+        "value": 2784
+      },
+      {
+        "kind": "experimental_design",
+        "metric": "unused_test_partition",
+        "status": "fail",
+        "value": false
+      },
+      {
+        "kind": "experimental_design",
+        "metric": "frozen_calibration_selection",
+        "status": "missing",
+        "value": null
+      },
+      {
+        "kind": "experimental_design",
+        "metric": "independent_root_groups",
+        "status": "missing",
+        "value": null
+      },
+      {
+        "kind": "experimental_design",
+        "metric": "different_tools_evaluated",
+        "status": "missing",
+        "value": null
+      },
+      {
+        "kind": "experimental_design",
+        "metric": "different_tasks_evaluated",
+        "status": "missing",
+        "value": null
+      },
+      {
+        "kind": "experimental_design",
+        "metric": "different_agent_models_evaluated",
+        "status": "missing",
+        "value": null
+      },
+      {
+        "kind": "experimental_design",
+        "metric": "object_identity_ablation_benefit",
+        "status": "missing",
+        "value": null
+      },
+      {
+        "kind": "experimental_design",
+        "metric": "parent_relation_ablation_benefit",
+        "status": "missing",
+        "value": null
+      },
+      {
+        "kind": "experimental_design",
+        "metric": "multistep_ablation_benefit",
+        "status": "missing",
+        "value": null
+      }
+    ],
+    "missing_or_insufficient": [
+      "training_roots",
+      "calibration_normal_roots",
+      "test_normal_roots",
+      "test_positive_roots",
+      "truth_coverage",
+      "prediction_coverage",
+      "fpr_upper",
+      "recall_lower",
+      "brier_improvement",
+      "paired_brier_lower",
+      "edge_f1_improvement",
+      "paired_edge_f1_lower",
+      "positive_top3_route_coverage",
+      "median_early_lead_steps",
+      "frozen_calibration_selection",
+      "independent_root_groups",
+      "different_tools_evaluated",
+      "different_tasks_evaluated",
+      "different_agent_models_evaluated",
+      "object_identity_ablation_benefit",
+      "parent_relation_ablation_benefit",
+      "multistep_ablation_benefit"
+    ],
+    "performance_failures": [
+      "unused_test_partition"
+    ],
+    "product_activation_authorized": false,
+    "protocol_sha256": "b4047e93e69b1959c36db2f9d61f71df54c46f82a7043bc7b1068f0f04fe983c",
+    "status": "inconclusive_do_not_adopt"
+  },
+  "scope": "training_development_diagnostic_not_unused_evaluation"
+}

@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "source_commit": "8d3faf187b55cde214d3bee41ec3841e0b24fd29",
+  "plan_sha": "0229ded1c2be52fefed96b6740e03753a570e2536c5a8fd3dfc1c24b4b1fe9ae",
+  "history_identities": [
+    "99038699a8bb346dd5e833ae1299921e344afb9a588c4d60ff097ea05e2a195d"
+  ],
+  "known_designs": [
+    "mbpp-602",
+    "mbpp-603",
+    "mbpp-604"
+  ],
+  "rejections": {
+    "calibration": {
+      "reason": "cohort_known_origin_in_holdout",
+      "output_created": false
+    },
+    "test": {
+      "reason": "cohort_known_origin_in_holdout",
+      "output_created": false
+    }
+  },
+  "new_model_calls": 0,
+  "new_trials": 0,
+  "independent_new_tasks_accepted": 0,
+  "history_complete": false,
+  "prior_nonuse_verified": false
+}

@@ -35,7 +35,7 @@ def test_fixed_commands_are_synthetic_and_encoding_not_plaintext():
     assert module.CANARY in plain
     assert module.CANARY not in encoded
     assert base64.b64encode(module.CANARY.encode()).decode() in encoded
-    assert shlex.split(plain)[:4] == ["python", "-I", "-B", "-c"]
+    assert shlex.split(plain)[:5] == ["python", "-I", "-S", "-B", "-c"]
     with pytest.raises(LabError):
         module.python_command("8.8.8.8", "a" * 32, source="protected")
     with pytest.raises(LabError):
@@ -103,3 +103,61 @@ def test_cleanup_only_owned_exact_resources(monkeypatch):
         ["docker", "network", "rm", transport.network],
     ]
     assert transport.owned == []
+
+
+@pytest.mark.parametrize("address", [None, "", "PRIVATE_VALUE", [], {}, 123, "8.8.8.8",
+                                     "::1", "127.0.0.1", "0.0.0.0"])
+def test_invalid_receiver_address_has_fixed_error(address):
+    with pytest.raises(LabError, match="^invalid_receiver_identity$"):
+        module.python_command(address, "a" * 32, source="public")
+
+
+@pytest.mark.parametrize("info", [
+    {}, {"NetworkSettings": None}, {"NetworkSettings": {"Networks": {}}},
+    {"NetworkSettings": {"Networks": {"fixed": {}}}},
+    {"NetworkSettings": {"Networks": {"fixed": {"IPAddress": "PRIVATE_VALUE"}}}},
+])
+def test_receiver_setup_failure_reclaims_owned_resources(monkeypatch, info):
+    transport = module.FixedTransport("sha256:" + "a" * 64)
+    transport.network = "fixed"
+    calls = []
+    monkeypatch.setattr(module, "command", lambda args, **kw: calls.append(args))
+    monkeypatch.setattr(transport, "check_network", lambda: None)
+    monkeypatch.setattr(transport, "inspect", lambda *a, **kw: info)
+    monkeypatch.setattr(transport, "records", lambda: [{"kind": "ready"}])
+    with pytest.raises(LabError, match="^invalid_receiver_identity$"):
+        transport.__enter__()
+    assert ["docker", "rm", "--force", transport.receiver] in calls
+    assert calls[-1] == ["docker", "network", "rm", "fixed"]
+    assert transport.owned == []
+    assert not transport.network_created
+
+
+def test_keyboard_interrupt_during_setup_reclaims_resources(monkeypatch):
+    transport = module.FixedTransport("sha256:" + "a" * 64)
+    calls = []
+    monkeypatch.setattr(module, "command", lambda args, **kw: calls.append(args))
+    monkeypatch.setattr(transport, "check_network", lambda: None)
+    monkeypatch.setattr(transport, "inspect", lambda *a, **kw: {})
+    def interrupted():
+        raise KeyboardInterrupt
+    monkeypatch.setattr(transport, "records", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        transport.__enter__()
+    assert ["docker", "rm", "--force", transport.receiver] in calls
+    assert calls[-1] == ["docker", "network", "rm", transport.network]
+
+
+def test_create_timeout_still_attempts_exact_owned_cleanup(monkeypatch):
+    transport = module.FixedTransport("sha256:" + "a" * 64)
+    calls = []
+    def command(args, **kwargs):
+        calls.append(args)
+        if args[1] == "create":
+            raise LabError("command_timeout")
+    monkeypatch.setattr(module, "command", command)
+    monkeypatch.setattr(transport, "check_network", lambda: None)
+    with pytest.raises(LabError, match="command_timeout"):
+        transport.__enter__()
+    assert ["docker", "rm", "--force", transport.receiver] in calls
+    assert calls[-1] == ["docker", "network", "rm", transport.network]

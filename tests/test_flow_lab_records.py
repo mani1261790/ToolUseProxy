@@ -282,3 +282,37 @@ def test_pending_reservations_consume_trial_budget(tmp_path) -> None:
         store.reserve(run, **reservation(observed(run)))
         with pytest.raises(StoreError, match="trial_budget_exhausted"):
             store.reserve(run, **reservation(observed(run)))
+
+
+@pytest.mark.parametrize("field", ["run_id", "attempt_id", "tool_use_id", "step_no"])
+def test_append_cannot_consume_another_reservation(tmp_path, field):
+    run = spec()
+    o = observed(run)
+    other = spec()
+    changed = replace(o, **{field: 2 if field == "step_no" else uuid.uuid4().hex})
+    if field == "run_id":
+        changed = replace(changed, run_id=other.run_id)
+    target = other if field == "run_id" else run
+    with TrialStore(tmp_path / "trial") as store:
+        store.start(run)
+        store.start(other)
+        store.reserve(run, **reservation(o))
+        original = store.pending(run)
+        with pytest.raises(StoreError, match="reservation_conflict"):
+            store.append(target, changed)
+        assert store.pending(run) == original
+        assert store.read(run) == store.read(other) == []
+        store.append(run, o)
+        assert store.pending(run) == []
+
+
+def test_fixed_suite_claim_is_atomic_between_connections(tmp_path):
+    first, second = spec(), spec()
+    with TrialStore(tmp_path / "trial") as a, TrialStore(tmp_path / "trial") as b:
+        a.require_no_unfinished_runs()
+        b.require_no_unfinished_runs()
+        a.start_fixed_suite(first)
+        with pytest.raises(StoreError, match="unfinished_run_requires_reconciliation"):
+            b.start_fixed_suite(second)
+        a.finish(first, "2026-09-06T01:02:00Z")
+        b.start_fixed_suite(second)

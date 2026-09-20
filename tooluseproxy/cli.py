@@ -10,6 +10,7 @@ import sqlite3
 import stat
 import sys
 import tempfile
+from contextlib import ExitStack
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -153,7 +154,48 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command is None:
         parser.print_help()
         return 0
+    authority_leases = ExitStack()
     try:
+        if args.command == "uninstall" and args.uninstall_command == "apply":
+            from tooluseproxy import authority_state
+
+            authority = authority_state.AUTHORITY_DIRECTORY
+            if authority.exists() or authority.is_symlink():
+                return _deny_administrator_managed_change(args)
+        if args.command in {"init", "setup", "status", "doctor", "config", "protect", "pilot", "logs"}:
+            workspace_argument = getattr(args, "workspace", None)
+            if workspace_argument is not None:
+                from tooluseproxy.integrations.authority import workspace_authority_lease
+
+                paths = resolve_runtime_paths(db_path=args.db, data_dir=args.data_dir)
+                state = authority_leases.enter_context(
+                    workspace_authority_lease(paths.db_path, str(workspace_argument))
+                )
+                if state is not None and state.phase != "active":
+                    payload = {
+                        "status": state.phase,
+                        "workspace_root": state.target.workspace,
+                        "runtime_active": False,
+                        "configuration_state": "not_inspected",
+                        "database_opened": False,
+                        "source_manifest_opened": False,
+                        "code": ("administrator_drain_required"
+                                 if state.phase == "deactivating"
+                                 else "administrator_reactivation_required"),
+                        "message": "このプロジェクトは管理者側で利用を停止しています。"
+                                   "停止処理の完了後、管理者側で再開できます。"
+                                   "以前の設定・登録は保持されています。",
+                    }
+                    _render(payload, as_json=getattr(args, "json", False))
+                    return 0 if args.command in {"status", "doctor"} else 1
+                if state is not None and (
+                    (args.command == "config" and args.config_command in {"set", "unset"})
+                    or (args.command == "protect" and any(
+                        getattr(args, operation, None) == "apply"
+                        for operation in ("removal_command", "reconciliation_command", "migration_command")
+                    ))
+                ):
+                    return _deny_administrator_managed_change(args)
         if args.command == "hook":
             return run_codex_hook(
                 args.phase,
@@ -168,6 +210,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _run_status(args)
         if args.command == "setup":
             return _run_setup(args)
+        if args.command == "logs":
+            from tooluseproxy.log_viewer import serve_workspace
+
+            paths = resolve_runtime_paths(db_path=args.db, data_dir=args.data_dir)
+            authority_leases.close()  # The viewer takes short leases per read, not for its lifetime.
+            return serve_workspace(paths.db_path, args.workspace, as_json=args.json)
+        if args.command == "unsetup":
+            return _run_unsetup(args)
         if args.command == "config":
             return _run_config(args)
         if args.command == "pilot":
@@ -194,8 +244,23 @@ def main(argv: Sequence[str] | None = None) -> int:
     ) as exc:
         print(f"tooluseproxy: {exc}", file=sys.stderr)
         return 1
+    finally:
+        authority_leases.close()
     parser.error(f"unsupported command: {args.command}")
     return 2
+
+
+def _deny_administrator_managed_change(args: argparse.Namespace) -> int:
+    _render({
+        "status": "denied",
+        "code": "administrator_managed_change_required",
+        "changes_applied": False,
+        "database_opened": False,
+        "source_manifest_opened": False,
+        "message": "管理者管理下では、通常CLIから設定・保護登録の変更や全体削除を適用できません。"
+                   "確認番号や設定revisionは利用者承認の代わりになりません。",
+    }, as_json=getattr(args, "json", False))
+    return 1
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -205,6 +270,12 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     subparsers = parser.add_subparsers(dest="command")
+
+    logs = subparsers.add_parser("logs", help="Serve this project's logs on loopback.",
+                                 allow_abbrev=False)
+    logs.add_argument("--workspace", type=Path, default=Path.cwd())
+    logs.add_argument("--json", action="store_true")
+    _add_runtime_path_arguments(logs)
 
     hook = subparsers.add_parser("hook", help="Run an internal Codex lifecycle hook.")
     hook.add_argument("phase", choices=tuple(CODEX_HOOK_PHASES))
@@ -243,6 +314,17 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     status.add_argument("--json", action="store_true", help="Print machine-readable output.")
     _add_runtime_path_arguments(status)
+
+    unsetup = subparsers.add_parser(
+        "unsetup", help="Preview project deactivation; application requires a trusted authority.",
+        allow_abbrev=False,
+    )
+    unsetup_commands = unsetup.add_subparsers(dest="unsetup_command", required=True)
+    for operation in ("plan", "apply"):
+        command = unsetup_commands.add_parser(operation, allow_abbrev=False)
+        command.add_argument("--workspace", type=Path, required=True)
+        command.add_argument("--json", action="store_true")
+        _add_runtime_path_arguments(command)
 
     setup = subparsers.add_parser(
         "setup",
@@ -708,6 +790,28 @@ def _run_externality(args: argparse.Namespace) -> int:
         }
     _render(payload, as_json=args.json)
     return 0
+
+
+def _run_unsetup(args: argparse.Namespace) -> int:
+    from tooluseproxy.unsetup import plan_unsetup, unavailable_unsetup_application
+
+    if args.unsetup_command == "apply":
+        # Deny before resolving paths, opening state or doing any other work.
+        payload = unavailable_unsetup_application()
+    else:
+        paths = resolve_runtime_paths(db_path=args.db, data_dir=args.data_dir)
+        payload = plan_unsetup(args.workspace, paths.db_path)
+    if args.json:
+        print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+    else:
+        print(payload["message"])
+        if args.unsetup_command == "plan":
+            print(f"対象: {payload['workspace_root']}")
+            for item in (*payload["proposed_effects"], *payload["limitations"]):
+                print(f"- {item}")
+        else:
+            print(payload["recovery"])
+    return 1 if args.unsetup_command == "apply" else 0
 
 
 def _run_uninstall(args: argparse.Namespace) -> int:

@@ -43,6 +43,64 @@ class PilotStopTest(unittest.TestCase):
     def compare(self):
         return compare_on_stop(self.path, event=self.event, codex_home=self.root / "codex")
 
+    def test_comparison_excludes_stopped_projects_and_holds_all_participant_leases(self):
+        from tooluseproxy.authority_state import Target, _Store
+        from hook_monitor.runtime.workspace import make_workspace_id
+        from hook_monitor.runtime.pilot_aggregate import build_pilot_comparisons
+
+        self.root = self.root.resolve()
+        self.path = self.path.resolve()
+        authority = self.root / "authority"
+        authority.mkdir(mode=0o755)
+        store = _Store(authority, owner=os.geteuid())
+        targets, states = [], []
+        for number in range(1, 4):
+            workspace = self.root / f"project{number}"
+            workspace.mkdir()
+            target = Target(os.getuid(), str(workspace), str(self.root))
+            targets.append(target)
+            states.append(store.transition(target, expected="absent", operation=str(number) * 32,
+                                           action="enroll"))
+            EventStore(self.path).register_workspace(resolve_workspace(str(workspace)))
+            for index in range(20):
+                item = fixtures.PilotAggregateTest()._observation(number, index)
+                store_pilot_observation(self.path, replace(
+                    item, workspace_id=make_workspace_id(str(workspace)),
+                    event_ref_sha256=hashlib.sha256(item.observation_id.encode()).hexdigest(),
+                    detector_version="pilot-v1-" + "a" * 48))
+        store.transition(targets[0], expected=states[0].generation, operation="a" * 32,
+                         action="deactivate")
+        self.event = normalize_event("stop", {"session_id": "fixture", "cwd": targets[1].workspace},
+                                     workspace_root=targets[1].workspace)
+        observed = []
+
+        def build(observations, problems, **kwargs):
+            self.assertEqual(40, len(observations))
+            self.assertNotIn(make_workspace_id(targets[0].workspace),
+                             {item.workspace_id for item in observations})
+            observed.append(store.transition(targets[2], expected=states[2].generation,
+                                             operation="b" * 32, action="deactivate"))
+            return build_pilot_comparisons(observations, problems, **kwargs)
+
+        with patch("tooluseproxy.authority_state.AUTHORITY_DIRECTORY", authority), patch(
+            "tooluseproxy.integrations.authority._Store", lambda _: store,
+        ), patch("hook_monitor.runtime.pilot_stop.build_pilot_comparisons", side_effect=build):
+            self.assertEqual(1, len(self.compare()))
+            self.assertEqual("deactivating", observed[0].phase)
+            self.assertEqual("inactive", store.transition(
+                targets[2], expected=observed[0].generation, operation="b" * 32,
+                action="deactivate",
+            ).phase)
+            self.event = normalize_event("stop", {"session_id": "fixture", "cwd": targets[0].workspace},
+                                         workspace_root=targets[0].workspace)
+            with patch("hook_monitor.runtime.pilot_stop.read_task_coverage",
+                       side_effect=AssertionError("inactive stop must not read coverage")):
+                self.assertEqual((), self.compare())
+        with sqlite3.connect(self.path) as conn:
+            self.assertEqual(60, conn.execute("SELECT COUNT(*) FROM pilot_observations").fetchone()[0])
+            self.assertEqual(2, conn.execute("SELECT COUNT(*) FROM pilot_project_aliases").fetchone()[0])
+        self.assertEqual(2, list_comparisons(self.path)[0]["report"]["comparison"]["project_count"])
+
     def test_initial_and_subsequent_rounds_skip_low_use_and_retries(self):
         self.add(1, 0, 20)
         self.add(2, 0, 19)

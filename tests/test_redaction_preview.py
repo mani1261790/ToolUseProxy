@@ -1436,6 +1436,9 @@ class RedactionPreviewLimitsTest(unittest.TestCase):
             current_sinks=accepted_sinks,
             current_critical_findings=accepted_findings,
             source_chunks=_source_map(accepted_event, *accepted_sources),
+            # This test isolates the finding-count boundary. The exact 50 ms
+            # deadline has its own injected-clock boundary test below.
+            monotonic_ns=_Clock([0]),
         )
         rejected = plan_mcp_redaction_preview(
             current_event=rejected_event,
@@ -1444,6 +1447,7 @@ class RedactionPreviewLimitsTest(unittest.TestCase):
             current_sinks=rejected_sinks,
             current_critical_findings=rejected_findings,
             source_chunks=_source_map(rejected_event, *rejected_sources),
+            monotonic_ns=_Clock([0]),
         )
 
         assert accepted.plan is not None and rejected.plan is not None

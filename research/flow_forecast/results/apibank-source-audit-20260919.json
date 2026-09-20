@@ -1,0 +1,98 @@
+{
+  "schema": 1,
+  "scope": "pinned_public_source_feasibility_audit_not_execution",
+  "repository": "AlibabaResearch/DAMO-ConvAI",
+  "commit": "188835d4f9948563a6b9c8ac50cd0f3ae4021ed6",
+  "files": [
+    {
+      "name": "README.md",
+      "bytes": 3741,
+      "git_blob_sha": "b254ae8efc27d149d5b1288eac3de24b7674607f",
+      "sha256": "3c9347ad1261cffcb8b27092a32fe6ff97e2c2a7662b061152f2042b47869dd9"
+    },
+    {
+      "name": "LICENSE",
+      "bytes": 11357,
+      "git_blob_sha": "261eeb9e9f8b2b4b0d119366dda99c6fd7d35c64",
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+    },
+    {
+      "name": "evaluator.py",
+      "bytes": 10975,
+      "git_blob_sha": "9e7dddb808802d33c853a3d3ae7015ef0865b610",
+      "sha256": "b7290a6076d96764f45f5377239d48477db0c00ada90a14119a69deec8fdfd85"
+    },
+    {
+      "name": "tool_manager.py",
+      "bytes": 9151,
+      "git_blob_sha": "e46e335d22ab72a816bcd9bf3e4e18c87631f9bb",
+      "sha256": "06c31264f9402b8627b7b009703c7dd8b97751f900395a5785d2d4bcc330718c"
+    },
+    {
+      "name": "apis/add_agenda.py",
+      "bytes": 3383,
+      "git_blob_sha": "d0d115c2f89fb7be56663cca467aa06c47fabc5e",
+      "sha256": "8c930c082b4c411f2f6951cb69217d10ebffa27c0a375261c687366937255dc1"
+    },
+    {
+      "name": "apis/query_agenda.py",
+      "bytes": 3496,
+      "git_blob_sha": "b6ad20655646b065cc56a68d5b43a3e7998ad64b",
+      "sha256": "1d4a163ba1c1aa406b7dbaf6f5464b32c5b863c08720de67f51c13a9c953e5f2"
+    },
+    {
+      "name": "apis/check_token.py",
+      "bytes": 2339,
+      "git_blob_sha": "7502838e70ec28a7f85de6be69e98767e328542c",
+      "sha256": "31acf7aba7b01e4993d4eb4de55df074baebba5fc87592dab6635d914a4611c7"
+    },
+    {
+      "name": "apis/send_email.py",
+      "bytes": 4313,
+      "git_blob_sha": "c49c160042d12112082beb82d15e108ab675b2b1",
+      "sha256": "69d3972ced625de51b482790bf52dd1d444d3af57cc20f2aaccaa7e0d1a0d2f8"
+    },
+    {
+      "name": "lv3_evaluator.py",
+      "bytes": 4588,
+      "git_blob_sha": "bc8ed2f29ee1616b7379384ceb7a4426f41c3bf3",
+      "sha256": "aa9945e8b0bbfd4e0bd3b3dc5c2cbc0e1898f9ce17ee0c1b36531d889646c631"
+    }
+  ],
+  "tree_objects": {
+    "apis": "b0910d9c73380c6a1a3650f0974961d7338f7632",
+    "lv1-lv2-samples": "73f8d6456dbe41f84142772bda0ea0f95f641ea2",
+    "lv3-samples": "addfd21db0bef35350c9e30db0d2eccc41a2844b",
+    "lv3_apis": "7c3f04b88c9084dd5f2f232ac9d634661dc03b13"
+  },
+  "directory_inventory": {
+    "apis_entries": 55,
+    "level1_jsonl_files": 214,
+    "level2_jsonl_files": 50,
+    "level3_text_files": 8,
+    "level3_api_entries": 22
+  },
+  "readme_claims_not_independent_counts": {
+    "evaluation_dialogues": 314,
+    "evaluation_calls": 753,
+    "evaluation_tools": 73,
+    "training_dialogues": 1888,
+    "training_apis": 2138,
+    "training_domains": 1000
+  },
+  "findings": [
+    "input_and_output_parameter_definitions_present_in_inspected_apis",
+    "agenda_mutates_and_queries_local_state",
+    "call_correctness_compares_expected_inputs_outputs_not_information_flow",
+    "send_email_success_does_not_observe_delivery",
+    "tool_manager_dynamically_imports_all_api_modules",
+    "level3_evaluator_references_test_data_level3_json_not_present_at_inspected_root"
+  ],
+  "decision": "candidate_for_isolated_agenda_adapter_not_direct_F01_import",
+  "third_party_code_executed": false,
+  "model_calls": 0,
+  "trials_executed": 0,
+  "accepted_f02_roots": 0,
+  "independence_verified": false,
+  "prior_nonuse_verified": false
+}

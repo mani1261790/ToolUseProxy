@@ -1,0 +1,61 @@
+{
+  "schema": 1,
+  "implementation_commit": "5058ef7ca1282d36665c5b53f173a99b81698290",
+  "source_commit": "6ea57973c7a6097fd7c5915698c54c17c5b1b6c8",
+  "source_sha": "6a9375aa6425410c07a151aef27f3e44e9ed1023bb5cc5c25f14f4a9b3c99116",
+  "local_artifact": "/private/tmp/tooluseproxy-204-bfcl-ticket-reference-v1",
+  "report": {
+    "accepted_independent_groups": 0,
+    "all_oracles_matched": true,
+    "api_calls": 6,
+    "artifact_bytes_before_report": 47987,
+    "elapsed_seconds": 6.468964084007894,
+    "execution_sha": "65f0d3543009da93af75118784f1f8448d5299a9b2c6b303d39bc3bc5095ba70",
+    "intent_sha": "242905e09633a96cc8bb9238e0fae38c017ec7eafdbb96c243253bee75f402b9",
+    "new_model_calls": 0,
+    "receiver_observed": false,
+    "results": [
+      {
+        "case_sha": "90781178f9ba831b7c4235ee18e6642fdd1b1f44685f2109e2715328a043c7de",
+        "observation_sha": "cdaff3df3c73843cbe2889da4443294c576ecc80c619a0fe4eaefc8dac435b3e",
+        "oracle_matched": true
+      },
+      {
+        "case_sha": "8f7a4ae0402b55a23ac7952741cf081bce2f975b968f301f3f632f8050e0ecf6",
+        "observation_sha": "7bb702ded2b1fcc68e6c0b0967501ca9bfbc27743ca2e6bc8ff7858e4cc9d3ba",
+        "oracle_matched": true
+      },
+      {
+        "case_sha": "c675587a2462785fbbd68ea0b556b4efff950b772f24b6f1475076cb6acc2a41",
+        "observation_sha": "acfc12ee721ff9fed12eb98abfb1b39f3439fbfd9273f37d7885d60b337e24ba",
+        "oracle_matched": true
+      },
+      {
+        "case_sha": "bee2068036488ca4bd92fb579bbe879288c34609ad3faaa5c3f79ea11d32c0b9",
+        "observation_sha": "c001470ac3c4dc03f0a7117c22f2e5cfd02c63dd9285e50bf53da466f341925c",
+        "oracle_matched": true
+      },
+      {
+        "case_sha": "04e6f05d68ec3ef0795b778ab5079e3cd0e01de34558bdb7d65a19b803e7ffd7",
+        "observation_sha": "c404d11ea077ab5077a846640348bef7cc563c11e4169a5170963e0fbd7c71e6",
+        "oracle_matched": true
+      },
+      {
+        "case_sha": "231fa8e71c1e0d1e6f51196940340778e071234f7d6333425c1f4ebcee66a09b",
+        "observation_sha": "4a938ff02784b0b644f70c2e339849b99834f799e81202da9b18cd0bded21d9e",
+        "oracle_matched": true
+      }
+    ],
+    "schema": 1,
+    "scope": "pinned_reference_development_not_flow_truth_or_unseen_evaluation",
+    "status": "completed",
+    "trial_charges": 12
+  },
+  "report_sha": "0148af3d9b3f3bc0c0794c94e280740c25aa79cac551058f6b10a55769b5dafa",
+  "image": "sha256:1692ebcdac9f705d176bb8d2f6ea807fade5d875e28471e11170fc7a921a51c3",
+  "independent_artifact_recheck": true,
+  "native_hook_tested": false,
+  "model_version_verified": false,
+  "independence_verified": false,
+  "prior_nonuse_verified": false
+}

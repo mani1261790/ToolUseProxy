@@ -1,0 +1,86 @@
+# F06 人工試験の追加停止（#138、実装中）
+
+`early_stop.assess` は、人工試験の比較runnerへ接続する判定関数です。
+Hook、実際のToolCall、保護設定へは接続していません。既定では無効です。
+
+- 既存検出器がblockなら常に停止を維持します。予測結果なし、故障、実験無効化でも解除しません。
+- 追加停止には実験の有効化、明示的な閾値、synthetic/enforce条件、期限内で対象操作・
+  入力・モデル・project世代が一致する結果が必要です。
+- 履歴のrequest ID、binding、モデル、Forecast schemaを再検査します。
+  元の記録と現在状態が不一致なら、その予測は停止に使いません。
+- 未確定の到達確率、未解決または列挙外の確率が残る予測は追加停止に使いません。
+- 無効化は追加停止だけを直ちに外します。既存停止の解除や将来権限の変更はしません。
+- experiment_enabledは人工比較の条件であり、人間承認やF04合格の証明ではありません。
+  本番導入と人間による明示的な確認は別です。
+
+25件の試験は判定条件、対照集計、実際の予測子プロセス、無効化との競合の検証です。正例のForecastは明示的に作った人工fixtureであり、
+F03モデルの有効性を示しません。正常作業の完了率と独立した受信証拠を用いる対照実行を、専用のDocker runnerへ接続しました。
+#204のholdout不足とF04の採用不可判定は解消していません。
+
+
+## 有限の接続確認
+
+```sh
+python3 -m research.flow_forecast.early_stop_runner --repository PATH/clean-checkout --output-directory PATH/new-output --model PATH/model.json --threshold 0.5 --seconds 600 --synthetic-stopping
+```
+
+出力先は新規ディレクトリだけを受け付けます。受信対照3件、public/protectedと
+plain/base64の4条件×2方式で11試行です。最大20試行・1GiB・指定時間の上限を自動延長しません。
+正常作業の完了、保護情報の受信、停止と受信の矛盾を別々に集計します。
+受信側の観測が不明なペアはunknownとして残し、ゼロ件へ置換しません。
+元の検出器のdecisionと予測の追加停止も別フィールドです。
+
+report.jsonは人工条件の接続確認です。閾値は明示的な試験条件であり、F04で選定された
+運用閾値ではありません。実行中のモデルを固定し、変更時には追加停止へ使いません。
+4つの条件はpublic/protectedの2課題群に属し、独立な4課題とは数えません。
+生のI/Oや実情報をIssueへ送る処理はありません。
+
+初回接続確認 `/private/tmp/tooluseproxy-138-wiring-smoke-v1` は閾値0で11試行を完了。
+追加停止2件、正常完了はbaseline 2/2→forecast 0/2、保護情報到達は0/2→0/2でした。
+停止と受信の矛盾は0。意図的に厳しすぎる閾値の診断であり、改善・有効性の証拠ではありません。
+これはモデル固定検査・runner実装digest追加前の接続確認です。最終版の実通信証拠とは区別します。
+
+F04の有効性と独立holdout不足、実機Hookとの確認、本番の停止利用に関する人間の確認は未完了です。
+
+モデル固定後の比較 `/private/tmp/tooluseproxy-138-comparison-v2`（c084ac2）は閾値0.5で
+11試行を完了。正常完了は2/2→2/2、保護到達は0/2→0/2、追加停止0、停止/受信矛盾0でした。
+既存停止に対する流出減少は示せていません。レポート中の課題群数のフィールド名は
+現在 `declared_root_families` に訂正しました。2群の独立性を実証したという意味ではありません。
+
+対照試行の受信記録は、操作ID・保護情報の有無・受信サイズを不変の構造記録として
+results.jsonlへ保存します。観測状態も含めてhashを照合し、到達結果と記録の不一致を拒否します。
+Docker終了後に保存済み8行を読み戻し、同じ比較結果を再計算できた場合だけ完了を記録します。
+
+```sh
+python3 -m research.flow_forecast.early_stop_audit --results PATH/output/results.jsonl
+```
+
+この監査CLIはDockerや送信処理を起動しません。旧v1/v2のdigestだけの記録は受け付けません。
+
+受信証拠の保存を追加した時点の確認は `/private/tmp/tooluseproxy-138-comparison-v3`。
+閾値0.5で11試行、正常完了2/2→2/2、保護到達0/2→0/2、追加停止0、矛盾0です。
+保存済み8行からの再集計も成功しました。実装digestは
+`c8f2a494c34195c2ee4657925b6eaa57f625bfc73f0a8db51027e65878c1ee88`。
+流出減少や独立課題での有効性は示していません。
+
+
+## レビュー後の整合性検査
+
+同じattempt/step/ToolCall IDを比較の両方式へ再利用することと、異なるrunの混在を拒否します。
+受信記録が存在するのに到達をunknownとする記録も拒否します。
+
+実装provenanceは一部のrunnerファイルだけでなく、research/flow_forecast・hook_monitor・
+tooluseproxy・scriptsのPythonソース一式を対象とします。モデル読込・予測依存を含む
+ファイル別hashをsource-provenance.jsonへ保存し、実行前後の不一致を拒否します。
+モデルartifactとDocker context/imageの識別は別に維持します。これは実行コードの由来であり、
+人間承認の証拠ではありません。受信記録の再監査と実装の由来の記録も別です。
+
+v3は旧方式の部分的な実装digestを使った結果です。新しい検査でも保存8行の再集計は成功していますが、
+完全なsource provenance付きの新しい実行証拠とは区別します。
+
+
+レビュー修正後の確認は `/private/tmp/tooluseproxy-138-comparison-v4`。
+閾値0.5、11試行、正常完了2/2→2/2、保護到達0/2→0/2、追加停止0、矛盾0。
+Docker終了後の再監査と、保存したsource provenanceと現在の実行コード一式の一致を確認しました。
+完全な実装digestは `5c685be03abaea4ebebf9a4a638d74185234543f6c8ec42b257eee16771605c1`。
+以前のv1〜v3を、この完全なprovenance方式の実行証拠としては扱いません。

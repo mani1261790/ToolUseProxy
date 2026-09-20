@@ -105,8 +105,9 @@ def test_enrolled_project_fails_closed_on_damage(tmp_path, monkeypatch, capsys, 
 
 
 @pytest.mark.parametrize("damage", ["missing", "broken", "old"])
+@pytest.mark.parametrize("operation", ["status", "unsetup plan"])
 def test_exact_local_management_remains_available_when_database_is_damaged(
-    tmp_path, monkeypatch, capsys, damage,
+    tmp_path, monkeypatch, capsys, damage, operation,
 ):
     database = tmp_path / "data" / "events.db"
     database.parent.mkdir()
@@ -131,7 +132,7 @@ def test_exact_local_management_remains_available_when_database_is_damaged(
         with sqlite3.connect(database) as connection:
             connection.execute("PRAGMA user_version=1")
     command = (
-        f"sh {launcher} status --workspace {root} "
+        f"sh {launcher} {operation} --workspace {root} "
         f"--data-dir {database.parent} --json"
     )
     payload = {
@@ -192,8 +193,9 @@ def test_management_lookalike_still_fails_closed_when_database_is_broken(
     assert output["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
+@pytest.mark.parametrize("operation", ["status", "unsetup plan"])
 def test_exact_local_management_does_not_wait_for_a_database_lock(
-    tmp_path, monkeypatch, capsys,
+    tmp_path, monkeypatch, capsys, operation,
 ):
     database = tmp_path / "data" / "events.db"
     database.parent.mkdir()
@@ -208,7 +210,7 @@ def test_exact_local_management_does_not_wait_for_a_database_lock(
     launcher.parent.mkdir(parents=True)
     launcher.write_text("#!/bin/sh\n", encoding="utf-8")
     command = (
-        f"sh {launcher} status --workspace {root} "
+        f"sh {launcher} {operation} --workspace {root} "
         f"--data-dir {database.parent} --json"
     )
     payload = {

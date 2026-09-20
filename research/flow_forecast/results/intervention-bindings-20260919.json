@@ -1,0 +1,56 @@
+{
+  "schema": 1,
+  "validator_source_sha": "17cbcd0dfdcf4501d216e703b6a4842a0408445e814c2ec0b7d58b2280db9153",
+  "bindings": [
+    {
+      "schema": 1,
+      "world": "inventory",
+      "capture_root": "f496a5a9a2f7464d9fe7bc5dbfcddcfd",
+      "capture_report_sha": "d666d47beb742f76991100bbeb5d44c4cf60773c75276dd5d08f55b96f85b551",
+      "intervention_report_sha": "489d05bbfc18f9c7ef10111c0476aba03057b045632bb224918e565479394339",
+      "definition_sha": "b06c96fbe77024eff79f83e0290ec7dbfaaf6246cd09a4cf64db08e675e8e5e7",
+      "matched_compute_command_sha": "63b9736d062c8f9589bdeac3959034d6be52e84d3f9fde21be1f7dfdf25373e5",
+      "changed_cases": [
+        "increase-a-stock",
+        "reverse-first-two-orders"
+      ],
+      "semantic_truth_promoted": false,
+      "independent_new_tasks_accepted": 0,
+      "scope": "same_closed_computation_finite_input_dependence_only"
+    },
+    {
+      "schema": 1,
+      "world": "calendar",
+      "capture_root": "bb6179f359a04c1e9c4cb6197215cfb6",
+      "capture_report_sha": "818adcaf2d7949fac4616e0ff6770d1754b910b8fe20f0eb4161f8165f81015e",
+      "intervention_report_sha": "79aa834e914cba01e36b2da8e862cb92b858cadb29ddb795d7d9a57ca6bc24b2",
+      "definition_sha": "548b7b7590f77b5fbed1ee96e35f7a87cb23744ad6707c9adca8e69437faf7b2",
+      "matched_compute_command_sha": "980784e67571a1192068434af06c1302f20ef5f13fcf7fc9009654fe01ce92be",
+      "changed_cases": [
+        "shorten-duration",
+        "remove-second-attendee-first-window"
+      ],
+      "semantic_truth_promoted": false,
+      "independent_new_tasks_accepted": 0,
+      "scope": "same_closed_computation_finite_input_dependence_only"
+    },
+    {
+      "schema": 1,
+      "world": "ledger",
+      "capture_root": "7d3e3e2b2cfd49788514e3d83b1b2261",
+      "capture_report_sha": "f0e78cb6907f9d55d4eba89941c76625b9724757492dfd6ae15817a23d27bacd",
+      "intervention_report_sha": "9e91c182f58568795241a6c67a89c1688ee68a83d1dc7ff3ce9660d3b65ee7db",
+      "definition_sha": "d3bfec300da57d30dd6768a4caa1d1c5fb2cfe59c14e8988e43b440cd6a5dcd4",
+      "matched_compute_command_sha": "a28d00e989115f199914fba0ed07ed9f9f8861ee8443a8ebc8ef2db9bb810a95",
+      "changed_cases": [
+        "increase-refund",
+        "unvoid-sale"
+      ],
+      "semantic_truth_promoted": false,
+      "independent_new_tasks_accepted": 0,
+      "scope": "same_closed_computation_finite_input_dependence_only"
+    }
+  ],
+  "new_trials": 0,
+  "new_model_calls": 0
+}
