@@ -333,3 +333,21 @@ def test_forecast_off_preserves_normal_hook(environment, monkeypatch):
         assert run_hook('pre_tool_use', db_path=database, allow_schema_migration=False) == 0
     assert output.getvalue() == ''
     assert journal.history(workspace.workspace_id) == []
+
+
+def test_parallel_sessions_do_not_invalidate_each_other(environment):
+    database, _, workspace, journal = environment
+    first, structure, model = prepared(environment)
+    config = journal.configuration(workspace.workspace_id)
+    first_request = journal.enqueue(structure, config)
+    second = record(environment, session='parallel', call='candidate')
+    with sqlite3.connect(database) as conn:
+        conn.execute("UPDATE workspaces SET last_seen_at='later',lexical_root='alternate-spelling'")
+    assert snapshot(database, workspace.workspace_id, first.session_id, first.event_id) == structure
+    other_structure = snapshot(database, workspace.workspace_id, second.session_id, second.event_id)
+    second_request = journal.enqueue(other_structure, config)
+    assert first_request != second_request
+    assert run_one(database, model) == 'predicted'
+    assert run_one(database, model) == 'predicted'
+    assert journal.consume_stop(first_request, config)
+    assert journal.consume_stop(second_request, config)

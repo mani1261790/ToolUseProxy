@@ -49,7 +49,9 @@ def snapshot(database, workspace, session, event_id):
                     raise ValueError('forecast_snapshot_limit')
             return result
 
-        registered = rows('SELECT * FROM workspaces WHERE workspace_id=?', (workspace,))
+        # last_seen_at/lexical discovery may change when another session reports
+        # activity. They are not protection revisions for this request.
+        registered = rows('SELECT workspace_id,canonical_root,first_seen_at FROM workspaces WHERE workspace_id=?', (workspace,))
         if len(registered) != 1:
             raise ValueError('forecast_workspace_unregistered')
         events = rows('SELECT event_id,phase,tool_use_id,tool_name,sequence_no,payload_json,workspace_execution_cwd '
