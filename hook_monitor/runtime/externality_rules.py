@@ -240,6 +240,12 @@ def classify_trusted_local_management_operation(
     common = ["sh", launcher, "setup"]
     workspace = str(workspace_root)
     data_dir = str(plugin_data)
+    for suffix in (
+        ["--workspace", workspace, "--json"],
+        ["--workspace", workspace, "--data-dir", data_dir, "--json"],
+    ):
+        if tokens == ["sh", launcher, "logs", *suffix]:
+            return "logs_serve"
     if tokens == [
         "sh",
         launcher,

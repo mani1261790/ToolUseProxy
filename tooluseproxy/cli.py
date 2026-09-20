@@ -210,6 +210,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _run_status(args)
         if args.command == "setup":
             return _run_setup(args)
+        if args.command == "logs":
+            from tooluseproxy.log_viewer import serve_workspace
+
+            paths = resolve_runtime_paths(db_path=args.db, data_dir=args.data_dir)
+            return serve_workspace(paths.db_path, args.workspace, as_json=args.json)
         if args.command == "unsetup":
             return _run_unsetup(args)
         if args.command == "config":
@@ -264,6 +269,12 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     subparsers = parser.add_subparsers(dest="command")
+
+    logs = subparsers.add_parser("logs", help="Serve this project's logs on loopback.",
+                                 allow_abbrev=False)
+    logs.add_argument("--workspace", type=Path, default=Path.cwd())
+    logs.add_argument("--json", action="store_true")
+    _add_runtime_path_arguments(logs)
 
     hook = subparsers.add_parser("hook", help="Run an internal Codex lifecycle hook.")
     hook.add_argument("phase", choices=tuple(CODEX_HOOK_PHASES))

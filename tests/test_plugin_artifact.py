@@ -77,6 +77,9 @@ class PluginArtifactTest(unittest.TestCase):
             self.assertIn("tooluseproxy/skills/tooluseproxy-setup/SKILL.md", names)
             self.assertIn("tooluseproxy/tooluseproxy_hook_watchdog.py", names)
             self.assertIn("tooluseproxy/tooluseproxy/__main__.py", names)
+            self.assertIn("tooluseproxy/tooluseproxy/log_viewer.py", names)
+            for asset in ("index.html", "screen.js", "screen.css"):
+                self.assertIn(f"tooluseproxy/tooluseproxy/viewer/{asset}", names)
             self.assertIn("tooluseproxy/hook_monitor/runtime/runner.py", names)
             self.assertIn("tooluseproxy/tooluseproxy/integrations/activation.py", names)
             for module in ("pilot_models", "pilot_recording", "pilot_storage", "pilot_review",

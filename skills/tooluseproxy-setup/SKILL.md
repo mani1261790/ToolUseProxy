@@ -361,6 +361,46 @@ do not report missing initial output as a command failure.
    use the installed launcher without `--data-dir`; the same verified resolver
    selects the Plugin data directory. A manual context-bound workflow instead
    keeps using only its exact supplied `--data-dir` commands.
+### Open the project's live logs after setup
+
+Opening the live log UI is part of the normal product setup experience, not an
+exhibition-only step. After the normal marketplace setup verification returns
+`configuration_passed`, open the logs without asking the user to request them
+separately. Do this for both newly initialized and already configured projects.
+Do not run this step after a failed setup gate. Manual Phase B harnesses retain
+their exact supplied commands and do not launch this additional server.
+
+Say: `設定を確認できました。このプロジェクトのログ画面を開きます。`
+Use the same installed launcher and verified workspace:
+
+```text
+sh "<PLUGIN_ROOT>/hooks/run_cli.sh" logs --workspace <workspace-root> --json
+```
+
+This is a foreground local server, not a command that completes immediately.
+The first JSON line reports `status: ready`, `url`, and `workspace_root`.
+Use a short initial tool yield. Once `ready` is returned, leave the process
+running; do not wait for server exit before opening the UI. Reuse an existing
+live server from this task only when its verified workspace and Plugin version
+match. If it exited, start it again. Do not kill another task's server.
+
+In Codex Desktop use `mcp__codex_app__open_in_codex` with
+`target: {type: "browser", url: <the returned URL>}` and `placement: "right"`.
+Open only the URL actually returned by the current server. Do not invent a
+port or reuse a URL from a different project. If this UI tool is unavailable,
+show a clickable link to the local URL. Do not open a system browser without
+the user's request. A queued app result means opening was requested, not that
+the screen has been visibly verified.
+
+The command serves only the selected project's DB logs, read-only, on loopback.
+It does not initialize, register protected sources, enable protection, or clear
+history. Stop this foreground process with Ctrl+C when it is no longer needed.
+If the log server or browser cannot open, report the setup verification result
+and UI failure separately. Never roll back protection, rerun setup, or request
+Hook trust merely because the viewer failed. A viewer showing saved logs does
+not establish current Hook delivery or successful enforcement; retain the
+verification's actual runtime status in the final report.
+
 6. Treat the generated `protected_sources.json` as a user-owned manifest. Never edit it directly on the user's behalf. If `status` reports that schema is omitted or v1, create a value-free migration plan on POSIX:
 
    ```text

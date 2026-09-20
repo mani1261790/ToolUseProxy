@@ -11,6 +11,8 @@ from pathlib import Path, PurePosixPath
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+VIEWER_ASSETS = {PurePosixPath("tooluseproxy/viewer") / name
+                 for name in ("index.html", "screen.js", "screen.css")}
 PACKAGE_BUILDER = REPO_ROOT / "scripts" / "build_package.py"
 SDIST_ROOT_FILES = {
     PurePosixPath("LICENSE"),
@@ -121,7 +123,7 @@ class PackageArtifactTest(unittest.TestCase):
                 ]
                 for path in sdist_paths:
                     _assert_no_forbidden_path(self, path)
-                    if path in SDIST_ROOT_FILES or _is_runtime_python_file(path):
+                    if path in SDIST_ROOT_FILES or _is_runtime_python_file(path) or path in VIEWER_ASSETS:
                         continue
                     if len(path.parts) == 2 and path.parts[0].endswith(".egg-info"):
                         self.assertIn(path.name, EGG_INFO_FILES, str(path))
@@ -145,7 +147,7 @@ class PackageArtifactTest(unittest.TestCase):
                 metadata = email.parser.BytesParser().parsebytes(archive.read(str(metadata_path)))
                 for path in wheel_paths:
                     _assert_no_forbidden_path(self, path)
-                    if _is_runtime_python_file(path):
+                    if _is_runtime_python_file(path) or path in VIEWER_ASSETS:
                         continue
                     if len(path.parts) == 2 and path.parts[0].endswith(".dist-info"):
                         self.assertIn(path.name, DIST_INFO_FILES, str(path))
