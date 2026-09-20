@@ -411,6 +411,12 @@ def run_hook(
         # PostToolUse evidence.  This avoids rebuilding the information-flow
         # graph on every harmless local read and on ToolUseProxy's own recovery
         # commands.
+        if trusted_management_operation is None:
+            from hook_monitor.runtime.forecast.bridge import apply_forecast
+
+            forecast_output = apply_forecast(store.db_path, event, None)
+            if forecast_output:
+                print(json.dumps(forecast_output, ensure_ascii=False))
         return 0
     if phase == "pre_tool_use" and event_pre_tool_adapter == "function":
         externality_decision = conservative_function_tool_decision(event.tool_name)
@@ -487,6 +493,10 @@ def run_hook(
                 "pre_tool_use", _inactive_message("pre_tool_policy_failed"),
                 deny_pre_tool=True,
             )
+        if trusted_management_operation is None:
+            from hook_monitor.runtime.forecast.bridge import apply_forecast
+
+            hook_output = apply_forecast(store.db_path, event, hook_output)
         if effective_runtime_settings.enabled(PILOT_RECORDING_KEY):
             from hook_monitor.runtime.pilot_recording import record_completed_policy
 
