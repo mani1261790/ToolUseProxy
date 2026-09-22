@@ -73,7 +73,7 @@ echo %inactive_message%（技術情報: %inactive_code%） 1>&2
 exit /b 0
 
 :emit_pre
-echo {"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":"%inactive_message%（技術情報: %inactive_code%）","permissionDecision":"deny","permissionDecisionReason":"ToolUseProxyが操作を実行前に止めました。保護判定を安全に開始できないため、この操作を許可できません。Pluginの状態を確認してからやり直してください。"}}
+echo {"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":"%inactive_message% 判定未完了のため、遮断せず継続します。（技術情報: %inactive_code%）"}}
 exit /b 0
 
 :emit_session

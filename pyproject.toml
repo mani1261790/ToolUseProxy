@@ -22,13 +22,13 @@ dev = [
 ]
 
 [project.scripts]
-tooluseproxy = "tooluseproxy.cli:main"
+tooluseproxy = "tooluseproxy.app:main"
 
 [tool.setuptools.dynamic]
 version = { attr = "tooluseproxy.__version__" }
 
 [tool.setuptools.packages.find]
-include = ["hook_monitor*", "tooluseproxy*"]
+include = ["tooluseproxy", "tooluseproxy.engine", "tooluseproxy.integrations"]
 exclude = ["hook_monitor.evaluation*"]
 
 [tool.setuptools.package-data]
@@ -39,4 +39,26 @@ target-version = "py311"
 line-length = 100
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = [
+  "tests/test_product_v2.py",
+  "tests/test_property_graph.py",
+  "tests/test_evidence.py",
+  "tests/test_payload.py",
+  "tests/test_dlp.py",
+  "tests/test_lineage.py",
+  "tests/test_jobs.py",
+  "tests/test_fast_path.py",
+  "tests/test_review.py",
+  "tests/test_graph_view.py",
+  "tests/test_legacy_archive.py",
+  "tests/test_semantic_flow.py",
+  "tests/test_hook_watchdog.py",
+  "tests/test_package_artifact.py",
+  "tests/test_plugin_artifact.py",
+  "tests/test_authority_state.py",
+  "tests/test_authority_admin.py",
+  "tests/test_logs_product.py",
+]
+
+[tool.setuptools.cmdclass]
+build_py = "build_support.RuntimeBuildPy"

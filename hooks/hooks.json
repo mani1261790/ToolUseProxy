@@ -1,5 +1,5 @@
 {
-  "description": "ToolUseProxy checks every Hook-visible local function-tool input before execution, records tool results locally, and reviews final responses for protected content. Unknown local function tools are treated conservatively when protected information reaches their input. Hosted tools cannot be intercepted, so SessionStart and SubagentStart add a developer-context safety boundary instead. It stays local by default. The experimental Externality Judge sends only a value-free structural summary to the model provider you explicitly select.",
+  "description": "Semantic dependency graph using codex exec. Recorded I/O is sent to the configured judge. External calls with protected ancestry are denied; unavailable judgments warn without denying.",
   "hooks": {
     "SessionStart": [
       {
@@ -8,7 +8,7 @@
             "type": "command",
             "command": "sh \"${PLUGIN_ROOT}/hooks/run_hook.sh\" session-start",
             "commandWindows": "\"%PLUGIN_ROOT%\\hooks\\run_hook.cmd\" session-start",
-            "timeout": 10
+            "timeout": 900
           }
         ]
       }
@@ -20,7 +20,7 @@
             "type": "command",
             "command": "sh \"${PLUGIN_ROOT}/hooks/run_hook.sh\" subagent-start",
             "commandWindows": "\"%PLUGIN_ROOT%\\hooks\\run_hook.cmd\" subagent-start",
-            "timeout": 10
+            "timeout": 900
           }
         ]
       }
@@ -33,7 +33,7 @@
             "type": "command",
             "command": "sh \"${PLUGIN_ROOT}/hooks/run_hook.sh\" pre-tool-use",
             "commandWindows": "\"%PLUGIN_ROOT%\\hooks\\run_hook.cmd\" pre-tool-use",
-            "timeout": 15
+            "timeout": 900
           }
         ]
       }
@@ -46,7 +46,7 @@
             "type": "command",
             "command": "sh \"${PLUGIN_ROOT}/hooks/run_hook.sh\" post-tool-use",
             "commandWindows": "\"%PLUGIN_ROOT%\\hooks\\run_hook.cmd\" post-tool-use",
-            "timeout": 10
+            "timeout": 900
           }
         ]
       }
@@ -58,7 +58,7 @@
             "type": "command",
             "command": "sh \"${PLUGIN_ROOT}/hooks/run_hook.sh\" stop",
             "commandWindows": "\"%PLUGIN_ROOT%\\hooks\\run_hook.cmd\" stop",
-            "timeout": 10
+            "timeout": 900
           }
         ]
       }

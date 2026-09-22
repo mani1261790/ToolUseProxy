@@ -7,7 +7,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
-from hook_monitor.runtime.workspace import make_workspace_id, resolve_workspace
+from tooluseproxy.engine.workspace import make_workspace_id, resolve_workspace
 from tooluseproxy import authority_state
 from tooluseproxy.authority_state import AuthorityError, State, Target, _Store
 

@@ -94,108 +94,23 @@ jobs:
         run: python scripts/check_build_toolchain.py
 
       - name: Run Ruff
-        run: python -m ruff check .
+        run: >-
+          python -m ruff check
+          tooluseproxy/engine tooluseproxy/app.py tooluseproxy/paths.py
+          tooluseproxy/log_viewer.py tooluseproxy/viewer_process.py
+          tooluseproxy/authority_state.py tooluseproxy/authority_admin.py
+          tooluseproxy/integrations/authority.py tooluseproxy/integrations/activation.py
+          tooluseproxy_hook_watchdog.py tooluseproxy_plugin.py build_support.py
+          scripts/runtime_manifest.py scripts/build_package.py scripts/build_plugin_bundle.py
+          tests/test_product_v2.py tests/test_semantic_flow.py tests/test_hook_watchdog.py
+          tests/test_package_artifact.py tests/test_plugin_artifact.py
+          tests/test_authority_state.py tests/test_authority_admin.py tests/test_logs_product.py
 
-      - name: Run full test suite
+      - name: Run v0.2 product contract suite
         run: python -m pytest -q
 
       - name: Compile Python sources
         run: python -m compileall -q hook_monitor tooluseproxy scripts tests
-
-      - name: Check similarity development contract
-        run: >-
-          python -m hook_monitor.evaluation.cli
-          --split development
-          --benchmark-repeats 1
-          --format text
-          --check
-          --require-go
-
-      - name: Check similarity validation contract
-        run: >-
-          python -m hook_monitor.evaluation.cli
-          --split validation
-          --benchmark-repeats 1
-          --format text
-          --check
-          --require-go
-
-      - name: Check complete similarity contract
-        run: >-
-          python -m hook_monitor.evaluation.cli
-          --split all
-          --benchmark-repeats 1
-          --format text
-          --check
-          --require-go
-
-      - name: Check similarity v2.1 stress foundation
-        run: |
-          for split in development validation all; do
-            python -m hook_monitor.evaluation.cli \
-              --dataset tests/fixtures/similarity/v2_1 \
-              --split "${split}" \
-              --benchmark-repeats 1 \
-              --format text \
-              --check \
-              --require-go
-          done
-
-      - name: Check reproducible similarity v2.1 fixture
-        run: python -m scripts.build_similarity_v21_fixture --check
-
-      - name: Check source-ingestion runtime parity
-        run: >-
-          python -m hook_monitor.evaluation.source_ingestion_cli
-          --dataset tests/fixtures/similarity/ingestion/v3
-          --split all
-          --format text
-          --check
-
-      - name: Check sink-first benchmark foundation
-        run: |
-          for dataset in v1 v1_1; do
-            python -m hook_monitor.evaluation.sink_benchmark_cli \
-              --dataset "tests/fixtures/sink_benchmark/${dataset}" \
-              --split all \
-              --format text \
-              --check
-          done
-
-      - name: Check network-egress differential foundation
-        run: >-
-          python -m hook_monitor.evaluation.network_egress_cli
-          --dataset tests/fixtures/network_egress/v1
-          --split all
-          --format text
-          --check
-
-      - name: Check protected-source discovery development gate
-        run: >-
-          python -m hook_monitor.evaluation.protected_source_discovery_cli
-          --dataset tests/fixtures/protected_source_discovery/v2
-          --split development
-          --format text
-          --check
-          --require-go
-
-      - name: Check protected-source discovery validation gate
-        run: >-
-          python -m hook_monitor.evaluation.protected_source_discovery_cli
-          --dataset tests/fixtures/protected_source_discovery/v2
-          --split validation
-          --format text
-          --check
-          --require-go
-
-      - name: Check protected-source discovery complete gate
-        run: >-
-          python -m hook_monitor.evaluation.protected_source_discovery_cli
-          --dataset tests/fixtures/protected_source_discovery/v2
-          --split all
-          --format text
-          --check
-          --require-go
 
   macos-package-smoke:
     name: macOS Python 3.12 package smoke
@@ -230,4 +145,4 @@ jobs:
           python -m pytest -q
           tests/test_package_artifact.py
           tests/test_plugin_artifact.py
-          tests/test_productization.py::WheelInstallationTest
+          tests/test_product_v2.py

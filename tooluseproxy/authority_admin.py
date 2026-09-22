@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import os
 import stat
 import sys
@@ -142,6 +143,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--uid", required=True, type=int)
     parser.add_argument("--workspace", required=True)
     parser.add_argument("--data-dir", required=True)
+    parser.add_argument("--gui", action="store_true")
     args = parser.parse_args(argv)
     try:
         _require_administrator_installation()
@@ -155,19 +157,29 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(state.payload() if state else {"status": "not_enrolled"},
                              ensure_ascii=False, sort_keys=True))
             return 0
-        if not sys.stdin.isatty() or not sys.stdout.isatty():
+        if not args.gui and (not sys.stdin.isatty() or not sys.stdout.isatty()):
             raise AuthorityError("administrator_interactive_terminal_required")
         review = _review(store, uid=args.uid, workspace=args.workspace, data_dir=args.data_dir,
                          action=args.action)
-        _render_review(review)
-        answer = input("続行する場合だけ「確認して適用」と入力: ")
+        if args.gui:
+            # This dialog is confirmation, not the authentication boundary.
+            # _require_administrator_installation already checked root and code ownership.
+            message = f"対象プロジェクト: {review.target.workspace!r}\n操作: {review.action}\n設定・保護登録・ログは保持します。"
+            script = "display dialog " + json.dumps(message, ensure_ascii=False) + ' with title "ToolUseProxy" buttons {"キャンセル", "確認して適用"} default button "キャンセル" cancel button "キャンセル"'
+            response = subprocess.run(["/usr/bin/osascript", "-e", script], capture_output=True, text=True, timeout=120)
+            if response.returncode:
+                raise AuthorityError("administrator_cancelled")
+            answer = "確認して適用"
+        else:
+            _render_review(review)
+            answer = input("続行する場合だけ「確認して適用」と入力: ")
         result = _apply_review(store, review, answer)
         messages = {"active": "利用可能です。保持中の設定・登録を引き継ぎます。",
                     "deactivating": "停止処理中です。実行中処理の終了後にfinishで確認してください。",
                     "inactive": "利用を停止しました。設定・登録・履歴は保持されています。"}
         print(messages[result.phase])
         return 0
-    except (AuthorityError, OSError, EOFError) as error:
+    except (AuthorityError, OSError, EOFError, subprocess.TimeoutExpired) as error:
         code = str(error) if isinstance(error, AuthorityError) else "administrator_operation_failed"
         print(f"操作を完了できませんでした: {code}", file=sys.stderr)
         print("途中終了の場合はstatusで状態を確認してください。", file=sys.stderr)
