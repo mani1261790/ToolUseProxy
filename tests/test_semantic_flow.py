@@ -244,7 +244,7 @@ def test_runtime_block_is_visible_in_log_filter(fixture, monkeypatch):
     }
     (store.db_path.parent / "semantic-flow.json").write_text(json.dumps(config))
     output = process_hook(
-        store, event, judge=lambda _: verdict(["source:private"], externality="external")
+        store, event, judge=lambda _: {**verdict(externality="external"), "accesses": [{"path":"private.txt","mode":"read","reason":"upload"}]}
     )
     assert output["hookSpecificOutput"]["permissionDecision"] == "deny"
     reader = LogReader(store.db_path)
@@ -253,3 +253,109 @@ def test_runtime_block_is_visible_in_log_filter(fixture, monkeypatch):
     decisions = reader.detail(event.event_id)["decisions"]
     assert decisions[0]["action"] == "block"
     assert json.loads(decisions[0]["path_json"])[0] == "source:private"
+
+
+def configure_runtime(store, workspace):
+    (store.db_path.parent / 'semantic-flow.json').write_text(json.dumps({'workspaces': {
+        workspace: {'provider': 'codex_exec', 'send_recorded_content': True,
+                    'mode': 'enforce', 'failure_policy': 'allow_with_warning'}}}))
+
+
+def test_local_work_defers_provenance_but_later_send_is_blocked(fixture, monkeypatch):
+    from hook_monitor.runtime.models import ProtectedSource
+    store, record = fixture
+    first = record('read', 'read private.txt')
+    configure_runtime(store, first.workspace_id)
+    source = ProtectedSource('private', 'private.txt', 'file', 'secret', (),
+                             workspace_id=first.workspace_id, source_key='private')
+    monkeypatch.setattr(store, 'list_protected_sources_for_workspace', lambda _: [source])
+    calls = {'screen': 0, 'detail': 0}
+
+    def screen(records):
+        calls['screen'] += 1
+        return verdict(externality='external' if records['tool_input']['command'] == 'send derived' else 'local')
+
+    def detail(records):
+        calls['detail'] += 1
+        command = records['current_call']['input']['command']
+        if command == 'read private.txt':
+            assert records['current_call']['output'] == 'synthetic source'
+            return {**verdict(), 'accesses': [{'path':'private.txt','mode':'read','reason':'read output'}]}
+        previous = records['previous_calls']
+        return {**verdict([previous[-1]['node_id']], externality='external' if command == 'send derived' else 'local'), 'accesses': []}
+
+    def run(event):
+        return process_hook(store, event, judge=detail, screening_judge=screen, target_judge=lambda _: {})
+
+    assert run(first) == {}
+    assert run(record('read', 'read private.txt', post=True, output='synthetic source')) == {}
+    assert run(record('write', 'write derived')) == {}
+    assert run(record('write', 'write derived', post=True, output='created')) == {}
+    assert calls == {'screen': 2, 'detail': 0}
+    send = record('send', 'send derived')
+    assert run(send)['hookSpecificOutput']['permissionDecision'] == 'deny'
+    assert calls == {'screen': 3, 'detail': 3}
+    assert run(send)['hookSpecificOutput']['permissionDecision'] == 'deny'
+    assert calls == {'screen': 3, 'detail': 3}
+
+
+@pytest.mark.parametrize('screen_result', ['unknown', 'incomplete', 'error', 'invalid'])
+def test_uncertain_screening_always_runs_full_analysis(fixture, screen_result):
+    store, record = fixture
+    event = record('opaque', 'run opaque script')
+    configure_runtime(store, event.workspace_id)
+    detailed = []
+
+    def screen(_):
+        if screen_result == 'error':
+            raise TimeoutError()
+        if screen_result == 'invalid':
+            return {'externality': 'local', 'complete': 'yes'}
+        return verdict(externality='unknown' if screen_result == 'unknown' else 'local', complete=False)
+
+    def detail(records):
+        detailed.append(records)
+        return verdict(externality='unknown', complete=False)
+
+    result = process_hook(store, event, judge=detail, screening_judge=screen)
+    assert len(detailed) == 1
+    assert 'additionalContext' in result['hookSpecificOutput']
+
+
+@pytest.mark.parametrize('value', ['unknown', 'incomplete', 'timeout'])
+def test_screening_without_local_evidence_routes_to_inspection(fixture, value):
+    from tooluseproxy.engine.runtime import screen_externality
+    store, record = fixture
+    event = record('opaque', './custom-task')
+
+    def provider(_):
+        if value == 'timeout':
+            raise TimeoutError()
+        return verdict(externality='unknown' if value == 'unknown' else 'local', complete=False)
+
+    result = screen_externality(store.db_path, event, 'fixture', provider)
+    assert result['externality'] == 'external'
+    assert result['complete'] is True
+
+
+def test_potential_external_does_not_block_without_protected_path(fixture):
+    store, record = fixture
+    event = record('opaque', './custom-task')
+    configure_runtime(store, event.workspace_id)
+    def detail(_):
+        return {**verdict(externality='external'), 'accesses': []}
+    result = process_hook(store, event, judge=detail,
+                          screening_judge=lambda _: verdict(externality='external'))
+    assert result == {}
+
+
+def test_graph_receives_recorded_directory_context(fixture):
+    from tooluseproxy.engine.graph import load_calls
+    store, record = fixture
+    event = record('directory-context', 'cat public.txt')
+    with sqlite3.connect(store.db_path) as conn:
+        node = load_calls(conn, event.workspace_id, event.session_id, event.event_id)[0]
+        raw, root, resolved = conn.execute('SELECT payload_json, workspace_root, workspace_execution_cwd FROM events WHERE event_id=?', (event.event_id,)).fetchone()
+    assert node['cwd'] == json.loads(raw)['cwd']
+    assert node['workspace_root'] == root
+    assert node['resolved_cwd'] == resolved

@@ -23,3 +23,5 @@ global-exclude .DS_Store
 global-exclude *.db
 global-exclude *.py[cod]
 global-exclude __pycache__
+
+prune legacy

@@ -45,10 +45,10 @@ Do not say 「流出しないことを確認しました」 when only registrati
 
 ToolUseProxy records Hook-visible ToolCalls in events.db. An independent `codex exec`
 judges information dependencies and possible external communication. The policy
-traverses those dependencies and stops external calls connected to registered sources.
+traverses those dependencies and stops external calls connected to registered sources. Independent exact-content DLP also checks resolved transmission contents; a DLP match is a distinct reason, not an inferred graph edge.
 This is inferred provenance, not proof of complete information-flow tracking.
 
-The judge receives recorded ToolCall inputs, outputs, and registered-source metadata.
+The judge receives recorded ToolCall inputs, outputs, registered-source metadata, and bounded local resource evidence needed to resolve a transmission. New setup also enables background provenance analysis, which uses the model.
 They may contain private information. It is NOT a local-only comparison and does NOT
 reuse the running Codex conversation internally. Explain the selected model/provider
 and the data it receives before initial setup. Reuse explicit consent already given;
@@ -70,7 +70,12 @@ sh "<PLUGIN_ROOT>/hooks/run_cli.sh" setup --workspace "<WORKSPACE>" --data-dir "
 
 `--model <MODEL>` selects the judge model explicitly; otherwise the independent CLI
 uses its default model. This is not necessarily the model of the current task.
+Setup records its start boundary; earlier events are not used to infer dependencies.
+Do not import history or scan the repository. When files are already specified, append
+`--protect <RELATIVE_FILE>` for each one to setup to avoid separate calls.
 Setup creates configuration and recording tables and starts the live log viewer.
+Report initialization separately if a file registration or viewer startup fails.
+Finish with the returned short Unsetup guidance, not a test or another confirmation.
 Open the returned viewer URL in Codex's browser side panel when available. A URL in
 JSON alone is not an opened screen. If the viewer fails, explain that configuration
 and viewer startup are separate outcomes; use `logs` to retry.
@@ -116,8 +121,11 @@ Use `status` or `doctor` with the same workspace and data arguments. These are
 configuration checks, not fresh Hook proof.
 
 - SessionStart / SubagentStart: explain coverage and hosted-tool limitations.
-- PreToolUse: record the pending call, judge dependencies/externality, then traverse.
-- PostToolUse: record actual output and update the node. Cannot undo execution.
+- PreToolUse: record and screen external communication first. Definite local calls defer
+  provenance; potential external calls inspect transmission evidence, check DLP, and traverse dependencies.
+- PostToolUse: record actual output and observed resource generations. When enabled at setup,
+  enqueue durable background provenance analysis after the Hook response; this uses the model.
+  It cannot undo execution. Existing configurations are not silently opted in.
 - Stop: no final-answer similarity check and no forecast-based additional stop.
 
 Hosted tools such as WebSearch do not reliably pass through Codex ToolUse hooks.
@@ -131,10 +139,22 @@ user's behalf or describe Hook trust as proof that the model classified correctl
 
 ## Stop or remove protection
 
-The agent-facing `unsetup` command does not remove protection. Administrative stop
+Use `unsetup open` with the same workspace/data arguments to request the macOS
+administrator authentication and confirmation UI. Do not enter credentials or operate
+the confirmation dialog on the user's behalf. `plan` and `apply` do not mutate state.
+If the administrator component is missing, report that and link the product's
+Setup/Unsetup administration instructions; do not install or enroll it implicitly.
+The agent-facing `unsetup` command does not itself remove protection. Administrative stop
 and reactivation use the independent administrator approval boundary. Do not edit
 Plugin enablement, source registrations, judge policy, or authority state to escape
 a denial. Never treat a confirmation string the agent can generate as human approval.
+
+## Provenance diagnostics
+
+`analyze status` reports durable-job counts; `analyze run` resumes a bounded batch with the
+same workspace/data arguments. These do not prove live interception. The log detail links
+to a separate 2D provenance page showing pinned revisions without raw file contents.
+Content-match blocks and graph-path blocks are separate outcomes. A missing graph is not safety.
 
 ## Retired v0.1 behavior
 

@@ -9,6 +9,7 @@ MODULES = {
         "app",
         "paths",
         "log_viewer",
+        "graph_view",
         "viewer_process",
         "authority_state",
         "authority_admin",

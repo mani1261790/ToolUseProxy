@@ -97,16 +97,23 @@ def load_calls(
     if end is None:
         raise GraphUnavailable("event_missing")
     # Never silently drop old history or truncate contents and then report an allow.
+    boundary = 0
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE name='recording_boundaries'").fetchone():
+        row = conn.execute("SELECT after_sequence FROM recording_boundaries WHERE workspace_id=?", (workspace,)).fetchone()
+        if row:
+            boundary = row[0]
     rows = conn.execute(
-        """SELECT event_id,phase,tool_use_id,tool_name,payload_json
+        """SELECT event_id,phase,tool_use_id,tool_name,payload_json,workspace_root,workspace_execution_cwd
         FROM events WHERE workspace_id=? AND session_id=? AND sequence_no<=?
-        AND phase IN ('pre_tool_use','post_tool_use') ORDER BY sequence_no LIMIT ?""",
-        (workspace, session, end[0], max_events + 1),
-    ).fetchall()
-    if len(rows) > max_events or sum(len(row[4].encode()) for row in rows) > max_bytes:
-        raise GraphUnavailable("history_budget_exceeded")
+        AND sequence_no>? AND phase IN ('pre_tool_use','post_tool_use') ORDER BY sequence_no LIMIT ?""",
+        (workspace, session, end[0], boundary, max_events + 1),
+    )
     calls: dict[str, dict] = {}
-    for eid, phase, tool_id, tool_name, raw in rows:
+    total_bytes = 0
+    for row_number, (eid, phase, tool_id, tool_name, raw, workspace_root, execution_cwd) in enumerate(rows):
+        total_bytes += len(raw.encode())
+        if row_number >= max_events or total_bytes > max_bytes:
+            raise GraphUnavailable("history_budget_exceeded")
         if not tool_id:
             raise GraphUnavailable("tool_use_id_missing")
         payload = json.loads(raw)
@@ -119,6 +126,9 @@ def load_calls(
                     previous["completed"]
                     or previous["input"] != tool_input
                     or previous["tool_name"] != tool_name
+                    or previous["cwd"] != payload.get("cwd")
+                    or previous["workspace_root"] != workspace_root
+                    or previous["resolved_cwd"] != execution_cwd
                 ):
                     raise GraphUnavailable("reused_tool_use_id")
                 # Redelivery can carry different runtime attestation metadata.
@@ -129,6 +139,9 @@ def load_calls(
                 "event_id": eid,
                 "tool_name": tool_name,
                 "input": tool_input,
+                "cwd": payload.get("cwd"),
+                "workspace_root": workspace_root,
+                "resolved_cwd": execution_cwd,
                 "output": None,
                 "completed": False,
             }
@@ -136,7 +149,9 @@ def load_calls(
             if node_id not in calls:
                 raise GraphUnavailable("pre_tool_record_missing")
             node = calls[node_id]
-            if node["input"] != tool_input or node["tool_name"] != tool_name:
+            if (node["input"] != tool_input or node["tool_name"] != tool_name
+                    or node["cwd"] != payload.get("cwd") or node["workspace_root"] != workspace_root
+                    or node["resolved_cwd"] != execution_cwd):
                 raise GraphUnavailable("post_tool_input_mismatch")
             node.update(output=payload.get("tool_response"), completed=True, event_id=eid)
     return list(calls.values())
