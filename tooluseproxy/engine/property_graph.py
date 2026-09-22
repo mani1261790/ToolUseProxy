@@ -6,6 +6,7 @@ import json
 import posixpath
 import sqlite3
 from collections import deque
+from contextlib import closing
 
 from tooluseproxy.engine.graph import GraphUnavailable, digest, initialize, load_calls
 from tooluseproxy.engine.judge import PROMPT_VERSION
@@ -218,6 +219,7 @@ def analyze_properties(
             "INSERT OR REPLACE INTO graph_progress VALUES (?,?,?,?)",
             (workspace, session, event_id, "analyzing"),
         )
+    with sqlite3.connect(db_path, timeout=5) as conn:
         calls = load_calls(conn, workspace, session, event_id)
     if not calls:
         raise GraphUnavailable("tool_call_missing")
@@ -226,31 +228,36 @@ def analyze_properties(
     complete = True
     current_verdict = None
     current_revision = None
-    for node in calls:
-        records = {"previous_calls": prior, "current_call": node}
-        revision = digest([PROMPT_VERSION, model, workspace, session, records])
-        with sqlite3.connect(db_path, timeout=5) as conn:
+    prefix = digest(["history-chain-v1", PROMPT_VERSION, model, workspace, session])
+    candidates = set()
+    # Reuse the connection, but commit each write before the next model request.
+    with closing(sqlite3.connect(db_path, timeout=5)) as conn:
+        for node in calls:
+            records = {"previous_calls": prior, "current_call": node}
+            revision = digest(["history-chain-v1", prefix, node])
             cached = conn.execute(
                 "SELECT verdict FROM graph_revisions WHERE revision=?", (revision,)
             ).fetchone()
-        candidates = {n["node_id"] for n in prior if n["completed"]}
-        verdict = validate(json.loads(cached[0]) if cached else judge(records), candidates)
-        complete = complete and verdict["complete"]
-        with sqlite3.connect(db_path, timeout=5) as conn:
-            persist(conn, workspace, session, node, revision, model, verdict, revisions)
-        revisions[node["node_id"]] = revision
-        prior.append(
-            dict(
-                node,
-                dependencies=verdict["dependencies"],
-                accesses=verdict["accesses"],
-                judgment_complete=verdict["complete"],
+            verdict = validate(json.loads(cached[0]) if cached else judge(records), candidates)
+            complete = complete and verdict["complete"]
+            with conn:
+                persist(conn, workspace, session, node, revision, model, verdict, revisions)
+            prefix = digest([prefix, node, verdict])
+            revisions[node["node_id"]] = revision
+            if node["completed"]:
+                candidates.add(node["node_id"])
+            prior.append(
+                dict(
+                    node,
+                    dependencies=verdict["dependencies"],
+                    accesses=verdict["accesses"],
+                    judgment_complete=verdict["complete"],
+                )
             )
-        )
-        if node["event_id"] == event_id:
-            current_verdict = verdict
-            current_revision = revision
-            current_node = node["node_id"]
+            if node["event_id"] == event_id:
+                current_verdict = verdict
+                current_revision = revision
+                current_node = node["node_id"]
     if current_verdict is None:
         raise GraphUnavailable("current_node_missing")
     with sqlite3.connect(db_path, timeout=5) as conn:

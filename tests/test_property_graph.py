@@ -66,8 +66,8 @@ def test_late_protection_reuses_edges_and_keeps_old_policy_result(tmp_path):
             for row in conn.execute("SELECT result FROM graph_policy_checks")
         ]
         assert decisions == ["allow", "block"]
-        assert conn.execute('SELECT COUNT(*) FROM graph_policies').fetchone()[0] == 2
-        assert conn.execute('SELECT COUNT(*) FROM graph_revision_links').fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM graph_policies").fetchone()[0] == 2
+        assert conn.execute("SELECT COUNT(*) FROM graph_revision_links").fetchone()[0] == 1
         assert reach(conn, "another", "s", result["node_id"], {}) == []
 
 
@@ -141,3 +141,88 @@ def test_unknown_selectors_cannot_establish_complete_policy(tmp_path):
             },
             set(),
         )
+
+
+def test_history_chain_reuses_prefix_and_invalidates_changed_evidence(tmp_path, monkeypatch):
+    import tooluseproxy.engine.property_graph as graph
+
+    db = tmp_path / "events.db"
+    calls = [
+        dict(
+            node_id=f"n{i}",
+            event_id=f"e{i}",
+            tool_name="test",
+            input={"i": i},
+            output="original",
+            completed=True,
+        )
+        for i in range(3)
+    ]
+    monkeypatch.setattr(graph, "load_calls", lambda *args: calls)
+    queried = []
+
+    def judge(records):
+        queried.append(records["current_call"]["node_id"])
+        # Another writer can acquire the DB while a model request is running.
+        with sqlite3.connect(db, timeout=0.1) as other:
+            other.execute("BEGIN IMMEDIATE")
+        return dict(
+            externality="local", complete=True, reason="fixture", accesses=[], dependencies=[]
+        )
+
+    graph.analyze_properties(db, "w", "s", "e2", [], judge)
+    assert queried == ["n0", "n1", "n2"]
+    queried.clear()
+    graph.analyze_properties(db, "w", "s", "e2", [], judge)
+    assert queried == []
+    calls.append(
+        dict(node_id="n3", event_id="e3", tool_name="test", input={}, output="", completed=True)
+    )
+    graph.analyze_properties(db, "w", "s", "e3", [], judge)
+    assert queried == ["n3"]
+    queried.clear()
+    calls[1]["output"] = "changed evidence"
+    graph.analyze_properties(db, "w", "s", "e3", [], judge)
+    assert queried == ["n1", "n2", "n3"]
+    queried.clear()
+    graph.analyze_properties(db, "w", "s", "e3", [], judge, model="other-model")
+    assert queried == ["n0", "n1", "n2", "n3"]
+
+
+def test_history_hash_input_grows_linearly(tmp_path, monkeypatch):
+    import tooluseproxy.engine.property_graph as graph
+
+    real_digest = graph.digest
+    volumes = []
+    for count in (40, 80):
+        calls = [
+            dict(
+                node_id=f"n{i:03}",
+                event_id=f"e{i:03}",
+                tool_name="test",
+                input={"text": "x" * 100},
+                output="y" * 100,
+                completed=True,
+            )
+            for i in range(count)
+        ]
+        monkeypatch.setattr(graph, "load_calls", lambda *args: calls)
+        sizes = []
+
+        def digest(value):
+            sizes.append(len(json.dumps(value)))
+            return real_digest(value)
+
+        monkeypatch.setattr(graph, "digest", digest)
+        graph.analyze_properties(
+            tmp_path / f"{count}.db",
+            "w",
+            "s",
+            calls[-1]["event_id"],
+            [],
+            lambda records: dict(
+                externality="local", complete=True, reason="fixture", accesses=[], dependencies=[]
+            ),
+        )
+        volumes.append(sum(sizes))
+    assert 1.9 < volumes[1] / volumes[0] < 2.1
