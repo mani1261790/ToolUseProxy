@@ -229,3 +229,39 @@ def test_changed_outbound_snapshot_cannot_use_an_old_graph_block(context):
     assert (
         result["action"] == "unavailable" and result["reason"] == "payload_changed_after_inspection"
     )
+
+
+def test_screening_payload_description_avoids_second_model_request(context):
+    _, store, create, _ = context
+    event, _ = create(session="combined")
+    (store.db_path.parent / "semantic-flow.json").write_text(
+        json.dumps(
+            {
+                "workspaces": {
+                    event.workspace_id: dict(
+                        provider="codex_exec",
+                        send_recorded_content=True,
+                        failure_policy="allow_with_warning",
+                        mode="enforce",
+                    )
+                }
+            }
+        )
+    )
+
+    def unused(_):
+        pytest.fail("the screening description and DLP evidence suffice")
+
+    output = process_hook(
+        store,
+        event,
+        judge=unused,
+        screening_judge=lambda _: dict(
+            externality="external",
+            complete=True,
+            reason="fixture",
+            resources=[],
+            transmission=target(None),
+        ),
+    )
+    assert output["hookSpecificOutput"]["permissionDecision"] == "deny"

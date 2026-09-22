@@ -262,7 +262,7 @@ def analyze_properties(
             _visiting=visiting,
         )
     with sqlite3.connect(db_path, timeout=5) as conn:
-        calls = load_calls(conn, workspace, session, event_id)
+        calls = load_calls(conn, workspace, session, event_id, 50_000, 64_000_000)
     if not calls:
         raise GraphUnavailable("tool_call_missing")
     prior = []
@@ -281,7 +281,11 @@ def analyze_properties(
             cached = conn.execute(
                 "SELECT verdict FROM graph_revisions WHERE revision=?", (revision,)
             ).fetchone()
-            verdict = validate(json.loads(cached[0]) if cached else judge(records), candidates)
+            if cached:
+                verdict = validate(json.loads(cached[0]), candidates)
+            else:
+                from tooluseproxy.engine.review import review
+                verdict = review(db_path, revision, records, judge, validate)
             complete = complete and verdict["complete"]
             with conn:
                 persist(conn, workspace, session, node, revision, model, verdict, revisions)

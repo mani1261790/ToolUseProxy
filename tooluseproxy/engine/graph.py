@@ -107,11 +107,13 @@ def load_calls(
         FROM events WHERE workspace_id=? AND session_id=? AND sequence_no<=?
         AND sequence_no>? AND phase IN ('pre_tool_use','post_tool_use') ORDER BY sequence_no LIMIT ?""",
         (workspace, session, end[0], boundary, max_events + 1),
-    ).fetchall()
-    if len(rows) > max_events or sum(len(row[4].encode()) for row in rows) > max_bytes:
-        raise GraphUnavailable("history_budget_exceeded")
+    )
     calls: dict[str, dict] = {}
-    for eid, phase, tool_id, tool_name, raw, workspace_root, execution_cwd in rows:
+    total_bytes = 0
+    for row_number, (eid, phase, tool_id, tool_name, raw, workspace_root, execution_cwd) in enumerate(rows):
+        total_bytes += len(raw.encode())
+        if row_number >= max_events or total_bytes > max_bytes:
+            raise GraphUnavailable("history_budget_exceeded")
         if not tool_id:
             raise GraphUnavailable("tool_use_id_missing")
         payload = json.loads(raw)

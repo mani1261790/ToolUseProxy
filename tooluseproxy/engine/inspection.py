@@ -25,6 +25,17 @@ def inspect_and_decide(store, event, sources, provider, graph_decision, node_id,
         stable_policy = policy_key(sources) == policy_key(current_sources())
         if dlp.matches and stable_policy and resolver.unchanged(resolution):
             return dict(action="block", reason="protected_content_match", path=[], node_id=node_id)
+        if stable_policy and resolver.unchanged(resolution) and sources_unchanged(resolver, dlp):
+            from tooluseproxy.engine.fast_path import known_protected_generation
+
+            fast = known_protected_generation(store, event, resolver, resolution, sources, model)
+            if (
+                fast is not None
+                and policy_key(sources) == policy_key(current_sources())
+                and resolver.unchanged(resolution)
+                and sources_unchanged(resolver, dlp)
+            ):
+                return fast
         issues = list(dlp.issues)
         if resolution.coverage != "complete":
             issues.append("transmission_coverage_incomplete")

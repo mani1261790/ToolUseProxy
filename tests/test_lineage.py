@@ -7,8 +7,7 @@ from tooluseproxy.engine.lineage import snapshot_resources
 from tooluseproxy.engine.property_graph import analyze_properties, bindings, persist, reach, schema
 
 
-@pytest.fixture
-def history(tmp_path):
+def make_history(tmp_path):
     root = tmp_path / "workspace"
     root.mkdir()
     root = root.resolve()
@@ -39,6 +38,11 @@ def history(tmp_path):
     (root / "derived").write_text("Apply a coefficient of seventy-three hundredths.")
     writer = record("a", "write", "post_tool_use", "write", response="done")
     return root, store, record, writer
+
+
+@pytest.fixture
+def history(tmp_path):
+    return make_history(tmp_path)
 
 
 def judge(records):

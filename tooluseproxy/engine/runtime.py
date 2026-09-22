@@ -32,27 +32,45 @@ def configuration(db_path: Path, workspace_id: str | None) -> dict | None:
 
 
 @contextmanager
-def session_lock(db_path: Path, workspace: str, session: str):
+def session_lock(db_path: Path, workspace: str, session: str, *, background=False):
     # Model requests must not hold the events.db writer lock. The process lock is
     # automatically released after a crash and serializes only this session.
     import fcntl
 
     lock_dir = db_path.parent / "semantic-flow-locks"
     lock_dir.mkdir(mode=0o700, exist_ok=True)
-    with (lock_dir / digest([workspace, session])).open("a") as handle:
-        until = time.monotonic() + 120
-        while True:
+    from tooluseproxy.engine.jobs import priority_schema, PriorityYield
+    import secrets
+    owner=secrets.token_hex(16)
+    if not background:
+        with sqlite3.connect(db_path,timeout=5) as conn:
+            priority_schema(conn)
+            conn.execute("DELETE FROM flow_foreground_waiters WHERE until<?",(time.time(),))
+            conn.execute("INSERT INTO flow_foreground_waiters VALUES (?,?,?,?)",(workspace,session,owner,time.time()+120))
+    try:
+        with (lock_dir / digest([workspace, session])).open("a") as handle:
+            until = time.monotonic() + 120
+            while True:
+                try:
+                    fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if background:
+                        raise PriorityYield()
+                    if time.monotonic() >= until:
+                        raise GraphUnavailable("session_analysis_busy")
+                    time.sleep(0.05)
+            if not background:
+                with sqlite3.connect(db_path,timeout=5) as conn:
+                    conn.execute("DELETE FROM flow_foreground_waiters WHERE owner=?",(owner,))
             try:
-                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                break
-            except BlockingIOError:
-                if time.monotonic() >= until:
-                    raise GraphUnavailable("session_analysis_busy")
-                time.sleep(0.05)
-        try:
-            yield
-        finally:
-            fcntl.flock(handle, fcntl.LOCK_UN)
+                yield
+            finally:
+                fcntl.flock(handle, fcntl.LOCK_UN)
+    finally:
+        if not background:
+            with sqlite3.connect(db_path,timeout=5) as conn:
+                conn.execute("DELETE FROM flow_foreground_waiters WHERE owner=?",(owner,))
 
 
 def hook_output(result: dict, phase: str) -> dict:
@@ -108,8 +126,16 @@ def screen_externality(db_path, event, model, provider):
                 or not isinstance(verdict.get("reason"), str)):
             raise GraphUnavailable("externality_invalid")
         resources = verdict.get("resources", [])
+        transmission = verdict.get("transmission")
         verdict = {key: verdict[key] for key in ("externality", "complete", "reason")}
         verdict["resources"] = resources if isinstance(resources, list) else []
+        if isinstance(transmission, dict):
+            from tooluseproxy.engine.targets import validate_targets
+            try:
+                validate_targets(transmission)
+                verdict["transmission"] = transmission
+            except ValueError:
+                pass
         if not verdict["complete"]:
             verdict = {"externality": "external", "complete": True, "reason": "screening_requires_inspection"}
     except Exception:
@@ -153,6 +179,9 @@ def process_hook(store, event, *, judge=None, screening_judge=None, target_judge
                 # on demand before a later possible external transmission.
                 from tooluseproxy.engine.lineage import snapshot_resources
                 snapshot_resources(store, event)
+                if config.get("background_provenance") is True:
+                    from tooluseproxy.engine.jobs import enqueue
+                    enqueue(store.db_path,event,model)
                 result = {"action": "observed", "reason": "provenance_deferred", "path": [], "node_id": node_id}
             else:
                 screen = screen_externality(store.db_path, event, model,
@@ -193,6 +222,8 @@ def process_hook(store, event, *, judge=None, screening_judge=None, target_judge
                         def target_provider(records):
                             if time.monotonic() - started > 480:
                                 raise GraphUnavailable("semantic_analysis_budget_exceeded")
+                            if target_judge is None and not records.get("execution_definitions") and screen.get("transmission") is not None:
+                                return screen["transmission"]
                             return (target_judge or provider)(records)
                         result = inspect_and_decide(store, event, sources, target_provider,
                                                     graph_decision, node_id, model)

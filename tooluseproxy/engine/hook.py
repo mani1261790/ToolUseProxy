@@ -81,5 +81,15 @@ def run(phase: str, db_path: Path) -> int:
         result = hook_output(
             {"action": "unavailable", "reason": "semantic_runtime_unavailable"}, runtime_phase
         )
-    print(json.dumps(result, ensure_ascii=False))
+    print(json.dumps(result, ensure_ascii=False), flush=True)
+    # The response is emitted before starting optional asynchronous work.
+    if runtime_phase == "post_tool_use":
+        try:
+            from tooluseproxy.engine.runtime import configuration
+            config = configuration(db_path,event.workspace_id)
+            if config and config.get("background_provenance") is True:
+                from tooluseproxy.engine.worker import kick
+                kick(db_path,event.workspace_id)
+        except Exception:
+            pass  # Durable work remains available to the next invocation/explicit drain.
     return 0
