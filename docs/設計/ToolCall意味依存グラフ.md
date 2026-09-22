@@ -1,6 +1,6 @@
 # ToolCall記録から作る意味依存グラフ
 
-2026-09-22。既存のI/O類似度・スコア伝播を置き換えるための初期実装。
+2026-09-22。v0.2の通常実行経路。既存のI/O類似度・スコア伝播から独立した構成。
 現在のPlugin設定・保護登録・実利用DBは変更していない。
 
 ## 調査結果
@@ -33,33 +33,42 @@
 
 この実装で選択できる障害時方針は、明示設定された`allow_with_warning`。未判定のまま操作を通すので、障害時の流出防止を保証しない。名前だけを「保留」にしてdenyを返すことはしない。Codex本体の承認条件を上書きする`permissionDecision: allow`も返さない。
 
-新経路では旧I/O類似度判定・予測による追加停止を実行しない。通常の旧経路は明示切替されるまで従来どおり。管理者による停止の処理は既存Plugin入口で先に行う。
+新経路では旧I/O類似度判定・予測による追加停止を実行しない。v0.2の配布物には旧経路を同梱しない。管理者による停止の処理は既存Plugin入口で先に行う。
 
-## 初期実装の利用条件
+## 内部構造
 
-この段階では実利用への一括移行を行わない。明示的に選択したworkspaceだけを対象とする。
-`events.db`と同じディレクトリに次の`semantic-flow.json`を置く。
+通常の入口は `tooluseproxy.app`。Hookは `engine.hook` → `engine.journal` →
+`engine.runtime` → `engine.judge` / `engine.codex` → `engine.graph` を通る。
+旧 `hook_monitor` や旧CLIをimportしない。
 
-```json
-{
-  "workspaces": {
-    "対象のworkspace_id": {
-      "mode": "enforce",
-      "provider": "codex_exec",
-      "model": null,
-      "send_recorded_content": true,
-      "failure_policy": "allow_with_warning"
-    }
-  }
-}
-```
+- Journal: 操作の原記録とworkspace登録だけを扱う。Hook中に全DBのmigrationや解析index再構築をしない。
+- Codex transport: 空ディレクトリ、独立した一時セッション、ツールなしでJSONを得る。
+- Judge: 依存元・外部通信・判断の完全性を返す。設定や保護登録を変更できない。
+- Graph: 許可された過去ノードと情報源だけをエッジとして採用し、到達性を調べる。
+- Lifecycle: 管理者停止のleaseを先に取得する。エージェント向け解除writerはない。
+- Viewer: 同じevents.dbを読み、継続更新とblock絞り込みを提供する。
 
-- `send_recorded_content`は、指定モデルへToolCallの入力・出力と情報源登録メタデータを送る選択。ローカルのみの旧設定と同じ意味ではない。秘密情報を含み得るので、送信先の利用条件を決めてから有効にする。今回の実験は人工データだけ。
-- modelがnullなら独立したCodexの既定モデルを使う。CLIの保存済み認証を使い、親セッションのモデル設定を引き継ぐとは限らない。
-- 登録元ファイルをこの経路が開き直すことはしない。DBに登録済みのworkspace別情報源を使う。
-- `hooks/semantic-flow.example.json`は切替用の例。通常のHookと二重登録しない。環境変数`TOOLUSEPROXY_SEMANTIC_FLOW=1`により新経路を選ぶ。現在のインストールには適用していない。
-- 判定1回は60秒まで、解析の追加依頼受付は480秒まで、セッションロック待機120秒、外側watchdog720秒、ホスト設定900秒。時間切れは新経路ではdenyに変換しない。これらは最適化済みの応答性能ではない。
-- ロック実装はPOSIX向け。Windowsでの新経路の検証・ロック実装は残件。
+配布ファイルは `scripts/runtime_manifest.py` で限定する。Plugin・wheelに旧解析器・旧CLI・旧workerを含めない。
+直接pipでbuildする場合も `build_support.py` が旧モジュールを除外する。
+過去の研究・比較試験はリポジトリに残すが、通常製品の依存にはしない。
+
+## 設定と移行
+
+[クイックスタート](../../QUICKSTART.md)のsetupを使う。`--accept-judge-data`で、
+ToolCallのI/Oと登録メタデータを独立したCodexへ渡すことを確認する。
+旧local-only設定を送信への同意として扱わない。setupはログUIも起動する。
+
+設定はDBと同じディレクトリの`semantic-flow.json`にworkspace単位で保存する。
+旧 `file-payload-exact` profileや環境変数で新方式を選ぶ必要はない。
+同じworkspaceの判定モデルをsetupで暗黙に変更しない。
+
+既存のworkspace別登録DBは読める。登録元ファイルをHookが開き直すことはない。
+manifestだけの旧環境を空の登録へ変換せず、移行確認を要求する。
+古いDBの移行や実利用環境への適用は、この変更では実施していない。
+
+判定1回60秒、追加の解析依頼受付480秒、セッションロック待機120秒、watchdog720秒、
+ホストHook900秒。起動失敗も含め、時間切れを流出検出へ変換しない。
+POSIXのプロセスロックを使用し、Windowsの新経路は未検証。
 
 ## 検証
 
@@ -99,3 +108,18 @@ ToolCall一つで複数の情報源・複数の出力を扱う場合、単一ノ
 
 全体試験の初回は2,810件＋補助1,609件成功、2件skip、3件失敗。新モジュールを配布許可リストへ追加後、関連27件は成功した。ログサーバーの起動試験は単独再実行で成功した。
 公開元監査の失敗は共有Git refs内にある既存の展示用Kleeフォント2件のサイズ超過によるもの。この変更で追加したファイルではなく、履歴削除や監査基準の緩和は行っていない。全体試験が全件成功したとは扱わない。
+
+## v0.2への更新状況
+
+通常Hook・CLI・setup・Skill・README・privacy・配布対象を新方式へ更新した。
+現在の実インストールのキャッシュは0.1.0-alpha.25であり、新Skillを読み込んだとは扱わない。
+旧版のキャッシュや有効設定を直接書き換えず、配布後の正規更新と新しいタスクで区別する。
+
+新規DBはevents・workspaces・protected_sourcesを中心に作り、旧類似度・lineage・worker用tableを作らない。
+構造を変えても、既存DB・登録・履歴を削除しない。削除や保護解除をモデル判断へ委任しない。
+
+
+2026-09-22 v0.2構成の確認: 製品契約82件成功、1件skip。CI供給元検査・対象Ruff成功。
+実モデルの人工例も新構成で再確認し、直接送信block、派生送信block、無関係な送信allow、git add allow。
+初回履歴込み37.66秒、後続9.02／10.66／8.92秒だった。記録内の送信コマンドは実行していない。
+旧全履歴テストの非互換は tests/README.md に記録し、v0.2の製品契約とは分けた。

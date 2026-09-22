@@ -7,7 +7,7 @@ from collections import deque
 from pathlib import Path
 from typing import Callable
 
-from hook_monitor.semantic_flow.judge import PROMPT_VERSION
+from tooluseproxy.engine.judge import PROMPT_VERSION
 
 
 class GraphUnavailable(ValueError):

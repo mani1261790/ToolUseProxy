@@ -35,7 +35,7 @@ def test_fast_child_output_and_exit_code_are_preserved() -> None:
     assert stdout.getvalue() == expected
 
 
-def test_slow_pre_tool_child_is_killed_and_replaced_by_deny() -> None:
+def test_timeout_is_a_warning_not_a_leak_finding() -> None:
     sentinel = "WATCHDOG.SLOW.CHILD.MUST.NOT.LEAK"
     stdout = io.BytesIO()
     started = time.monotonic()
@@ -63,8 +63,8 @@ def test_slow_pre_tool_child_is_killed_and_replaced_by_deny() -> None:
     assert result == 0
     assert elapsed < 1.0
     assert details["hookEventName"] == "PreToolUse"
-    assert details["permissionDecision"] == "deny"
-    assert "hook_deadline_exceeded" in details["additionalContext"]
+    assert "permissionDecision" not in details
+    assert "semantic_watchdog_timeout" in details["additionalContext"]
     assert sentinel not in stdout.getvalue().decode("utf-8")
 
 
@@ -72,7 +72,7 @@ def test_pre_tool_host_timeout_exceeds_internal_deadline() -> None:
     hooks = json.loads((REPO_ROOT / "hooks" / "hooks.json").read_text(encoding="utf-8"))
     pre_tool_timeout = hooks["hooks"]["PreToolUse"][0]["hooks"][0]["timeout"]
 
-    assert pre_tool_timeout == 15
+    assert pre_tool_timeout == 900
 
 
 def test_both_launchers_invoke_the_watchdog() -> None:

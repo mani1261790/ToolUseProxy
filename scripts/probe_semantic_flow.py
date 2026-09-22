@@ -7,16 +7,16 @@ import tempfile
 import time
 from pathlib import Path
 
-from hook_monitor.runtime.parser import build_artifacts, normalize_event
-from hook_monitor.runtime.storage import EventStore
-from hook_monitor.semantic_flow.graph import analyze
-from hook_monitor.semantic_flow.judge import CodexSemanticJudge
+from tooluseproxy.engine.journal import event_from
+from tooluseproxy.engine.journal import Journal
+from tooluseproxy.engine.graph import analyze
+from tooluseproxy.engine.judge import CodexSemanticJudge
 
 
 def main():
     with tempfile.TemporaryDirectory(prefix="tup-semantic-fixture-") as directory:
         root = Path(directory)
-        store = EventStore(root / "events.db")
+        store = Journal(root / "events.db")
         store.initialize()
 
         def record(call, command, output=None):
@@ -30,8 +30,8 @@ def main():
             }
             if output is not None:
                 payload["tool_response"] = output
-            event = normalize_event(phase, payload, workspace_root=str(root))
-            store.record(event, build_artifacts(event))
+            event = event_from(phase, payload, str(root))
+            store.record(event)
             return event
 
         sources = [

@@ -9,7 +9,7 @@ import tempfile
 from contextlib import closing
 from pathlib import Path
 
-from hook_monitor.runtime.workspace import make_workspace_id, resolve_workspace
+from tooluseproxy.engine.workspace import make_workspace_id, resolve_workspace
 
 ACTIVATION_DIRECTORY_SUFFIX = ".workspaces"
 ACTIVATION_MARKER_VERSION = 1

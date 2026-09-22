@@ -10,14 +10,14 @@ import pytest
 
 from hook_monitor.runtime.parser import normalize_event, build_artifacts
 from hook_monitor.runtime.storage import EventStore
-from hook_monitor.semantic_flow.graph import (
+from tooluseproxy.engine.graph import (
     GraphUnavailable,
     analyze,
     protected_path,
     validate_verdict,
 )
-from hook_monitor.semantic_flow.runtime import hook_output, process_hook
-from hook_monitor.externality.providers import JudgeProviderError
+from tooluseproxy.engine.runtime import hook_output, process_hook
+from tooluseproxy.engine.codex import JudgeProviderError
 from tooluseproxy_hook_watchdog import run_child
 
 
@@ -201,7 +201,6 @@ def test_semantic_watchdog_does_not_convert_timeout_to_leak():
             stdin=stdin,
             stdout=stdout,
             timeout_seconds=0.02,
-            semantic_flow=True,
         )
     output = json.loads(stdout.getvalue())
     assert "permissionDecision" not in output["hookSpecificOutput"]
@@ -254,42 +253,3 @@ def test_runtime_block_is_visible_in_log_filter(fixture, monkeypatch):
     decisions = reader.detail(event.event_id)["decisions"]
     assert decisions[0]["action"] == "block"
     assert json.loads(decisions[0]["path_json"])[0] == "source:private"
-
-
-def test_runner_uses_semantic_path_without_legacy_similarity(fixture, monkeypatch, capsys):
-    from hook_monitor.runtime.runner import run_hook
-    from hook_monitor.runtime import runner
-
-    store, record = fixture
-    event = record("one", "git add public.txt")
-    config = {
-        "workspaces": {
-            event.workspace_id: {
-                "provider": "codex_exec",
-                "send_recorded_content": True,
-                "mode": "enforce",
-                "failure_policy": "allow_with_warning",
-            }
-        }
-    }
-    (store.db_path.parent / "semantic-flow.json").write_text(json.dumps(config))
-    monkeypatch.setenv("TOOLUSEPROXY_SEMANTIC_FLOW", "1")
-    monkeypatch.setattr(
-        "hook_monitor.semantic_flow.runtime.CodexSemanticJudge",
-        lambda *a, **kw: lambda records: verdict(),
-    )
-
-    def legacy(*a, **kw):
-        raise AssertionError("legacy policy must not run")
-
-    monkeypatch.setattr(runner, "_effective_runtime_settings", legacy)
-    monkeypatch.setattr(
-        sys, "stdin", io.TextIOWrapper(io.BytesIO(json.dumps(event.raw_payload).encode()))
-    )
-    assert (
-        run_hook(
-            "pre_tool_use", db_path=store.db_path, activated_workspace_root=event.workspace_root
-        )
-        == 0
-    )
-    assert json.loads(capsys.readouterr().out) == {}

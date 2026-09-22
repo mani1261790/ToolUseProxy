@@ -1,91 +1,15 @@
-# プライバシーとデータ保持
+# v0.2のデータの扱い
 
-ToolUseProxy `0.1.0-alpha.24`のlocal runtimeが扱うデータ、保存場所、保持期間、削除時の境界を説明します。ToolUseProxyはCodexとは別のlocal Hook processとして動作し、既定ではtelemetry、remote embedding、外部API、network送信を行いません。実験的なExternality Judgeだけは、利用者がproviderを明示し、Hook外workerを実行した場合に限り、値非保持の構造要約を選択済みproviderへ送ります。
+ToolUseProxyはToolCallの入力・出力をローカルのevents.dbへ保存します。ログにはコード、ファイル名、秘密情報が平文で含まれる場合があります。暗号化DBではありません。
 
-## 保存するデータ
+判定時は、同じプロジェクト・セッションのToolCall記録と登録済み情報源のメタデータを、独立した`codex exec`へ渡します。登録ファイルをHookが開き直すことはしませんが、読み取った内容がToolCall出力にあれば判定入力に含まれます。
 
-ToolUseProxyは情報流を再構築するため、次のデータをlocal SQLiteへ保存します。
+CLIの保存済み認証を使います。親の会話を暗黙に参照する方式ではなく、必要な記録を明示的にモデルへ送ります。判定用セッションのツール・Hook・Pluginは無効にします。`--ephemeral`はサービス側での処理・保持がゼロであることを意味しません。利用中のCodexのデータ利用条件を確認してください。
 
-| 種類 | 内容 | 機密性に関する注意 |
-| --- | --- | --- |
-| Hook event | tool名、phase、session / turn / tool use ID、時刻、workspace、Plugin / runtime版、Hook定義hash | workspaceの絶対pathを含み得る。verification commandには使い捨てのopaque probe tokenも含まれる |
-| raw Hook payload | Codexから渡されたtool input、tool response、final answer | source code、command、出力、secretなどの平文を含み得る |
-| artifact / fragment | payloadから抽出したtext、path、query、content、stdoutなど | 抽出後のtextと正規化textを平文で保存する |
-| protected source chunk | manifestで指定したsourceから解析したchunk | protected sourceの内容を平文で保存し得る |
-| graph / finding / policy | source、artifact、resource、sinkの関係、score、判断理由 | 内容そのものに加え、機密情報の存在や流れを推測できるmetadataを含む |
-| candidate / review | 候補path、selector、rule、confidence、再検証用hash / stat、review状態 | agent向け出力には値を出さないが、pathやdictionary-test可能なhashは機密になり得る |
-| Externality Judge評価 | event / workspace / sessionの内部ID、構造要約hash、Codex model名のhash、closed verdict、件数、時間、値を含まないfailure code | raw command、source code、URL、host、path、protected source identity、model名を保存しない。ToolUseProxyはAPI keyを受け取らない |
-| migration backup | SQLiteや`protected_sources.json`の更新前backup | 元データと同じ機密性を持つ |
-| 利用projectの印 | 明示的に初期設定したworkspaceの絶対path | `events.db.workspaces/`へprojectごとに保存し、未設定projectをHookの対象外にするためだけに使う |
+初期設定ではこの送信を確認します。v0.1の「ローカルのみ」という同意を新しい送信への同意として流用しません。判定の失敗・時間切れでは警告して継続するため、その間に情報が外へ出る可能性があります。
 
-候補scanの外向きJSONとreview監査にはsource本文やsecret値を含めません。ただし、これはSQLite全体がhash-onlyまたは匿名化済みという意味ではありません。通常のHook payload、artifact、source chunk、analysis snapshotには平文が残り得ます。
+ToolUseProxy独自のテレメトリーや改善用アップロードは行いません。旧外部分類worker、旧自動探索・予測・最終回答検査は通常のHookから起動しません。
 
-## 保存場所
+設定・記録は指定した専用データディレクトリに置きます。POSIXではディレクトリ0700、DB0600を使用します。プロジェクト内のソース、既存登録、古い記録を更新時に削除しません。自動整理は新実行経路に含めません。停止・解除・データ削除は独立した管理者承認の対象です。
 
-Codex Pluginでは、Codexが渡す`PLUGIN_DATA`の下に`events.db`、利用projectの印を分けて置く`events.db.workspaces/`、必要なbackupを保存します。明示的な`--data-dir`、`--db`、`TOOLUSEPROXY_DATA_DIR`、`TOOLUSEPROXY_DB_PATH`を指定した場合は、その場所を優先します。
-
-通常packageの既定値は次の通りです。
-
-| OS | 既定data directory |
-| --- | --- |
-| macOS | `~/Library/Application Support/ToolUseProxy` |
-| Linux | `$XDG_STATE_HOME/tooluseproxy`または`~/.local/state/tooluseproxy` |
-| Windows | `%LOCALAPPDATA%\ToolUseProxy`または`~/AppData/Local/ToolUseProxy` |
-
-`init`、`doctor --json`、`status --json`は解決した`data_dir`または`db_path`を確認するために使えます。POSIXでは新規data directoryをmode `0700`、databaseを`0600`にしますが、SQLiteはapplication-level encryptionを行いません。OS accountの分離とdisk encryptionを併用してください。
-
-## networkとtelemetry
-
-- 通常のToolUseProxy Hook、CLI、analysisはnetwork requestを開始しません
-- 通常setupは`externality-protection`のlocal static/cache判定を有効にしますが、LLM providerとHook外workerは既定offです
-- `externality-protection`を有効にしてもHookはnetwork通信せず、未知callの値非保持envelopeをlocal queueへ積み、安全に確認できないexternal payloadを保守的に実行前denyします
-- LLM分類にはHook外workerと`codex` routeの両方を明示する必要があります。別providerやfallbackはありません
-- ToolUseProxyはOpenAI API endpointを直接呼ばず、API keyを受け取りません
-- Codex routeは、実行ファイル、version、model、judge契約に結び付いた事前probe receiptが一致する場合だけ、インストール済みCodexをjobごとの新しい一時セッションとして隔離設定で呼びます
-- remote embeddingは使いません
-- telemetry、crash report、usage analyticsを送信しません
-- GitHub Actionsやpackage buildは開発・release工程であり、local Hook runtimeからは起動しません
-
-Externality Judgeへ送る構造要約には、tool family、解析coverage、executable category、HTTP / socket / DNS / child processなどのclosed capability、dynamic code / 未知executable / workspace外参照などのclosed risk signal、bounded countだけを含めます。次は送信しません。
-
-- raw command、argument、source code、tool response、final answer
-- protected source、user prompt、transcript
-- URL、host、DNS label、workspace path、file name、独自identifier
-- credential、環境変数値
-
-Codex一時セッションには同じ値非保持envelopeだけが送られます。Codex service側の一時的な処理・保持をゼロと保証するものではないため、利用しているCodexのデータ利用・保持条件は別途確認してください。ToolUseProxyが認証情報を取得・保存・転送することはありません。
-
-LLM分類自体は人間review前にruleへ昇格しません。ただし初見unknownの保守的sinkはreview前から有効で、protected flowが到達すればdenyします。timeout、refusal、HTTP error、schema不一致、provider不在はfailureとして値非保持で記録し、`local`やallowへ変換しません。承認済みriskは完全一致したcallにexternal sinkを維持し、承認済みlocal分類は同じworkspace・構造の保守的unknown sinkだけを外します。既存adapter/static blockは解除しません。無効化するには`externality-protection`をoff / unsetにします。provider routeを`off`にするとHook外workerの通信も停止します。
-
-Codex自体や、Codexが呼び出す外部tool / MCP serverの通信は、上記の明示されたExternality Judge routeを除きToolUseProxyの通信ではありません。packageのPreToolUse block既定値は無効ですが、通常setup profileは明示的に有効化します。保護設定後の解析不能・schema不整合・内部例外では、PreToolUseをfail-closedでdenyします。
-
-## 保持期間
-
-詳しい操作記録は30日保持し、30日を過ぎた完全な作業単位だけを、変更前計画と安全条件に従って少量ずつ整理できます。30日以内の記録は容量だけを理由に削除しません。改善用フィードバック、利用者評価、設定、保護対象登録は今回の整理対象外です。更新前DB退避は、現在版の動作確認、7日経過、現在DBの整合性、改変なし、新しい移行なしをすべて満たす場合だけ整理できます。自動整理は初期状態では無効で、利用者が直前の計画を確認して明示的に有効化した後だけ、24時間に1回まで別処理で動きます。
-
-保護対象リストの変更前backupである`manifest-backups`には自動期限を設けません。一部のredaction auditにはdry-runを既定とするcleanup scriptがあります。secure erase、filesystem snapshot、外部backupの削除は保証しません。
-
-Pluginのdisable、remove、marketplace remove、package uninstallはlocal dataを自動削除しません。これは誤削除を防ぎ、監査やupgrade後の再利用を可能にするためのalpha既定です。
-
-`protect remove`は指定した1件を保護対象リストから外しますが、元ファイル、ほかの保護対象、監査DB、runtime設定は削除しません。適用前の保護対象リストは専用保存領域の`manifest-backups`へ残り、自動整理では削除しません。これは保護登録の解除であり、元データの消去機能ではありません。
-
-## 削除手順
-
-1. Codex Pluginをdisableまたはremoveし、新しいHook実行を止める
-2. `status --json`またはPluginが表示したcommandで対象の`data_dir` / `db_path`を確認する
-3. 必要な監査dataをbackupするか、不要であることを確認する
-4. Codexの関連taskとToolUseProxy processを終了する
-5. `tooluseproxy uninstall plan --data-dir <DATA_DIR> --json`を実行し、管理file数、byte数、管理外entry数をreviewする
-6. 出力された現在内容固有のtokenを`tooluseproxy uninstall apply --data-dir <DATA_DIR> --confirmation-token <TOKEN> --json`へ明示的に渡す
-
-`init`はdata directoryへ値を含まないprivateな識別markerを作成します。既存directoryにmarkerがない場合はToolUseProxy SQLite schemaを識別できた場合だけ削除planを作ります。`apply`はmarker、`events.db`とSQLite sidecar、`events.db.workspaces/`、migration backup、`manifest-backups`だけを管理対象として削除します。管理外entryは削除せずdata directoryを残します。plan後に管理dataの内容が変化した場合、tokenは無効になり再planが必要です。symlinkやgroup / otherから読めるdata directoryは拒否します。
-
-複数workspaceが同じdatabaseを共有している場合、uninstallは全workspaceの履歴を削除します。現在の`0.1.0-alpha.24`にはworkspace単位の完全なerase command、secure erase、外部backup追跡、復元不能性の保証はありません。SSD、filesystem snapshot、backup serviceには削除後もcopyが残る可能性があります。
-
-## 共有時の注意
-
-`events.db`、SQLite WAL / SHM、migration backup、analysis export、trace JSONをGitへcommitしたりIssueへ添付したりしないでください。bug reportにはraw payload、protected value、absolute pathを貼らず、syntheticな再現データを使ってください。
-
-## 変更方針
-
-将来telemetry、別のremote model、network service、自動uploadを導入する場合は、既定off、送信項目、送信先、retention、同意と無効化方法を別の明示契約として先に追加します。Externality Judgeについても送信項目やproviderをsilentに広げません。
+ログDB、モデル判定の根拠、スクリーンショットには私的な内容が含まれ得ます。公開IssueやGitには添付せず、人工データで再現してください。

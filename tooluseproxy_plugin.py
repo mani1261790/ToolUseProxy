@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Codex Plugin entrypoint kept at plugin root for import-safe source execution."""
 
-from tooluseproxy.cli import main
+from tooluseproxy.app import main
 
 
 if __name__ == "__main__":

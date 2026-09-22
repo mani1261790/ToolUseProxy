@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import email.parser
+import runpy
 import subprocess
 import sys
 import tarfile
@@ -26,6 +27,7 @@ SDIST_ROOT_FILES = {
     PurePosixPath("SUPPORT.md"),
     PurePosixPath("pyproject.toml"),
     PurePosixPath("setup.cfg"),
+    PurePosixPath("build_support.py"),
 }
 EGG_INFO_FILES = {
     "PKG-INFO",
@@ -164,7 +166,11 @@ class PackageArtifactTest(unittest.TestCase):
 
             self.assertEqual({">=3.11", "<3.13"}, set(metadata["Requires-Python"].split(",")))
             self.assertEqual("Apache-2.0", metadata["License-Expression"])
-            self.assertTrue(any(path.parts[0] == "hook_monitor" for path in wheel_paths))
+            self.assertFalse(any(path.parts[0] == "hook_monitor" for path in wheel_paths))
+            self.assertNotIn(PurePosixPath("tooluseproxy/cli.py"), wheel_paths)
+            allowed = runpy.run_path(str(REPO_ROOT / "scripts/runtime_manifest.py"))["RUNTIME_FILES"]
+            self.assertEqual({PurePosixPath(name) for name in allowed if name.endswith(".py")},
+                             {path for path in wheel_paths if path.suffix == ".py"})
             self.assertTrue(any(path.parts[0] == "tooluseproxy" for path in wheel_paths))
 
 

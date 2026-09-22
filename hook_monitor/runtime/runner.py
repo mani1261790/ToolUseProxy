@@ -266,13 +266,6 @@ def run_hook(
             return 0
     if allow_schema_migration:
         store.initialize()
-    if os.environ.get("TOOLUSEPROXY_SEMANTIC_FLOW") == "1":
-        from hook_monitor.semantic_flow.runtime import process_hook
-
-        semantic_output = process_hook(store, event)
-        if semantic_output is not None:
-            print(json.dumps(semantic_output, ensure_ascii=False))
-            return 0
     try:
         effective_runtime_settings = _effective_runtime_settings(store, event)
     except Exception:  # pragma: no cover - defensive hook boundary

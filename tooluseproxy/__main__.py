@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from tooluseproxy.cli import main
+from tooluseproxy.app import main
 
 
 if __name__ == "__main__":

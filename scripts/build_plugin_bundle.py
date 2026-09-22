@@ -6,6 +6,7 @@ import ast
 import hashlib
 import json
 import os
+import runpy
 import tempfile
 import zipfile
 from pathlib import Path, PurePosixPath
@@ -109,12 +110,8 @@ def main() -> int:
 
 def _plugin_files() -> list[tuple[Path, PurePosixPath]]:
     relative_paths = [PurePosixPath(path) for path in FIXED_FILES]
-    for directory in PYTHON_PACKAGE_DIRECTORIES:
-        relative_paths.extend(
-            PurePosixPath(path.relative_to(REPO_ROOT).as_posix())
-            for path in (REPO_ROOT / directory).rglob("*.py")
-            if not _is_excluded_python_file(path)
-        )
+    runtime_files = runpy.run_path(str(REPO_ROOT / "scripts/runtime_manifest.py"))["RUNTIME_FILES"]
+    relative_paths.extend(PurePosixPath(path) for path in runtime_files)
 
     files: list[tuple[Path, PurePosixPath]] = []
     for relative_path in sorted(set(relative_paths), key=str):

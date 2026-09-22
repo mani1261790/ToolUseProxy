@@ -1,149 +1,30 @@
-# ToolUseProxy 5分クイックスタート
+# ToolUseProxy v0.2の初期設定
 
-この手順では、検証済みの公開alphaを保護branch `public-alpha`からインストールします。開発中の変更を含む`main`は、通常利用のインストール元にしないでください。この版は`0.1.0-alpha.24`です。
+このbranchはv0.2.0-alpha.1の開発版です。公開チャンネルや現在のインストールが更新されたとは限りません。
+macOS / Linux、Python 3.11–3.12、認証済みCodex CLIを使用します。検証したCLIは0.153.4です。
 
-## 1. 必要なもの
+1. インストール済みPluginのlauncherで`--version`を確認します。v0.1のSkillやsetup profileを混ぜないでください。
+2. ToolCallのI/Oと登録メタデータが判定用Codexへ送られることを確認します。判定不能時は警告して通すので、その間の流出防止を保証しません。
+3. 初期設定します。プロジェクト外の専用データディレクトリを使用してください。
 
-- macOSまたはLinux
-- Python 3.11または3.12
-- Plugin対応のCodex CLIまたはCodex Desktop
-
-利用前に[対応環境と既知の制限](SUPPORT.md)と[プライバシーとデータ保持](PRIVACY.md)を確認してください。ToolUseProxyのlocal監査DBには、コード、command、response、protected sourceの断片が平文で保存される場合があります。
-
-## 2. Pluginをインストールする
-
-次の2コマンドを実行します。
-
-```bash
-codex plugin marketplace add mani1261790/ToolUseProxy --ref public-alpha
-codex plugin add tooluseproxy@tooluseproxy
+```sh
+python3 -m tooluseproxy setup --workspace /path/to/project --data-dir /path/to/private-data --accept-judge-data --json
 ```
 
-MarketplaceとPluginのインストールは、Codex環境ごとに1回だけです。projectごとに再インストールする必要はなく、同じPluginを複数projectで利用できます。
+setupはログUIを起動し、URLを返します。CodexにはそのURLをブラウザのサイドパネルで開くよう依頼してください。
+`--model`で独立した判定用Codexのモデルを指定できます。指定しない場合はCLIの既定モデルです。
 
-インストールしただけでは、開いているprojectでToolUseProxyは動きません。初期設定していないprojectでは案内を表示せず、操作を記録・停止しません。利用するprojectだけを手順4で明示的に有効にします。
+4. 登録するファイルを確認し、承認した対象だけを登録します。現在の新規登録はファイル全体です。
 
-特定versionへ固定する場合は、1つ目のコマンドで`public-alpha`の代わりにimmutable tagを指定します。
-
-```bash
-codex plugin marketplace add mani1261790/ToolUseProxy --ref v0.1.0-alpha.24
+```sh
+python3 -m tooluseproxy protect plan --path private.txt --workspace /path/to/project --data-dir /path/to/private-data --json
+python3 -m tooluseproxy protect add --path private.txt --workspace /path/to/project --data-dir /path/to/private-data --json
 ```
 
-## 3. 5つのHookを確認してTrustする
+5. まず人工データで、Hookの到達、判定結果、実行されたかどうかを確認します。`configured_unverified`やログUIの表示だけでは保護の成功を確認できません。
 
-以前の版を使っていた場合は、先に`codex plugin marketplace upgrade tooluseproxy`を実行し、`codex plugin list --json`で`0.1.0-alpha.24`になったことを確認してください。更新後はCodexを完全に終了して起動し直し、新しいタスクを始めます。画面上の版表示だけでは、実行中タスクが新しいHookを読み込んだ証拠になりません。
+`status`、`doctor`、`logs`、`protect list`も同じworkspace・data-dirを指定します。
+既存のDBと登録は残します。manifestだけの旧環境は自動移行しません。解除は管理者側の承認経路で行います。
 
-Codexが表示するHookを、次の条件と照合してください。
-
-- sourceが`Plugin - tooluseproxy@tooluseproxy`
-- `SessionStart`、`SubagentStart`、`PreToolUse`、`PostToolUse`、`Stop`の5件
-- commandがインストール済みToolUseProxy Plugin内の`hooks/run_hook.sh`を指す
-
-役割は次のとおりです。
-
-- `SessionStart`: Web SearchなどHookで技術的に遮断できないhosted toolへ、protected contentやそこから得た内容を渡さない安全境界をCodexへ伝える
-- `SubagentStart`: subagentにも同じhosted tool境界を伝える
-- `PreToolUse`: Hookから見えるlocal toolの実行前にpayloadを確認し、protected contentの外部送信を止める
-- `PostToolUse`: tool実行後に入力と結果をlocal DBへ記録する
-- `Stop`: 最終回答にprotected contentが残っていないか確認する
-
-HookはCodex sandbox外でユーザー権限により実行されます。Hook自体はlocal dataだけを読み書きし、network通信やLLM待機を行いません。実験的なExternality Judgeを別途有効にすると、未知callは値非保持のlocal queueへ入り、protected情報がそのcallへ流れている場合は分類を待たず止まります。publicだけなら止まりません。LLM分類は、Hook外workerを利用者が明示実行した場合に、jobごとの新しい隔離済みCodex一時セッションでだけ行われ、この手順では有効になりません。ToolUseProxyはOpenAI APIやAPI keyを直接扱いません。source、件数、command pathが異なる場合はTrustしないでください。無関係なHookも表示されている場合は`Trust all`を使わず、ToolUseProxyの5件を個別に確認します。
-
-この実行前blockは、現在のタスクで`PreToolUse`到達を確認できたlocal toolが対象です。hosted Web SearchはHookへ届かず、実行中processへの`write_stdin`追加入力では新しい`PreToolUse`が発火しません。Codex Desktopの単一`tools.exec_command`固定wrapperはalpha.12実機で配送とblockを確認済みです。別wrapper、複数command、他のprogrammatic nested toolは確認済みとは扱いません。
-
-## 4. 利用するprojectを初期設定する
-
-ToolUseProxyを使いたいprojectをCodexで開き、新しいtaskで自然な言葉で依頼します。例えば次のように短く頼めますが、この通りの言い方でなくても構いません。
-
-> ToolUseProxyをこのプロジェクトで使えるようにして
-
-Pluginのインストールは1回ですが、次の情報はworkspaceごとに分離されます。
-
-- workspaceの初期化
-- protected sourceの登録
-- runtime保護設定
-- local監査data
-
-ToolUseProxyが必要な初期設定と安全確認を案内します。操作ごとの承認UIを使う権限modeでは通常2回確認されます。現在のmodeが専用保存領域へのaccessをすでに許可し、承認UIを表示しない場合は、その選択済み権限内で同じ限定setupを続行し、表示回数を0回と正確に報告します。どちらの場合も外部通信は行いません。
-
-設定確認が完了すると、そのプロジェクトのログUIを開きます。Codex Desktopではサイドパネルに表示し、対応する画面操作がない環境ではローカルURLを案内します。ログUIの起動に失敗しても保護設定は取り消しません。ログが表示されることと、現在の操作が実行前に保護されていることは別に確認します。
-
-通常インストールでは、ToolUseProxy自身が現在のPlugin identityを検証して専用保存領域を特定します。利用者が`database_missing`などの内部診断、absolute path、初期化commandをコピーして貼り直す必要はありません。承認UIがないことだけを理由にターミナル実行へ切り替えません。保存先またはaccessを安全に確認できない場合は、別pathや広い権限を推測せず未設定のまま停止します。
-
-完了時の`configuration_passed`は、まず初期設定が正しいという意味です。現在のverification commandそのものに、同じPlugin版・同じHook定義から実行前チェックが届いた場合だけ`active`になります。内部の使い捨て照合用tokenはCodexが毎回新しく用意し、利用者が覚えたり入力したりする必要はありません。届いた証拠がなければ`configured_unverified`のままです。protected操作を止めた証拠は同じセッションのものだけを使い、過去の成功を流用しません。すべての機密ファイルが自動登録されるわけではありません。
-
-以前登録したファイルが移動・削除されている場合、ToolUseProxyは外部通信や判定不能な操作を止めたまま、見つからない登録を一度に一覧表示します。利用者が一覧全体の整理を明示的に認めた場合だけ、古い登録を原子的に外して設定をやり直します。元ファイルは変更・削除せず、利用できる登録は残し、更新前の保護リストを専用保存領域へバックアップします。JSONを手で編集したり、1件ずつ同じ確認を繰り返したりする必要はありません。
-
-## 5. protected source候補をまとめて確認する
-
-続けて、自然な言葉で保護候補を探すよう依頼します。次は入力例であり、固定フレーズではありません。
-
-> 守った方がよいファイルを探して
-
-候補が見つかると、最大10件が番号付きでまとめて表示されます。
-
-- ファイル：project内の相対pathだけ
-- 守る内容：値を表示せず、どの設定項目を守るか
-- できること：選んだ内容の外部送信を実行前に止められること
-- 「守る」を選ぶと：その候補が保護対象リストに追加され、元ファイルは変わらないこと
-- 選択肢：「守る」「今回は見送る」「今後は候補に出さない」
-
-候補の値、file preview、source hash、ユーザーのabsolute pathは表示しません。「全部守る」「1と3は守る、2は見送る」のように自然な言葉でまとめて回答できます。判断が曖昧な候補があれば、その番号だけを確認してから一括反映します。初期設定や候補探しだけでは保護対象に登録されません。
-
-登録済みのファイルを1件だけ外す場合は「README.mdを保護対象から外して」のように依頼します。ToolUseProxyは対象、残る登録数、元ファイルを変更しないことを先に示します。了承後にその登録だけを外し、全設定の削除や保護リストの直接編集は行いません。
-
-既にpathが分かっているMarkdownなどの文書は、例えば「研究計画と研究方針のMarkdownを全文守りたい」のように依頼できます。ToolUseProxyは本文を表示せず、最大10件の対象pathと「全文を守る」ことをまとめて示します。明示的に「守る」と判断したファイルだけを、一度の操作で登録します。
-
-この初期設定では、PreToolUseによる実行前blockとfile-backed payload保護をworkspace単位で有効にします。既存の異なる設定がある場合は上書きせず停止します。
-
-## 6. 実projectで安全に試す
-
-最初は、production credential、顧客data、署名鍵を含まない低riskなprojectを選びます。次の順で確認してください。
-
-1. 有効なToolUseProxy Pluginが1つだけである
-2. 5つのHookを確認してTrustした
-3. setupが`configuration_passed`となり、これが設定確認だけだと説明された
-4. harmlessなpublic操作が通常どおり完了した
-5. syntheticなprotected valueが外部操作の実行前にblockされ、ここで初めてruntime保護を確認できた
-6. 通常作業で予期しないblockが発生しない
-7. PluginをRemoveしても、別途data削除を承認しない限りlocal dataが保持される
-
-setup失敗、Hookの`modified`または`untrusted`、2つ目のToolUseProxy Plugin、public操作の誤block、protected valueの外部副作用が発生した場合は検証を停止してください。広い再利用可能permissionで回避しないでください。
-
-正常にblockした場合は、「ToolUseProxyが外部送信を実行前に止めました」と「結果：外部操作は実行されていません」が先に表示されます。保護対象の本文、source ID、scoreは判断材料として表示しません。調査commandが必要な場合だけ、最後の「技術情報（通常は読む必要なし）」を確認できます。
-
-詳細な記録項目は[実projectでのドッグフード手順](docs/運用/Pluginドッグフード.md#実projectでのself-dogfood)と[dogfood report template](.github/ISSUE_TEMPLATE/dogfood-report.md)を利用できます。reportへsource値、raw Hook payload、SQLite DB、access token、ユーザーのabsolute pathを含めないでください。
-
-## 7. 更新する
-
-更新は自動ではありません。新しい公開alphaへ進む場合だけ、明示的に実行します。
-
-```bash
-codex plugin marketplace upgrade tooluseproxy
-codex plugin list --json
-```
-
-更新後は変更されたHook定義を再確認し、新しいCodex taskを開始して、bundled setup skillが求めるverificationを実行します。
-
-## 8. Pluginを外す
-
-PluginコードとMarketplace登録を外す場合は次を実行します。
-
-```bash
-codex plugin remove tooluseproxy@tooluseproxy
-codex plugin marketplace remove tooluseproxy
-```
-
-この操作ではlocal監査dataを削除しません。data削除は[Plugin導入ガイド](docs/設定/Plugin導入.md#disable--uninstall)に記載した、別の`uninstall plan`と明示承認が必要です。
-
-## 30秒のsynthetic preview
-
-repositoryをcheckoutしている場合は、実network通信を行わない自動previewも実行できます。
-
-```bash
-python3.11 scripts/demo_plugin.py
-# Python 3.12を使う場合
-python3.12 scripts/demo_plugin.py
-```
-
-これはHookの目視確認・Trustや、実際のCodex taskでの検証を置き換えるものではありません。
+5つのHookは、開始時の境界説明、実行前の意味判定、実行後の記録を行います。Stopでは旧最終回答検査を行いません。
+Hookはユーザー権限で実行され、判定モデルへ通信します。定義とインストール元を確認してTrustしてください。

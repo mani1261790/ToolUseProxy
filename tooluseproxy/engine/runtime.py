@@ -7,10 +7,9 @@ from contextlib import contextmanager
 from dataclasses import asdict
 from pathlib import Path
 
-from hook_monitor.externality.providers import JudgeProviderError
-from hook_monitor.runtime.parser import build_artifacts
-from hook_monitor.semantic_flow.graph import GraphUnavailable, analyze, digest, initialize
-from hook_monitor.semantic_flow.judge import PROMPT_VERSION, CodexSemanticJudge
+from tooluseproxy.engine.codex import JudgeProviderError
+from tooluseproxy.engine.graph import GraphUnavailable, analyze, digest, initialize
+from tooluseproxy.engine.judge import PROMPT_VERSION, CodexSemanticJudge
 
 
 def configuration(db_path: Path, workspace_id: str | None) -> dict | None:
@@ -91,7 +90,7 @@ def process_hook(store, event, *, judge=None) -> dict | None:
     if event.phase not in ("pre_tool_use", "post_tool_use"):
         # The old final-answer similarity policy is not part of this engine.
         return {}
-    store.record(event, build_artifacts(event))
+    store.record(event, [])
     result = {
         "action": "unavailable",
         "reason": "semantic_internal_error",

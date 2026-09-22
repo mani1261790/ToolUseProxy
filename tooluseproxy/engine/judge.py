@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from hook_monitor.externality.providers import (
+from tooluseproxy.engine.codex import (
     JudgeProviderError,
     _loads_no_duplicate_keys,
     _minimal_codex_environment,

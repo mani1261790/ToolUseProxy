@@ -326,7 +326,7 @@ def make_server(reader, port=0):
 
 def serve_workspace(db_path: Path, workspace: Path, *, as_json: bool = False) -> int:
     """Start a foreground viewer; never initialize or change protection settings."""
-    from hook_monitor.runtime.workspace import make_workspace_id
+    from tooluseproxy.engine.workspace import make_workspace_id
 
     root = workspace.resolve(strict=True)
     reader = LogReader(db_path, make_workspace_id(str(root)), root)
