@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 import secrets
 import sqlite3
+from socketserver import TCPServer
 from time import monotonic
 from urllib.parse import parse_qs, urlsplit
 
@@ -82,7 +83,9 @@ class LogReader:
             saved = ("EXISTS (SELECT 1 FROM workspace_runtime_settings rs "
                      "WHERE rs.workspace_id=g.workspace_id)"
                      if "workspace_runtime_settings" in tables else "NULL")
-            query = (f"SELECT g.*, {root} AS workspace_root, "
+            boundary = ("(SELECT started_at FROM recording_boundaries rb WHERE rb.workspace_id=g.workspace_id)"
+                        if "recording_boundaries" in tables else "NULL")
+            query = (f"SELECT g.*, {boundary} AS recording_started_at, {root} AS workspace_root, "
                      f"{initialized} AS initialization_recorded, {saved} AS settings_saved "
                      f"FROM ({query}) g {join}ORDER BY g.latest DESC")
             rows = conn.execute(query, (self.workspace_id,) if self.workspace_id else ()).fetchall()
@@ -151,6 +154,22 @@ class LogReader:
                         "b.workspace_id IS e.workspace_id AND b.session_id=e.session_id "
                         "AND b.tool_use_id=e.tool_use_id))"
                     )
+            if "semantic_flow_decisions" in tables:
+                semantic_select = (
+                    "SELECT b.event_id,b.workspace_id,b.session_id,b.tool_use_id "
+                    "FROM semantic_flow_decisions d JOIN events b ON b.event_id=d.event_id "
+                    "AND b.workspace_id=d.workspace_id AND b.session_id=d.session_id "
+                    "WHERE d.action='block' AND b.phase='pre_tool_use'"
+                )
+                cte = (cte[:-2] + " UNION " + semantic_select + ") " if cte else
+                       "WITH blocked_events AS (" + semantic_select + ") ")
+                blocked = (
+                    "EXISTS (SELECT 1 FROM blocked_events b WHERE b.event_id=e.event_id OR "
+                    "(e.session_id IS NOT NULL AND e.session_id!='' AND "
+                    "e.tool_use_id IS NOT NULL AND e.tool_use_id!='' AND "
+                    "b.workspace_id IS e.workspace_id AND b.session_id=e.session_id "
+                    "AND b.tool_use_id=e.tool_use_id))"
+                )
             if blocked_only:
                 if cte:
                     clauses.append(
@@ -179,6 +198,12 @@ class LogReader:
                 calls[key] = event | {"phases": [], "blocked": is_blocked}
             calls[key]["phases"].append(event["phase"])
         return {"database": str(self.path), "calls": list(calls.values()), "window": 300}
+
+    def graph(self, event_id):
+        from tooluseproxy.graph_view import graph_snapshot
+        with closing(self.connect()) as conn:
+            conn.execute("BEGIN")
+            return graph_snapshot(conn, event_id, self.workspace_id)
 
     def detail(self, event_id):
         with closing(self.connect()) as conn:
@@ -222,6 +247,16 @@ class LogReader:
                         "AND json_extract(s.metadata_json,'$.event_id')=? LIMIT 100",
                         (event["sequence_no"], event["event_id"]),
                     ))
+                if "semantic_flow_decisions" in tables:
+                    decisions.extend(dict(item) for item in conn.execute(
+                        "SELECT event_id AS decision_id,action,'PreToolUse' AS hook_event,reason,"
+                        "CASE WHEN reason='protected_content_match' THEN '保護内容との一致を検出し、実行前に停止' WHEN action='block' THEN '秘密情報源への依存経路を検出し、実行前に停止' "
+                        "WHEN action='unavailable' THEN '情報流の判定未完了。流出検出ではありません' "
+                        "ELSE '情報流グラフによる判定' END AS user_message,"
+                        "recorded_at AS created_at,path_json FROM semantic_flow_decisions "
+                        "WHERE event_id=? AND workspace_id=? AND session_id=?",
+                        (event['event_id'], event['workspace_id'], event['session_id']),
+                    ))
                 if forecasts:
                     decisions.extend({
                         "decision_id": item["id"], "action": "block", "hook_event": "PreToolUse",
@@ -256,7 +291,7 @@ def make_server(reader, port=0):
                 return
             route = path.path[len(prefix):]
             status = 200
-            if route in {"api/events", "api/detail", "api/scopes"}:
+            if route in {"api/events", "api/detail", "api/scopes", "api/graph"}:
                 try:
                     query = parse_qs(path.query, keep_blank_values=True)
                     with reader.access():
@@ -268,6 +303,8 @@ def make_server(reader, port=0):
                                 if name in query:
                                     filters[name] = json.loads(query[name][0])
                             result = reader.snapshot(**filters, blocked_only=query.get("blocked") == ["1"])
+                        elif route == "api/graph":
+                            result = reader.graph(query.get("id", [""])[0])
                         else:
                             result = reader.detail(query.get("id", [""])[0])
                 except (ValueError, TypeError):
@@ -276,10 +313,10 @@ def make_server(reader, port=0):
                     status, result = 503, {"error": "DBに接続できません。保存先・権限・DBの状態を確認してください。"}
                 body = json.dumps(result, ensure_ascii=False).encode()
                 mime = "application/json; charset=utf-8"
-            elif route in {"", "index.html", "screen.js", "screen.css"}:
+            elif route in {"", "index.html", "screen.js", "screen.css", "graph.html", "graph.js", "graph.css"}:
                 name = route or "index.html"
                 body = (ASSETS / name).read_bytes()
-                mime = {"index.html": "text/html; charset=utf-8", "screen.js": "text/javascript", "screen.css": "text/css"}[name]
+                mime = {"index.html": "text/html; charset=utf-8", "screen.js": "text/javascript", "screen.css": "text/css", "graph.html": "text/html; charset=utf-8", "graph.js": "text/javascript", "graph.css": "text/css"}[name]
             else:
                 self.send_error(404)
                 return
@@ -294,13 +331,20 @@ def make_server(reader, port=0):
             self.end_headers()
             self.wfile.write(body)
 
-    server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    class LoopbackHTTPServer(ThreadingHTTPServer):
+        def server_bind(self):
+            # HTTPServer otherwise performs reverse DNS during bind. The viewer
+            # only serves this numeric loopback address and needs no DNS name.
+            TCPServer.server_bind(self)
+            self.server_name, self.server_port = self.server_address[:2]
+
+    server = LoopbackHTTPServer(("127.0.0.1", port), Handler)
     return server, f"http://127.0.0.1:{server.server_port}/{token}/"
 
 
 def serve_workspace(db_path: Path, workspace: Path, *, as_json: bool = False) -> int:
     """Start a foreground viewer; never initialize or change protection settings."""
-    from hook_monitor.runtime.workspace import make_workspace_id
+    from tooluseproxy.engine.workspace import make_workspace_id
 
     root = workspace.resolve(strict=True)
     reader = LogReader(db_path, make_workspace_id(str(root)), root)

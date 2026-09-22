@@ -218,6 +218,9 @@ function clearDetail() {
   $('title').textContent = '呼び出しを選択';
   $('identity').textContent = '';
   $('decisions').replaceChildren();
+  const graph = node('a', '来歴グラフを見る');
+  graph.href = `graph.html?id=${encodeURIComponent(selected.event_id)}`;
+  $('decisions').append(graph);
   $('io').replaceChildren(node('p', '条件に一致する呼び出しを待っています。', 'empty'));
 }
 function filtersChanged(projectChanged = false) {
@@ -235,7 +238,9 @@ function updateProjectState() {
   $('project-state').hidden = workspace === undefined;
   if (workspace === undefined) return;
   const scope = knownScopes.find(item => item.workspace_id === workspace);
-  $('init-state').textContent = scope?.initialization_recorded === true
+  $('init-state').textContent = scope?.recording_started_at
+    ? `記録開始: ${scope.recording_started_at} UTC（それ以前の履歴は判定対象外）`
+    : scope?.initialization_recorded === true
     ? '初期化・利用設定操作による登録記録あり'
     : '初期化操作の記録を確認できません（未初期化と断定はしません）';
   $('setup-state').textContent = scope?.settings_saved === true
@@ -302,6 +307,9 @@ function renderDetail(data) {
   $('title').textContent = selected.tool_name;
   $('identity').textContent = `${timeLabel(selected.recorded_at)} · ${phaseLabel(selected)} · プロジェクト: ${projectLabel(selected.workspace_id)} · セッション: ${scopeLabel(selected.session_id)}`;
   $('decisions').replaceChildren();
+  const graph = node('a', '来歴グラフを見る');
+  graph.href = `graph.html?id=${encodeURIComponent(selected.event_id)}`;
+  $('decisions').append(graph);
   if (!data.decisions.length) $('decisions').append(node('p', '判定は未記録です。許可・成功を意味するものではありません。', 'hint'));
   for (const d of data.decisions) {
     const box = node('div', undefined, d.action === 'block' ? 'decision blocked' : 'decision');

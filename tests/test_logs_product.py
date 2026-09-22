@@ -42,7 +42,7 @@ def test_missing_db_does_not_initialize_or_change_workspace(tmp_path, capsys):
 def test_foreground_cli_serves_packaged_assets(tmp_path):
     path = database(tmp_path)
     process = subprocess.Popen(
-        [sys.executable, '-m', 'tooluseproxy', 'logs', '--workspace', str(tmp_path),
+        [sys.executable, '-m', 'tooluseproxy', 'logs', '--foreground', '--workspace', str(tmp_path),
          '--data-dir', str(tmp_path), '--json'],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
     )

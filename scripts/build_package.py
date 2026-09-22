@@ -6,6 +6,7 @@ import gzip
 import hashlib
 import io
 import os
+import runpy
 import shutil
 import subprocess
 import sys
@@ -58,6 +59,13 @@ def main() -> int:
         artifact_stage = temporary_root / "artifacts"
         artifact_stage.mkdir()
         shutil.copytree(REPO_ROOT, source, ignore=_ignore_source_entry)
+        runtime_files = set(runpy.run_path(str(REPO_ROOT / "scripts/runtime_manifest.py"))["RUNTIME_FILES"])
+        # Prune only the disposable build stage. Research/legacy source remains in Git.
+        shutil.rmtree(source / "hook_monitor", ignore_errors=True)
+        for staged_file in (source / "tooluseproxy").rglob("*.py"):
+            if staged_file.relative_to(source).as_posix() not in runtime_files:
+                staged_file.unlink()
+
         command = [
             sys.executable,
             "-m",

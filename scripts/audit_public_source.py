@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import argparse
+import gzip
+import io
+import tarfile
 import json
 import re
 import subprocess
@@ -306,6 +309,33 @@ def _scan_content(
     if len(content) > MAX_BLOB_BYTES:
         findings["oversized_blob"] += 1
         return 0
+    if content.startswith(b"\x1f\x8b"):
+        # Audit archived source rather than allowing opaque compressed binaries.
+        ignored = 0
+        try:
+            with gzip.GzipFile(fileobj=io.BytesIO(content)) as stream:
+                raw = stream.read(16 * 1024 * 1024 + 1)
+            if len(raw) > 16 * 1024 * 1024:
+                raise ValueError("archive_too_large")
+            with tarfile.open(fileobj=io.BytesIO(raw), mode="r:") as archive:
+                names = set()
+                for member in archive:
+                    path = PurePosixPath(member.name)
+                    if (not member.isfile() or path.is_absolute() or ".." in path.parts
+                            or member.name in names or len(names) >= 10000):
+                        raise ValueError("invalid_archive_member")
+                    names.add(member.name)
+                    if _forbidden_path(member.name):
+                        findings["forbidden_path"] += 1
+                    payload = archive.extractfile(member).read()
+                    if payload.startswith(b"\x1f\x8b"):
+                        raise ValueError("nested_archive")
+                    ignored += _scan_content(payload, findings, observations, binary_allowed=False)
+            observations["audited_archive"] += 1
+            return ignored
+        except (OSError, EOFError, ValueError, tarfile.TarError):
+            findings["invalid_archive"] += 1
+            return ignored
     if b"\x00" in content:
         if binary_allowed:
             observations["allowed_binary_blob"] += 1

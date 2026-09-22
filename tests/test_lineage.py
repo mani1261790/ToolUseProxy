@@ -1,0 +1,178 @@
+import sqlite3
+
+import pytest
+
+from tooluseproxy.engine.journal import Journal, event_from
+from tooluseproxy.engine.lineage import snapshot_resources
+from tooluseproxy.engine.property_graph import analyze_properties, bindings, persist, reach, schema
+
+
+def make_history(tmp_path):
+    root = tmp_path / "workspace"
+    root.mkdir()
+    root = root.resolve()
+    (root / "private").write_text("Synthetic confidential source with coefficient 0.73")
+    store = Journal(tmp_path / "events.db")
+    store.initialize()
+
+    def record(session, call, phase, step, resources=(), response=None):
+        event = event_from(
+            phase,
+            dict(
+                cwd=str(root),
+                session_id=session,
+                tool_use_id=call,
+                tool_name="fixture",
+                tool_input={"step": step},
+                tool_response=response,
+            ),
+            str(root),
+        )
+        store.record(event)
+        snapshot_resources(store, event, list(resources))
+        return event
+
+    record("a", "read", "pre_tool_use", "read", [{"path": "private", "mode": "read"}])
+    record("a", "read", "post_tool_use", "read", response="coefficient 0.73")
+    record("a", "write", "pre_tool_use", "write", [{"path": "derived", "mode": "write"}])
+    (root / "derived").write_text("Apply a coefficient of seventy-three hundredths.")
+    writer = record("a", "write", "post_tool_use", "write", response="done")
+    return root, store, record, writer
+
+
+@pytest.fixture
+def history(tmp_path):
+    return make_history(tmp_path)
+
+
+def judge(records):
+    step = records["current_call"]["input"]["step"]
+    deps = []
+    if step == "write":
+        deps = [{"node_id": records["previous_calls"][0]["node_id"], "reason": "uses read result"}]
+    return dict(
+        externality="external" if step == "send" else "local",
+        complete=True,
+        reason="fixture",
+        dependencies=deps,
+        accesses=[
+            dict(
+                path="private" if step == "read" else "derived",
+                mode="write" if step == "write" else "read",
+                reason="fixture",
+            )
+        ],
+    )
+
+
+def inspect(store, event):
+    return analyze_properties(
+        store.db_path,
+        event.workspace_id,
+        event.session_id,
+        event.event_id,
+        [{"node_id": "source:private", "path": "private"}],
+        judge,
+    )
+
+
+def test_observed_generation_links_sessions_and_expands_pending_producer(history):
+    _, store, record, _ = history
+    send = record("b", "send", "pre_tool_use", "send", [{"path": "derived", "mode": "read"}])
+    result = inspect(store, send)
+    assert result["action"] == "block" and len(result["path"]) == 4
+    assert result["path"][0] == "source:private"
+    with sqlite3.connect(store.db_path) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM graph_heads WHERE session='a'").fetchone()[0] == 2
+        assert conn.execute("SELECT COUNT(*) FROM flow_file_observations").fetchone()[0] == 4
+
+
+@pytest.mark.parametrize("same_content", [False, True])
+def test_unobserved_replacement_never_inherits_old_producer(history, same_content):
+    root, store, record, _ = history
+    previous = (root / "derived").read_text()
+    replacement = root / "replacement"
+    replacement.write_text(previous if same_content else "unrelated replacement")
+    replacement.replace(root / "derived")
+    send = record("b", "send", "pre_tool_use", "send", [{"path": "derived", "mode": "read"}])
+    assert inspect(store, send)["path"] == []
+
+
+def test_failed_write_is_not_a_producer(history):
+    root, store, record, _ = history
+    record("c", "failed", "pre_tool_use", "write", [{"path": "derived", "mode": "write"}])
+    (root / "derived").write_text("different bytes from an unsuccessful operation")
+    record("c", "failed", "post_tool_use", "write", response={"exit_code": 1})
+    send = record("b", "send", "pre_tool_use", "send", [{"path": "derived", "mode": "read"}])
+    assert inspect(store, send)["path"] == []
+
+
+def test_old_decision_traverses_pinned_parent_revision(tmp_path):
+    store = Journal(tmp_path / "events.db")
+    store.initialize()
+    base = dict(externality="local", complete=True, reason="fixture", dependencies=[], accesses=[])
+    with sqlite3.connect(store.db_path) as conn:
+        schema(conn)
+        old = dict(base, accesses=[dict(path="private", mode="read", reason="old read")])
+        persist(
+            conn, "scope", "a", {"node_id": "parent", "event_id": "old"}, "old", "model", old, {}
+        )
+        child = dict(
+            base,
+            externality="external",
+            dependencies=[dict(node_id="parent", reason="uses old read")],
+        )
+        persist(
+            conn,
+            "scope",
+            "b",
+            {"node_id": "child", "event_id": "send"},
+            "child-rev",
+            "model",
+            child,
+            {"parent": "old"},
+        )
+        persist(
+            conn, "scope", "a", {"node_id": "parent", "event_id": "new"}, "new", "model", base, {}
+        )
+        roots, _ = bindings(conn, "scope", "b", [dict(node_id="secret", path="private")])
+        assert reach(conn, "scope", "b", "child", roots) == ["secret", "parent", "child"]
+        assert reach(conn, "other", "b", "child", roots) == []
+
+
+def test_unrelated_incomplete_observation_does_not_poison_send(tmp_path, monkeypatch):
+    import tooluseproxy.engine.property_graph as graph
+
+    db = tmp_path / "events.db"
+    Journal(db).initialize()
+    calls = [
+        dict(
+            node_id="incomplete",
+            event_id="one",
+            tool_name="fixture",
+            input={},
+            output="",
+            completed=True,
+        ),
+        dict(
+            node_id="send",
+            event_id="two",
+            tool_name="fixture",
+            input={},
+            output=None,
+            completed=False,
+        ),
+    ]
+    monkeypatch.setattr(graph, "load_calls", lambda *args: calls)
+
+    def classify(records):
+        sending = records["current_call"]["node_id"] == "send"
+        return dict(
+            externality="external" if sending else "local",
+            complete=sending,
+            reason="independent" if sending else "missing unrelated input",
+            dependencies=[],
+            accesses=[],
+        )
+
+    assert graph.analyze_properties(db, "scope", "s", "two", [], classify)["action"] == "allow"

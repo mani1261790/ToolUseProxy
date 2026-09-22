@@ -78,15 +78,13 @@ class PluginArtifactTest(unittest.TestCase):
             self.assertIn("tooluseproxy/tooluseproxy_hook_watchdog.py", names)
             self.assertIn("tooluseproxy/tooluseproxy/__main__.py", names)
             self.assertIn("tooluseproxy/tooluseproxy/log_viewer.py", names)
-            for asset in ("index.html", "screen.js", "screen.css"):
+            for asset in ("index.html", "screen.js", "screen.css", "graph.html", "graph.js", "graph.css"):
                 self.assertIn(f"tooluseproxy/tooluseproxy/viewer/{asset}", names)
-            self.assertIn("tooluseproxy/hook_monitor/runtime/runner.py", names)
+            self.assertIn("tooluseproxy/tooluseproxy/engine/hook.py", names)
+            self.assertIn("tooluseproxy/tooluseproxy/app.py", names)
             self.assertIn("tooluseproxy/tooluseproxy/integrations/activation.py", names)
-            for module in ("pilot_models", "pilot_recording", "pilot_storage", "pilot_review",
-                           "pilot_aggregate", "pilot_stop", "pilot_coverage", "pilot_issue", "pilot_outbox"):
-                self.assertIn(f"tooluseproxy/hook_monitor/runtime/{module}.py", names)
-            self.assertIn("tooluseproxy/tooluseproxy/pilot_cli.py", names)
-            self.assertIn("tooluseproxy/tooluseproxy/pilot_worker.py", names)
+            self.assertFalse(any(name.startswith("tooluseproxy/hook_monitor/") for name in names))
+            self.assertNotIn("tooluseproxy/tooluseproxy/cli.py", names)
             self.assertNotIn("tooluseproxy/hooks/monitor_pre_tool.py", names)
             self.assertNotIn("tooluseproxy/hooks/monitor_post_tool.py", names)
             self.assertNotIn("tooluseproxy/hooks/monitor_stop.py", names)
@@ -108,8 +106,8 @@ class PluginArtifactTest(unittest.TestCase):
         windows = (REPO_ROOT / "hooks" / "run_hook.cmd").read_text(encoding="utf-8")
         self.assertIn("workspace_may_be_enabled", posix)
         self.assertIn(":workspace_may_be_enabled", windows)
-        self.assertIn('"permissionDecision":"deny"', posix)
-        self.assertIn('"permissionDecision":"deny"', windows)
+        self.assertNotIn('"permissionDecision":"deny"', posix)
+        self.assertNotIn('"permissionDecision":"deny"', windows)
 
     def test_bundle_bytes_are_reproducible(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -160,7 +158,7 @@ class PluginArtifactTest(unittest.TestCase):
                 text=True,
             )
             self.assertIn(
-                f"tooluseproxy {manifest['version'].replace('-alpha.', 'a')}",
+                f"{manifest['version'].replace('-alpha.', 'a')}",
                 version.stdout,
             )
             subprocess.run(
@@ -168,7 +166,8 @@ class PluginArtifactTest(unittest.TestCase):
                     "sh",
                     str(launcher),
                     "init",
-                    "--codex",
+                    "--accept-judge-data",
+                    "--no-viewer",
                     "--workspace",
                     str(workspace),
                     "--data-dir",
@@ -197,8 +196,18 @@ class PluginArtifactTest(unittest.TestCase):
                 capture_output=True,
                 text=True,
             )
-            self.assertEqual(1, status.returncode)
-            self.assertEqual("inactive", json.loads(status.stdout)["status"])
+            self.assertEqual(0, status.returncode)
+            self.assertTrue(json.loads(status.stdout)["configured"])
+            self.assertFalse(json.loads(status.stdout)["hook_verified"])
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            fake = bin_dir / "codex"
+            fake.write_text("#!" + sys.executable + "\nimport json,sys\nfrom pathlib import Path\n"
+                            "Path(sys.argv[sys.argv.index('--output-last-message')+1]).write_text("
+                            "json.dumps({'externality':'local','complete':True,'reason':'fixture',"
+                            "'dependencies':[]}))\n")
+            fake.chmod(0o700)
+            environment["PATH"] = str(bin_dir) + os.pathsep + environment.get("PATH", "")
             hook = subprocess.run(
                 ["sh", str(plugin_root / "hooks" / "run_hook.sh"), "pre-tool-use"],
                 cwd=workspace,
@@ -218,7 +227,7 @@ class PluginArtifactTest(unittest.TestCase):
                 capture_output=True,
                 text=True,
             )
-            self.assertEqual("", hook.stdout)
+            self.assertEqual({}, json.loads(hook.stdout))
             with sqlite3.connect(data_dir / "events.db") as connection:
                 self.assertEqual(
                     1,

@@ -7,6 +7,7 @@ include SUPPORT.md
 include LICENSE
 include pyproject.toml
 include MANIFEST.in
+include build_support.py
 
 prune .agents
 prune .codex-plugin
@@ -22,3 +23,5 @@ global-exclude .DS_Store
 global-exclude *.db
 global-exclude *.py[cod]
 global-exclude __pycache__
+
+prune legacy
