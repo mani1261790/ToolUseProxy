@@ -355,6 +355,7 @@ def test_graph_receives_recorded_directory_context(fixture):
     event = record('directory-context', 'cat public.txt')
     with sqlite3.connect(store.db_path) as conn:
         node = load_calls(conn, event.workspace_id, event.session_id, event.event_id)[0]
-        raw, root = conn.execute('SELECT payload_json, workspace_root FROM events WHERE event_id=?', (event.event_id,)).fetchone()
+        raw, root, resolved = conn.execute('SELECT payload_json, workspace_root, workspace_execution_cwd FROM events WHERE event_id=?', (event.event_id,)).fetchone()
     assert node['cwd'] == json.loads(raw)['cwd']
     assert node['workspace_root'] == root
+    assert node['resolved_cwd'] == resolved

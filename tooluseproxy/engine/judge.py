@@ -36,8 +36,10 @@ Return accesses for resources whose contents this call reads or writes, with wor
 relative normalized paths and evidence. A direct upload of a file reads that file even
 without an earlier separate read call. Do not label a write-only operation as a read.
 Use actual recorded outputs when completed; for pending calls report intended accesses
-without inventing success. cwd is the recorded starting directory; workspace_root
-is the base for resource paths. Respect explicit tool workdir and shell directory
+without inventing success. cwd is the recorded lexical starting directory. resolved_cwd is its canonical
+identity resolved by the recorder at observation time; use it with the canonical
+workspace_root as the base for relative resource paths. Do not treat those recorded
+lexical/canonical directory spellings as different locations. Respect explicit tool workdir and shell directory
 changes in input. Resolve paths only from recorded evidence; unknown working
 directories or resource identities require complete=false when concretely unresolved.
 Do not invent symlinks or hidden scripts unsupported by the records.

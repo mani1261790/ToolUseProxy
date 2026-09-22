@@ -103,7 +103,7 @@ def load_calls(
         if row:
             boundary = row[0]
     rows = conn.execute(
-        """SELECT event_id,phase,tool_use_id,tool_name,payload_json,workspace_root
+        """SELECT event_id,phase,tool_use_id,tool_name,payload_json,workspace_root,workspace_execution_cwd
         FROM events WHERE workspace_id=? AND session_id=? AND sequence_no<=?
         AND sequence_no>? AND phase IN ('pre_tool_use','post_tool_use') ORDER BY sequence_no LIMIT ?""",
         (workspace, session, end[0], boundary, max_events + 1),
@@ -111,7 +111,7 @@ def load_calls(
     if len(rows) > max_events or sum(len(row[4].encode()) for row in rows) > max_bytes:
         raise GraphUnavailable("history_budget_exceeded")
     calls: dict[str, dict] = {}
-    for eid, phase, tool_id, tool_name, raw, workspace_root in rows:
+    for eid, phase, tool_id, tool_name, raw, workspace_root, execution_cwd in rows:
         if not tool_id:
             raise GraphUnavailable("tool_use_id_missing")
         payload = json.loads(raw)
@@ -126,6 +126,7 @@ def load_calls(
                     or previous["tool_name"] != tool_name
                     or previous["cwd"] != payload.get("cwd")
                     or previous["workspace_root"] != workspace_root
+                    or previous["resolved_cwd"] != execution_cwd
                 ):
                     raise GraphUnavailable("reused_tool_use_id")
                 # Redelivery can carry different runtime attestation metadata.
@@ -138,6 +139,7 @@ def load_calls(
                 "input": tool_input,
                 "cwd": payload.get("cwd"),
                 "workspace_root": workspace_root,
+                "resolved_cwd": execution_cwd,
                 "output": None,
                 "completed": False,
             }
@@ -146,7 +148,8 @@ def load_calls(
                 raise GraphUnavailable("pre_tool_record_missing")
             node = calls[node_id]
             if (node["input"] != tool_input or node["tool_name"] != tool_name
-                    or node["cwd"] != payload.get("cwd") or node["workspace_root"] != workspace_root):
+                    or node["cwd"] != payload.get("cwd") or node["workspace_root"] != workspace_root
+                    or node["resolved_cwd"] != execution_cwd):
                 raise GraphUnavailable("post_tool_input_mismatch")
             node.update(output=payload.get("tool_response"), completed=True, event_id=eid)
     return list(calls.values())

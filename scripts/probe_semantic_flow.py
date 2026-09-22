@@ -90,7 +90,7 @@ def main():
                 flush=True,
             )
             if result["action"] != expected:
-                print(json.dumps({"current_verdict": observations.get(event.event_id)}, ensure_ascii=False), flush=True)
+                print(json.dumps({"current_verdict": observations.get(event.event_id), "all_verdicts": observations}, ensure_ascii=False), flush=True)
                 raise SystemExit("semantic_probe_mismatch")
 
 
