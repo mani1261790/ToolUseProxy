@@ -1,6 +1,6 @@
 # ToolUseProxy v0.2の初期設定
 
-このbranchはv0.2.0-alpha.3の開発版です。公開チャンネルや現在のインストールが更新されたとは限りません。
+このbranchはv0.2.0-alpha.4の開発版です。公開チャンネルや現在のインストールが更新されたとは限りません。
 macOS / Linux、Python 3.11–3.12、認証済みCodex CLIを使用します。検証したCLIは0.153.4です。
 
 1. インストール済みPluginのlauncherで`--version`を確認します。v0.1のSkillやsetup profileを混ぜないでください。
