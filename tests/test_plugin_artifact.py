@@ -78,7 +78,7 @@ class PluginArtifactTest(unittest.TestCase):
             self.assertIn("tooluseproxy/tooluseproxy_hook_watchdog.py", names)
             self.assertIn("tooluseproxy/tooluseproxy/__main__.py", names)
             self.assertIn("tooluseproxy/tooluseproxy/log_viewer.py", names)
-            for asset in ("index.html", "screen.js", "screen.css", "graph.html", "graph.js", "graph.css"):
+            for asset in ("index.html", "screen.js", "screen.css", "graph.html", "graph.js", "graph.css", "theme.css"):
                 self.assertIn(f"tooluseproxy/tooluseproxy/viewer/{asset}", names)
             self.assertIn("tooluseproxy/tooluseproxy/engine/hook.py", names)
             self.assertIn("tooluseproxy/tooluseproxy/app.py", names)

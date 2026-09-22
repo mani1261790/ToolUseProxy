@@ -1,1 +1,20 @@
-:root{font-family:-apple-system,BlinkMacSystemFont,"Hiragino Sans",sans-serif;color:#252a30;background:#f7f8fa;font-size:16px}body{margin:0}header{display:flex;align-items:center;gap:28px;padding:14px 28px;border-bottom:1px solid #d8dde3;background:white}h1{font-size:20px;margin:0;flex:1}h1 span{font-weight:400;color:#606873;margin-left:12px}a{color:#315a88}button{font:inherit;background:white;border:1px solid #bbc3cd;border-radius:6px;padding:7px 14px;cursor:pointer}main{padding:22px 28px}h2{font-size:21px;font-weight:600}p{line-height:1.7;color:#5c6570}#canvas{overflow:auto;background:white;border:1px solid #d8dde3;border-radius:8px;margin:20px 0}svg{display:block;min-width:100%;font-size:15px}svg path{stroke:#7e8c9b;stroke-width:2;fill:none}svg rect{fill:#fff;stroke:#8495a7;stroke-width:1.5;rx:7}svg g[tabindex]{cursor:pointer}svg g[tabindex]:focus rect,svg g[aria-pressed=true] rect{stroke:#27598b;stroke-width:3;fill:#eef5fc}svg text{fill:#253342;pointer-events:none}svg .secondary{font-size:13px;fill:#606c78}#detail{padding:4px 0 16px}li{margin:10px 0;overflow-wrap:anywhere}.check{padding:12px 0;border-bottom:1px solid #dde2e8}.blocked{color:#8c3030}#note{font-size:14px}
+#canvas { overflow:auto; }
+#graph { display:block; min-width:100%; font-size:15px; }
+#graph path { stroke:var(--line); stroke-width:1.5; fill:none; }
+#graph polygon { fill:var(--line); }
+#graph rect { fill:var(--surface); stroke:var(--border); stroke-width:1; rx:5; }
+#graph g[tabindex] { cursor:pointer; }
+#graph g:hover rect { fill:var(--hover); }
+#graph g:focus-visible { outline:none; }
+#graph g:focus-visible rect { stroke:var(--accent);stroke-width:2; }
+#graph g[aria-pressed=true] rect { fill:var(--selected);stroke:var(--control); }
+#graph text { fill:var(--text);pointer-events:none; }
+#graph .secondary { font-size:13px;fill:var(--muted); }
+.graph-status { margin:12px 18px; font-size:14px; }
+.graph-context { border-top:1px solid var(--border);margin-top:24px;padding-top:16px; }
+.graph-detail .identity { overflow-wrap:anywhere; }
+.resource-list { padding:0;list-style:none; }
+.resource-list li { padding:12px 0;border-bottom:1px solid var(--border);overflow-wrap:anywhere; }
+.resource-list span { display:block;color:var(--muted);font-size:14px; }
+.check { margin:8px 0; }
+.check.blocked { color:var(--danger); }

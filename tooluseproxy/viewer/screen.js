@@ -1,6 +1,9 @@
 'use strict';
 const $ = (id) => document.getElementById(id);
 let selected = null;
+const initialParams = new URLSearchParams(location.search);
+let requestedId = initialParams.get('id');
+let restoreFilters = true;
 let listJSON = '';
 let detailJSON = '';
 let refreshVersion = 0;
@@ -52,8 +55,14 @@ function callKey(call) {
 }
 function choose(call) {
   selected = call;
+  updateGraphLink();
   detailJSON = '';
   listJSON = '';
+}
+function updateGraphLink() {
+  const params = new URLSearchParams(eventQuery());
+  if (!$('follow').checked && selected) params.set('id', selected.event_id);
+  $('graph-link').href = 'graph.html' + (params.size ? '?' + params : '');
 }
 function scopeLabel(value) { return value === null ? '未記録' : value || '（空のID）'; }
 function projectLabel(id) {
@@ -218,9 +227,6 @@ function clearDetail() {
   $('title').textContent = '呼び出しを選択';
   $('identity').textContent = '';
   $('decisions').replaceChildren();
-  const graph = node('a', '来歴グラフを見る');
-  graph.href = `graph.html?id=${encodeURIComponent(selected.event_id)}`;
-  $('decisions').append(graph);
   $('io').replaceChildren(node('p', '条件に一致する呼び出しを待っています。', 'empty'));
 }
 function filtersChanged(projectChanged = false) {
@@ -269,7 +275,7 @@ settings.addEventListener('click', event => {
   const rect = settings.getBoundingClientRect();
   if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) settings.close();
 });
-$('follow').onchange = () => { updateViewSummary(); clearTimeout(refreshTimer); refresh(); };
+$('follow').onchange = () => { updateGraphLink(); updateViewSummary(); clearTimeout(refreshTimer); refresh(); };
 $('workspace').onchange = () => filtersChanged(true);
 $('session').onchange = () => filtersChanged();
 $('blocked-only').onchange = () => filtersChanged();
@@ -307,9 +313,6 @@ function renderDetail(data) {
   $('title').textContent = selected.tool_name;
   $('identity').textContent = `${timeLabel(selected.recorded_at)} · ${phaseLabel(selected)} · プロジェクト: ${projectLabel(selected.workspace_id)} · セッション: ${scopeLabel(selected.session_id)}`;
   $('decisions').replaceChildren();
-  const graph = node('a', '来歴グラフを見る');
-  graph.href = `graph.html?id=${encodeURIComponent(selected.event_id)}`;
-  $('decisions').append(graph);
   if (!data.decisions.length) $('decisions').append(node('p', '判定は未記録です。許可・成功を意味するものではありません。', 'hint'));
   for (const d of data.decisions) {
     const box = node('div', undefined, d.action === 'block' ? 'decision blocked' : 'decision');
@@ -359,13 +362,30 @@ async function refresh() {
     knownScopes = scopes.scopes;
     fixedWorkspace = scopes.fixed_workspace || null;
     renderScopes();
+    if (restoreFilters) {
+      restoreFilters = false;
+      if (initialParams.has('workspace')) $('workspace').value = initialParams.get('workspace');
+      renderScopes();
+      if (initialParams.has('session')) $('session').value = JSON.stringify([JSON.parse(initialParams.get('workspace') || 'null'), JSON.parse(initialParams.get('session'))]);
+      $('blocked-only').checked = initialParams.get('blocked') === '1';
+      renderScopes();
+      if (initialParams.has('workspace') || initialParams.has('session') || initialParams.has('blocked')) return refresh();
+    }
     updateViewSummary();
     $('scope-note').hidden = !scopes.truncated;
     $('scope-note').textContent = scopes.truncated ? 'セッション候補は最新1000組までです。' : '';
     $('database').textContent = data.database;
+    if (requestedId) {
+      const detail = await get(`api/detail?id=${encodeURIComponent(requestedId)}`);
+      if (version !== refreshVersion) return;
+      requestedId = null;
+      const event = detail.events[0];
+      if (event) { $('follow').checked = false; choose(data.calls.find(call => callKey(call) === callKey(event)) || {...event, phases:[event.phase]}); }
+    }
     if (data.calls.length && (!selected || ($('follow').checked && selected.event_id !== data.calls[0].event_id))) choose(data.calls[0]);
     if (selected) selected = data.calls.find(call => callKey(call) === callKey(selected)) || selected;
     if (!data.calls.length) clearDetail();
+    updateGraphLink();
     renderCalls(data.calls);
     const current = selected;
     if (current) {

@@ -313,10 +313,10 @@ def make_server(reader, port=0):
                     status, result = 503, {"error": "DBに接続できません。保存先・権限・DBの状態を確認してください。"}
                 body = json.dumps(result, ensure_ascii=False).encode()
                 mime = "application/json; charset=utf-8"
-            elif route in {"", "index.html", "screen.js", "screen.css", "graph.html", "graph.js", "graph.css"}:
+            elif route in {"", "index.html", "screen.js", "screen.css", "graph.html", "graph.js", "graph.css", "theme.css"}:
                 name = route or "index.html"
                 body = (ASSETS / name).read_bytes()
-                mime = {"index.html": "text/html; charset=utf-8", "screen.js": "text/javascript", "screen.css": "text/css", "graph.html": "text/html; charset=utf-8", "graph.js": "text/javascript", "graph.css": "text/css"}[name]
+                mime = {"index.html": "text/html; charset=utf-8", "screen.js": "text/javascript", "screen.css": "text/css", "graph.html": "text/html; charset=utf-8", "graph.js": "text/javascript", "graph.css": "text/css", "theme.css": "text/css"}[name]
             else:
                 self.send_error(404)
                 return

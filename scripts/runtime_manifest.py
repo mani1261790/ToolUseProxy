@@ -10,5 +10,5 @@ RUNTIME_FILES = (
     'tooluseproxy/engine/journal.py', 'tooluseproxy/engine/evidence.py', 'tooluseproxy/engine/payload.py', 'tooluseproxy/engine/targets.py', 'tooluseproxy/engine/dlp.py', 'tooluseproxy/engine/inspection.py', 'tooluseproxy/engine/lineage.py', 'tooluseproxy/engine/fast_path.py', 'tooluseproxy/engine/jobs.py', 'tooluseproxy/engine/worker.py', 'tooluseproxy/engine/review.py', 'tooluseproxy/engine/judge.py',
     'tooluseproxy/engine/runtime.py', 'tooluseproxy/engine/workspace.py',
     'tooluseproxy/engine/identity.py',
-    'tooluseproxy/viewer/graph.html', 'tooluseproxy/viewer/graph.js', 'tooluseproxy/viewer/graph.css', 'tooluseproxy/viewer/index.html', 'tooluseproxy/viewer/screen.js', 'tooluseproxy/viewer/screen.css',
+    'tooluseproxy/viewer/graph.html', 'tooluseproxy/viewer/graph.js', 'tooluseproxy/viewer/graph.css', 'tooluseproxy/viewer/theme.css', 'tooluseproxy/viewer/index.html', 'tooluseproxy/viewer/screen.js', 'tooluseproxy/viewer/screen.css',
 )
