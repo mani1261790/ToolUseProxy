@@ -226,3 +226,31 @@ def test_history_hash_input_grows_linearly(tmp_path, monkeypatch):
         )
         volumes.append(sum(sizes))
     assert 1.9 < volumes[1] / volumes[0] < 2.1
+
+
+def test_local_operation_defers_incomplete_provenance_but_send_does_not(tmp_path, monkeypatch):
+    import tooluseproxy.engine.property_graph as graph
+
+    calls = [
+        dict(node_id="local", event_id="e1", tool_name="test", input={}, output="", completed=True)
+    ]
+    monkeypatch.setattr(graph, "load_calls", lambda *args: calls)
+
+    def judge(records):
+        local = records["current_call"]["node_id"] == "local"
+        return dict(
+            externality="local" if local else "external",
+            complete=not local,
+            reason="missing resource identity" if local else "possible communication",
+            dependencies=[],
+            accesses=[],
+        )
+
+    db = tmp_path / "events.db"
+    assert graph.analyze_properties(db, "w", "s", "e1", [], judge)["action"] == "allow"
+    calls.append(
+        dict(
+            node_id="send", event_id="e2", tool_name="test", input={}, output=None, completed=False
+        )
+    )
+    assert graph.analyze_properties(db, "w", "s", "e2", [], judge)["action"] == "unavailable"

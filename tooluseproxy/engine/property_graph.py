@@ -56,10 +56,7 @@ def validate(value, candidates):
         "accesses",
     }:
         raise GraphUnavailable("invalid_property_verdict")
-    if (
-        value["externality"] not in ("local", "external")
-        or type(value["complete"]) is not bool
-    ):
+    if value["externality"] not in ("local", "external") or type(value["complete"]) is not bool:
         raise GraphUnavailable("invalid_property_classification")
     if not isinstance(value["reason"], str) or not 0 < len(value["reason"]) <= 4000:
         raise GraphUnavailable("invalid_property_reason")
@@ -273,7 +270,11 @@ def analyze_properties(
         )
         roots, policy_complete = bindings(conn, workspace, session, sources)
         path = reach(conn, workspace, session, current_node, roots)
-        if current_verdict["externality"] == "external" and path:
+        if current_verdict["externality"] == "local":
+            # Local work need not wait for provenance that only a later send needs.
+            # Keep incomplete verdicts intact so that send still requires inspection.
+            action, reason = "allow", "local_operation"
+        elif path:
             action, reason = "block", "protected_source_reachable"
         elif not complete or not policy_complete:
             action, reason = "unavailable", "property_graph_incomplete"
@@ -287,7 +288,12 @@ def analyze_properties(
         result = {"node_id": current_node, "action": action, "reason": reason, "path": path}
         conn.execute(
             "INSERT OR REPLACE INTO graph_progress VALUES (?,?,?,?)",
-            (workspace, session, event_id, "incomplete" if action == "unavailable" else "ready"),
+            (
+                workspace,
+                session,
+                event_id,
+                "incomplete" if not complete or not policy_complete else "ready",
+            ),
         )
         conn.execute(
             "INSERT OR IGNORE INTO graph_policy_checks(event,policy_revision,graph_revision,result) VALUES (?,?,?,?)",
