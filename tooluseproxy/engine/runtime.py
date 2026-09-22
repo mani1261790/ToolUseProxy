@@ -96,14 +96,16 @@ def screen_externality(db_path, event, model, provider):
         if len(json.dumps(records, ensure_ascii=False).encode()) > 64_000:
             raise GraphUnavailable("externality_input_large")
         verdict = provider(records)
-        if (verdict.get("externality") not in ("local", "external", "unknown")
+        if (verdict.get("externality") not in ("local", "external")
                 or type(verdict.get("complete")) is not bool
                 or not isinstance(verdict.get("reason"), str)):
             raise GraphUnavailable("externality_invalid")
         verdict = {key: verdict[key] for key in ("externality", "complete", "reason")}
+        if not verdict["complete"]:
+            verdict = {"externality": "external", "complete": True, "reason": "screening_requires_inspection"}
     except Exception:
         # A screening failure is not permission to skip detailed analysis.
-        return {"externality": "unknown", "complete": False, "reason": "screening_unavailable"}
+        return {"externality": "external", "complete": True, "reason": "screening_unavailable_requires_inspection"}
     with sqlite3.connect(db_path) as conn:
         conn.execute("INSERT OR REPLACE INTO semantic_externality_checks VALUES (?,?,?,?)", (request_hash, event.event_id, json.dumps(verdict), int((time.monotonic()-started)*1000)))
     return verdict

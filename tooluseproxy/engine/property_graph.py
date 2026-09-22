@@ -57,7 +57,7 @@ def validate(value, candidates):
     }:
         raise GraphUnavailable("invalid_property_verdict")
     if (
-        value["externality"] not in ("local", "external", "unknown")
+        value["externality"] not in ("local", "external")
         or type(value["complete"]) is not bool
     ):
         raise GraphUnavailable("invalid_property_classification")
@@ -275,7 +275,7 @@ def analyze_properties(
         path = reach(conn, workspace, session, current_node, roots)
         if current_verdict["externality"] == "external" and path:
             action, reason = "block", "protected_source_reachable"
-        elif not complete or not policy_complete or current_verdict["externality"] == "unknown":
+        elif not complete or not policy_complete:
             action, reason = "unavailable", "property_graph_incomplete"
         else:
             action, reason = (

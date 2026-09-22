@@ -320,3 +320,30 @@ def test_uncertain_screening_always_runs_full_analysis(fixture, screen_result):
     result = process_hook(store, event, judge=detail, screening_judge=screen)
     assert len(detailed) == 1
     assert 'additionalContext' in result['hookSpecificOutput']
+
+
+@pytest.mark.parametrize('value', ['unknown', 'incomplete', 'timeout'])
+def test_screening_without_local_evidence_routes_to_inspection(fixture, value):
+    from tooluseproxy.engine.runtime import screen_externality
+    store, record = fixture
+    event = record('opaque', './custom-task')
+
+    def provider(_):
+        if value == 'timeout':
+            raise TimeoutError()
+        return verdict(externality='unknown' if value == 'unknown' else 'local', complete=False)
+
+    result = screen_externality(store.db_path, event, 'fixture', provider)
+    assert result['externality'] == 'external'
+    assert result['complete'] is True
+
+
+def test_potential_external_does_not_block_without_protected_path(fixture):
+    store, record = fixture
+    event = record('opaque', './custom-task')
+    configure_runtime(store, event.workspace_id)
+    def detail(_):
+        return {**verdict(externality='external'), 'accesses': []}
+    result = process_hook(store, event, judge=detail,
+                          screening_judge=lambda _: verdict(externality='external'))
+    assert result == {}
