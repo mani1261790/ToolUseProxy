@@ -347,3 +347,14 @@ def test_potential_external_does_not_block_without_protected_path(fixture):
     result = process_hook(store, event, judge=detail,
                           screening_judge=lambda _: verdict(externality='external'))
     assert result == {}
+
+
+def test_graph_receives_recorded_directory_context(fixture):
+    from tooluseproxy.engine.graph import load_calls
+    store, record = fixture
+    event = record('directory-context', 'cat public.txt')
+    with sqlite3.connect(store.db_path) as conn:
+        node = load_calls(conn, event.workspace_id, event.session_id, event.event_id)[0]
+        raw, root = conn.execute('SELECT payload_json, workspace_root FROM events WHERE event_id=?', (event.event_id,)).fetchone()
+    assert node['cwd'] == json.loads(raw)['cwd']
+    assert node['workspace_root'] == root

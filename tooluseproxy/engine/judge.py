@@ -36,7 +36,9 @@ Return accesses for resources whose contents this call reads or writes, with wor
 relative normalized paths and evidence. A direct upload of a file reads that file even
 without an earlier separate read call. Do not label a write-only operation as a read.
 Use actual recorded outputs when completed; for pending calls report intended accesses
-without inventing success. Resolve paths only from recorded evidence; unknown working
+without inventing success. cwd is the recorded starting directory; workspace_root
+is the base for resource paths. Respect explicit tool workdir and shell directory
+changes in input. Resolve paths only from recorded evidence; unknown working
 directories or resource identities require complete=false when concretely unresolved.
 Do not invent symlinks or hidden scripts unsupported by the records.
 Protection registrations are intentionally absent: provenance must not change when
@@ -55,7 +57,7 @@ SCHEMA = {
         "reason": {"type": "string"},
         "accesses": {
             "type": "array", "items": {"type": "object", "additionalProperties": False,
-                "properties": {"path": {"type": "string"}, "mode": {"type": "string", "enum": ["read", "write"]}, "reason": {"type": "string"}},
+                "properties": {"path": {"type": "string", "pattern": "^[^/].*", "description": "Normalized path relative to workspace_root, never absolute. No leading ./ or ../."}, "mode": {"type": "string", "enum": ["read", "write"]}, "reason": {"type": "string"}},
                 "required": ["path", "mode", "reason"]}},
         "dependencies": {
             "type": "array",
