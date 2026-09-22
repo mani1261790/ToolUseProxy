@@ -146,26 +146,50 @@ def persist(conn, workspace, session, node, revision, model, verdict, parent_rev
     )
 
 
+def revision_parents(conn, workspace, node, revision):
+    rows = conn.execute(
+        """SELECT e.src,l.parent_revision FROM graph_edges e
+        LEFT JOIN graph_revision_links l ON l.revision=e.revision AND l.parent_node=e.src
+        WHERE e.revision=? AND e.dst=?""",
+        (revision, node),
+    ).fetchall()
+    result = []
+    for parent, parent_revision in rows:
+        if parent_revision is None:
+            # Compatibility for graph-only fixtures/benchmarks, not persisted judgments.
+            if conn.execute(
+                "SELECT 1 FROM graph_revisions WHERE revision=?", (revision,)
+            ).fetchone():
+                raise GraphUnavailable("dependency_revision_missing")
+            row = conn.execute(
+                "SELECT revision FROM graph_heads WHERE workspace=? AND node=?", (workspace, parent)
+            ).fetchone()
+            parent_revision = row[0] if row else None
+        if parent_revision is None:
+            raise GraphUnavailable("dependency_node_missing")
+        result.append((parent, parent_revision))
+    return result
+
+
 def reach(conn, workspace, session, node, roots, limit=200_000):
-    # Indexed incoming-edge lookups; no all-edge load. Keep predecessors once,
-    # rather than copying complete paths at every traversal step.
-    queue = deque([node])
-    toward = {node: None}
+    head = conn.execute(
+        "SELECT revision FROM graph_heads WHERE workspace=? AND session=? AND node=?",
+        (workspace, session, node),
+    ).fetchone()
+    if not head:
+        return []
+    start = (node, head[0])
+    queue, toward = deque([start]), {start: None}
     while queue:
         current = queue.popleft()
-        if current in roots:
-            path = [roots[current], current]
+        source = roots.get(current, roots.get(current[0]))
+        if source:
+            path = [source, current[0]]
             while toward[current] is not None:
                 current = toward[current]
-                path.append(current)
+                path.append(current[0])
             return path
-        rows = conn.execute(
-            """SELECT e.src FROM graph_heads h JOIN graph_edges e
-            ON e.revision=h.revision AND e.dst=h.node
-            WHERE h.workspace=? AND h.session=? AND h.node=?""",
-            (workspace, session, current),
-        )
-        for (parent,) in rows:
+        for parent in revision_parents(conn, workspace, *current):
             if parent not in toward:
                 if len(toward) >= limit:
                     raise GraphUnavailable("graph_traversal_budget_exceeded")
@@ -189,13 +213,13 @@ def bindings(conn, workspace, session, sources):
             complete = False
             continue
         rows = conn.execute(
-            """SELECT a.node FROM graph_accesses a JOIN graph_heads h
-            ON h.revision=a.revision AND h.node=a.node
-            WHERE a.path=? AND a.mode='read' AND h.workspace=? AND h.session=?""",
-            (path, workspace, session),
+            """SELECT a.node,a.revision FROM graph_accesses a JOIN graph_revisions r
+            ON r.revision=a.revision AND r.node=a.node
+            WHERE a.path=? AND a.mode='read' AND r.workspace=?""",
+            (path, workspace),
         )
-        for (node,) in rows:
-            roots[node] = source["node_id"]
+        for node, revision in rows:
+            roots[(node, revision)] = source["node_id"]
     return roots, complete
 
 
@@ -209,12 +233,33 @@ def analyze_properties(
     *,
     model="codex_default",
     sources_refresh=None,
+    _visiting=None,
 ):
     with sqlite3.connect(db_path, timeout=5) as conn:
         schema(conn)
         conn.execute(
             "INSERT OR REPLACE INTO graph_progress VALUES (?,?,?,?)",
             (workspace, session, event_id, "analyzing"),
+        )
+    from tooluseproxy.engine.lineage import attach_witnesses, pending_producers, link_producers
+
+    visiting = set() if _visiting is None else _visiting
+    if event_id in visiting or len(visiting) >= 64:
+        raise GraphUnavailable("resource_lineage_expansion_budget")
+    visiting.add(event_id)
+    with sqlite3.connect(db_path, timeout=5) as conn:
+        producers = pending_producers(conn, workspace, session, event_id)
+    for producer, producer_session in producers:
+        analyze_properties(
+            db_path,
+            workspace,
+            producer_session,
+            producer,
+            sources,
+            judge,
+            model=model,
+            sources_refresh=sources_refresh,
+            _visiting=visiting,
         )
     with sqlite3.connect(db_path, timeout=5) as conn:
         calls = load_calls(conn, workspace, session, event_id)
@@ -230,6 +275,7 @@ def analyze_properties(
     # Reuse the connection, but commit each write before the next model request.
     with closing(sqlite3.connect(db_path, timeout=5)) as conn:
         for node in calls:
+            attach_witnesses(conn, workspace, node)
             records = {"previous_calls": prior, "current_call": node}
             revision = digest(["history-chain-v1", prefix, node])
             cached = conn.execute(
@@ -239,6 +285,7 @@ def analyze_properties(
             complete = complete and verdict["complete"]
             with conn:
                 persist(conn, workspace, session, node, revision, model, verdict, revisions)
+                link_producers(conn, workspace, node, revision, verdict)
             prefix = digest([prefix, node, verdict])
             revisions[node["node_id"]] = revision
             if node["completed"]:
@@ -268,6 +315,7 @@ def analyze_properties(
             "INSERT OR IGNORE INTO graph_policies VALUES (?,?)",
             (policy_revision, json.dumps(sources)),
         )
+        complete = dependency_complete(conn, workspace, current_node)
         roots, policy_complete = bindings(conn, workspace, session, sources)
         path = reach(conn, workspace, session, current_node, roots)
         if current_verdict["externality"] == "local":
@@ -304,4 +352,29 @@ def analyze_properties(
                 json.dumps(result),
             ),
         )
+    visiting.remove(event_id)
     return result
+
+
+def dependency_complete(conn, workspace, node):
+    head = conn.execute(
+        "SELECT revision FROM graph_heads WHERE workspace=? AND node=?", (workspace, node)
+    ).fetchone()
+    if not head:
+        return False
+    pending, seen = [(node, head[0])], set()
+    while pending:
+        current = pending.pop()
+        if current in seen:
+            continue
+        seen.add(current)
+        if len(seen) > 200_000:
+            raise GraphUnavailable("graph_completeness_budget")
+        row = conn.execute(
+            "SELECT verdict FROM graph_revisions WHERE workspace=? AND node=? AND revision=?",
+            (workspace, *current),
+        ).fetchone()
+        if not row or not json.loads(row[0])["complete"]:
+            return False
+        pending.extend(revision_parents(conn, workspace, *current))
+    return True

@@ -302,4 +302,6 @@ class PayloadResolver:
         )
         for need in result.needs:
             self.store.add_need(self.scope, self.event, need)
+        from tooluseproxy.engine.lineage import record_transmission_snapshots
+        record_transmission_snapshots(self, result)
         return identity

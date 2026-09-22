@@ -86,7 +86,10 @@ def hook_output(result: dict, phase: str) -> dict:
 def screen_externality(db_path, event, model, provider):
     # Reuse only an identical delivery in the same workspace/session. Identical
     # command strings at a later time need not have the same environment/behavior.
-    records = {"stage": "externality", "tool_name": event.raw_payload.get("tool_name"),
+    with sqlite3.connect(db_path) as conn:
+        context = conn.execute("SELECT workspace_root,workspace_execution_cwd FROM events WHERE event_id=?",(event.event_id,)).fetchone()
+    records = {"workspace_root": context[0] if context else None, "resolved_cwd": context[1] if context else None,
+               "stage": "externality", "tool_name": event.raw_payload.get("tool_name"),
                "tool_input": event.raw_payload.get("tool_input"),
                "workspace": event.workspace_id}
     request_hash = digest([EXTERNALITY_VERSION, model, event.event_id, records])
@@ -104,7 +107,9 @@ def screen_externality(db_path, event, model, provider):
                 or type(verdict.get("complete")) is not bool
                 or not isinstance(verdict.get("reason"), str)):
             raise GraphUnavailable("externality_invalid")
+        resources = verdict.get("resources", [])
         verdict = {key: verdict[key] for key in ("externality", "complete", "reason")}
+        verdict["resources"] = resources if isinstance(resources, list) else []
         if not verdict["complete"]:
             verdict = {"externality": "external", "complete": True, "reason": "screening_requires_inspection"}
     except Exception:
@@ -146,10 +151,14 @@ def process_hook(store, event, *, judge=None, screening_judge=None, target_judge
             if event.phase == "post_tool_use":
                 # Actual output is already in the journal. Analyze its provenance
                 # on demand before a later possible external transmission.
+                from tooluseproxy.engine.lineage import snapshot_resources
+                snapshot_resources(store, event)
                 result = {"action": "observed", "reason": "provenance_deferred", "path": [], "node_id": node_id}
             else:
                 screen = screen_externality(store.db_path, event, model,
                     screening_judge or judge or CodexSemanticJudge(config.get("model"), timeout=15))
+                from tooluseproxy.engine.lineage import snapshot_resources
+                snapshot_resources(store, event, screen.get("resources", []))
                 if screen["externality"] == "local" and screen["complete"]:
                     result = {"action": "allow", "reason": "local_provenance_deferred", "path": [], "node_id": node_id}
                 else:

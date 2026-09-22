@@ -34,6 +34,8 @@ def inspect_and_decide(store, event, sources, provider, graph_decision, node_id,
         # This path cannot suppress an independently established graph block.
         pass
     result = graph_decision()
+    if resolver is not None and resolution is not None and not resolver.unchanged(resolution):
+        return dict(result, action="unavailable", reason="payload_changed_after_inspection")
     if result["action"] == "allow" and result["reason"] != "local_operation":
         if policy_key(sources) != policy_key(current_sources()):
             issues.append("protection_policy_changed_during_inspection")

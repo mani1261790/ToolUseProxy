@@ -9,6 +9,7 @@ def test_late_protection_reuses_edges_and_keeps_old_policy_result(tmp_path):
     root = tmp_path / "workspace"
     root.mkdir()
     db = tmp_path / "events.db"
+    Journal(db).initialize()
     store = Journal(db)
     store.initialize()
     events = []
@@ -100,6 +101,7 @@ def test_changed_observation_preserves_both_revisions(tmp_path):
     from tooluseproxy.engine.property_graph import persist
 
     db = tmp_path / "events.db"
+    Journal(db).initialize()
     node = {"node_id": "n", "event_id": "before"}
     verdict = {
         "dependencies": [],
@@ -147,6 +149,7 @@ def test_history_chain_reuses_prefix_and_invalidates_changed_evidence(tmp_path, 
     import tooluseproxy.engine.property_graph as graph
 
     db = tmp_path / "events.db"
+    Journal(db).initialize()
     calls = [
         dict(
             node_id=f"n{i}",
@@ -214,6 +217,7 @@ def test_history_hash_input_grows_linearly(tmp_path, monkeypatch):
             return real_digest(value)
 
         monkeypatch.setattr(graph, "digest", digest)
+        Journal(tmp_path / f"{count}.db").initialize()
         graph.analyze_properties(
             tmp_path / f"{count}.db",
             "w",
@@ -242,11 +246,12 @@ def test_local_operation_defers_incomplete_provenance_but_send_does_not(tmp_path
             externality="local" if local else "external",
             complete=not local,
             reason="missing resource identity" if local else "possible communication",
-            dependencies=[],
+            dependencies=[] if local else [{"node_id": "local", "reason": "uses unresolved input"}],
             accesses=[],
         )
 
     db = tmp_path / "events.db"
+    Journal(db).initialize()
     assert graph.analyze_properties(db, "w", "s", "e1", [], judge)["action"] == "allow"
     calls.append(
         dict(

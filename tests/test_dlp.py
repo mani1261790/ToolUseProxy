@@ -198,3 +198,34 @@ def test_protection_change_during_graph_cannot_return_verified_allow(context):
     result = inspect_and_decide(store, event, [source], target, graph, "node", "fixture")
     assert result["action"] == "unavailable"
     assert result["reason"] == "protected_content_changed_during_inspection"
+
+
+def test_changed_outbound_snapshot_cannot_use_an_old_graph_block(context):
+    root, store, create, source = context
+    event, _ = create("public")
+    (root / "outbound").write_text("original independent content")
+
+    def plan(_):
+        return dict(
+            complete=True,
+            reason="file",
+            targets=[
+                dict(
+                    kind="file", pointer=None, path="outbound", offset=0, length=None, reason="file"
+                )
+            ],
+        )
+
+    def graph():
+        (root / "outbound").write_text("replacement while model was judging")
+        return dict(
+            action="block",
+            reason="protected_source_reachable",
+            path=["source:private", "node"],
+            node_id="node",
+        )
+
+    result = inspect_and_decide(store, event, [source], plan, graph, "node", "fixture")
+    assert (
+        result["action"] == "unavailable" and result["reason"] == "payload_changed_after_inspection"
+    )
