@@ -235,7 +235,9 @@ function updateProjectState() {
   $('project-state').hidden = workspace === undefined;
   if (workspace === undefined) return;
   const scope = knownScopes.find(item => item.workspace_id === workspace);
-  $('init-state').textContent = scope?.initialization_recorded === true
+  $('init-state').textContent = scope?.recording_started_at
+    ? `記録開始: ${scope.recording_started_at} UTC（それ以前の履歴は判定対象外）`
+    : scope?.initialization_recorded === true
     ? '初期化・利用設定操作による登録記録あり'
     : '初期化操作の記録を確認できません（未初期化と断定はしません）';
   $('setup-state').textContent = scope?.settings_saved === true

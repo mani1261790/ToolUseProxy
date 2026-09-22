@@ -70,7 +70,12 @@ sh "<PLUGIN_ROOT>/hooks/run_cli.sh" setup --workspace "<WORKSPACE>" --data-dir "
 
 `--model <MODEL>` selects the judge model explicitly; otherwise the independent CLI
 uses its default model. This is not necessarily the model of the current task.
+Setup records its start boundary; earlier events are not used to infer dependencies.
+Do not import history or scan the repository. When files are already specified, append
+`--protect <RELATIVE_FILE>` for each one to setup to avoid separate calls.
 Setup creates configuration and recording tables and starts the live log viewer.
+Report initialization separately if a file registration or viewer startup fails.
+Finish with the returned short Unsetup guidance, not a test or another confirmation.
 Open the returned viewer URL in Codex's browser side panel when available. A URL in
 JSON alone is not an opened screen. If the viewer fails, explain that configuration
 and viewer startup are separate outcomes; use `logs` to retry.
@@ -131,7 +136,12 @@ user's behalf or describe Hook trust as proof that the model classified correctl
 
 ## Stop or remove protection
 
-The agent-facing `unsetup` command does not remove protection. Administrative stop
+Use `unsetup open` with the same workspace/data arguments to request the macOS
+administrator authentication and confirmation UI. Do not enter credentials or operate
+the confirmation dialog on the user's behalf. `plan` and `apply` do not mutate state.
+If the administrator component is missing, report that and link the product's
+Setup/Unsetup administration instructions; do not install or enroll it implicitly.
+The agent-facing `unsetup` command does not itself remove protection. Administrative stop
 and reactivation use the independent administrator approval boundary. Do not edit
 Plugin enablement, source registrations, judge policy, or authority state to escape
 a denial. Never treat a confirmation string the agent can generate as human approval.

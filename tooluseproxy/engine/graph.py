@@ -97,11 +97,16 @@ def load_calls(
     if end is None:
         raise GraphUnavailable("event_missing")
     # Never silently drop old history or truncate contents and then report an allow.
+    boundary = 0
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE name='recording_boundaries'").fetchone():
+        row = conn.execute("SELECT after_sequence FROM recording_boundaries WHERE workspace_id=?", (workspace,)).fetchone()
+        if row:
+            boundary = row[0]
     rows = conn.execute(
         """SELECT event_id,phase,tool_use_id,tool_name,payload_json
         FROM events WHERE workspace_id=? AND session_id=? AND sequence_no<=?
-        AND phase IN ('pre_tool_use','post_tool_use') ORDER BY sequence_no LIMIT ?""",
-        (workspace, session, end[0], max_events + 1),
+        AND sequence_no>? AND phase IN ('pre_tool_use','post_tool_use') ORDER BY sequence_no LIMIT ?""",
+        (workspace, session, end[0], boundary, max_events + 1),
     ).fetchall()
     if len(rows) > max_events or sum(len(row[4].encode()) for row in rows) > max_bytes:
         raise GraphUnavailable("history_budget_exceeded")

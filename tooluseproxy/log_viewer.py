@@ -83,7 +83,9 @@ class LogReader:
             saved = ("EXISTS (SELECT 1 FROM workspace_runtime_settings rs "
                      "WHERE rs.workspace_id=g.workspace_id)"
                      if "workspace_runtime_settings" in tables else "NULL")
-            query = (f"SELECT g.*, {root} AS workspace_root, "
+            boundary = ("(SELECT started_at FROM recording_boundaries rb WHERE rb.workspace_id=g.workspace_id)"
+                        if "recording_boundaries" in tables else "NULL")
+            query = (f"SELECT g.*, {boundary} AS recording_started_at, {root} AS workspace_root, "
                      f"{initialized} AS initialization_recorded, {saved} AS settings_saved "
                      f"FROM ({query}) g {join}ORDER BY g.latest DESC")
             rows = conn.execute(query, (self.workspace_id,) if self.workspace_id else ()).fetchall()

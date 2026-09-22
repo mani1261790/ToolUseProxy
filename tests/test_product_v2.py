@@ -340,3 +340,49 @@ def test_registration_errors_are_actionable_and_do_not_create_database(tmp_path,
     assert main(['protect', 'add', *args, '--path', 'notes.txt']) == 1
     assert json.loads(capsys.readouterr().out)['status'] == 'setup_required'
     assert not (data / 'events.db').exists()
+
+
+def test_setup_boundary_and_batch_registration_are_preserved(tmp_path, capsys):
+    root = tmp_path / 'project'
+    root.mkdir()
+    data = tmp_path / 'data'
+    data.mkdir()
+    Journal(data / 'events.db').initialize()
+    with sqlite3.connect(data / 'events.db') as conn:
+        conn.execute("INSERT INTO events(event_id,phase,payload_json,sequence_no) VALUES ('old','stop','{}',7)")
+    (root / 'a.txt').write_text('synthetic')
+    (root / 'b.txt').write_text('synthetic')
+    args = ['--workspace', str(root), '--data-dir', str(data), '--no-viewer']
+    assert main(['setup', *args, '--accept-judge-data', '--protect', 'a.txt', '--protect', 'b.txt']) == 0
+    first = json.loads(capsys.readouterr().out)
+    assert first['recording']['after_sequence'] == 7
+    assert [r['status'] for r in first['registrations']] == ['registered', 'registered']
+    assert first['unsetup']['command'] == 'unsetup open'
+    assert main(['setup', *args]) == 0
+    assert json.loads(capsys.readouterr().out)['recording'] == first['recording']
+
+
+def test_graph_excludes_calls_before_setup_boundary(tmp_path):
+    from tooluseproxy.engine.graph import load_calls
+    db = tmp_path / 'events.db'
+    Journal(db).initialize()
+    with sqlite3.connect(db) as conn:
+        conn.execute('CREATE TABLE recording_boundaries(workspace_id TEXT PRIMARY KEY,after_sequence INTEGER)')
+        conn.execute("INSERT INTO recording_boundaries VALUES ('w',1)")
+        for seq, call in [(1, 'old'), (2, 'new')]:
+            conn.execute("INSERT INTO events(event_id,phase,session_id,tool_use_id,workspace_id,payload_json,sequence_no) VALUES (?,'pre_tool_use','s',?,'w',?,?)", (call,call,json.dumps({'tool_input': {'command': call}}),seq))
+        calls = load_calls(conn, 'w', 's', 'new')
+    assert len(calls) == 1 and calls[0]['event_id'] == 'new'
+
+
+def test_unsetup_missing_admin_never_prompts_or_changes_data(tmp_path, capsys, monkeypatch):
+    from tooluseproxy import authority_admin
+    root, data, args, result = setup(tmp_path, capsys)
+    monkeypatch.setattr(authority_admin, 'ADMIN_SCRIPT', tmp_path / 'absent')
+    def forbidden(*args, **kwargs):
+        raise AssertionError('no administrator entrypoint; do not launch anything')
+    monkeypatch.setattr(subprocess, 'run', forbidden)
+    before = (data / 'semantic-flow.json').read_bytes()
+    assert main(['unsetup', 'open', *args]) == 1
+    assert json.loads(capsys.readouterr().out)['status'] == 'administrator_installation_required'
+    assert (data / 'semantic-flow.json').read_bytes() == before
