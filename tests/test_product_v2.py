@@ -182,7 +182,7 @@ def test_setup_starts_viewer_that_serves_new_journal(tmp_path, capsys, monkeypat
             == 0
         )
         result = json.loads(capsys.readouterr().out)
-        assert result["viewer"]["status"] == "ready"
+        assert result["viewer"]["status"] == "ready", result["viewer"]
         url = urlsplit(result["viewer"]["url"])
         conn = http.client.HTTPConnection(url.hostname, url.port, timeout=2)
         try:

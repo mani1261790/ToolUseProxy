@@ -55,7 +55,8 @@ def start(db: Path, workspace: Path):
             start_new_session=True,
             cwd=Path(__file__).resolve().parents[1],
         )
-    until = time.monotonic() + 5
+    # macOS host-name resolution during HTTPServer startup can exceed five seconds.
+    until = time.monotonic() + 30
     while time.monotonic() < until:
         try:
             return json.loads(status.read_text())
@@ -65,5 +66,6 @@ def start(db: Path, workspace: Path):
             time.sleep(0.05)
     return {
         "status": "viewer_unavailable",
+        "reason": "startup_timeout" if child.poll() is None else "process_exited",
         "message": "ログUIを起動できませんでした。設定は保持されています。",
     }
