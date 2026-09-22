@@ -151,6 +151,22 @@ class LogReader:
                         "b.workspace_id IS e.workspace_id AND b.session_id=e.session_id "
                         "AND b.tool_use_id=e.tool_use_id))"
                     )
+            if "semantic_flow_decisions" in tables:
+                semantic_select = (
+                    "SELECT b.event_id,b.workspace_id,b.session_id,b.tool_use_id "
+                    "FROM semantic_flow_decisions d JOIN events b ON b.event_id=d.event_id "
+                    "AND b.workspace_id=d.workspace_id AND b.session_id=d.session_id "
+                    "WHERE d.action='block' AND b.phase='pre_tool_use'"
+                )
+                cte = (cte[:-2] + " UNION " + semantic_select + ") " if cte else
+                       "WITH blocked_events AS (" + semantic_select + ") ")
+                blocked = (
+                    "EXISTS (SELECT 1 FROM blocked_events b WHERE b.event_id=e.event_id OR "
+                    "(e.session_id IS NOT NULL AND e.session_id!='' AND "
+                    "e.tool_use_id IS NOT NULL AND e.tool_use_id!='' AND "
+                    "b.workspace_id IS e.workspace_id AND b.session_id=e.session_id "
+                    "AND b.tool_use_id=e.tool_use_id))"
+                )
             if blocked_only:
                 if cte:
                     clauses.append(
@@ -221,6 +237,16 @@ class LogReader:
                         "WHERE s.sequence_no=? AND json_valid(s.metadata_json) "
                         "AND json_extract(s.metadata_json,'$.event_id')=? LIMIT 100",
                         (event["sequence_no"], event["event_id"]),
+                    ))
+                if "semantic_flow_decisions" in tables:
+                    decisions.extend(dict(item) for item in conn.execute(
+                        "SELECT event_id AS decision_id,action,'PreToolUse' AS hook_event,reason,"
+                        "CASE action WHEN 'block' THEN '秘密情報源への依存経路を検出し、実行前に停止' "
+                        "WHEN 'unavailable' THEN '情報流の判定未完了。流出検出ではありません' "
+                        "ELSE '情報流グラフによる判定' END AS user_message,"
+                        "recorded_at AS created_at,path_json FROM semantic_flow_decisions "
+                        "WHERE event_id=? AND workspace_id=? AND session_id=?",
+                        (event['event_id'], event['workspace_id'], event['session_id']),
                     ))
                 if forecasts:
                     decisions.extend({

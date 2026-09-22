@@ -49,6 +49,7 @@ HOOK_MONITOR_RUNTIME_DIRECTORIES = {
     "externality",
     "policy",
     "runtime",
+    "semantic_flow",
 }
 FORBIDDEN_PARTS = {
     ".agents",

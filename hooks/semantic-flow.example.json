@@ -1,0 +1,67 @@
+{
+  "description": "Experimental semantic flow engine. Requires explicit per-workspace provider-content consent. Judgment failures warn and do not block; no safety guarantee on failure.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "TOOLUSEPROXY_SEMANTIC_FLOW=1 sh \"${PLUGIN_ROOT}/hooks/run_hook.sh\" session-start",
+            "commandWindows": "set TOOLUSEPROXY_SEMANTIC_FLOW=1&& \"%PLUGIN_ROOT%\\hooks\\run_hook.cmd\" session-start",
+            "timeout": 900
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "TOOLUSEPROXY_SEMANTIC_FLOW=1 sh \"${PLUGIN_ROOT}/hooks/run_hook.sh\" subagent-start",
+            "commandWindows": "set TOOLUSEPROXY_SEMANTIC_FLOW=1&& \"%PLUGIN_ROOT%\\hooks\\run_hook.cmd\" subagent-start",
+            "timeout": 900
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "^.*$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "TOOLUSEPROXY_SEMANTIC_FLOW=1 sh \"${PLUGIN_ROOT}/hooks/run_hook.sh\" pre-tool-use",
+            "commandWindows": "set TOOLUSEPROXY_SEMANTIC_FLOW=1&& \"%PLUGIN_ROOT%\\hooks\\run_hook.cmd\" pre-tool-use",
+            "timeout": 900
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "^.*$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "TOOLUSEPROXY_SEMANTIC_FLOW=1 sh \"${PLUGIN_ROOT}/hooks/run_hook.sh\" post-tool-use",
+            "commandWindows": "set TOOLUSEPROXY_SEMANTIC_FLOW=1&& \"%PLUGIN_ROOT%\\hooks\\run_hook.cmd\" post-tool-use",
+            "timeout": 900
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "TOOLUSEPROXY_SEMANTIC_FLOW=1 sh \"${PLUGIN_ROOT}/hooks/run_hook.sh\" stop",
+            "commandWindows": "set TOOLUSEPROXY_SEMANTIC_FLOW=1&& \"%PLUGIN_ROOT%\\hooks\\run_hook.cmd\" stop",
+            "timeout": 900
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -39,8 +40,9 @@ def run_child(
     stdin: BinaryIO,
     stdout: BinaryIO,
     timeout_seconds: float = PRE_TOOL_CHILD_TIMEOUT_SECONDS,
+    semantic_flow: bool = False,
 ) -> int:
-    timeout = timeout_seconds if phase == "pre-tool-use" else None
+    timeout = timeout_seconds if phase == "pre-tool-use" or semantic_flow else None
     try:
         completed = subprocess.run(
             list(command),
@@ -49,10 +51,18 @@ def run_child(
             stderr=subprocess.DEVNULL,
             timeout=timeout,
             check=False,
+            env=({**os.environ, "TOOLUSEPROXY_SEMANTIC_FLOW": "1"} if semantic_flow else None),
         )
     except subprocess.TimeoutExpired:
         if phase == "pre-tool-use":
-            rendered = json.dumps(_deadline_output(), ensure_ascii=False) + "\n"
+            if semantic_flow:
+                output = {"hookSpecificOutput": {"hookEventName": "PreToolUse",
+                    "additionalContext": "ToolUseProxyの情報流判定が時間切れになりました。"
+                    "流出検出ではありません。新方式の障害時方針により遮断せず継続します。"
+                    "安全確認は未完了です。（semantic_watchdog_timeout）"}}
+            else:
+                output = _deadline_output()
+            rendered = json.dumps(output, ensure_ascii=False) + "\n"
             stdout.write(rendered.encode("utf-8"))
         return 0
     stdout.write(completed.stdout)
@@ -61,6 +71,10 @@ def run_child(
 
 def main(argv: Sequence[str] | None = None) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
+    semantic_flow = os.environ.get("TOOLUSEPROXY_SEMANTIC_FLOW") == "1"
+    if "--semantic-flow" in arguments:
+        semantic_flow = True
+        arguments.remove("--semantic-flow")
     if len(arguments) != 3 or arguments[1] != "--data-dir" or not arguments[2]:
         return 2
     phase = arguments[0]
@@ -78,6 +92,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         phase=phase,
         stdin=sys.stdin.buffer,
         stdout=sys.stdout.buffer,
+        timeout_seconds=720 if semantic_flow else PRE_TOOL_CHILD_TIMEOUT_SECONDS,
+        semantic_flow=semantic_flow,
     )
 
 
