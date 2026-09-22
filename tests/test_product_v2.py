@@ -103,18 +103,13 @@ def test_default_hook_uses_only_model_graph_and_updates_live_logs(tmp_path, caps
     source.write_text("fictional material")
     main(["protect", "add", *args, "--path", "private.txt"])
     capsys.readouterr()
-    sources = Journal(data / "events.db").list_protected_sources_for_workspace(
-        configured["workspace_id"]
-    )
-
     def judge(records):
         return {
             "externality": "external",
             "complete": True,
             "reason": "synthetic direct send",
-            "dependencies": [
-                {"node_id": "source:" + sources[0].source_id, "reason": "file payload"}
-            ],
+            "dependencies": [],
+            "accesses": [{"path": "private.txt", "mode": "read", "reason": "file payload"}],
         }
 
     monkeypatch.setattr("tooluseproxy.engine.runtime.CodexSemanticJudge", lambda *a, **kw: judge)

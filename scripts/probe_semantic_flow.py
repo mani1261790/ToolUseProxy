@@ -9,7 +9,7 @@ from pathlib import Path
 
 from tooluseproxy.engine.journal import event_from
 from tooluseproxy.engine.journal import Journal
-from tooluseproxy.engine.graph import analyze
+from tooluseproxy.engine.property_graph import analyze_properties as analyze
 from tooluseproxy.engine.judge import CodexSemanticJudge
 
 

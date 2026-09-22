@@ -8,7 +8,8 @@ from dataclasses import asdict
 from pathlib import Path
 
 from tooluseproxy.engine.codex import JudgeProviderError
-from tooluseproxy.engine.graph import GraphUnavailable, analyze, digest, initialize
+from tooluseproxy.engine.graph import GraphUnavailable, digest, initialize
+from tooluseproxy.engine.property_graph import analyze_properties
 from tooluseproxy.engine.judge import PROMPT_VERSION, EXTERNALITY_VERSION, CodexSemanticJudge
 
 
@@ -160,7 +161,7 @@ def process_hook(store, event, *, judge=None, screening_judge=None) -> dict | No
                             raise GraphUnavailable("semantic_prompt_budget_exceeded")
                         return provider(records)
 
-                    result = analyze(
+                    result = analyze_properties(
                         store.db_path,
                         event.workspace_id,
                         event.session_id,
@@ -168,6 +169,7 @@ def process_hook(store, event, *, judge=None, screening_judge=None) -> dict | No
                         sources,
                         bounded_judge,
                         model=model,
+                        sources_refresh=lambda: [dict(asdict(source), node_id="source:" + source.source_id) for source in store.list_protected_sources_for_workspace(event.workspace_id)],
                     )
     except (GraphUnavailable, JudgeProviderError) as exc:
         result["reason"] = str(exc)

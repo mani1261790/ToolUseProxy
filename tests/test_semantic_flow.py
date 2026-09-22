@@ -244,7 +244,7 @@ def test_runtime_block_is_visible_in_log_filter(fixture, monkeypatch):
     }
     (store.db_path.parent / "semantic-flow.json").write_text(json.dumps(config))
     output = process_hook(
-        store, event, judge=lambda _: verdict(["source:private"], externality="external")
+        store, event, judge=lambda _: {**verdict(externality="external"), "accesses": [{"path":"private.txt","mode":"read","reason":"upload"}]}
     )
     assert output["hookSpecificOutput"]["permissionDecision"] == "deny"
     reader = LogReader(store.db_path)
@@ -280,9 +280,9 @@ def test_local_work_defers_provenance_but_later_send_is_blocked(fixture, monkeyp
         command = records['current_call']['input']['command']
         if command == 'read private.txt':
             assert records['current_call']['output'] == 'synthetic source'
-            return verdict(['source:private'])
+            return {**verdict(), 'accesses': [{'path':'private.txt','mode':'read','reason':'read output'}]}
         previous = records['previous_calls']
-        return verdict([previous[-1]['node_id']], externality='external' if command == 'send derived' else 'local')
+        return {**verdict([previous[-1]['node_id']], externality='external' if command == 'send derived' else 'local'), 'accesses': []}
 
     def run(event):
         return process_hook(store, event, judge=detail, screening_judge=screen)
