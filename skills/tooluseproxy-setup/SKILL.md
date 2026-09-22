@@ -121,8 +121,10 @@ Use `status` or `doctor` with the same workspace and data arguments. These are
 configuration checks, not fresh Hook proof.
 
 - SessionStart / SubagentStart: explain coverage and hosted-tool limitations.
-- PreToolUse: record the pending call, judge dependencies/externality, then traverse.
-- PostToolUse: record actual output and update the node. Cannot undo execution.
+- PreToolUse: record and screen external communication first. Definite local calls defer
+  provenance; external/unknown calls analyze dependencies and traverse.
+- PostToolUse: record actual output; defer provenance until a later possible external call.
+  It does not launch a model or undo execution.
 - Stop: no final-answer similarity check and no forecast-based additional stop.
 
 Hosted tools such as WebSearch do not reliably pass through Codex ToolUse hooks.

@@ -9,7 +9,7 @@ from pathlib import Path
 
 from tooluseproxy.engine.codex import JudgeProviderError
 from tooluseproxy.engine.graph import GraphUnavailable, analyze, digest, initialize
-from tooluseproxy.engine.judge import PROMPT_VERSION, CodexSemanticJudge
+from tooluseproxy.engine.judge import PROMPT_VERSION, EXTERNALITY_VERSION, CodexSemanticJudge
 
 
 def configuration(db_path: Path, workspace_id: str | None) -> dict | None:
@@ -78,7 +78,37 @@ def hook_output(result: dict, phase: str) -> dict:
     return {}
 
 
-def process_hook(store, event, *, judge=None) -> dict | None:
+def screen_externality(db_path, event, model, provider):
+    # Reuse only an identical delivery in the same workspace/session. Identical
+    # command strings at a later time need not have the same environment/behavior.
+    records = {"stage": "externality", "tool_name": event.raw_payload.get("tool_name"),
+               "tool_input": event.raw_payload.get("tool_input"),
+               "workspace": event.workspace_id}
+    request_hash = digest([EXTERNALITY_VERSION, model, event.event_id, records])
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("CREATE TABLE IF NOT EXISTS semantic_externality_checks (request_hash TEXT PRIMARY KEY, event_id TEXT NOT NULL, verdict_json TEXT NOT NULL, duration_ms INTEGER NOT NULL)")
+        cached = conn.execute("SELECT verdict_json FROM semantic_externality_checks WHERE request_hash=?", (request_hash,)).fetchone()
+    if cached:
+        return json.loads(cached[0])
+    started = time.monotonic()
+    try:
+        if len(json.dumps(records, ensure_ascii=False).encode()) > 64_000:
+            raise GraphUnavailable("externality_input_large")
+        verdict = provider(records)
+        if (verdict.get("externality") not in ("local", "external", "unknown")
+                or type(verdict.get("complete")) is not bool
+                or not isinstance(verdict.get("reason"), str)):
+            raise GraphUnavailable("externality_invalid")
+        verdict = {key: verdict[key] for key in ("externality", "complete", "reason")}
+    except Exception:
+        # A screening failure is not permission to skip detailed analysis.
+        return {"externality": "unknown", "complete": False, "reason": "screening_unavailable"}
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("INSERT OR REPLACE INTO semantic_externality_checks VALUES (?,?,?,?)", (request_hash, event.event_id, json.dumps(verdict), int((time.monotonic()-started)*1000)))
+    return verdict
+
+
+def process_hook(store, event, *, judge=None, screening_judge=None) -> dict | None:
     try:
         config = configuration(store.db_path, event.workspace_id)
     except (ValueError, OSError, AttributeError):
@@ -101,30 +131,44 @@ def process_hook(store, event, *, judge=None) -> dict | None:
     try:
         if not event.workspace_id or not event.session_id or not event.tool_use_id:
             raise GraphUnavailable("semantic_identity_missing")
-        sources = [
-            dict(asdict(source), node_id="source:" + source.source_id)
-            for source in store.list_protected_sources_for_workspace(event.workspace_id)
-        ]
         with session_lock(store.db_path, event.workspace_id, event.session_id):
-            started = time.monotonic()
-            provider = judge or CodexSemanticJudge(config.get("model"), timeout=60)
+            node_id = "call:" + digest([event.workspace_id, event.session_id, event.tool_use_id])
+            with sqlite3.connect(store.db_path) as conn:
+                initialize(conn)
+                conn.execute("INSERT OR IGNORE INTO semantic_flow_nodes (node_id,workspace_id,session_id,event_id,request_hash,verdict_json) VALUES (?,?,?,?,?,?)", (node_id,event.workspace_id,event.session_id,event.event_id,"","{}"))
+            if event.phase == "post_tool_use":
+                # Actual output is already in the journal. Analyze its provenance
+                # on demand before a later possible external transmission.
+                result = {"action": "observed", "reason": "provenance_deferred", "path": [], "node_id": node_id}
+            else:
+                screen = screen_externality(store.db_path, event, model,
+                    screening_judge or judge or CodexSemanticJudge(config.get("model"), timeout=15))
+                if screen["externality"] == "local" and screen["complete"]:
+                    result = {"action": "allow", "reason": "local_provenance_deferred", "path": [], "node_id": node_id}
+                else:
+                    sources = [
+                        dict(asdict(source), node_id="source:" + source.source_id)
+                        for source in store.list_protected_sources_for_workspace(event.workspace_id)
+                    ]
+                    started = time.monotonic()
+                    provider = judge or CodexSemanticJudge(config.get("model"), timeout=60)
 
-            def bounded_judge(records):
-                if time.monotonic() - started > 480:
-                    raise GraphUnavailable("semantic_analysis_budget_exceeded")
-                if len(json.dumps(records, ensure_ascii=False).encode()) > 512_000:
-                    raise GraphUnavailable("semantic_prompt_budget_exceeded")
-                return provider(records)
+                    def bounded_judge(records):
+                        if time.monotonic() - started > 480:
+                            raise GraphUnavailable("semantic_analysis_budget_exceeded")
+                        if len(json.dumps(records, ensure_ascii=False).encode()) > 512_000:
+                            raise GraphUnavailable("semantic_prompt_budget_exceeded")
+                        return provider(records)
 
-            result = analyze(
-                store.db_path,
-                event.workspace_id,
-                event.session_id,
-                event.event_id,
-                sources,
-                bounded_judge,
-                model=model,
-            )
+                    result = analyze(
+                        store.db_path,
+                        event.workspace_id,
+                        event.session_id,
+                        event.event_id,
+                        sources,
+                        bounded_judge,
+                        model=model,
+                    )
     except (GraphUnavailable, JudgeProviderError) as exc:
         result["reason"] = str(exc)
     except Exception:

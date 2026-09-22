@@ -253,3 +253,70 @@ def test_runtime_block_is_visible_in_log_filter(fixture, monkeypatch):
     decisions = reader.detail(event.event_id)["decisions"]
     assert decisions[0]["action"] == "block"
     assert json.loads(decisions[0]["path_json"])[0] == "source:private"
+
+
+def configure_runtime(store, workspace):
+    (store.db_path.parent / 'semantic-flow.json').write_text(json.dumps({'workspaces': {
+        workspace: {'provider': 'codex_exec', 'send_recorded_content': True,
+                    'mode': 'enforce', 'failure_policy': 'allow_with_warning'}}}))
+
+
+def test_local_work_defers_provenance_but_later_send_is_blocked(fixture, monkeypatch):
+    from hook_monitor.runtime.models import ProtectedSource
+    store, record = fixture
+    first = record('read', 'read private.txt')
+    configure_runtime(store, first.workspace_id)
+    source = ProtectedSource('private', 'private.txt', 'file', 'secret', (),
+                             workspace_id=first.workspace_id, source_key='private')
+    monkeypatch.setattr(store, 'list_protected_sources_for_workspace', lambda _: [source])
+    calls = {'screen': 0, 'detail': 0}
+
+    def screen(records):
+        calls['screen'] += 1
+        return verdict(externality='external' if records['tool_input']['command'] == 'send derived' else 'local')
+
+    def detail(records):
+        calls['detail'] += 1
+        command = records['current_call']['input']['command']
+        if command == 'read private.txt':
+            assert records['current_call']['output'] == 'synthetic source'
+            return verdict(['source:private'])
+        previous = records['previous_calls']
+        return verdict([previous[-1]['node_id']], externality='external' if command == 'send derived' else 'local')
+
+    def run(event):
+        return process_hook(store, event, judge=detail, screening_judge=screen)
+
+    assert run(first) == {}
+    assert run(record('read', 'read private.txt', post=True, output='synthetic source')) == {}
+    assert run(record('write', 'write derived')) == {}
+    assert run(record('write', 'write derived', post=True, output='created')) == {}
+    assert calls == {'screen': 2, 'detail': 0}
+    send = record('send', 'send derived')
+    assert run(send)['hookSpecificOutput']['permissionDecision'] == 'deny'
+    assert calls == {'screen': 3, 'detail': 3}
+    assert run(send)['hookSpecificOutput']['permissionDecision'] == 'deny'
+    assert calls == {'screen': 3, 'detail': 3}
+
+
+@pytest.mark.parametrize('screen_result', ['unknown', 'incomplete', 'error', 'invalid'])
+def test_uncertain_screening_always_runs_full_analysis(fixture, screen_result):
+    store, record = fixture
+    event = record('opaque', 'run opaque script')
+    configure_runtime(store, event.workspace_id)
+    detailed = []
+
+    def screen(_):
+        if screen_result == 'error':
+            raise TimeoutError()
+        if screen_result == 'invalid':
+            return {'externality': 'local', 'complete': 'yes'}
+        return verdict(externality='unknown' if screen_result == 'unknown' else 'local', complete=False)
+
+    def detail(records):
+        detailed.append(records)
+        return verdict(externality='unknown', complete=False)
+
+    result = process_hook(store, event, judge=detail, screening_judge=screen)
+    assert len(detailed) == 1
+    assert 'additionalContext' in result['hookSpecificOutput']
