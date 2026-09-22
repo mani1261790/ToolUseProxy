@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from tooluseproxy.engine.targets import TARGET_PROMPT, TARGET_SCHEMA
+
 from tooluseproxy.engine.codex import (
     JudgeProviderError,
     _loads_no_duplicate_keys,
@@ -105,8 +107,10 @@ class CodexSemanticJudge:
             root = Path(directory)
             schema, output = root / "schema.json", root / "verdict.json"
             screening = records.get("stage") == "externality"
-            schema.write_text(json.dumps(EXTERNALITY_SCHEMA if screening else SCHEMA), encoding="utf-8")
-            prompt = EXTERNALITY_PROMPT if screening else PROMPT
+            targets = records.get("stage") == "transmission_targets"
+            output_schema = TARGET_SCHEMA if targets else EXTERNALITY_SCHEMA if screening else SCHEMA
+            schema.write_text(json.dumps(output_schema), encoding="utf-8")
+            prompt = TARGET_PROMPT if targets else EXTERNALITY_PROMPT if screening else PROMPT
             argv = build_codex_exec_argv(
                 executable="codex",
                 schema_path=schema,

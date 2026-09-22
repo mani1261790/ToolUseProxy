@@ -7,7 +7,7 @@ RUNTIME_FILES = (
     'tooluseproxy/integrations/authority.py',
     'tooluseproxy/engine/__init__.py', 'tooluseproxy/engine/codex.py',
     'tooluseproxy/engine/graph.py', 'tooluseproxy/engine/property_graph.py', 'tooluseproxy/engine/hook.py',
-    'tooluseproxy/engine/journal.py', 'tooluseproxy/engine/evidence.py', 'tooluseproxy/engine/judge.py',
+    'tooluseproxy/engine/journal.py', 'tooluseproxy/engine/evidence.py', 'tooluseproxy/engine/payload.py', 'tooluseproxy/engine/targets.py', 'tooluseproxy/engine/judge.py',
     'tooluseproxy/engine/runtime.py', 'tooluseproxy/engine/workspace.py',
     'tooluseproxy/engine/identity.py',
     'tooluseproxy/viewer/index.html', 'tooluseproxy/viewer/screen.js', 'tooluseproxy/viewer/screen.css',
