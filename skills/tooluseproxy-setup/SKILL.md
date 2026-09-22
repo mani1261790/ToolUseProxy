@@ -7,8 +7,39 @@ description: Set up or inspect ToolUseProxy v0.2, register protected files, and 
 
 This skill describes the semantic dependency engine. Do not reuse v0.1 setup profiles,
 commands, or claims. Use the currently installed Plugin's launcher; a cached older
-skill is not evidence of the current runtime. Check the launcher's `--version` first.
+skill is not evidence of the current runtime. Check the launcher's `--version` once when resolving the installation; reuse that result
+within the task unless the installation changes.
 If it is not v0.2, explain the version mismatch instead of applying these commands.
+
+## Route the request, then finish that operation
+
+| User intent | Action | Finish with |
+| --- | --- | --- |
+| 「このプロジェクトで使いたい」 | Setup once; open its viewer in the side panel | 初期設定とログ画面の結果 |
+| 「private.txtを保護して」 | Direct `protect add` for that exact file | 登録した相対パスとファイル全体という範囲 |
+| 「何を登録してた？」 | `protect list` | 登録一覧 |
+| 「ログ見せて」 | `logs`, then open the returned URL | 表示したこと |
+| 「設定どうなってる？」 | `status` | 設定状態。稼働の証明にはしない |
+| 「本当に止まるか試したい」 | Separately scoped verification | 実際に観測した判定と実行結果 |
+
+A named-file registration request already authorizes that registration. Do not turn
+it into a mandatory plan → confirmation → add → list → test sequence. Ask only if
+the target or scope is genuinely missing (e.g. 「秘密っぽいものを全部」); do not scan
+files to invent the answer. If setup is missing, handle the one-time data-handling
+agreement, set up, and continue the already requested registration.
+
+Registration is a metadata operation: do not read the file, invoke a judge, generate
+a canary, attempt a push/send, or run a protection test as part of it. A fresh-Hook
+check is not a prerequisite for completing registration. Offer detailed diagnosis
+when requested or when an actual failure needs it; do not start it after every success.
+Do not append old recording/demo scripts to normal use.
+
+Reuse the resolved workspace, data directory, installed version, and prior explicit
+consent. An `already_registered` or `already_configured` result completes the request;
+do not remove and recreate state. For ordinary success, answer in one or two sentences,
+e.g. 「private.txt をファイル全体で保護対象に登録しました。」 Avoid internal IDs,
+JSON, CLI syntax, and repeated coverage disclaimers unless they help this request.
+Do not say 「流出しないことを確認しました」 when only registration succeeded.
 
 ## Explain the product accurately
 
@@ -54,19 +85,30 @@ Do not call an installed/enabled Plugin or a populated DB proof of current prote
 
 ## Register a source
 
-First show exactly which file and scope will be registered. The v0.2 command below
-registers the whole file. It does not read its contents or guess which passages are secret.
+For an explicitly named file, register it directly. The command registers the whole
+file without reading its contents or judging whether its passages are secret.
 
 ```sh
-sh "<PLUGIN_ROOT>/hooks/run_cli.sh" protect plan --path "<RELATIVE_FILE>" --workspace "<WORKSPACE>" --data-dir "<PLUGIN_DATA>" --json
+sh "<PLUGIN_ROOT>/hooks/run_cli.sh" protect add --path "<RELATIVE_FILE>" --workspace "<WORKSPACE>" --data-dir "<PLUGIN_DATA>" --json
 ```
 
-After the user authorizes that exact source (including authorization already in the
-conversation), use the same arguments with `protect add` instead of `protect plan`.
-`protect list` lists the registrations. Never scan or open a file the user forbids
-accessing. Do not register unrelated sources or silently import an old manifest.
-Existing DB registrations are retained; a manifest-only installation requires a
-reviewed migration rather than creating an empty catalog and claiming protection.
+`protect plan` is optional for a preview request or for clarifying a proposed target;
+it is not a prerequisite to `protect add`. `protect list` is for listing registrations,
+not a required follow-up after a successful add. Explain structured errors briefly:
+missing file → check its name; directory → ask for files; outside workspace → identify
+the intended project. Do not retry an unchanged error or silently broaden scope.
+
+Never access a file the user forbids, register unrelated sources, or silently import
+an old manifest. Existing DB registrations are retained; a manifest-only installation
+requires a reviewed migration instead of an empty catalog presented as protection.
+
+## Verification is a separate task
+
+Run a leakage or Hook test only when requested, or as part of explicitly requested
+installation diagnostics. Establish the test data and destination first; a request to
+register a file does not authorize sending its contents anywhere. Prefer synthetic
+inputs. Record fresh PreToolUse arrival, the decision, and actual execution evidence.
+Report uncertainty honestly, but do not make such proof a condition of metadata registration.
 
 ## Inspect and explain Hook roles
 

@@ -102,6 +102,28 @@ def _save_configuration(db: Path, workspace: str, model):
 
 
 def _setup(args, paths, root):
+    from tooluseproxy.engine.workspace import make_workspace_id
+
+    existing = configuration(paths.db_path, make_workspace_id(str(root)))
+    if existing is not None:
+        if args.model is not None and args.model != existing.get("model"):
+            return {
+                "status": "judge_configuration_differs",
+                "message": "設定済みの判定モデルと異なります。設定は変更していません。",
+            }, 1
+        result = {
+            "status": "already_configured",
+            "engine": "semantic-flow-v2",
+            "workspace_root": str(root),
+            "model": existing.get("model"),
+            "hook_verified": False,
+            "message": "初期設定済みです。",
+        }
+        if not args.no_viewer:
+            from tooluseproxy.viewer_process import start
+
+            result["viewer"] = start(paths.db_path, root)
+        return result, 0
     if not args.accept_judge_data:
         return {
             "status": "consent_required",
@@ -154,11 +176,17 @@ def _protect(args, paths, root):
             ]
         }, 0
     if args.path is None:
-        raise ValueError("source_path_required")
-    path = (root / args.path).resolve(strict=True)
-    relative = path.relative_to(root).as_posix()
+        return {"status": "source_path_required", "message": "登録するファイルを指定してください。"}, 1
+    try:
+        path = (root / args.path).resolve(strict=True)
+    except FileNotFoundError:
+        return {"status": "source_not_found", "message": "指定したファイルが見つかりません。"}, 1
+    try:
+        relative = path.relative_to(root).as_posix()
+    except ValueError:
+        return {"status": "source_outside_workspace", "message": "このプロジェクト内のファイルを指定してください。"}, 1
     if not path.is_file():
-        raise ValueError("source_must_be_file")
+        return {"status": "source_must_be_file", "message": "登録対象はファイル単位です。ファイルを指定してください。"}, 1
     result = {
         "workspace": str(root),
         "path": relative,
@@ -169,9 +197,9 @@ def _protect(args, paths, root):
     if args.operation == "plan":
         return result, 0
     if configuration(paths.db_path, workspace) is None:
-        raise ValueError("setup_required")
+        return {"status": "setup_required", "message": "このプロジェクトは未初期化です。先に初期設定が必要です。"}, 1
     with sqlite3.connect(paths.db_path, timeout=5) as conn:
-        conn.execute(
+        inserted = conn.execute(
             "INSERT OR IGNORE INTO protected_sources "
             "(source_id,path,source_type,sensitivity,policy_tags_json,selector_json,workspace_id,source_key) "
             "VALUES (?,?,?,?,?,?,?,?)",
@@ -186,7 +214,12 @@ def _protect(args, paths, root):
                 relative,
             ),
         )
-    return {**result, "status": "registered"}, 0
+        registered = inserted.rowcount == 1
+    return {
+        **result,
+        "status": "registered" if registered else "already_registered",
+        "message": "ファイル全体を保護対象に登録しました。" if registered else "このファイルは登録済みです。",
+    }, 0
 
 
 def main(argv=None):

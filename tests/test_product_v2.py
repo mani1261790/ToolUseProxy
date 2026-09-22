@@ -281,3 +281,62 @@ def test_viewer_bind_does_not_resolve_dns(tmp_path, monkeypatch):
         assert url.startswith("http://127.0.0.1:")
     finally:
         server.server_close()
+
+
+def test_direct_registration_is_local_idempotent_and_needs_no_plan(tmp_path, capsys, monkeypatch):
+    root, data, args, result = setup(tmp_path, capsys)
+    source = root / 'notes.txt'
+    source.write_text('synthetic input')
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError('registration must not read contents or start a model/test')
+
+    monkeypatch.setattr(subprocess, 'Popen', forbidden)
+    original = Path.open
+
+    def open_without_source(path, *a, **kw):
+        if path == source:
+            forbidden()
+        return original(path, *a, **kw)
+
+    monkeypatch.setattr(Path, 'open', open_without_source)
+    for expected in ('registered', 'already_registered'):
+        assert main(['protect', 'add', *args, '--path', 'notes.txt']) == 0
+        response = json.loads(capsys.readouterr().out)
+        assert response['status'] == expected
+        assert response['path'] == 'notes.txt' and not response['content_read']
+    with sqlite3.connect(data / 'events.db') as connection:
+        assert connection.execute('SELECT COUNT(*) FROM protected_sources').fetchone()[0] == 1
+        assert connection.execute('SELECT COUNT(*) FROM events').fetchone()[0] == 0
+
+
+def test_repeated_setup_reuses_consent_and_model_without_rewriting(tmp_path, capsys):
+    root = tmp_path / 'project'
+    root.mkdir()
+    data = tmp_path / 'data'
+    args = ['--workspace', str(root), '--data-dir', str(data), '--no-viewer']
+    assert main(['setup', *args, '--accept-judge-data', '--model', 'example-model']) == 0
+    capsys.readouterr()
+    config = data / 'semantic-flow.json'
+    before = (config.read_bytes(), config.stat().st_mtime_ns)
+    assert main(['setup', *args]) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result['status'] == 'already_configured'
+    assert result['model'] == 'example-model'
+    assert (config.read_bytes(), config.stat().st_mtime_ns) == before
+    assert main(['setup', *args, '--model', 'different-model']) == 1
+    assert json.loads(capsys.readouterr().out)['status'] == 'judge_configuration_differs'
+    assert (config.read_bytes(), config.stat().st_mtime_ns) == before
+
+
+def test_registration_errors_are_actionable_and_do_not_create_database(tmp_path, capsys):
+    root = tmp_path / 'project'
+    root.mkdir()
+    data = tmp_path / 'data'
+    args = ['--workspace', str(root), '--data-dir', str(data)]
+    assert main(['protect', 'add', *args, '--path', 'missing.txt']) == 1
+    assert json.loads(capsys.readouterr().out)['status'] == 'source_not_found'
+    (root / 'notes.txt').write_text('synthetic')
+    assert main(['protect', 'add', *args, '--path', 'notes.txt']) == 1
+    assert json.loads(capsys.readouterr().out)['status'] == 'setup_required'
+    assert not (data / 'events.db').exists()

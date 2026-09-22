@@ -14,14 +14,17 @@ python3 -m tooluseproxy setup --workspace /path/to/project --data-dir /path/to/p
 setupはログUIを起動し、URLを返します。CodexにはそのURLをブラウザのサイドパネルで開くよう依頼してください。
 `--model`で独立した判定用Codexのモデルを指定できます。指定しない場合はCLIの既定モデルです。
 
-4. 登録するファイルを確認し、承認した対象だけを登録します。現在の新規登録はファイル全体です。
+4. 「private.txtを保護して」のように対象を指定します。指定済みなら追加の確認を挟まず、そのファイル全体を登録します。
 
 ```sh
-python3 -m tooluseproxy protect plan --path private.txt --workspace /path/to/project --data-dir /path/to/private-data --json
 python3 -m tooluseproxy protect add --path private.txt --workspace /path/to/project --data-dir /path/to/private-data --json
 ```
 
-5. まず人工データで、Hookの到達、判定結果、実行されたかどうかを確認します。`configured_unverified`やログUIの表示だけでは保護の成功を確認できません。
+登録はここで完了です。ファイルの読み取りやLLM判定、流出テストは登録処理に含みません。登録済みなら作り直さず、その旨を返します。`protect plan`は登録前に候補を見たい場合だけ使います。
+
+初期化済みのプロジェクトでsetupを再実行しても、同じ同意を取り直したり設定を作り直したりせず、ログUIを開きます。判定モデルの変更は暗黙には行いません。
+
+動作を確かめたいときは、別途「本当に止まるかテストして」と依頼してください。人工データでHookの到達、判定結果、実行されたかどうかを確認します。登録完了と実際の流出防止の確認は別の結果です。
 
 `status`、`doctor`、`logs`、`protect list`も同じworkspace・data-dirを指定します。
 既存のDBと登録は残します。manifestだけの旧環境は自動移行しません。解除は管理者側の承認経路で行います。
