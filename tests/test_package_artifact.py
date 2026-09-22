@@ -13,7 +13,7 @@ from pathlib import Path, PurePosixPath
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 VIEWER_ASSETS = {PurePosixPath("tooluseproxy/viewer") / name
-                 for name in ("index.html", "screen.js", "screen.css", "graph.html", "graph.js", "graph.css")}
+                 for name in ("index.html", "screen.js", "screen.css", "graph.html", "graph.js", "graph.css", "theme.css")}
 PACKAGE_BUILDER = REPO_ROOT / "scripts" / "build_package.py"
 SDIST_ROOT_FILES = {
     PurePosixPath("LICENSE"),
