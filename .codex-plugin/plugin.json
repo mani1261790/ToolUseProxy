@@ -1,7 +1,7 @@
 {
   "name": "tooluseproxy",
-  "version": "0.1.0-alpha.25",
-  "description": "Local information-flow tracing and guardrails for Codex tool use.",
+  "version": "0.2.0-alpha.1",
+  "description": "ToolCall dependency graphs judged by Codex, with mechanical source-reachability checks.",
   "author": {
     "name": "ToolUseProxy contributors",
     "url": "https://github.com/mani1261790"
@@ -18,8 +18,8 @@
   "skills": "./skills/",
   "interface": {
     "displayName": "ToolUseProxy",
-    "shortDescription": "Local information-flow guardrails for Codex",
-    "longDescription": "Trace local information flow through Codex tool calls and inspect or stop risky outputs without sending protected source data to a remote service.",
+    "shortDescription": "ToolCallの意味依存グラフと送信判定",
+    "longDescription": "ToolCallのI/Oを独立したCodex判定モデルに渡して依存関係を推定し、登録情報源へつながる外部通信を実行前に止めます。判定不能時は警告して継続します。",
     "developerName": "ToolUseProxy contributors",
     "category": "Developer Tools",
     "capabilities": [

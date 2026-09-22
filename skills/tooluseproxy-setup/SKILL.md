@@ -1,549 +1,144 @@
 ---
 name: tooluseproxy-setup
-description: Set up, diagnose, inspect, or explicitly uninstall the ToolUseProxy Codex Plugin for the current workspace. Use for ToolUseProxy init, doctor, status, plugin Hook trust, database-path, protected_sources.json onboarding, or managed-data removal tasks.
+description: Set up or inspect ToolUseProxy v0.2, register protected files, and open its live ToolCall log viewer. Explain Codex judge data transmission and incomplete judgments accurately.
 ---
 
-# ToolUseProxy setup
+# ToolUseProxy v0.2
 
-Use this workflow only when the user asks to set up, diagnose, or uninstall ToolUseProxy. Never add a protected source or delete local data without showing the exact value-free plan and receiving explicit user approval.
+This skill describes the semantic dependency engine. Do not reuse v0.1 setup profiles,
+commands, or claims. Use the currently installed Plugin's launcher; a cached older
+skill is not evidence of the current runtime. Check the launcher's `--version` once when resolving the installation; reuse that result
+within the task unless the installation changes.
+If it is not v0.2, explain the version mismatch instead of applying these commands.
 
-## User-facing language contract
+## Route the request, then finish that operation
 
-Infer the user's intent from natural language. Never require or compare against
-an exact phrase. The user must not need to know the skill name, CLI subcommands,
-storage layout, or English decision words. The following are copyable examples,
-not trigger strings:
+| User intent | Action | Finish with |
+| --- | --- | --- |
+| 「このプロジェクトで使いたい」 | Setup once; open its viewer in the side panel | 初期設定とログ画面の結果 |
+| 「private.txtを保護して」 | Direct `protect add` for that exact file | 登録した相対パスとファイル全体という範囲 |
+| 「何を登録してた？」 | `protect list` | 登録一覧 |
+| 「ログ見せて」 | `logs`, then open the returned URL | 表示したこと |
+| 「設定どうなってる？」 | `status` | 設定状態。稼働の証明にはしない |
+| 「本当に止まるか試したい」 | Separately scoped verification | 実際に観測した判定と実行結果 |
 
-- `ToolUseProxyをこのプロジェクトで使えるようにして`
-- `守った方がよいファイルを探して`
-- `ToolUseProxyが動いているか確認して`
-- `ToolUseProxyをこのプロジェクトから外して`
+A named-file registration request already authorizes that registration. Do not turn
+it into a mandatory plan → confirmation → add → list → test sequence. Ask only if
+the target or scope is genuinely missing (e.g. 「秘密っぽいものを全部」); do not scan
+files to invent the answer. If setup is missing, handle the one-time data-handling
+agreement, set up, and continue the already requested registration.
 
-Do not ask the user to restate a request using `setup skill`, `init`, `doctor`,
-`status`, `scan`, `selector`, `approve`, `reject`, or `ignore`. Those are
-implementation details for the agent. Accept clear paraphrases, different levels
-of detail and politeness, and short follow-up requests whose intent is clear from
-the conversation. Never ask the user to repeat one of the examples verbatim.
+Registration is a metadata operation: do not read the file, invoke a judge, generate
+a canary, attempt a push/send, or run a protection test as part of it. A fresh-Hook
+check is not a prerequisite for completing registration. Offer detailed diagnosis
+when requested or when an actual failure needs it; do not start it after every success.
+Do not append old recording/demo scripts to normal use.
 
-When setup starts, lead with:
+Reuse the resolved workspace, data directory, installed version, and prior explicit
+consent. An `already_registered` or `already_configured` result completes the request;
+do not remove and recreate state. For ordinary success, answer in one or two sentences,
+e.g. 「private.txt をファイル全体で保護対象に登録しました。」 Avoid internal IDs,
+JSON, CLI syntax, and repeated coverage disclaimers unless they help this request.
+Do not say 「流出しないことを確認しました」 when only registration succeeded.
 
-`このプロジェクトでToolUseProxyを使えるようにします。初期設定と安全確認のため、通常は確認画面が2回出ます。どちらも外部通信は行いません。`
+## Explain the product accurately
 
-When configuration verification succeeds but the current verification command
-has no verified PreToolUse delivery, lead with:
+ToolUseProxy records Hook-visible ToolCalls in events.db. An independent `codex exec`
+judges information dependencies and possible external communication. The policy
+traverses those dependencies and stops external calls connected to registered sources.
+This is inferred provenance, not proof of complete information-flow tracking.
 
-`初期設定は完了しました。ただし、今の確認操作にToolUseProxyの実行前チェックが届くことは確認できていません。この状態では保護中とは扱いません。Codexを再起動して新しいタスクから安全な動作確認を行います。`
+The judge receives recorded ToolCall inputs, outputs, and registered-source metadata.
+They may contain private information. It is NOT a local-only comparison and does NOT
+reuse the running Codex conversation internally. Explain the selected model/provider
+and the data it receives before initial setup. Reuse explicit consent already given;
+do not ask for the same approval again.
 
-Only after separate fresh Hook evidence proves delivery and a protected
-pre-execution denial may you lead with:
+When judgment times out, fails, or lacks evidence, report **判定未完了**. This version
+warns and continues. Never describe such a result as a detected leak, a safe operation,
+or an automatic protection success. It never bypasses Codex's own approval rules.
 
-`動作確認まで完了しました。このプロジェクトではToolUseProxyのHookが届き、保護対象の外部送信を実行前に止められることを確認しました。`
+## Setup
 
-When setup or verification fails, lead with:
+Use natural language with the user; these are implementation commands, not required phrases.
+Resolve the current workspace and Plugin data directory. Do not guess a different
+Plugin version's cache path. Once the user has agreed to the judge data handling:
 
-`準備できませんでした。ToolUseProxyの保護機能はこのプロジェクトでは有効になっていません。ここで停止し、原因と安全なやり直し方を説明します。`
-
-Technical status codes and raw JSON may follow under `技術情報`, but never use
-them as the primary explanation and never require the user to interpret them.
-
-ToolUseProxy cannot technically intercept hosted tools such as `WebSearch`
-because Codex does not send them through `PreToolUse` or `PostToolUse`. A
-`SessionStart` and `SubagentStart` Hooks supply a developer-context safety
-boundary instead. Never
-put registered protected content, or content derived from it, into a hosted
-tool. Build hosted-tool queries only from public information. If protected and
-public information cannot be separated confidently, do not call the hosted
-tool; explain the limitation to the user. Do not describe this context rule as
-pre-execution enforcement or complete DLP.
-
-Never describe an installed/enabled Plugin or trusted Hooks as active
-protection. `configured_unverified` means the files and settings exist but the
-current verification command has not proved delivery from the exact installed
-PreToolUse runtime. Only `active` means that current-invocation delivery is proven for
-Hook-visible local tools. It never includes hosted tools, `write_stdin`
-continuations, or unverified programmatic nested-tool paths. If the database is
-missing, say plainly that the Plugin is installed but this workspace is not
-protected yet. Do not present protected-source registration plans before the
-configuration gate passes.
-
-If the request contains a version-specific skill link for an older Plugin
-cache entry, do not treat the removed cache directory as a product failure and
-do not search for replacement cache paths. Use this skill only when it is the
-current active skill supplied by Codex, explain that a Plugin update requires a
-new task, and never ask the user to copy an absolute skill path.
-
-Before asking the user to trust ToolUseProxy Hooks, explain all five roles in
-plain language:
-
-- `SessionStart`: session開始時に、Hookで遮断できないhosted toolへprotected
-  contentを渡さない安全境界をCodexへ伝える。これは技術的遮断ではない。
-- `SubagentStart`: subagentにも同じhosted tool境界を伝える。これは技術的
-  遮断ではない。
-- `PreToolUse`: Hookから見えるローカルtoolを実行する前に、その入力を確認し、
-  protected contentの外部送信を実行前に止める。
-- `PostToolUse`: toolを実行した後に、入力と結果をlocal DBへ記録する。すでに
-  実行されたtoolを取り消すものではない。
-- `Stop`: 最終回答を返す前に、protected contentが残っていないか確認し、必要なら
-  回答を作り直させる。
-
-Explain that command Hooks run outside the Codex sandbox with the user's local
-permissions. ToolUseProxy's Hook implementation writes to its local data
-directory and does not make network requests, but the user must still verify
-the Plugin source, exactly five ToolUseProxy Hooks, and every ToolUseProxy
-command path. For a normal installation, the expected source is
-`Plugin - tooluseproxy@tooluseproxy`. If a manual Phase B context declares
-`expected_plugin_id`, use `Plugin - <expected_plugin_id>` instead; never replace
-that context-specific ID with the normal installation ID. Every command must
-point inside the expected installed Plugin root. In an isolated manual Phase B
-harness, those five must be the only pending Hooks. Outside that harness, if
-unrelated Hooks are also pending, do not use `Trust all`; review the five
-ToolUseProxy entries individually. Explain that trust applies to the exact
-definitions currently shown and changed definitions require review again. If
-any ToolUseProxy source, count, or path differs, tell the user not to trust and
-stop setup.
-
-A denial returned by ToolUseProxy's `PreToolUse` Hook is evidence that this Hook
-was delivered for that command. Never reinterpret that denial as evidence that
-the Hooks are untrusted, and never ask the user to repeat Hook review solely
-because ToolUseProxy denied a command.
-
-Before requesting permission to run any `run_cli.sh` or `run_cli.cmd` command,
-explain the operation in plain language. The explanation must let a person
-decide without parsing the installed Plugin path or the raw shell command, and
-without remembering an earlier guide or explanation. Repeat a self-contained
-permission summary immediately before every permission request. Build the
-summary from the exact command arguments that will be submitted.
-
-Assume the Codex approval surface renders plain text, exposes Markdown syntax
-literally, and may collapse every newline. Therefore the summary must be one
-short physical paragraph of at most 160 Unicode characters. Never use Markdown
-headings, emphasis, bullets, tables, code spans, or fenced blocks in it. In
-particular, do not emit `#`, `*`, backticks, or a leading `-`.
-
-Use these plain-text delimiters in this exact order:
-
-`ToolUseProxyの操作確認｜行うこと：...｜変更されるもの：...｜外部通信：...｜確認が必要な理由：...｜この内容で実行してよいですか？`
-
-Keep every field in ordinary language. Use `ありません` for no state change
-or no network. End with the direct question exactly as shown. Do not tell the
-user to approve or reject, and do not describe an internal permission rule.
-
-Do not list absolute paths in the summary. Name the workspace briefly and say
-that the submitted arguments were checked against the approved context file.
-The raw command remains available separately for technical review.
-
-Pass exactly the same short paragraph as the tool call's approval
-`justification`; do not put a second, longer explanation in the approval UI.
-For common operations, follow these models and adapt only the project name or
-whether state changes:
-
-- fixed setup profile apply: `ToolUseProxyの操作確認｜行うこと：このプロジェクトの保護を有効にします｜変更されるもの：初期設定と、保護ファイルの外部送信を実行前に止める設定｜外部通信：ありません｜確認が必要な理由：プロジェクト外の専用保存領域へ設定を保存するためです｜この内容で実行してよいですか？`
-- fixed setup profile verify: `ToolUseProxyの操作確認｜行うこと：設定が正しく有効か確認します｜変更されるもの：ありません｜外部通信：ありません｜確認が必要な理由：プロジェクト外の専用保存領域を読み取るためです｜この内容で実行してよいですか？`
-- init: `ToolUseProxyの操作確認｜行うこと：このプロジェクトで利用を開始します｜変更されるもの：初期設定と記録用DB｜外部通信：ありません｜確認が必要な理由：プロジェクト外の専用保存領域を使うためです｜この内容で実行してよいですか？`
-- doctor/status/config show: `ToolUseProxyの操作確認｜行うこと：このプロジェクトで正しく動くか確認します｜変更されるもの：ありません｜外部通信：ありません｜確認が必要な理由：専用保存領域の状態を読み取るためです｜この内容で実行してよいですか？`
-- config set: `ToolUseProxyの操作確認｜行うこと：表示した保護設定を変更します｜変更されるもの：このプロジェクトの設定1件｜外部通信：ありません｜確認が必要な理由：専用保存領域へ設定を保存するためです｜この内容で実行してよいですか？`
-- protected-source scan: `ToolUseProxyの操作確認｜行うこと：守った方がよいファイルを探します｜変更されるもの：候補を確認した記録だけ｜外部通信：ありません｜確認が必要な理由：プロジェクト外の専用保存領域へ確認結果を記録するためです｜この内容で実行してよいですか？`
-- protected-source batch review: `ToolUseProxyの操作確認｜行うこと：表示した候補への選択をまとめて反映します｜変更されるもの：選んだ保護対象と見送った記録｜外部通信：ありません｜確認が必要な理由：専用保存領域へ選択結果を保存するためです｜この内容で実行してよいですか？`
-- protected-source migration plan: `ToolUseProxyの操作確認｜行うこと：保護対象リストを安全に更新できるか確認します｜変更されるもの：ありません｜外部通信：ありません｜確認が必要な理由：プロジェクト外の専用保存領域を読み取るためです｜この内容で実行してよいですか？`
-- protected-source migration apply: `ToolUseProxyの操作確認｜行うこと：保護対象リストを新しい形式へ更新します｜変更されるもの：リストの形式と専用保存領域のバックアップ｜外部通信：ありません｜確認が必要な理由：更新前の状態を安全に保存するためです｜この内容で実行してよいですか？`
-- unavailable-source reconciliation plan: `ToolUseProxyの操作確認｜行うこと：見つからない保護対象の登録をまとめて確認します｜変更されるもの：ありません｜外部通信：ありません｜確認が必要な理由：専用保存領域と保護リストを読み取るためです｜この内容で実行してよいですか？`
-- unavailable-source reconciliation apply: `ToolUseProxyの操作確認｜行うこと：表示した見つからない登録を保護リストから外します｜変更されるもの：保護リストと更新前のバックアップ｜外部通信：ありません｜確認が必要な理由：元ファイルを変えずに古い登録だけを整理するためです｜この内容で実行してよいですか？`
-- protected-source removal plan: `ToolUseProxyの操作確認｜行うこと：指定した保護対象1件を解除できるか確認します｜変更されるもの：ありません｜外部通信：ありません｜確認が必要な理由：専用保存領域と保護リストを読み取るためです｜この内容で実行してよいですか？`
-- protected-source removal apply: `ToolUseProxyの操作確認｜行うこと：表示した保護対象1件の登録を外します｜変更されるもの：保護リストと更新前のバックアップ｜外部通信：ありません｜確認が必要な理由：元ファイルを変えずに選んだ登録だけを外すためです｜この内容で実行してよいですか？`
-- removal without data deletion: `ToolUseProxyの操作確認｜行うこと：このプロジェクトでの利用を止めます｜変更されるもの：Pluginの有効状態だけ｜外部通信：ありません｜確認が必要な理由：新しい記録を止めるためです｜この内容で実行してよいですか？`
-- managed-data deletion: `ToolUseProxyの操作確認｜行うこと：表示したToolUseProxyデータを削除します｜変更されるもの：表示した管理対象データ｜外部通信：ありません｜確認が必要な理由：削除すると元に戻せないためです｜この内容で実行してよいですか？`
-
-Do not use implementation terms such as revision, manifest hash, Hook data
-directory, or opaque token as the primary permission explanation. Those terms
-may follow as technical detail. If a command combines multiple read-only
-checks after one local initialization, say so explicitly.
-
-Never use memory-dependent references such as `説明済み`, `上記の操作`, or
-`先ほどの説明` in the permission summary. Before submitting the tool call,
-verify that the long `sh ...`
-display uses the expected installed Plugin launcher, exact subcommand,
-workspace, and data directory, and contains no unmentioned command. State that
-verification in the summary. Tell the user to reject if the command differs from
-the named operation or scope. The user must not need to understand the long
-shell command to decide.
-
-If a `run_cli.sh` or `run_cli.cmd` command must read or write `PLUGIN_DATA`
-outside the current sandbox's writable roots, do not first try the command with
-ordinary sandbox permissions. Request the host's explicit, one-command
-out-of-sandbox approval for that exact command. On an `exec_command` interface
-that exposes `sandbox_permissions`, set it to `require_escalated` and provide a
-short plain-language justification consistent with the permission summary.
-Do not treat Full Access as a prerequisite and do not use it merely to avoid a
-per-command decision.
-
-For a normal marketplace installation only, a surface may explicitly report
-that per-command approval is disabled while its current filesystem permission
-profile already grants access to the installed Plugin data directory. That is
-not a permission failure and must not make the user copy an internal command
-into a terminal. A clear request to enable ToolUseProxy or protect files
-authorizes only the fixed normal setup profile needed for that request. Show the
-same short, self-contained summary in conversation, then run the exact setup
-command with the permissions already selected by the user. Run the read-only
-verification next. Do not claim that an approval UI was shown; report its actual
-count as zero. This is not permission escalation and does not authorize an
-arbitrary profile, source approval, migration, uninstall, or data deletion.
-
-If the current surface offers no per-command escalation and no explicit current
-permission profile that grants the required path, stop before execution. Explain
-the missing capability in ordinary language, but do not make copying a long
-internal command the normal recovery path. Never retry an `Operation not permitted`
-result with a broader command, different path, or silently enlarged permission.
-Manual Phase B runs keep their context-specific per-command
-escalation requirement and never use this normal-installation fallback.
-
-If the command tool reports that the process is still running and returns a
-continuation or cell ID, use only the host-provided wait/resume operation with
-that exact ID until the original command completes. Waiting is not a second CLI
-command and must not trigger a new approval. Do not rerun the CLI command, and
-do not report missing initial output as a command failure.
-
-1. Confirm that the current directory is the intended workspace root.
-2. Confirm that the ToolUseProxy Plugin Hook definition has been reviewed and trusted in Codex. Do not bypass Hook trust.
-3. If the workspace belongs to a manual Phase B harness and the prompt names a
-   mode `0600` `phase-b-context.json`, read that exact file first. Use only its
-   `workspace`, `plugin_root`, `plugin_data`, and `test_sink` as filesystem
-   paths. Use `expected_plugin_id`, `expected_plugin_version`, `setup_skill`,
-   and `surface` only as identity and workflow metadata. Do not use `ps`,
-   inspect parent-process environments, or broadly search outside the workspace
-   to rediscover those paths. If the context conflicts with the current
-   workspace or a Hook diagnostic, stop and explain the mismatch.
-   Otherwise, resolve the absolute Plugin root from this skill's location; it
-   is two directories above `skills/tooluseproxy-setup`. On macOS/Linux, run
-   every command through `sh "<PLUGIN_ROOT>/hooks/run_cli.sh"`. The general
-   Windows launcher is `<PLUGIN_ROOT>\hooks\run_cli.cmd`, but the entire
-   protected-source registration workflow is not supported on Windows yet.
-   If the context declares `surface: codex_cli_tui`, report the result only for
-   the Codex CLI TUI. Do not infer Codex Desktop/GUI support from that run.
-4. Initialize the same writable directory used by the Hook:
-
-   If an approved manual workflow supplies an exact `file-payload-exact`
-   setup-profile command and expected revision, use that one command instead
-   of separate `init` and four `config set` commands. The profile is fixed to
-   `pre-tool-policy`, `file-payload-shadow`,
-   `file-payload-exact-enforcement`, and `externality-protection` all enabled;
-   it accepts no arbitrary settings object. Enabling externality protection
-   activates local static/cache classification and conservative handling of
-   unverified external sinks. It does not select an LLM provider or send a
-   judge request. Do not substitute another profile or revision.
-
-   ```text
-   sh "<PLUGIN_ROOT>/hooks/run_cli.sh" setup apply file-payload-exact --codex --expected-revision <expected-revision> --workspace <workspace-root> --data-dir <PLUGIN_DATA> --json
-   ```
-
-   Follow it with the exact read-only combined verification when the workflow
-   supplies it. This replaces separate `doctor`, `status`, and `config show`
-   calls for that workflow:
-
-   ```text
-   sh "<PLUGIN_ROOT>/hooks/run_cli.sh" setup verify file-payload-exact --hook-probe-token <fresh-probe-token> --workspace <workspace-root> --data-dir <PLUGIN_DATA> --json
-   ```
-
-   Create `<fresh-probe-token>` directly for this command using the exact form
-   `tup-probe-v1-` followed by 32 lowercase hexadecimal characters. Do not run
-   another command to generate it, show it to the user, or reuse one from an
-   earlier verification. It is not a secret; it only correlates this command
-   with its immediately preceding PreToolUse event.
-
-   Stop before any send test unless the setup application and combined
-   verification both succeed. The approval is required because these commands
-   access Plugin data outside the task workspace, not because they use the
-   network. Request each as a one-command approval and never request a reusable
-   permission prefix.
-
-   For a normal marketplace installation, do not depend on a Hook diagnostic
-   and do not ask the user to paste `database_missing`, an absolute data path,
-   or an initialization command. The installed launcher validates that its
-   Plugin root is exactly inside the current Codex Plugin store, checks that the
-   manifest name matches the installed Plugin identity, and then resolves the
-   corresponding Codex Plugin data directory using Codex's Plugin-store
-   contract. It fails closed if any identity or layout check differs.
-
-   After reading this skill, treat the task's current working directory as the
-   intended workspace root. Before the exact setup command, do not run `pwd`,
-   `git`, memory searches, repository scans, or a compound diagnostic command.
-   The setup command performs its own strict workspace and Plugin-store checks.
-
-   Apply the fixed profile with the compatible-settings precondition. This is
-   safe for a new workspace, idempotent when the same profile is already
-   applied, and atomically adds settings that are missing from an older
-   compatible setup. If any configured value differs from the fixed profile,
-   it refuses the entire change:
-
-   ```text
-   sh "<PLUGIN_ROOT>/hooks/run_cli.sh" setup apply file-payload-exact --codex --expect-compatible-settings --workspace <workspace-root> --json
-   ```
-
-   If this exact command returns `protected_source_unavailable`, do not call it
-   a Hook trust failure and do not ask the user to open the Plugin diagnostics.
-   It means one or more files registered earlier have since been moved, deleted,
-   or made unsafe. Run the exact value-free batch plan:
-
-   ```text
-   sh "<PLUGIN_ROOT>/hooks/run_cli.sh" protect reconcile plan --workspace <workspace-root> --json
-   ```
-
-   Show every returned workspace-relative path together in one numbered list.
-   Explain that ToolUseProxy cannot protect those old paths while the files are
-   absent, that removing the registrations does not change or delete any source
-   file, that all still-available registrations remain, and that an exact private
-   backup of the current protection list will be kept. Ask for one decision for
-   the entire displayed batch. Natural approval is accepted; never require an
-   English command or exact phrase. If the user wants to restore or relocate a
-   file instead, stop without changing the list.
-
-   Only after explicit approval, pass the unchanged revision and manifest hash:
-
-   ```text
-   sh "<PLUGIN_ROOT>/hooks/run_cli.sh" protect reconcile apply --reconciliation-revision <reconciliation-revision> --expected-manifest-sha256 <manifest-sha256> --workspace <workspace-root> --json
-   ```
-
-   The apply command removes exactly the unavailable registrations committed by
-   the reviewed plan in one atomic manifest replacement. It preserves unknown
-   manifest fields, available entries, their order, and every source file. If
-   the manifest or source availability changed, create and show a new plan and
-   obtain new approval. After a successful or already-reconciled result, rerun
-   the same fixed setup apply command once, then continue to verification.
-
-   Then run the one read-only configuration verification command:
-
-   ```text
-   sh "<PLUGIN_ROOT>/hooks/run_cli.sh" setup verify file-payload-exact --hook-probe-token <fresh-probe-token> --workspace <workspace-root> --json
-   ```
-
-   A successful result is `status: configuration_passed`. The
-   `verification_scope` and `runtime_enforcement` fields say whether this was
-   configuration-only or also proved delivery from the exact installed Hook
-   runtime for this verification command. Never infer current protection from a block
-   recorded by another session or an older Plugin version.
-
-   Interpret `runtime_enforcement.status` literally:
-
-   - `requires_current_invocation_hook_probe`: this exact verification command
-     has no matching PreToolUse event; report setup only.
-   - `stale_or_unattested_hook_runtime`: an event exists, but it is not bound
-     to the currently installed Plugin version and Hook definition; stop.
-   - `current_invocation_hook_delivery_observed_block_not_tested`: the current
-     runtime reaches Hook-visible local tools in this session, but a protected
-     block has not been tested.
-   - `current_invocation_protected_block_observed`: current runtime delivery and a
-     protected PreToolUse block exist in the same session. This does not extend
-     protection to hosted or otherwise Hook-invisible paths.
-
-   These are the normal two approval screens. Never add `--data-dir` derived
-   from a guessed path. If either command reports that the installed Plugin
-   identity or data directory cannot be verified, lead with the setup-failure
-   wording and stop. Do not fall back to asking the user for internal
-   diagnostics.
-
-   If an earlier exploratory command was denied before setup, say explicitly
-   that setup itself was not attempted. Do not call that command the initial
-   setup or claim that no Hook was delivered.
-
-5. For a manual context-bound Phase B workflow, run `doctor` and `status` with
-   the exact context-supplied `--workspace` and `--data-dir` values when that
-   workflow requires the individual commands. For a normal marketplace setup,
-   the combined `setup verify` above is only the configuration gate. Stop and
-   explain every failing check before protected-source review or stronger
-   policy tests. Do not treat `configuration_passed` as Hook-delivery evidence. A
-   legacy manifest may remain runtime-readable and active while reporting
-   `registration_writable: false` and `migration_required: true`.
-   In a manual Phase B run, if `init`, `doctor`, `status`, or `protect scan`
-   returns an error or non-healthy status, stop that run immediately. Do not
-   continue to any send test, do not attempt the protected call, and do not
-   treat a later recovery as evidence for the failed run. Diagnose or prepare
-   a fresh run separately.
-   For steps 6 through 11 in a normal marketplace installation, continue to
-   use the installed launcher without `--data-dir`; the same verified resolver
-   selects the Plugin data directory. A manual context-bound workflow instead
-   keeps using only its exact supplied `--data-dir` commands.
-### Open the project's live logs after setup
-
-Opening the live log UI is part of the normal product setup experience, not an
-exhibition-only step. After the normal marketplace setup verification returns
-`configuration_passed`, open the logs without asking the user to request them
-separately. Do this for both newly initialized and already configured projects.
-Do not run this step after a failed setup gate. Manual Phase B harnesses retain
-their exact supplied commands and do not launch this additional server.
-
-Say: `設定を確認できました。このプロジェクトのログ画面を開きます。`
-Use the same installed launcher and verified workspace. The trusted management
-classification is not host filesystem permission. Apply the permission rules
-above to this command too: if Plugin data is outside the host's granted paths,
-request approval for this exact command before running it, with a short summary
-that this opens a read-only local log screen and does not change protection.
-If the current permission profile already grants access and approval is disabled,
-use that existing permission without asking again. If the required permission is
-unavailable, retain the successful setup result and report only the UI failure.
-For an approval request use this summary (and the identical justification):
-`ToolUseProxyの操作確認｜行うこと：確認済みのこのプロジェクトのログ画面を開きます｜変更されるもの：ありません｜外部通信：ありません｜確認が必要な理由：専用保存領域を読み取るためです｜この内容で実行してよいですか？`
-
-```text
-sh "<PLUGIN_ROOT>/hooks/run_cli.sh" logs --workspace <workspace-root> --json
+```sh
+sh "<PLUGIN_ROOT>/hooks/run_cli.sh" setup --workspace "<WORKSPACE>" --data-dir "<PLUGIN_DATA>" --accept-judge-data --json
 ```
 
-This is a foreground local server, not a command that completes immediately.
-The first JSON line reports `status: ready`, `url`, and `workspace_root`.
-Use a short initial tool yield. Once `ready` is returned, leave the process
-running; do not wait for server exit before opening the UI. Reuse an existing
-live server from this task only when its verified workspace and Plugin version
-match. If it exited, start it again. Do not kill another task's server.
+`--model <MODEL>` selects the judge model explicitly; otherwise the independent CLI
+uses its default model. This is not necessarily the model of the current task.
+Setup creates configuration and recording tables and starts the live log viewer.
+Open the returned viewer URL in Codex's browser side panel when available. A URL in
+JSON alone is not an opened screen. If the viewer fails, explain that configuration
+and viewer startup are separate outcomes; use `logs` to retry.
 
-In Codex Desktop use `mcp__codex_app__open_in_codex` with
-`target: {type: "browser", url: <the returned URL>}` and `placement: "right"`.
-Open only the URL actually returned by the current server. Do not invent a
-port or reuse a URL from a different project. If this UI tool is unavailable,
-show a clickable link to the local URL. Do not open a system browser without
-the user's request. A queued app result means opening was requested, not that
-the screen has been visibly verified.
+```sh
+sh "<PLUGIN_ROOT>/hooks/run_cli.sh" logs --workspace "<WORKSPACE>" --data-dir "<PLUGIN_DATA>" --json
+```
 
-The command serves only the selected project's DB logs, read-only, on loopback.
-It does not initialize, register protected sources, enable protection, or clear
-history. Stop this foreground process with Ctrl+C when it is no longer needed.
-If the log server or browser cannot open, report the setup verification result
-and UI failure separately. Never roll back protection, rerun setup, or request
-Hook trust merely because the viewer failed. A viewer showing saved logs does
-not establish current Hook delivery or successful enforcement; retain the
-verification's actual runtime status in the final report.
+`configured_unverified` is configuration only. To claim protection works, separately
+observe a fresh PreToolUse, the judge's decision, and whether the actual tool executed.
+Do not call an installed/enabled Plugin or a populated DB proof of current protection.
 
-6. Treat the generated `protected_sources.json` as a user-owned manifest. Never edit it directly on the user's behalf. If `status` reports that schema is omitted or v1, create a value-free migration plan on POSIX:
+## Register a source
 
-   ```text
-   sh "<PLUGIN_ROOT>/hooks/run_cli.sh" protect migrate plan --workspace <workspace-root> --json
-   ```
+For an explicitly named file, register it directly. The command registers the whole
+file without reading its contents or judging whether its passages are secret.
 
-   Show the user the from/to schema, source count, whether a missing `sources` field will be added, formatting policy, private backup name, and preservation guarantees. Never show the manifest body, unknown-field values, source values, or previews. Explain that migration preserves existing entries, source order, existing key order, unknown fields, selectors, and protection semantics while changing the schema declaration and, only when `sources` is missing, adding the semantically equivalent empty list. It infers no selectors. It stores an exact-byte private backup under the data directory and normalizes the installed manifest to UTF-8, 2-space indentation, LF, and a trailing newline. Strict JSON does not support comments; do not strip comments or accept duplicate keys.
+```sh
+sh "<PLUGIN_ROOT>/hooks/run_cli.sh" protect add --path "<RELATIVE_FILE>" --workspace "<WORKSPACE>" --data-dir "<PLUGIN_DATA>" --json
+```
 
-   Wait for explicit user approval of that exact migration plan. Setup approval, permission to edit another file, or a request to register a source does not approve migration. After approval, pass the unchanged revision and input manifest hash returned by the plan:
+`protect plan` is optional for a preview request or for clarifying a proposed target;
+it is not a prerequisite to `protect add`. `protect list` is for listing registrations,
+not a required follow-up after a successful add. Explain structured errors briefly:
+missing file → check its name; directory → ask for files; outside workspace → identify
+the intended project. Do not retry an unchanged error or silently broaden scope.
 
-   ```text
-   sh "<PLUGIN_ROOT>/hooks/run_cli.sh" protect migrate apply --migration-revision <migration-revision> --expected-manifest-sha256 <manifest-sha256> --workspace <workspace-root> --json
-   ```
+Never access a file the user forbids, register unrelated sources, or silently import
+an old manifest. Existing DB registrations are retained; a manifest-only installation
+requires a reviewed migration instead of an empty catalog presented as protection.
 
-   The apply command accepts no replacement JSON. If the manifest changed, run `protect migrate plan` again, present the new plan, and obtain new approval. For an interruption or durability-unknown result, retry the exact same apply command. The workspace lock serializes cooperating ToolUseProxy writers, but not a same-UID non-cooperating editor; filesystem updates are not guaranteed to be serialized across the final validation-to-replace or durability-revalidation-to-completion windows. Run migration only on POSIX (macOS/Linux); it is unsupported on Windows. Migration approval never approves a later protected-source proposal.
-7. After schema v2 and `registration_writable: true` are confirmed, explicitly run the bounded offline scanner:
+## Verification is a separate task
 
-   ```text
-   sh "<PLUGIN_ROOT>/hooks/run_cli.sh" protect scan --workspace <workspace-root> --json
-   ```
+Run a leakage or Hook test only when requested, or as part of explicitly requested
+installation diagnostics. Establish the test data and destination first; a request to
+register a file does not authorize sending its contents anywhere. Prefer synthetic
+inputs. Record fresh PreToolUse arrival, the decision, and actual execution evidence.
+Report uncertainty honestly, but do not make such proof a condition of metadata registration.
 
-   The scanner is read-only for source files and the manifest, performs no network access, and uses fixed limits for traversal depth, entries, supported files, total bytes, and candidates. It excludes VCS, dependencies, virtual environments, build/cache directories, symlinks, and ToolUseProxy runtime data. It writes only a value-free candidate/review audit plus internal source hash/stat to the local runtime database and returns up to ten review candidates in stable relative-path order. Show the relative path, selected scope, reason codes, confidence, and scan completeness. Never show or repeat source values, source hashes, absolute paths, or file previews. If `scan_complete` is false, explain the reached limit reasons and that unscanned scope remains; never report that no protected source exists.
+## Inspect and explain Hook roles
 
-   Present every returned candidate in one numbered review list. Each item must
-   include:
+Use `status` or `doctor` with the same workspace and data arguments. These are
+configuration checks, not fresh Hook proof.
 
-   - `ファイル`: show only the workspace-relative path.
-   - `守る内容`: explain selectors as scope, not syntax. For `dotenv_keys`,
-     say that only the values of the named settings are selected, not every
-     value in the file. For `json_pointers`, identify the selected JSON fields
-     without showing their values. If there is no selector, say that the file
-     content is selected.
-   - `できること`: say that ToolUseProxy can stop an attempt to send the
-     selected content outside before the tool runs.
-   - `「守る」を選ぶと`: say that the item is added to ToolUseProxy's protected
-     list and the source file itself is not changed. Do not name the manifest.
-   After the list, ask for all decisions in one reply. Explain that natural
-   answers such as `全部守る` or `1と3は守る、2は見送る、4は今後表示しない`
-   are accepted. Do not require an exact reply format. If only some items have
-   an unambiguous decision, ask only about the undecided item numbers before
-   changing anything.
+- SessionStart / SubagentStart: explain coverage and hosted-tool limitations.
+- PreToolUse: record the pending call, judge dependencies/externality, then traverse.
+- PostToolUse: record actual output and update the node. Cannot undo execution.
+- Stop: no final-answer similarity check and no forecast-based additional stop.
 
-   Map `守る` to approve, `今回は見送る` to reject, and
-   `今後は候補に出さない` to ignore internally. Never require the user to
-   reply with the English command words.
+Hosted tools such as WebSearch do not reliably pass through Codex ToolUse hooks.
+Never send registered protected content or derived content to hosted tools. Public
+research must use public-only queries. This instruction is not technical interception.
 
-   Keep the exact value-free proposals and opaque revisions from the CLI result
-   for the apply command, but do not make the user read raw JSON or internal
-   candidate IDs. If the exact result is no longer available, stop and rerun
-   the same bounded discovery command instead of reconstructing it. If the user
-   says an item is unclear, explain its `守る内容` and what changes, then collect
-   the remaining decisions in the same review batch.
-8. If the user or agent already knows one `.env`, `.env.*`, or JSON path, use
-   the selector-aware explicit-path fallback:
+When reviewing Hook trust, check the actual installed source, all five definitions,
+and their paths. Explain that hooks run with local user permissions and that the
+judge makes model-provider requests. Do not accept unrelated pending hooks on the
+user's behalf or describe Hook trust as proof that the model classified correctly.
 
-   ```text
-   sh "<PLUGIN_ROOT>/hooks/run_cli.sh" protect suggest --path <workspace-relative-path> --workspace <workspace-root> --json
-   ```
+## Stop or remove protection
 
-   `suggest` has the same source/manifest read-only and value-free output/storage boundary as `scan`. Repeat `--path` to review up to ten known paths together.
+The agent-facing `unsetup` command does not remove protection. Administrative stop
+and reactivation use the independent administrator approval boundary. Do not edit
+Plugin enablement, source registrations, judge policy, or authority state to escape
+a denial. Never treat a confirmation string the agent can generate as human approval.
 
-   If the user explicitly asks to protect a complete UTF-8 text file such as a
-   Markdown research plan, use the whole-file form instead. It remains bounded
-   to one workspace-relative, non-symlink regular file of at most 1 MiB and
-   does not add that format to automatic scanning:
+## Retired v0.1 behavior
 
-   ```text
-   sh "<PLUGIN_ROOT>/hooks/run_cli.sh" protect suggest --path <workspace-relative-path> --whole-file --workspace <workspace-root> --json
-   ```
-
-   In the review card, say plainly that the entire file content is selected.
-   Never preview or quote it. A directory-level request may be translated into
-   a value-free list of relative file paths, but it is only a scope plan: it is
-   not approval. Suggest the bounded path batch, show every relative path and
-   scope together, and collect an explicit decision for every item.
-9. Wait for explicit user decisions for the reviewed batch. Approval is not implied by setup, diagnosis, manifest migration, running a scan, a prior request to inspect a file, or permission to edit other project files. After every item has a clear decision, pass each unchanged candidate ID and opaque revision plus the shared manifest hash returned by `scan` or `suggest` in one command:
-
-   ```text
-   sh "<PLUGIN_ROOT>/hooks/run_cli.sh" protect review --decision <candidate-id> <opaque-revision> <approve|reject|ignore> [--decision ...] --expected-manifest-sha256 <manifest-sha256> --workspace <workspace-root> --json
-   ```
-
-   Batch review holds the workspace lock while every candidate is checked and
-   writes the manifest once for all approved items. A changed source, manifest,
-   duplicate decision, unknown candidate, or stale detector stops the batch;
-   never drop the failing item or weaken the comparison. For an interruption or
-   durability-unknown result, retry the exact same review command. Run a fresh
-   scan after a successful batch only when `remaining_candidate_count` was
-   nonzero or the scan was incomplete. The single-candidate approve, reject,
-   and ignore commands remain compatibility fallbacks, not the normal UX.
-
-   After a Plugin update, never reuse a pending candidate ID, opaque revision, or approval command created by an older protected-source detector. If approve, reject, or ignore returns `candidate_detector_stale`, treat it as a version boundary rather than a transient error: do not retry the cached command, run `protect scan`, present the current detector's new proposal, and obtain new explicit approval. Old reject/ignore decisions do not suppress a new detector version. Already-approved manifest entries remain registered. Only an exact retry for a candidate already in `approving` or `approved` may cross the version boundary to recover an interrupted durable approval.
-
-   Run the whole `protect scan / suggest / review / approve / reject / ignore` workflow only on POSIX (macOS/Linux); it is not supported on Windows yet. Neither `init` nor a Hook runs the scanner implicitly.
-
-   If the user asks to stop protecting one already registered file, never edit
-   `protected_sources.json` directly and never use uninstall. Create the exact
-   read-only plan with `protect remove plan --path <workspace-relative-path>
-   --workspace <workspace-root> --json`. Show the selected relative path, say
-   that the source file and all other registrations remain unchanged, and wait
-   for explicit approval. Then pass the same path plus the unchanged removal
-   revision and manifest hash to `protect remove apply`. A stale plan or a
-   different path must fail closed. After success, report that only the
-   registration was removed; do not say that the file was deleted. This exact
-   local management command is allowed to recover even when the selected source
-   file is already unavailable, but appended shell commands, another launcher,
-   another workspace, malformed revisions, and external ToolUseProxy commands
-   are not trusted as self-operations.
-
-10. Use `status --hook-probe-token <fresh-probe-token>` to verify the database,
-    schema v2 manifest, settings, and current-invocation Hook delivery.
-    Generate a different token with the same exact format for every status
-    invocation. Without a fresh token, status is deliberately
-    configuration-only and cannot return `active`.
-    `configured_unverified` is not active protection. `active` applies only to
-    Hook-visible local tools for the verified invocation; it does not mean that a
-    complete scan ran or that every sensitive file is registered.
-
-11. If the user asks to uninstall, remove or disable the Plugin first so new Hook writes stop. Data retention is the default; Plugin or package removal never approves data deletion. If the user also asks to delete local data, run a non-mutating plan from an installed package or the exact release artifact being removed:
-
-   ```text
-   sh "<PLUGIN_ROOT>/hooks/run_cli.sh" uninstall plan --json
-   ```
-
-   Show the selected data directory, managed file count, managed byte count, unmanaged top-level entry count, and that all workspaces sharing the database will be affected. Never inspect or reveal stored payloads. Wait for explicit approval of that exact deletion plan. Then pass the unchanged opaque confirmation token:
-
-   ```text
-   sh "<PLUGIN_ROOT>/hooks/run_cli.sh" uninstall apply --confirmation-token <confirmation-token> --json
-   ```
-
-   Do not infer approval from a request to remove Plugin code, uninstall a Python package, clear a different cache, or approve a protected source. If managed data changes after review, `apply` rejects the stale token; create and present a new plan. The command deletes only the ToolUseProxy database / SQLite sidecars, migration backups, and manifest backups. It retains unknown entries, workspace manifests, protected source files, symlink targets, filesystem snapshots, and external backups. It does not provide secure erase.
-
-The core defaults record tool activity and review final responses; PreToolUse
-blocking is disabled until explicitly configured. The normal fixed
-setup profile described above explicitly enables PreToolUse file-payload
-blocking after the user approves the setup. Enabling PreToolUse also enables
-MCP leak evaluation; do not describe ordinary MCP protection as requiring
-another opt-in.
+Do not use `setup apply --profile file-payload-exact`, similarity-score thresholds,
+externality rule learning, forecast/early-stop commands, or final-response rewriting
+as instructions for v0.2. Historical research code and records do not establish current
+product capabilities. Do not assert that all setup operations or Hook checks are offline.
