@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 import secrets
 import sqlite3
+from socketserver import TCPServer
 from time import monotonic
 from urllib.parse import parse_qs, urlsplit
 
@@ -320,7 +321,14 @@ def make_server(reader, port=0):
             self.end_headers()
             self.wfile.write(body)
 
-    server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    class LoopbackHTTPServer(ThreadingHTTPServer):
+        def server_bind(self):
+            # HTTPServer otherwise performs reverse DNS during bind. The viewer
+            # only serves this numeric loopback address and needs no DNS name.
+            TCPServer.server_bind(self)
+            self.server_name, self.server_port = self.server_address[:2]
+
+    server = LoopbackHTTPServer(("127.0.0.1", port), Handler)
     return server, f"http://127.0.0.1:{server.server_port}/{token}/"
 
 

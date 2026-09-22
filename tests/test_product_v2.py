@@ -266,3 +266,18 @@ def test_skill_and_product_metadata_describe_the_same_engine():
         not in skill
     )
     assert "without sending protected source data to a remote service" not in json.dumps(metadata)
+
+
+def test_viewer_bind_does_not_resolve_dns(tmp_path, monkeypatch):
+    import socket
+    from tooluseproxy.log_viewer import LogReader, make_server
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("loopback viewer must not perform DNS resolution")
+
+    monkeypatch.setattr(socket, "getfqdn", forbidden)
+    server, url = make_server(LogReader(tmp_path / "events.db"))
+    try:
+        assert url.startswith("http://127.0.0.1:")
+    finally:
+        server.server_close()
