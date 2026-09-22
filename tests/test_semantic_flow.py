@@ -285,7 +285,7 @@ def test_local_work_defers_provenance_but_later_send_is_blocked(fixture, monkeyp
         return {**verdict([previous[-1]['node_id']], externality='external' if command == 'send derived' else 'local'), 'accesses': []}
 
     def run(event):
-        return process_hook(store, event, judge=detail, screening_judge=screen)
+        return process_hook(store, event, judge=detail, screening_judge=screen, target_judge=lambda _: {})
 
     assert run(first) == {}
     assert run(record('read', 'read private.txt', post=True, output='synthetic source')) == {}

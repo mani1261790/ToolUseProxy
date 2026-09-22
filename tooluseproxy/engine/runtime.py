@@ -63,7 +63,11 @@ def hook_output(result: dict, phase: str) -> dict:
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
                 "permissionDecision": "deny",
-                "permissionDecisionReason": "送信する内容から登録済みの秘密情報源へ依存経路が見つかったため、実行前に停止しました。",
+                "permissionDecisionReason": (
+                    "送信する内容に登録済みの秘密情報との一致が見つかったため、実行前に停止しました。"
+                    if result.get("reason") == "protected_content_match" else
+                    "送信する内容から登録済みの秘密情報源へ依存経路が見つかったため、実行前に停止しました。"
+                ),
             }
         }
     if result["action"] == "unavailable":
@@ -111,7 +115,7 @@ def screen_externality(db_path, event, model, provider):
     return verdict
 
 
-def process_hook(store, event, *, judge=None, screening_judge=None) -> dict | None:
+def process_hook(store, event, *, judge=None, screening_judge=None, target_judge=None) -> dict | None:
     try:
         config = configuration(store.db_path, event.workspace_id)
     except (ValueError, OSError, AttributeError):
@@ -163,16 +167,29 @@ def process_hook(store, event, *, judge=None, screening_judge=None) -> dict | No
                             raise GraphUnavailable("semantic_prompt_budget_exceeded")
                         return provider(records)
 
-                    result = analyze_properties(
-                        store.db_path,
-                        event.workspace_id,
-                        event.session_id,
-                        event.event_id,
-                        sources,
-                        bounded_judge,
-                        model=model,
-                        sources_refresh=lambda: [dict(asdict(source), node_id="source:" + source.source_id) for source in store.list_protected_sources_for_workspace(event.workspace_id)],
-                    )
+                    def graph_decision():
+                        return analyze_properties(
+                            store.db_path,
+                            event.workspace_id,
+                            event.session_id,
+                            event.event_id,
+                            sources,
+                            bounded_judge,
+                            model=model,
+                            sources_refresh=lambda: [dict(asdict(source), node_id="source:" + source.source_id) for source in store.list_protected_sources_for_workspace(event.workspace_id)],
+                        )
+
+                    if sources:
+                        from tooluseproxy.engine.inspection import inspect_and_decide
+                        def target_provider(records):
+                            if time.monotonic() - started > 480:
+                                raise GraphUnavailable("semantic_analysis_budget_exceeded")
+                            return (target_judge or provider)(records)
+                        result = inspect_and_decide(store, event, sources, target_provider,
+                                                    graph_decision, node_id, model)
+                    else:
+                        result = graph_decision()
+
     except (GraphUnavailable, JudgeProviderError) as exc:
         result["reason"] = str(exc)
     except Exception:
