@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from tooluseproxy.engine.identity import make_event_id
+from tooluseproxy.engine.evidence import migrate, observe
 from tooluseproxy.engine.workspace import resolve_workspace
 
 
@@ -88,6 +89,8 @@ class Journal:
                     recorded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
             """)
 
+            migrate(conn)
+
     def register_workspace(self, root: str):
         workspace = resolve_workspace(root, root)
         if not workspace.ready:
@@ -112,6 +115,8 @@ class Journal:
                 "SELECT sequence_no FROM events WHERE event_id=?", (event.event_id,)
             ).fetchone()
             if existing:
+                migrate(conn)
+                observe(conn, event, existing[0])
                 return
             sequence = conn.execute("SELECT COALESCE(MAX(sequence_no),0)+1 FROM events").fetchone()[
                 0
@@ -145,6 +150,8 @@ class Journal:
                     sequence,
                 ),
             )
+            migrate(conn)
+            observe(conn, event, sequence)
 
     def list_protected_sources_for_workspace(self, workspace: str):
         with sqlite3.connect(self.db_path, timeout=5) as conn:
