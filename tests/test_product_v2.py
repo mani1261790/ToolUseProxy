@@ -381,3 +381,23 @@ def test_unsetup_missing_admin_never_prompts_or_changes_data(tmp_path, capsys, m
     assert main(['unsetup', 'open', *args]) == 1
     assert json.loads(capsys.readouterr().out)['status'] == 'administrator_installation_required'
     assert (data / 'semantic-flow.json').read_bytes() == before
+
+
+def test_setup_discloses_background_and_does_not_change_existing(tmp_path, capsys):
+    from tooluseproxy.app import main
+    root = tmp_path / 'root'
+    root.mkdir()
+    data = tmp_path / 'data'
+    args = ['setup','--workspace',str(root),'--data-dir',str(data),'--no-viewer']
+    assert main(args) == 1
+    assert 'バックグラウンド' in json.loads(capsys.readouterr().out)['message']
+    assert main(args+['--accept-judge-data']) == 0
+    capsys.readouterr()
+    saved = data / 'semantic-flow.json'
+    value = json.loads(saved.read_text())
+    assert next(iter(value['workspaces'].values()))['background_provenance'] is True
+    next(iter(value['workspaces'].values())).pop('background_provenance')
+    saved.write_text(json.dumps(value))
+    assert main(args) == 0
+    capsys.readouterr()
+    assert json.loads(saved.read_text()) == value

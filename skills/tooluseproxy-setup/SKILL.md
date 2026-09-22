@@ -45,10 +45,10 @@ Do not say 「流出しないことを確認しました」 when only registrati
 
 ToolUseProxy records Hook-visible ToolCalls in events.db. An independent `codex exec`
 judges information dependencies and possible external communication. The policy
-traverses those dependencies and stops external calls connected to registered sources.
+traverses those dependencies and stops external calls connected to registered sources. Independent exact-content DLP also checks resolved transmission contents; a DLP match is a distinct reason, not an inferred graph edge.
 This is inferred provenance, not proof of complete information-flow tracking.
 
-The judge receives recorded ToolCall inputs, outputs, and registered-source metadata.
+The judge receives recorded ToolCall inputs, outputs, registered-source metadata, and bounded local resource evidence needed to resolve a transmission. New setup also enables background provenance analysis, which uses the model.
 They may contain private information. It is NOT a local-only comparison and does NOT
 reuse the running Codex conversation internally. Explain the selected model/provider
 and the data it receives before initial setup. Reuse explicit consent already given;
@@ -122,9 +122,10 @@ configuration checks, not fresh Hook proof.
 
 - SessionStart / SubagentStart: explain coverage and hosted-tool limitations.
 - PreToolUse: record and screen external communication first. Definite local calls defer
-  provenance; external/unknown calls analyze dependencies and traverse.
-- PostToolUse: record actual output; defer provenance until a later possible external call.
-  It does not launch a model or undo execution.
+  provenance; potential external calls inspect transmission evidence, check DLP, and traverse dependencies.
+- PostToolUse: record actual output and observed resource generations. When enabled at setup,
+  enqueue durable background provenance analysis after the Hook response; this uses the model.
+  It cannot undo execution. Existing configurations are not silently opted in.
 - Stop: no final-answer similarity check and no forecast-based additional stop.
 
 Hosted tools such as WebSearch do not reliably pass through Codex ToolUse hooks.
@@ -147,6 +148,13 @@ The agent-facing `unsetup` command does not itself remove protection. Administra
 and reactivation use the independent administrator approval boundary. Do not edit
 Plugin enablement, source registrations, judge policy, or authority state to escape
 a denial. Never treat a confirmation string the agent can generate as human approval.
+
+## Provenance diagnostics
+
+`analyze status` reports durable-job counts; `analyze run` resumes a bounded batch with the
+same workspace/data arguments. These do not prove live interception. The log detail links
+to a separate 2D provenance page showing pinned revisions without raw file contents.
+Content-match blocks and graph-path blocks are separate outcomes. A missing graph is not safety.
 
 ## Retired v0.1 behavior
 

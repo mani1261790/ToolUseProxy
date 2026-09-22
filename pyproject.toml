@@ -49,6 +49,7 @@ testpaths = [
   "tests/test_jobs.py",
   "tests/test_fast_path.py",
   "tests/test_review.py",
+  "tests/test_graph_view.py",
   "tests/test_legacy_archive.py",
   "tests/test_semantic_flow.py",
   "tests/test_hook_watchdog.py",

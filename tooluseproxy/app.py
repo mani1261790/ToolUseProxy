@@ -30,7 +30,7 @@ def parser():
     )
     result.add_argument("--version", action="version", version=__version__)
     commands = result.add_subparsers(dest="command", required=True)
-    for name in ("setup", "init", "status", "doctor", "logs", "protect", "unsetup", "hook"):
+    for name in ("setup", "init", "status", "doctor", "logs", "protect", "unsetup", "analyze", "hook"):
         command = commands.add_parser(name)
         command.add_argument("--data-dir", type=Path)
         command.add_argument("--db", type=Path)
@@ -52,11 +52,13 @@ def parser():
             command.add_argument(
                 "--accept-judge-data",
                 action="store_true",
-                help="ToolCallのI/Oと登録メタデータをCodex判定モデルへ渡すことを確認",
+                help="ToolCallのI/O・必要な資源の証拠を判定モデルへ渡し、バックグラウンドで来歴を解析することを確認",
             )
             command.add_argument("--model")
             command.add_argument("--no-viewer", action="store_true")
             command.add_argument("--protect", type=Path, action="append", default=[])
+        if name == "analyze":
+            command.add_argument("operation", choices=("status", "run"))
         if name == "logs":
             command.add_argument("--foreground", action="store_true")
         if name == "protect":
@@ -88,6 +90,7 @@ def _save_configuration(db: Path, workspace: str, model):
         "provider": "codex_exec",
         "model": model,
         "send_recorded_content": True,
+        "background_provenance": True,
         "mode": "enforce",
         "failure_policy": "allow_with_warning",
     }
@@ -127,7 +130,7 @@ def _setup(args, paths, root):
     if not args.accept_judge_data:
         return {
             "status": "consent_required",
-            "message": "ToolCallのI/OをCodexの判定モデルへ渡します。"
+            "message": "ToolCallのI/Oと必要なローカル資源の証拠をCodexの判定モデルへ渡します。バックグラウンド解析もモデルを使用します。"
             "送信先と、判定不能時は警告して継続する方針を確認してから設定してください。",
         }, 1
     if not paths.db_path.exists() and (root / "protected_sources.json").exists():
@@ -268,6 +271,18 @@ def _protect(args, paths, root):
     }, 0
 
 
+def administrator_status():
+    from tooluseproxy.authority_admin import ADMIN_SCRIPT
+    try:
+        for entry in (ADMIN_SCRIPT, *ADMIN_SCRIPT.parents):
+            info = entry.lstat()
+            if entry.is_symlink() or info.st_uid != 0 or info.st_mode & 0o022:
+                return "invalid_installation"
+        return "installed_authentication_unverified" if not ADMIN_SCRIPT.stat().st_mode & 0o222 else "invalid_installation"
+    except OSError:
+        return "not_installed"
+
+
 def main(argv=None):
     args = parser().parse_args(argv)
     try:
@@ -290,14 +305,24 @@ def main(argv=None):
                 result, code = _setup(args, paths, root)
             elif args.command == "protect":
                 result, code = _protect(args, paths, root)
+            elif args.command == "analyze":
+                from tooluseproxy.engine.workspace import make_workspace_id
+                from tooluseproxy.engine.jobs import drain, queue_status
+                scope = make_workspace_id(str(root))
+                count = drain(paths.db_path, scope) if args.operation == "run" else 0
+                result, code = {"completed": count, "queue": queue_status(paths.db_path, scope)}, 0
             elif args.command in ("status", "doctor"):
                 from tooluseproxy.engine.workspace import make_workspace_id
 
+                from tooluseproxy.engine.jobs import queue_status
                 config = configuration(paths.db_path, make_workspace_id(str(root)))
                 result, code = (
                     {
                         "engine": "semantic-flow-v2",
                         "configured": config is not None,
+                        "background_provenance": bool(config and config.get("background_provenance")),
+                        "queue": queue_status(paths.db_path, make_workspace_id(str(root))),
+                        "administrator": administrator_status(),
                         "hook_verified": False,
                         "failure_policy": "allow_with_warning",
                     },

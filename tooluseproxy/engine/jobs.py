@@ -191,3 +191,16 @@ def foreground_waiting(db, scope, session):
                 (scope, session, time.time()),
             ).fetchone()
         )
+
+
+def queue_status(db, scope):
+    """Diagnostics must not initialize a database or mutate the queue."""
+    if not Path(db).is_file():
+        return {}
+    conn = sqlite3.connect(Path(db).resolve().as_uri() + "?mode=ro", uri=True, timeout=1)
+    try:
+        if not conn.execute("SELECT 1 FROM sqlite_master WHERE name='flow_jobs'").fetchone():
+            return {}
+        return dict(conn.execute("SELECT status,COUNT(*) FROM flow_jobs WHERE scope=? GROUP BY status", (scope,)))
+    finally:
+        conn.close()
