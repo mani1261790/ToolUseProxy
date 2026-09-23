@@ -74,6 +74,11 @@ def test_local_calls_and_post_recording_do_not_wait_for_graph_lock(tmp_path):
     import concurrent.futures
     from tooluseproxy.engine.runtime import _process_once
     root, store, post = fixture(tmp_path)
+    with sqlite3.connect(store.db_path) as conn:
+        conn.execute('INSERT INTO protected_sources '
+            '(source_id,path,source_type,sensitivity,policy_tags_json,selector_json,workspace_id,source_key) '
+            'VALUES (?,?,?,?,?,?,?,?)',
+            ('fixture', 'private.txt', 'file', 'secret', '[]', 'null', post.workspace_id, 'fixture'))
     pre = event_from('pre_tool_use', dict(cwd=str(root), session_id='s',
         tool_use_id='local-next', tool_name='Bash', tool_input={'command':'cat readme'}), str(root))
     with concurrent.futures.ThreadPoolExecutor() as pool:

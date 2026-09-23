@@ -35,6 +35,49 @@ def test_setup_requires_new_data_consent_before_creating_database(tmp_path, caps
     assert not (tmp_path / "data/events.db").exists()
 
 
+def test_empty_policy_is_decided_without_models_and_rechecked_after_registration(tmp_path, capsys):
+    from tooluseproxy.engine.journal import event_from
+    from tooluseproxy.engine.runtime import _process_once
+    root, data, args, _ = setup(tmp_path, capsys)
+    store = Journal(data / 'events.db')
+    event = event_from('pre_tool_use', dict(cwd=str(root), session_id='s',
+        tool_use_id='outbound', tool_name='send', tool_input={'body':'synthetic'}), str(root))
+    calls = []
+    def unavailable(_):
+        calls.append(True)
+        raise AssertionError('model unavailable')
+    result = _process_once(store, event, screening_judge=unavailable, judge=unavailable)
+    assert result['action'] == 'allow' and result['reason'] == 'no_registered_sources'
+    assert calls == []
+    post = event_from('post_tool_use', dict(event.raw_payload, tool_response='synthetic output'), str(root))
+    assert _process_once(store, post, judge=unavailable)['action'] == 'observed'
+    with sqlite3.connect(store.db_path) as conn:
+        assert json.loads(conn.execute('SELECT payload_json FROM events WHERE event_id=?',
+            (post.event_id,)).fetchone()[0])['tool_response'] == 'synthetic output'
+        if conn.execute("SELECT 1 FROM sqlite_master WHERE name='flow_jobs'").fetchone():
+            assert conn.execute('SELECT COUNT(*) FROM flow_jobs').fetchone()[0] == 0
+    (root / 'private.txt').write_text('synthetic')
+    assert main(['protect', 'add', *args, '--path', 'private.txt']) == 0
+    capsys.readouterr()
+    result = _process_once(store, event, screening_judge=unavailable, judge=unavailable)
+    assert result['action'] == 'unavailable' and len(calls) == 1
+    with sqlite3.connect(store.db_path) as conn:
+        assert conn.execute('SELECT COUNT(*) FROM events WHERE event_id=?', (event.event_id,)).fetchone()[0] == 1
+
+
+def test_empty_policy_never_hides_registration_storage_failure(tmp_path, capsys, monkeypatch):
+    from tooluseproxy.engine.journal import event_from
+    from tooluseproxy.engine.runtime import _process_once
+    root, data, _, _ = setup(tmp_path, capsys)
+    store = Journal(data / 'events.db')
+    event = event_from('pre_tool_use', dict(cwd=str(root), session_id='s',
+        tool_use_id='outbound', tool_name='send', tool_input={}), str(root))
+    def broken(_):
+        raise sqlite3.OperationalError('synthetic inaccessible registration table')
+    monkeypatch.setattr(store, 'list_protected_sources_for_workspace', broken)
+    assert _process_once(store, event)['action'] == 'unavailable'
+
+
 def test_new_setup_has_no_old_analysis_tables_or_manifest(tmp_path, capsys):
     root, data, args, result = setup(tmp_path, capsys)
     assert result["engine"] == "semantic-flow-v2" and not result["hook_verified"]
@@ -262,6 +305,10 @@ def test_exact_issued_viewer_handoff_does_not_wait_for_a_model(tmp_path, capsys)
     from tooluseproxy.log_viewer import LogReader, make_server
 
     root, data, _, configured = setup(tmp_path, capsys)
+    (root / 'private.txt').write_text('synthetic protected content')
+    assert main(['protect', 'add', '--workspace', str(root), '--data-dir', str(data),
+                 '--path', 'private.txt']) == 0
+    capsys.readouterr()
     workspace = configured["workspace_root"]
     server, url = make_server(
         LogReader(data / "events.db", configured["workspace_id"], Path(workspace))

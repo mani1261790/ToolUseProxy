@@ -168,6 +168,7 @@ def test_history_limit_does_not_silently_allow(fixture):
 def test_timeout_is_retried_and_retained_without_dispatch(fixture):
     store, record = fixture
     event = record("one", "git add public.txt")
+    register_fixture_source(store, event.workspace_id)
     config = {
         "workspaces": {
             event.workspace_id: {
@@ -264,6 +265,14 @@ def configure_runtime(store, workspace):
                     'mode': 'enforce', 'failure_policy': 'allow_with_warning'}}}))
 
 
+def register_fixture_source(store, workspace):
+    with sqlite3.connect(store.db_path) as conn:
+        conn.execute('INSERT INTO protected_sources '
+            '(source_id,path,source_type,sensitivity,policy_tags_json,selector_json,workspace_id,source_key) '
+            'VALUES (?,?,?,?,?,?,?,?)',
+            ('fixture', 'unused.txt', 'file', 'secret', '[]', 'null', workspace, 'fixture'))
+
+
 def test_local_work_defers_provenance_but_later_send_is_blocked(fixture, monkeypatch):
     from hook_monitor.runtime.models import ProtectedSource
     store, record = fixture
@@ -307,6 +316,7 @@ def test_failed_screening_does_not_expand_into_implementation_analysis(fixture, 
     store, record = fixture
     event = record('opaque', 'run opaque script')
     configure_runtime(store, event.workspace_id)
+    register_fixture_source(store, event.workspace_id)
     detailed = []
 
     def screen(_):
@@ -366,6 +376,7 @@ def test_graph_receives_recorded_directory_context(fixture):
 def test_transient_model_failure_completes_same_hook_before_allow(fixture):
     store, record = fixture
     event = record('send-after-recovery', 'send public information')
+    register_fixture_source(store, event.workspace_id)
     (store.db_path.parent/'semantic-flow.json').write_text(json.dumps({'workspaces': {
         event.workspace_id: {'provider':'codex_exec', 'send_recorded_content':True,
                             'mode':'enforce', 'failure_policy':'wait_for_decision'}}}))
@@ -374,9 +385,8 @@ def test_transient_model_failure_completes_same_hook_before_allow(fixture):
         calls.append(True)
         if len(calls) == 1:
             raise JudgeProviderError('codex_exec_timeout')
-        return dict(verdict(externality='external'), accesses=[])
-    output = process_hook(store, event, judge=judge,
-                          screening_judge=lambda _: dict(externality='external',complete=True,reason='fixture'))
+        return dict(verdict(externality='local'), accesses=[])
+    output = process_hook(store, event, screening_judge=judge)
     assert output == {} and len(calls) == 2
     with sqlite3.connect(store.db_path) as conn:
         attempts = [json.loads(r[0])['action'] for r in conn.execute('SELECT result FROM judgment_attempts ORDER BY attempt')]
