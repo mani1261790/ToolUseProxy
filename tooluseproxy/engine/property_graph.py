@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import posixpath
 import sqlite3
+import time
 from collections import deque
 from contextlib import closing
 
@@ -41,6 +42,8 @@ def schema(conn):
         CREATE TABLE IF NOT EXISTS graph_output_selections (
             revision TEXT PRIMARY KEY, node TEXT NOT NULL, selection_json TEXT NOT NULL,
             observation_hash TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS graph_resource_selections (
+            revision TEXT PRIMARY KEY, node TEXT NOT NULL, selection_json TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS graph_policies (
             revision TEXT PRIMARY KEY, sources_json TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS graph_progress (
@@ -51,6 +54,29 @@ def schema(conn):
             result TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY(event,policy_revision,graph_revision));
     """)
+
+
+def selection_texts(selection):
+    """Normalize a finite union of observed fragments, without widening to all output."""
+    if not isinstance(selection, dict) or set(selection) not in ({"text"}, {"texts"}):
+        raise GraphUnavailable("invalid_output_selection")
+    texts = [selection["text"]] if "text" in selection else selection["texts"]
+    if (not isinstance(texts, list) or not texts
+        or any(not isinstance(text, str) or not text for text in texts)
+        or sum(len(text) for text in texts) > 128_000):
+        raise GraphUnavailable("invalid_output_selection")
+    return sorted(set(texts))
+
+
+def merge_selections(left, right):
+    # Whole-output evidence subsumes fragments; distinct fragments do not imply
+    # that an unrelated field in the same observation contributed information.
+    if left is None or right is None:
+        return None
+    texts = sorted(set(selection_texts(left) + selection_texts(right)))
+    result = {"text": texts[0]} if len(texts) == 1 else {"texts": texts}
+    selection_texts(result)
+    return result
 
 
 def validate(value, candidates):
@@ -68,26 +94,26 @@ def validate(value, candidates):
         raise GraphUnavailable("invalid_property_reason")
     if not isinstance(value["dependencies"], list) or not isinstance(value["accesses"], list):
         raise GraphUnavailable("invalid_property_lists")
-    seen = set()
+    dependencies = {}
     for edge in value["dependencies"]:
         if (
             not isinstance(edge, dict)
             or set(edge) - {"selection"} != {"node_id", "reason"}
             or not isinstance(edge["node_id"], str)
             or edge["node_id"] not in candidates
-            or edge["node_id"] in seen
             or not isinstance(edge["reason"], str)
             or not 0 < len(edge["reason"]) <= 4000
         ):
             raise GraphUnavailable("invalid_property_edge")
         selection = edge.get("selection")
-        if selection is not None and (
-            not isinstance(selection, dict) or set(selection) != {"text"}
-            or not isinstance(selection["text"], str) or not 0 < len(selection["text"]) <= 128_000
-        ):
-            raise GraphUnavailable("invalid_output_selection")
-        seen.add(edge["node_id"])
-    seen = set()
+        if selection is not None:
+            selection_texts(selection)
+        old = dependencies.get(edge["node_id"])
+        dependencies[edge["node_id"]] = (
+            dict(edge, selection=merge_selections(old.get("selection"), selection))
+            if old is not None else edge
+        )
+    accesses = {}
     for access in value["accesses"]:
         if not isinstance(access, dict) or set(access) != {"path", "mode", "reason"}:
             raise GraphUnavailable("invalid_access")
@@ -106,9 +132,7 @@ def validate(value, candidates):
         ):
             raise GraphUnavailable("invalid_access")
         key = (path, access["mode"])
-        if key in seen:
-            raise GraphUnavailable("duplicate_access")
-        seen.add(key)
+        accesses[key] = access
     requests = value.get("evidence_requests", [])
     if not isinstance(requests, list) or len(requests) > 8:
         raise GraphUnavailable("invalid_evidence_requests")
@@ -118,7 +142,7 @@ def validate(value, candidates):
             raise GraphUnavailable("invalid_evidence_request")
     if value["complete"] and requests:
         raise GraphUnavailable("completed_with_evidence_requests")
-    return value
+    return dict(value, dependencies=list(dependencies.values()), accesses=list(accesses.values()))
 
 
 def persist(conn, workspace, session, node, revision, model, verdict, parent_revisions=None):
@@ -256,33 +280,21 @@ def analyze_properties(
     current_evidence=None,
     require_external=False,
     _visiting=None,
+    _resource_scope=None,
 ):
     with sqlite3.connect(db_path, timeout=5) as conn:
         schema(conn)
-        conn.execute(
-            "INSERT OR REPLACE INTO graph_progress VALUES (?,?,?,?)",
-            (workspace, session, event_id, "analyzing"),
-        )
-    from tooluseproxy.engine.lineage import attach_witnesses, pending_producers, link_producers
+        if _resource_scope is None:
+            conn.execute(
+                "INSERT OR REPLACE INTO graph_progress VALUES (?,?,?,?)",
+                (workspace, session, event_id, "analyzing"),
+            )
+    from tooluseproxy.engine.lineage import attach_witnesses
 
     visiting = set() if _visiting is None else _visiting
     if event_id in visiting or len(visiting) >= 64:
         raise GraphUnavailable("resource_lineage_expansion_budget")
     visiting.add(event_id)
-    with sqlite3.connect(db_path, timeout=5) as conn:
-        producers = pending_producers(conn, workspace, session, event_id, model)
-    for producer, producer_session in producers:
-        analyze_properties(
-            db_path,
-            workspace,
-            producer_session,
-            producer,
-            sources,
-            judge,
-            model=model,
-            sources_refresh=sources_refresh,
-            _visiting=visiting,
-        )
     with sqlite3.connect(db_path, timeout=5) as conn:
         calls = load_calls(conn, workspace, session, event_id, 50_000, 64_000_000)
     if not calls:
@@ -301,17 +313,23 @@ def analyze_properties(
         by_id = {n["node_id"]: i for i, n in enumerate(calls)}
         assessed = {}
 
-        def assess(index, selection=None, depth=0):
+        def assess(index, selection=None, depth=0, resources=None):
             if depth >= 128 or len(assessed) > 50_000:
                 raise GraphUnavailable("output_provenance_expansion_budget")
             producer = calls[index]
-            key = (index, digest(selection))
+            key = (index, digest([selection, resources]))
             if key in assessed:
                 return assessed[key]
             focused = dict(producer)
+            if resources is not None:
+                witnessed = {(r['path'], r['version']) for r in producer.get('resource_observations', [])
+                             if r['mode'] == 'write' and r['status'] == 'observed'}
+                if not resources or any((r['path'], r['version']) not in witnessed for r in resources):
+                    raise GraphUnavailable('resource_selection_not_observed')
+                focused['required_resources'] = resources
             if selection is not None:
                 observed = producer["output"] if isinstance(producer["output"], str) else json.dumps(producer["output"], ensure_ascii=False, sort_keys=True)
-                if not producer["completed"] or observed.count(selection["text"]) != 1:
+                if not producer["completed"] or any(observed.count(text) != 1 for text in selection_texts(selection)):
                     raise GraphUnavailable("output_selection_missing_or_ambiguous")
                 focused["required_output"] = dict(selection, observation_hash=digest(producer["output"]))
             records = {"previous_calls": calls[:index], "current_call": focused}
@@ -320,42 +338,107 @@ def analyze_properties(
             if cached and not reusable(json.loads(cached[0]), producer):
                 cached = None
             candidates = {n["node_id"] for n in calls[:index] if n["completed"]}
-            if cached:
+            from tooluseproxy.engine.contracts import provenance_contract
+            mechanical = provenance_contract(focused)
+            if mechanical is not None:
+                verdict = validate(mechanical, candidates)
+            elif cached:
                 verdict = validate(json.loads(cached[0]), candidates)
             else:
                 from tooluseproxy.engine.review import review
                 verdict = review(db_path, request, records, judge, validate, evidence_context=evidence_context)
+            # A transmitted value selected from a controller-loaded observation
+            # has a mandatory producer edge. A model cannot omit that provenance.
+            observed_edges = {}
+            for part in producer.get('payload_observations', []):
+                parent = part.get('observation', {}).get('source_node_id')
+                if parent is None:
+                    continue
+                if parent not in candidates:
+                    raise GraphUnavailable('observed_transmission_parent_missing')
+                original = calls[by_id[parent]]['output']
+                original = original if isinstance(original, str) else json.dumps(original, ensure_ascii=False, sort_keys=True)
+                content = part.get('content', '')
+                output_selection = ({'text': content} if part.get('encoding') == 'utf-8'
+                             and content and original.count(content) == 1 else None)
+                old = observed_edges.get(parent)
+                if old is not None:
+                    output_selection = merge_selections(old['selection'], output_selection)
+                observed_edges[parent] = dict(node_id=parent, selection=output_selection,
+                                              reason='controller-resolved transmitted output')
+            if observed_edges:
+                dependencies = {edge['node_id']: edge for edge in verdict['dependencies']}
+                for parent, edge in observed_edges.items():
+                    old = dependencies.get(parent)
+                    if old is not None:
+                        edge = dict(edge, selection=merge_selections(old.get('selection'), edge['selection']))
+                    dependencies[parent] = edge
+                verdict = dict(verdict, dependencies=list(dependencies.values()))
             # Relative and absolute aliases must name the same policy resource.
             from tooluseproxy.engine.requirements import resource_identity
             verdict = dict(verdict, accesses=[dict(a, path=resource_identity(a["path"], producer["workspace_root"])) for a in verdict["accesses"]])
+            # Collect all demands on each producer BEFORE reviewing it. A consumer
+            # can use several files and output fragments from the same operation.
+            # One focused parent revision must cover their union, not whichever
+            # resource happened to be visited last.
             links = {}
-            for edge in verdict["dependencies"]:
-                parent_index = by_id[edge["node_id"]]
-                if parent_index >= index:
-                    raise GraphUnavailable("future_output_dependency")
-                links[edge["node_id"]] = assess(parent_index, edge.get("selection"), depth+1)[0]
-            # A same-session file producer may be needed even without a direct
-            # ToolCall edge: demand-driven analysis must materialize that revision.
             from tooluseproxy.engine.lineage import matching_producers
             reads = {a["path"] for a in verdict["accesses"] if a["mode"] == "read"}
-            for origin_event, origin_session, path, _ in matching_producers(conn, workspace, producer["event_id"]):
-                if origin_session == session and path in reads:
-                    origin_index = next((i for i,n in enumerate(calls[:index]) if n["event_id"] == origin_event), None)
-                    if origin_index is not None:
-                        assess(origin_index, None, depth+1)
+            origins = matching_producers(conn, workspace, producer["event_id"])
+            demands = {}
+            for origin_event, origin_session, path, version in origins:
+                if path not in reads:
+                    continue
+                demands.setdefault((origin_event, origin_session), []).append(dict(path=path, version=version))
+            semantic_edges = {edge['node_id']: edge for edge in verdict['dependencies']}
             resource_links = []
-            for origin_event, _, path, _ in matching_producers(conn, workspace, producer["event_id"]):
-                if path in reads:
-                    parent = conn.execute("SELECT h.node,h.revision FROM graph_heads h JOIN graph_revisions r ON r.revision=h.revision JOIN graph_accesses a ON a.revision=r.revision WHERE h.workspace=? AND r.event=? AND a.path=? AND a.mode='write'", (workspace, origin_event, path)).fetchone()
-                    if parent:
-                        resource_links.append(parent)
+            for (origin_event, origin_session), requested in sorted(demands.items()):
+                requested = sorted(requested, key=lambda r: (r['path'], r['version']))
+                origin_index = next((i for i, n in enumerate(calls[:index]) if n['event_id'] == origin_event), None)
+                if origin_session == session and origin_index is not None:
+                    parent_node = calls[origin_index]['node_id']
+                    edge = semantic_edges.get(parent_node)
+                    # A resource's bytes are not the writer's tool response.
+                    # Null output selection adds no response demand when a
+                    # witnessed resource identifies the consumed value. Any
+                    # additional consumed response must be explicitly selected.
+                    scope = requested
+                    parent_revision = assess(origin_index, edge.get('selection') if edge else None,
+                                             depth+1, scope)[0]
+                    if edge is not None:
+                        links[parent_node] = parent_revision
+                elif origin_session != session:
+                    parent_result = analyze_properties(
+                        db_path, workspace, origin_session, origin_event,
+                        sources, judge, model=model, sources_refresh=sources_refresh,
+                        _visiting=visiting, _resource_scope=requested,
+                    )
+                    parent_node, parent_revision = parent_result['node_id'], parent_result['revision']
+                else:
+                    raise GraphUnavailable('resource_producer_missing')
+                resource_links.append((parent_node, parent_revision))
+            for edge in verdict['dependencies']:
+                if edge['node_id'] in links:
+                    continue
+                parent_index = by_id[edge['node_id']]
+                if parent_index >= index:
+                    raise GraphUnavailable('future_output_dependency')
+                links[edge['node_id']] = assess(parent_index, edge.get('selection'), depth+1)[0]
             revision = digest([request, verdict, links, resource_links])
             old_head = conn.execute("SELECT revision FROM graph_heads WHERE workspace=? AND session=? AND node=?", (workspace, session, producer["node_id"])).fetchone()
             with conn:
                 persist(conn, workspace, session, producer, revision, model, verdict, links)
-                link_producers(conn, workspace, producer, revision, verdict)
+                for parent_node, parent_revision in resource_links:
+                    conn.execute('INSERT OR IGNORE INTO graph_edges VALUES (?,?,?,?)',
+                                 (revision, parent_node, producer['node_id'], 'witnessed resource generation'))
+                    conn.execute('INSERT OR IGNORE INTO graph_revision_links VALUES (?,?,?)',
+                                 (revision, parent_node, parent_revision))
                 if selection is not None:
                     conn.execute("INSERT OR IGNORE INTO graph_output_selections VALUES (?,?,?,?)", (revision, producer["node_id"], json.dumps(selection), digest(producer["output"])))
+                if resources is not None:
+                    conn.execute('INSERT OR IGNORE INTO graph_resource_selections VALUES (?,?,?)',
+                                 (revision, producer['node_id'], json.dumps(resources)))
+                if selection is not None or resources is not None:
                     # Keep scoped reviews out of the whole-operation head/cache.
                     if old_head:
                         conn.execute("UPDATE graph_heads SET revision=? WHERE workspace=? AND session=? AND node=?", (old_head[0], workspace, session, producer["node_id"]))
@@ -368,11 +451,14 @@ def analyze_properties(
 
         for index, node in enumerate(calls):
             if node["event_id"] == event_id:
-                current_revision, current_verdict = assess(index)
+                current_revision, current_verdict = assess(index, resources=_resource_scope)
                 current_node = node["node_id"]
                 break
     if current_verdict is None:
         raise GraphUnavailable("current_node_missing")
+    if _resource_scope is not None:
+        visiting.remove(event_id)
+        return dict(node_id=current_node, revision=current_revision)
     with sqlite3.connect(db_path, timeout=5) as conn:
         # Serialize the final policy snapshot and recorded decision with source
         # registration. Model requests finished before this short transaction.
@@ -384,6 +470,7 @@ def analyze_properties(
             "INSERT OR IGNORE INTO graph_policies VALUES (?,?)",
             (policy_revision, json.dumps(sources)),
         )
+        traversal_started = time.monotonic_ns()
         complete = dependency_complete(conn, workspace, current_node)
         roots, policy_complete = bindings(conn, workspace, session, sources)
         path = reach(conn, workspace, session, current_node, roots)
@@ -397,7 +484,8 @@ def analyze_properties(
             action, reason = "unavailable", "property_graph_incomplete"
         else:
             action, reason = "allow", "no_protected_path_observed"
-        result = {"node_id": current_node, "action": action, "reason": reason, "path": path}
+        result = {"node_id": current_node, "action": action, "reason": reason, "path": path,
+                  "reachability_ms": (time.monotonic_ns() - traversal_started) / 1_000_000}
         if action == "unavailable":
             result["retryable"] = False
             result["evidence_needs"] = unresolved_dependencies(conn, workspace, current_node)

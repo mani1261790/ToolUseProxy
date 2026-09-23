@@ -38,6 +38,29 @@ def file_target(path, offset=0, length=None):
     return dict(kind="file", path=path, offset=offset, length=length)
 
 
+def test_observed_output_value_has_exact_extent_and_producer_identity(setup):
+    _, make = setup
+    resolver = make()
+    resolver.observed_calls = ({'node_id': 'call:producer', 'event_id': 'post:producer',
+                                'completed': True, 'output': {'value': 'PUBLIC PRIVATE'}},)
+    result = resolver.resolve(dict(kind='observed', pointer='/previous_calls/0/output/value',
+                                   offset=0, length=6))
+    assert result.coverage == 'complete'
+    assert result.parts[0].content == b'PUBLIC'
+    assert result.parts[0].version.resource.kind == 'event_output'
+    assert result.parts[0].observation['source_node_id'] == 'call:producer'
+
+
+@pytest.mark.parametrize('pointer', ['/previous_calls/0/input', '/previous_calls/8/output',
+                                     '/tool_input/body', '/previous_calls/0/output/missing'])
+def test_observed_target_cannot_select_unprovided_records_or_inputs(setup, pointer):
+    _, make = setup
+    resolver = make()
+    resolver.observed_calls = ({'completed': True, 'output': {'value': 'content'}},)
+    result = resolver.resolve(dict(kind='observed', pointer=pointer, offset=0, length=None))
+    assert result.coverage != 'complete' and not result.parts
+
+
 def test_inline_comes_from_actual_input_and_does_not_store_plaintext(setup):
     root, make = setup
     resolver = make()
@@ -208,6 +231,101 @@ def test_plan_cache_does_not_cache_mutable_file_contents(setup):
     assert len(queried) == 1
     assert first.parts[0].content == b"first" and second.parts[0].content == b"second"
     assert first.parts[0].version.identity != second.parts[0].version.identity
+
+
+def test_plan_reuse_across_invocations_reloads_bytes_and_invalidates_input(setup):
+    import json
+    from tooluseproxy.engine.targets import inspect_transmission
+    root, make = setup
+    existing = make()
+    store = Journal(existing.store.path)
+    with sqlite3.connect(store.db_path) as conn:
+        raw = json.loads(conn.execute('SELECT payload_json FROM events WHERE event_id=?',
+                                     (existing.event,)).fetchone()[0])
+    queried = []
+
+    def provider(records):
+        assert 'previous_calls' not in records
+        queried.append(records)
+        return dict(complete=True, reason='explicit file argument', targets=[
+            dict(kind='file', path=records['tool_input']['path'], pointer=None,
+                 offset=0, length=None, reason='submitted file')])
+
+    contents = []
+    for i, path in enumerate(['data.bin', 'data.bin', 'other.bin']):
+        (root / path).write_text(f'value-{i}')
+        event = event_from('pre_tool_use', dict(raw, tool_use_id=f'repeated-{i}',
+                           tool_input={'path': path}), str(root))
+        store.record(event)
+        _, result, _ = inspect_transmission(store, event, provider)
+        assert result.coverage == 'complete'
+        contents.append(result.parts[0].content)
+    assert contents == [b'value-0', b'value-1', b'value-2']
+    assert len(queried) == 2
+
+
+@pytest.mark.parametrize('premature_observation', [False, True])
+def test_history_dependent_plan_cannot_reuse_an_old_result(setup, premature_observation):
+    import json
+    from tooluseproxy.engine.targets import inspect_transmission
+    root, make = setup
+    existing = make()
+    store = Journal(existing.store.path)
+    with sqlite3.connect(store.db_path) as conn:
+        raw = json.loads(conn.execute('SELECT payload_json FROM events WHERE event_id=?',
+                                     (existing.event,)).fetchone()[0])
+    calls = []
+
+    def provider(records):
+        calls.append(records.get('history_status'))
+        if 'previous_calls' not in records and not premature_observation:
+            return dict(complete=False, reason='requires preceding result', targets=[
+                dict(kind='unresolved', path=None, pointer=None, offset=0, length=None,
+                     reason='preceding result')])
+        index = len(records.get('previous_calls', [{}])) - 1
+        return dict(complete=True, reason='observed result', targets=[
+            dict(kind='observed', path=None, pointer=f'/previous_calls/{index}/output',
+                 offset=0, length=None, reason='result to send')])
+
+    for i in range(2):
+        store.record(event_from('post_tool_use', dict(raw, tool_use_id=f'producer-{i}',
+            tool_response=f'observed-{i}'), str(root)))
+        event = event_from('pre_tool_use', dict(raw, tool_use_id=f'send-{i}'), str(root))
+        store.record(event)
+        _, result, _ = inspect_transmission(store, event, provider)
+        assert result.coverage == 'complete'
+        assert result.parts[0].content == f'observed-{i}'.encode()
+    assert calls == ['not_requested', 'observed', 'not_requested', 'observed']
+
+
+def test_reusable_plan_is_invalidated_by_configuration_evidence(setup, monkeypatch):
+    import json
+    from tooluseproxy.engine.targets import inspect_transmission
+    root, make = setup
+    existing = make()
+    store = Journal(existing.store.path)
+    with sqlite3.connect(store.db_path) as conn:
+        raw = json.loads(conn.execute('SELECT payload_json FROM events WHERE event_id=?',
+                                     (existing.event,)).fetchone()[0])
+    monkeypatch.setattr('tooluseproxy.engine.contracts.evidence_requirements',
+                        lambda *_: [dict(path='send.conf', reason='current configuration')])
+    queried = []
+
+    def provider(records):
+        path = records['execution_definitions'][0]['content']
+        queried.append(path)
+        return dict(complete=True, reason='configured payload', targets=[
+            dict(kind='file', path=path, pointer=None, offset=0, length=None, reason='configured file')])
+
+    for i, path in enumerate(['first.txt', 'second.txt']):
+        (root / 'send.conf').write_text(path)
+        (root / path).write_text(f'body-{i}')
+        event = event_from('pre_tool_use', dict(raw, tool_use_id=f'config-send-{i}'), str(root))
+        store.record(event)
+        resolver, result, _ = inspect_transmission(store, event, provider)
+        assert result.parts[0].content == f'body-{i}'.encode()
+        assert resolver.unchanged(result)
+    assert queried == ['first.txt', 'second.txt']
 
 
 def test_missing_execution_definition_is_read_not_executed_and_rejudged(setup):

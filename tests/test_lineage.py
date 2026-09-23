@@ -83,8 +83,48 @@ def test_observed_generation_links_sessions_and_expands_pending_producer(history
     assert result["action"] == "block" and len(result["path"]) == 4
     assert result["path"][0] == "source:private"
     with sqlite3.connect(store.db_path) as conn:
-        assert conn.execute("SELECT COUNT(*) FROM graph_heads WHERE session='a'").fetchone()[0] == 2
+        # A file-scoped review is not a whole-operation head. Its pinned revision
+        # remains reachable from the consumer, including across sessions.
+        assert conn.execute("SELECT COUNT(*) FROM graph_heads WHERE session='a'").fetchone()[0] == 1
+        assert conn.execute('SELECT COUNT(*) FROM graph_resource_selections').fetchone()[0] == 1
         assert conn.execute("SELECT COUNT(*) FROM flow_file_observations").fetchone()[0] == 4
+
+
+def test_materializing_parent_does_not_invalidate_unchanged_observation_cache(history):
+    _, store, record, _ = history
+    send = record("b", "send", "pre_tool_use", "send", [{"path": "derived", "mode": "read"}])
+    queried = []
+
+    def counted(records):
+        queried.append(records["current_call"]["event_id"])
+        return judge(records)
+
+    args = (store.db_path, send.workspace_id, send.session_id, send.event_id,
+            [{"node_id": "source:private", "path": "private"}], counted)
+    assert analyze_properties(*args)["action"] == "block"
+    count = len(queried)
+    assert count == 3
+    assert analyze_properties(*args)["action"] == "block"
+    assert len(queried) == count
+
+
+def test_unrelated_prior_cross_session_read_is_not_analyzed(history):
+    _, store, record, _ = history
+    record("b", "old", "pre_tool_use", "send", [{"path": "derived", "mode": "read"}])
+    record("b", "old", "post_tool_use", "send", response="old unrelated content")
+    send = record("b", "send", "pre_tool_use", "public-send")
+    queried = []
+
+    def only_current(records):
+        queried.append(records["current_call"]["event_id"])
+        assert records["current_call"]["event_id"] == send.event_id
+        return dict(externality="external", complete=True, reason="independent content",
+                    dependencies=[], accesses=[])
+
+    result = analyze_properties(store.db_path, send.workspace_id, send.session_id,
+                                send.event_id, [], only_current)
+    assert result["action"] == "allow"
+    assert queried == [send.event_id]
 
 
 @pytest.mark.parametrize("same_content", [False, True])
@@ -96,6 +136,60 @@ def test_unobserved_replacement_never_inherits_old_producer(history, same_conten
     replacement.replace(root / "derived")
     send = record("b", "send", "pre_tool_use", "send", [{"path": "derived", "mode": "read"}])
     assert inspect(store, send)["path"] == []
+
+
+@pytest.mark.parametrize('consumer_session', ['a', 'b'])
+@pytest.mark.parametrize('selected', [('public',), ('derived',), ('derived', 'public')])
+@pytest.mark.parametrize('uses_response', [True, False])
+def test_two_written_files_have_distinct_provenance(history, consumer_session, selected, uses_response):
+    root, store, record, _ = history
+    paths = ['derived', 'public']
+    record('a', 'pair', 'pre_tool_use', 'pair',
+           [dict(path=path, mode='write') for path in paths])
+    (root / 'derived').write_text('Coefficient 0.73 in a revised document')
+    (root / 'public').write_text('Collect your badge at reception')
+    pair = record('a', 'pair', 'post_tool_use', 'pair', response='public confirmation')
+    scoped = []
+
+    def separate(records):
+        node = records['current_call']
+        step = node['input']['step']
+        if step not in ('pair', 'selected-send'):
+            return judge(records)
+        if step == 'pair':
+            scope = node.get('required_resources')
+            used = [r['path'] for r in scope] if scope else paths
+            if scope:
+                scoped.append(used)
+            deps = ([dict(node_id=records['previous_calls'][0]['node_id'], reason='coefficient derived from notes')]
+                    if 'derived' in used else [])
+            accesses = [dict(path=p, mode='write', reason='selected generated file') for p in used]
+        else:
+            # Also use a public output value from the same producer when it is
+            # in this session. The resource demand must not be lost to that edge.
+            producers = [n for n in records['previous_calls'] if n['input']['step'] == 'pair']
+            deps = ([dict(node_id=producers[0]['node_id'], reason='public result',
+                          selection={'text': 'public confirmation'} if uses_response else None)] if producers else [])
+            accesses = [dict(path=p, mode='read', reason='submitted file') for p in selected]
+        return dict(externality='external' if step == 'selected-send' else 'local',
+                    complete=True, reason='fixture', dependencies=deps, accesses=accesses)
+
+    sources = [dict(node_id='source:private', path='private')]
+    analyze_properties(store.db_path, pair.workspace_id, 'a', pair.event_id, sources, separate)
+    with sqlite3.connect(store.db_path) as conn:
+        whole_head = conn.execute('SELECT revision FROM graph_heads WHERE node=(SELECT node FROM graph_revisions WHERE event=? LIMIT 1)',
+                                  (pair.event_id,)).fetchone()[0]
+    send = record(consumer_session, 'selected-send', 'pre_tool_use', 'selected-send',
+                  [dict(path=p, mode='read') for p in selected])
+    args = (store.db_path, send.workspace_id, consumer_session, send.event_id, sources, separate)
+    result = analyze_properties(*args)
+    assert result['action'] == ('block' if 'derived' in selected else 'allow')
+    assert scoped == [sorted(selected)]
+    assert analyze_properties(*args)['action'] == result['action']
+    assert scoped == [sorted(selected)]  # Same content/scope reuses the review.
+    with sqlite3.connect(store.db_path) as conn:
+        assert conn.execute('SELECT revision FROM graph_heads WHERE node=(SELECT node FROM graph_revisions WHERE event=? LIMIT 1)',
+                            (pair.event_id,)).fetchone()[0] == whole_head
 
 
 def test_failed_write_is_not_a_producer(history):

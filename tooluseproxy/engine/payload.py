@@ -11,6 +11,7 @@ import hmac
 import json
 import os
 import secrets
+import re
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
@@ -155,13 +156,27 @@ class PayloadResolver:
                             )
                         )
                     return
-                if kind == "inline":
+                if kind in ("inline", "observed"):
                     if set(item) not in (
                         {"kind", "pointer"},
                         {"kind", "pointer", "offset", "length"},
                     ):
                         raise ResolutionError("invalid_inline_target")
-                    content = pointer_value(document, item["pointer"])
+                    origin = None
+                    if kind == "observed":
+                        match = re.fullmatch(r'/previous_calls/(0|[1-9][0-9]*)/output(/.*)?', item['pointer'])
+                        calls = getattr(self, 'observed_calls', ())
+                        if not match or int(match[1]) >= len(calls):
+                            raise ResolutionError('observed_pointer_missing')
+                        origin = calls[int(match[1])]
+                        if not origin.get('completed'):
+                            raise ResolutionError('observed_output_not_completed')
+                        # Reuse the strict string/range resolver without accepting
+                        # arbitrary pointers into instructions or hidden metadata.
+                        content = pointer_value({'tool_input': {'value': origin['output']}},
+                                                '/tool_input/value' + (match[2] or ''))
+                    else:
+                        content = pointer_value(document, item["pointer"])
                     if len(content) > budget["bytes"]:
                         raise ResolutionError("resolution_byte_budget")
                     budget["bytes"] -= len(content)
@@ -183,14 +198,17 @@ class PayloadResolver:
                     selected = (
                         content[offset:] if length is None else content[offset : offset + length]
                     )
-                    resource = Resource(self.scope, "event_input", self.event + item["pointer"])
+                    resource = Resource(self.scope, "event_output" if origin else "event_input",
+                                        (origin['event_id'] if origin else self.event) + item["pointer"])
                     value = ContentVersion(resource, self.token(content), self.event, len(content))
                     result.parts.append(
                         Part(
                             value,
                             selected,
                             {"offset": offset, "length": len(selected)},
-                            {"event": self.event, "pointer": item["pointer"]},
+                            {"event": origin['event_id'] if origin else self.event,
+                             "pointer": item["pointer"],
+                             **({'source_node_id': origin['node_id']} if origin else {})},
                         )
                     )
                     return

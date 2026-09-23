@@ -165,9 +165,15 @@ def test_history_limit_does_not_silently_allow(fixture):
         )
 
 
-def test_timeout_is_retried_and_retained_without_dispatch(fixture):
+def test_timeout_is_retried_and_retained_without_dispatch(fixture, monkeypatch):
+    from tooluseproxy.engine.pending import decide
+    import time
+    elapsed = [time.monotonic()]
+    monkeypatch.setattr('tooluseproxy.engine.pending.decide', lambda db, event, operation: decide(
+        db, event, operation, budget_seconds=10, clock=lambda: elapsed[0],
+        sleep=lambda duration: elapsed.__setitem__(0, elapsed[0]+duration)))
     store, record = fixture
-    event = record("one", "git add public.txt")
+    event = record("one", "custom_operation public.txt")
     register_fixture_source(store, event.workspace_id)
     config = {
         "workspaces": {
@@ -187,7 +193,7 @@ def test_timeout_is_retried_and_retained_without_dispatch(fixture):
     output = process_hook(store, event, judge=timeout)
     assert output["hookSpecificOutput"]["permissionDecision"] == "deny"
     with sqlite3.connect(store.db_path) as conn:
-        assert conn.execute("SELECT state,attempts FROM pending_judgments").fetchone() == ("waiting", 3)
+        assert conn.execute("SELECT state,attempts FROM pending_judgments").fetchone() == ("waiting", 4)
     with sqlite3.connect(store.db_path) as conn:
         assert conn.execute("SELECT action,reason FROM semantic_flow_decisions").fetchone() == (
             "unavailable",

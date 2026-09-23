@@ -39,6 +39,29 @@ def test_bad_result_never_grants_permission(tmp_path):
     assert result['action'] == 'pending'
 
 
+def test_provider_can_recover_after_three_fast_failures_within_same_budget(tmp_path):
+    elapsed, calls = [0.0], []
+    def operation(deadline):
+        calls.append(deadline)
+        return (dict(action='allow', reason='complete') if len(calls) == 5 else
+                dict(action='unavailable', reason='semantic_provider_failed', retry_scope='provider'))
+    result = decide(tmp_path / 'events.db', event(), operation, budget_seconds=60,
+                    clock=lambda: elapsed[0], sleep=lambda duration: elapsed.__setitem__(0, elapsed[0]+duration))
+    assert result['action'] == 'allow'
+    assert calls == [60] * 5 and elapsed[0] == 15
+
+
+def test_provider_retry_does_not_extend_the_live_deadline(tmp_path):
+    elapsed, calls = [0.0], []
+    def operation(deadline):
+        calls.append(deadline)
+        return dict(action='unavailable', reason='semantic_provider_failed', retry_scope='provider')
+    result = decide(tmp_path / 'events.db', event(), operation, budget_seconds=10,
+                    clock=lambda: elapsed[0], sleep=lambda duration: elapsed.__setitem__(0, elapsed[0]+duration))
+    assert result['action'] == 'pending'
+    assert elapsed[0] == 10 and calls == [10] * 4
+
+
 def test_missing_evidence_does_not_schedule_unchanged_background_retry(tmp_path):
     from tooluseproxy.engine.pending import resume
     db = tmp_path / 'events.db'
@@ -87,11 +110,11 @@ def test_non_due_pending_does_not_call_model(tmp_path):
     assert resume(db, 'w', now=0, operation=lambda *_: (_ for _ in ()).throw(AssertionError())) == 0
 
 
-def test_concurrent_delivery_never_duplicates_in_flight_analysis(tmp_path):
+def test_concurrent_delivery_waits_then_revalidates_without_in_flight_duplication(tmp_path):
     from concurrent.futures import ThreadPoolExecutor
     from threading import Event
     db = tmp_path/'events.db'
-    started, release = Event(), Event()
+    started, release, revalidated = Event(), Event(), Event()
     def operation(_):
         started.set()
         assert release.wait(5)
@@ -99,14 +122,20 @@ def test_concurrent_delivery_never_duplicates_in_flight_analysis(tmp_path):
     with ThreadPoolExecutor() as pool:
         first = pool.submit(decide, db, event(), operation)
         assert started.wait(5)
+        def changed_policy(_):
+            assert release.is_set()
+            revalidated.set()
+            return {'action': 'block', 'reason': 'policy changed'}
+        second = pool.submit(decide, db, event(), changed_policy)
         try:
-            second = decide(db, event(), lambda _: (_ for _ in ()).throw(AssertionError()))
-            assert second['action'] == 'pending'
+            assert not revalidated.wait(0.15)
+            assert not second.done()
         finally:
             release.set()
         assert first.result()['action'] == 'allow'
+        assert second.result()['action'] == 'block'
     with sqlite3.connect(db) as conn:
-        assert conn.execute('SELECT COUNT(*) FROM judgment_attempts').fetchone()[0] == 1
+        assert conn.execute('SELECT COUNT(*) FROM judgment_attempts').fetchone()[0] == 2
 
 
 def test_stale_owner_cannot_publish_a_decision(tmp_path):
