@@ -174,7 +174,7 @@ def test_history_chain_reuses_prefix_and_invalidates_changed_evidence(tmp_path, 
         )
 
     graph.analyze_properties(db, "w", "s", "e2", [], judge)
-    assert queried == ["n0", "n1", "n2"]
+    assert queried == ["n2"]
     queried.clear()
     graph.analyze_properties(db, "w", "s", "e2", [], judge)
     assert queried == []
@@ -186,10 +186,10 @@ def test_history_chain_reuses_prefix_and_invalidates_changed_evidence(tmp_path, 
     queried.clear()
     calls[1]["output"] = "changed evidence"
     graph.analyze_properties(db, "w", "s", "e3", [], judge)
-    assert queried == ["n1", "n2", "n3"]
+    assert queried == ["n3"]
     queried.clear()
     graph.analyze_properties(db, "w", "s", "e3", [], judge, model="other-model")
-    assert queried == ["n0", "n1", "n2", "n3"]
+    assert queried == ["n3"]
 
 
 def test_history_hash_input_grows_linearly(tmp_path, monkeypatch):

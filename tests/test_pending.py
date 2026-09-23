@@ -146,3 +146,14 @@ def test_persisted_outage_resumes_through_real_runtime_pipeline(tmp_path):
         assert conn.execute('SELECT state,attempts,held FROM pending_judgments').fetchone() == ('complete',4,1)
         assert conn.execute('SELECT action FROM semantic_flow_decisions').fetchone()[0] == 'allow'
         assert conn.execute("SELECT COUNT(*) FROM events WHERE phase='post_tool_use'").fetchone()[0] == 0
+
+
+def test_missing_evidence_does_not_repeat_identical_foreground_judgments(tmp_path):
+    calls=[]
+    def operation(_):
+        calls.append(1)
+        return dict(action='unavailable',reason='property_graph_incomplete',retryable=False,
+                    evidence_needs=[{'reason':'definition unavailable'}])
+    result=decide(tmp_path/'events.db',event(),operation,sleep=lambda _:None)
+    assert result['action']=='pending' and len(calls)==1
+    assert result['evidence_needs']

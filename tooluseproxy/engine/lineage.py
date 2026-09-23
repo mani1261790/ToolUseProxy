@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 
 from tooluseproxy.engine.evidence import EvidenceStore, EvidenceNeed
-from tooluseproxy.engine.payload import PayloadResolver, ResolutionError, safe_parts
+from tooluseproxy.engine.payload import PayloadResolver, ResolutionError
 
 
 def schema(conn):
@@ -47,8 +47,9 @@ def snapshot_resources(store, event, resources=None):
                 ):
                     continue
                 try:
-                    safe_parts(item["path"])
-                except ResolutionError:
+                    from tooluseproxy.engine.requirements import resource_identity
+                    item = dict(item, path=resource_identity(item["path"], row[0]))
+                except (ResolutionError, ValueError, OSError):
                     continue
                 normalized.append(item)
             conn.execute(
@@ -86,8 +87,14 @@ def snapshot_resources(store, event, resources=None):
         if event.phase == "pre_tool_use" and item["mode"] != "read":
             continue
         try:
-            content, observation = resolver.read_file(item["path"], budget)
-            stamp = json.dumps(observation["fingerprint"])
+            external = item["path"].startswith("/")
+            if external:
+                from tooluseproxy.engine.requirements import external_generation
+                stamp = json.dumps(external_generation(item["path"]))
+                content = ("metadata-generation:" + stamp).encode()
+            else:
+                content, observation = resolver.read_file(item["path"], budget)
+                stamp = json.dumps(observation["fingerprint"])
             if event.phase == "post_tool_use" and item["mode"] == "read":
                 with ledger.transaction() as conn:
                     before = conn.execute(
@@ -111,8 +118,8 @@ def snapshot_resources(store, event, resources=None):
                 item["mode"],
                 status,
                 "inference",
-                {"whole": True},
-                "declared access with controller snapshot",
+                {"metadata_only": True} if external else {"whole": True},
+                "declared access with metadata generation" if external else "declared access with controller snapshot",
             )
             with ledger.transaction() as conn:
                 conn.execute(
@@ -228,7 +235,8 @@ def matching_producers(conn, workspace, event):
     return list(dict.fromkeys([*live, *immutable]))
 
 
-def pending_producers(conn, workspace, session, event):
+def pending_producers(conn, workspace, session, event, model="codex_default"):
+    from tooluseproxy.engine.judge import PROMPT_VERSION
     # Current transmission and earlier observed reads in this session can need
     # producers from another session. Raw observations remain the source of truth.
     schema(conn)
@@ -248,8 +256,9 @@ def pending_producers(conn, workspace, session, event):
                 continue
             known = conn.execute(
                 """SELECT 1 FROM graph_heads h JOIN graph_revisions r ON r.revision=h.revision
-                WHERE h.workspace=? AND r.event=?""",
-                (workspace, producer),
+                WHERE h.workspace=? AND r.event=? AND r.prompt=? AND r.model=?
+                  AND json_extract(r.verdict,'$.complete')=1""",
+                (workspace, producer, PROMPT_VERSION, model),
             ).fetchone()
             if not known and (producer, other_session) not in result:
                 result.append((producer, other_session))

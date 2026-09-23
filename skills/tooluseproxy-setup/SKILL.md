@@ -9,6 +9,7 @@ This skill describes the semantic dependency engine. Do not reuse v0.1 setup pro
 commands, or claims. Use the currently installed Plugin's launcher; a cached older
 skill is not evidence of the current runtime. Check the launcher's `--version` once when resolving the installation; reuse that result
 within the task unless the installation changes.
+If the catalog path is stale, locate `tooluseproxy-setup/SKILL.md` under the ToolUseProxy Plugin cache in one scoped lookup and derive the launcher from that actual package root. Do not search unrelated projects or memories for an ordinary setup request.
 If it is not v0.2, explain the version mismatch instead of applying these commands.
 
 ## Route the request, then finish that operation

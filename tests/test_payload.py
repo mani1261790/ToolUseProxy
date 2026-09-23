@@ -330,3 +330,27 @@ def test_repository_snapshot_never_invokes_hooks_or_lazy_fetch(setup):
     git('config','remote.fake.promisor','true')
     result=resolver.resolve(dict(kind='snapshot',format='git',path='.',revision='HEAD'))
     assert result.coverage=='unsupported' and result.needs[0].reason=='repository_requires_remote_objects'
+
+
+def test_transmission_reuses_definition_evidence_but_not_graph_permission(setup):
+    import json
+    from tooluseproxy.engine.targets import inspect_transmission
+    from tooluseproxy.engine.property_graph import schema, persist
+    root, make = setup
+    existing=make()
+    (root/'behavior.txt').write_text('observed execution definition')
+    with sqlite3.connect(existing.store.path) as conn:
+        raw=conn.execute('select payload_json from events where event_id=?',(existing.event,)).fetchone()[0]
+        event=event_from('pre_tool_use',json.loads(raw),str(root))
+        schema(conn)
+        persist(conn,event.workspace_id,event.session_id,{'node_id':'n','event_id':event.event_id},'r','model',
+            {'complete':True,'externality':'external','reason':'not a permission certificate','dependencies':[],'accesses':[],
+             'evidence_receipts':[{'path':'behavior.txt','reason':'needed definition','status':'observed','sha256':'earlier'}]})
+    def provider(records):
+        assert records['execution_definitions'][0]['content']=='observed execution definition'
+        assert 'action' not in records and 'graph_verdict' not in records
+        return {'complete':True,'reason':'recorded input','targets':[{'kind':'inline','pointer':'/tool_input/body','path':None,'offset':0,'length':None,'reason':'body'}]}
+    resolver,resolution,_=inspect_transmission(Journal(existing.store.path),event,provider)
+    assert resolution.coverage=='complete' and resolver.unchanged(resolution)
+    (root/'behavior.txt').write_text('changed behavior')
+    assert not resolver.unchanged(resolution)
