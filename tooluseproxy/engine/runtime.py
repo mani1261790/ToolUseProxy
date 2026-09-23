@@ -201,12 +201,42 @@ def _process_once(store, event, *, judge=None, screening_judge=None, target_judg
                     enqueue(store.db_path,event,model)
                 result = {"action": "observed", "reason": "provenance_deferred", "path": [], "node_id": node_id}
             else:
-                screen = screen_externality(store.db_path, event, model,
-                    screening_judge or judge or CodexSemanticJudge(config.get("model"), timeout=15))
+                from tooluseproxy.viewer_process import issued_viewer_open
+                local_viewer = issued_viewer_open(
+                    store.db_path,
+                    event.workspace_root,
+                    event.workspace_id,
+                    event.raw_payload.get("tool_name"),
+                    event.raw_payload.get("tool_input"),
+                )
+                screen = (
+                    {
+                        "externality": "local",
+                        "complete": True,
+                        "reason": "issued_tooluseproxy_viewer",
+                        "resources": [],
+                    }
+                    if local_viewer
+                    else screen_externality(
+                        store.db_path,
+                        event,
+                        model,
+                        screening_judge
+                        or judge
+                        or CodexSemanticJudge(config.get("model"), timeout=15),
+                    )
+                )
                 from tooluseproxy.engine.lineage import snapshot_resources
                 snapshot_resources(store, event, screen.get("resources", []))
                 if screen["externality"] == "local" and screen["complete"]:
-                    result = {"action": "allow", "reason": "local_provenance_deferred", "path": [], "node_id": node_id}
+                    result = {
+                        "action": "allow",
+                        "reason": "issued_tooluseproxy_viewer"
+                        if local_viewer
+                        else "local_provenance_deferred",
+                        "path": [],
+                        "node_id": node_id,
+                    }
                 else:
                     sources = [
                         dict(asdict(source), node_id="source:" + source.source_id)

@@ -195,6 +195,128 @@ def test_setup_starts_viewer_that_serves_new_journal(tmp_path, capsys, monkeypat
             child.wait(timeout=5)
 
 
+def test_only_exact_issued_viewer_url_is_a_local_handoff(tmp_path, capsys):
+    import threading
+
+    from tooluseproxy.engine.graph import digest
+    from tooluseproxy.log_viewer import LogReader, make_server
+    from tooluseproxy.viewer_process import issued_viewer_open
+
+    root, data, _, configured = setup(tmp_path, capsys)
+    workspace = configured["workspace_root"]
+    server, url = make_server(
+        LogReader(data / "events.db", configured["workspace_id"], Path(workspace))
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    status = data / ("viewer-" + digest(workspace) + ".json")
+    status.write_text(
+        json.dumps(
+            {
+                "status": "ready",
+                "url": url,
+                "workspace_root": workspace,
+                "workspace_id": configured["workspace_id"],
+            }
+        )
+    )
+    status.chmod(0o600)
+
+    try:
+        assert issued_viewer_open(
+            data / "events.db",
+            workspace,
+            configured["workspace_id"],
+            "mcp__codex_app__open_in_codex",
+            {"placement": "right", "target": {"type": "browser", "url": url}},
+        )
+        assert not issued_viewer_open(
+            data / "events.db",
+            workspace,
+            configured["workspace_id"],
+            "mcp__codex_app__open_in_codex",
+            {
+                "placement": "right",
+                "target": {"type": "browser", "url": "http://127.0.0.1:54321/other/"},
+            },
+        )
+        assert not issued_viewer_open(
+            data / "events.db",
+            workspace,
+            configured["workspace_id"],
+            "mcp__codex_app__open_in_codex",
+            {"threadId": "other", "target": {"type": "browser", "url": url}},
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+def test_exact_issued_viewer_handoff_does_not_wait_for_a_model(tmp_path, capsys):
+    import threading
+
+    from tooluseproxy.engine.graph import digest
+    from tooluseproxy.engine.journal import event_from
+    from tooluseproxy.engine.runtime import process_hook
+    from tooluseproxy.log_viewer import LogReader, make_server
+
+    root, data, _, configured = setup(tmp_path, capsys)
+    workspace = configured["workspace_root"]
+    server, url = make_server(
+        LogReader(data / "events.db", configured["workspace_id"], Path(workspace))
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    status = data / ("viewer-" + digest(workspace) + ".json")
+    status.write_text(
+        json.dumps(
+            {
+                "status": "ready",
+                "url": url,
+                "workspace_root": workspace,
+                "workspace_id": configured["workspace_id"],
+            }
+        )
+    )
+    status.chmod(0o600)
+    event = event_from(
+        "pre_tool_use",
+        {
+            "cwd": str(root),
+            "session_id": "viewer-session",
+            "tool_use_id": "open-viewer",
+            "tool_name": "mcp__codex_app__open_in_codex",
+            "tool_input": {
+                "placement": "right",
+                "target": {"type": "browser", "url": url},
+            },
+        },
+        workspace,
+    )
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("an issued local viewer handoff must not start a model")
+
+    try:
+        assert process_hook(
+            Journal(data / "events.db"),
+            event,
+            judge=forbidden,
+            screening_judge=forbidden,
+            target_judge=forbidden,
+        ) == {}
+        with sqlite3.connect(data / "events.db") as conn:
+            assert conn.execute(
+                "SELECT action,reason FROM semantic_flow_decisions WHERE event_id=?",
+                (event.event_id,),
+            ).fetchone() == ("allow", "issued_tooluseproxy_viewer")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
 def test_stopped_v2_hook_cannot_open_database_or_start_judge(tmp_path, monkeypatch, capsys):
     from contextlib import contextmanager
     from types import SimpleNamespace
@@ -256,6 +378,8 @@ def test_skill_and_product_metadata_describe_the_same_engine():
     assert metadata["version"].startswith("0.2.")
     assert "codex exec" in skill and "inputs, outputs" in skill
     assert "pending a completed judgment" in skill
+    assert "current setup request itself explicitly names that file" in skill
+    assert "A plain request such as 「このプロジェクトで使いたい」 performs Setup" in skill
     assert "warns and continues" not in skill
     assert (
         "Hook implementation writes to its local data\ndirectory and does not make network requests"

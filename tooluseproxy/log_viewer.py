@@ -331,6 +331,7 @@ def make_server(reader, port=0):
             for key, value in {
                 "Content-Type": mime, "Content-Length": str(len(body)),
                 "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff",
+                "X-ToolUseProxy-Viewer": "v1",
                 "Referrer-Policy": "no-referrer",
                 "Content-Security-Policy": "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'",
             }.items():
