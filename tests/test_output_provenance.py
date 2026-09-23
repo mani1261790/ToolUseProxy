@@ -136,7 +136,7 @@ def test_catalog_is_metadata_only_and_excludes_control_file(tmp_path):
     (tmp_path/'protected_sources.json').write_text('must not be read')
     data=observe_managed_resources(tmp_path)
     assert data['complete']
-    assert [PathName['path'].rsplit('/',1)[-1] for PathName in data['entries']]==['state.json']
+    assert [entry['path'].rsplit('/',1)[-1] for entry in data['entries']]==['state.json']
     assert 'secret content' not in json.dumps(data)
     assert not observe_managed_resources(tmp_path,limit=0)['complete']
 
@@ -152,3 +152,14 @@ def test_invalid_model_shape_receives_feedback_without_infinite_retry(tmp_path):
         return verdict()
     result=inspect({'current_call':{'workspace_root':str(tmp_path),'input':{}},'previous_calls':[]},judge,validate,set())
     assert result['complete'] and len(seen)==2
+
+
+def test_multiline_output_selection_uses_observed_text(tmp_path):
+    text = "first line\n次の行"
+    root, db, event = fixture(tmp_path, text)
+    def judge(records):
+        if records['current_call'].get('required_output'):
+            assert records['current_call']['required_output']['text'] == text
+            return verdict()
+        return verdict(deps=[{'node_id':records['previous_calls'][0]['node_id'], 'reason':'uses both lines', 'selection':{'text':text}}])
+    assert analyze_properties(db,event.workspace_id,'s',event.event_id,[],judge)['action']=='allow'

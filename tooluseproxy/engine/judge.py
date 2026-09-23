@@ -82,7 +82,8 @@ PROMPT += """
 Dependencies may select one exact nonempty text fragment from an earlier call's
 observed output using selection={text: ...}; use selection=null when the entire
 producer or an unobserved/resource-based contribution is needed. The controller
-validates that the fragment occurs uniquely in the serialized observed output.
+validates that the fragment occurs uniquely in the raw output string (or canonical
+JSON serialization when the output is structured). Preserve literal newlines and Unicode.
 Selection must cover the information actually used, including derived information;
 never select an innocuous fragment to omit another contribution. Use the full edge
 when a single fragment is insufficient. A selection does NOT declare information safe.

@@ -309,7 +309,7 @@ def analyze_properties(
                 return assessed[key]
             focused = dict(producer)
             if selection is not None:
-                observed = json.dumps(producer["output"], ensure_ascii=False, sort_keys=True)
+                observed = producer["output"] if isinstance(producer["output"], str) else json.dumps(producer["output"], ensure_ascii=False, sort_keys=True)
                 if not producer["completed"] or observed.count(selection["text"]) != 1:
                     raise GraphUnavailable("output_selection_missing_or_ambiguous")
                 focused["required_output"] = dict(selection, observation_hash=digest(producer["output"]))
