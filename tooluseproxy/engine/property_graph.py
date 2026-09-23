@@ -10,6 +10,7 @@ from contextlib import closing
 
 from tooluseproxy.engine.graph import GraphUnavailable, digest, initialize, load_calls
 from tooluseproxy.engine.judge import PROMPT_VERSION
+from tooluseproxy.engine.requirements import reusable
 
 
 def schema(conn):
@@ -37,6 +38,9 @@ def schema(conn):
         CREATE TABLE IF NOT EXISTS graph_revision_links (
             revision TEXT NOT NULL, parent_node TEXT NOT NULL, parent_revision TEXT NOT NULL,
             PRIMARY KEY(revision,parent_node));
+        CREATE TABLE IF NOT EXISTS graph_output_selections (
+            revision TEXT PRIMARY KEY, node TEXT NOT NULL, selection_json TEXT NOT NULL,
+            observation_hash TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS graph_policies (
             revision TEXT PRIMARY KEY, sources_json TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS graph_progress (
@@ -50,7 +54,7 @@ def schema(conn):
 
 
 def validate(value, candidates):
-    if not isinstance(value, dict) or set(value) != {
+    if not isinstance(value, dict) or set(value) - {"evidence_requests", "evidence_receipts"} != {
         "externality",
         "complete",
         "reason",
@@ -68,7 +72,7 @@ def validate(value, candidates):
     for edge in value["dependencies"]:
         if (
             not isinstance(edge, dict)
-            or set(edge) != {"node_id", "reason"}
+            or set(edge) - {"selection"} != {"node_id", "reason"}
             or not isinstance(edge["node_id"], str)
             or edge["node_id"] not in candidates
             or edge["node_id"] in seen
@@ -76,6 +80,12 @@ def validate(value, candidates):
             or not 0 < len(edge["reason"]) <= 4000
         ):
             raise GraphUnavailable("invalid_property_edge")
+        selection = edge.get("selection")
+        if selection is not None and (
+            not isinstance(selection, dict) or set(selection) != {"text"}
+            or not isinstance(selection["text"], str) or not 0 < len(selection["text"]) <= 128_000
+        ):
+            raise GraphUnavailable("invalid_output_selection")
         seen.add(edge["node_id"])
     seen = set()
     for access in value["accesses"]:
@@ -87,7 +97,6 @@ def validate(value, candidates):
             or not path
             or len(path) > 4096
             or "\x00" in path
-            or path.startswith("/")
             or path == ".."
             or path.startswith("../")
             or posixpath.normpath(path) != path
@@ -100,6 +109,15 @@ def validate(value, candidates):
         if key in seen:
             raise GraphUnavailable("duplicate_access")
         seen.add(key)
+    requests = value.get("evidence_requests", [])
+    if not isinstance(requests, list) or len(requests) > 8:
+        raise GraphUnavailable("invalid_evidence_requests")
+    for request in requests:
+        if (not isinstance(request, dict) or set(request) != {"path", "reason"}
+            or not all(isinstance(request[k], str) and 0 < len(request[k]) <= 4096 for k in request)):
+            raise GraphUnavailable("invalid_evidence_request")
+    if value["complete"] and requests:
+        raise GraphUnavailable("completed_with_evidence_requests")
     return value
 
 
@@ -268,56 +286,90 @@ def analyze_properties(
         calls = load_calls(conn, workspace, session, event_id, 50_000, 64_000_000)
     if not calls:
         raise GraphUnavailable("tool_call_missing")
-    prior = []
-    revisions = {}
-    complete = True
     current_verdict = None
-    current_revision = None
-    prefix = digest(["history-chain-v1", PROMPT_VERSION, model, workspace, session])
-    candidates = set()
-    # Reuse the connection, but commit each write before the next model request.
+    evidence_context = {}
     with closing(sqlite3.connect(db_path, timeout=5)) as conn:
+        prefixes = []
+        prefix = digest(["demand-history-v1", PROMPT_VERSION, model, workspace, session])
         for node in calls:
             attach_witnesses(conn, workspace, node)
             if node["event_id"] == event_id and current_evidence is not None:
                 node["payload_observations"] = current_evidence
-            records = {"previous_calls": prior, "current_call": node}
-            request = digest(["history-chain-v2", prefix, node])
-            cached = conn.execute(
-                "SELECT r.verdict FROM graph_completed_reviews c "
-                "JOIN graph_revisions r ON r.revision=c.revision WHERE c.request=?", (request,)
-            ).fetchone()
+            prefixes.append(prefix)
+            prefix = digest([prefix, node])
+        by_id = {n["node_id"]: i for i, n in enumerate(calls)}
+        assessed = {}
+
+        def assess(index, selection=None, depth=0):
+            if depth >= 128 or len(assessed) > 50_000:
+                raise GraphUnavailable("output_provenance_expansion_budget")
+            producer = calls[index]
+            key = (index, digest(selection))
+            if key in assessed:
+                return assessed[key]
+            focused = dict(producer)
+            if selection is not None:
+                observed = json.dumps(producer["output"], ensure_ascii=False, sort_keys=True)
+                if not producer["completed"] or observed.count(selection["text"]) != 1:
+                    raise GraphUnavailable("output_selection_missing_or_ambiguous")
+                focused["required_output"] = dict(selection, observation_hash=digest(producer["output"]))
+            records = {"previous_calls": calls[:index], "current_call": focused}
+            request = digest(["demand-review-v1", prefixes[index], focused])
+            cached = conn.execute("SELECT r.verdict FROM graph_completed_reviews c JOIN graph_revisions r ON r.revision=c.revision WHERE c.request=?", (request,)).fetchone()
+            if cached and not reusable(json.loads(cached[0]), producer):
+                cached = None
+            candidates = {n["node_id"] for n in calls[:index] if n["completed"]}
             if cached:
                 verdict = validate(json.loads(cached[0]), candidates)
             else:
                 from tooluseproxy.engine.review import review
-                verdict = review(db_path, request, records, judge, validate)
-            # A recovered verdict creates a new immutable revision. Old policy
-            # checks still point at the actual incomplete verdict they observed.
-            revision = digest([request, verdict])
-            complete = complete and verdict["complete"]
+                verdict = review(db_path, request, records, judge, validate, evidence_context=evidence_context)
+            # Relative and absolute aliases must name the same policy resource.
+            from tooluseproxy.engine.requirements import resource_identity
+            verdict = dict(verdict, accesses=[dict(a, path=resource_identity(a["path"], producer["workspace_root"])) for a in verdict["accesses"]])
+            links = {}
+            for edge in verdict["dependencies"]:
+                parent_index = by_id[edge["node_id"]]
+                if parent_index >= index:
+                    raise GraphUnavailable("future_output_dependency")
+                links[edge["node_id"]] = assess(parent_index, edge.get("selection"), depth+1)[0]
+            # A same-session file producer may be needed even without a direct
+            # ToolCall edge: demand-driven analysis must materialize that revision.
+            from tooluseproxy.engine.lineage import matching_producers
+            reads = {a["path"] for a in verdict["accesses"] if a["mode"] == "read"}
+            for origin_event, origin_session, path, _ in matching_producers(conn, workspace, producer["event_id"]):
+                if origin_session == session and path in reads:
+                    origin_index = next((i for i,n in enumerate(calls[:index]) if n["event_id"] == origin_event), None)
+                    if origin_index is not None:
+                        assess(origin_index, None, depth+1)
+            resource_links = []
+            for origin_event, _, path, _ in matching_producers(conn, workspace, producer["event_id"]):
+                if path in reads:
+                    parent = conn.execute("SELECT h.node,h.revision FROM graph_heads h JOIN graph_revisions r ON r.revision=h.revision JOIN graph_accesses a ON a.revision=r.revision WHERE h.workspace=? AND r.event=? AND a.path=? AND a.mode='write'", (workspace, origin_event, path)).fetchone()
+                    if parent:
+                        resource_links.append(parent)
+            revision = digest([request, verdict, links, resource_links])
+            old_head = conn.execute("SELECT revision FROM graph_heads WHERE workspace=? AND session=? AND node=?", (workspace, session, producer["node_id"])).fetchone()
             with conn:
-                persist(conn, workspace, session, node, revision, model, verdict, revisions)
-                link_producers(conn, workspace, node, revision, verdict)
+                persist(conn, workspace, session, producer, revision, model, verdict, links)
+                link_producers(conn, workspace, producer, revision, verdict)
+                if selection is not None:
+                    conn.execute("INSERT OR IGNORE INTO graph_output_selections VALUES (?,?,?,?)", (revision, producer["node_id"], json.dumps(selection), digest(producer["output"])))
+                    # Keep scoped reviews out of the whole-operation head/cache.
+                    if old_head:
+                        conn.execute("UPDATE graph_heads SET revision=? WHERE workspace=? AND session=? AND node=?", (old_head[0], workspace, session, producer["node_id"]))
+                    else:
+                        conn.execute("DELETE FROM graph_heads WHERE workspace=? AND session=? AND node=?", (workspace, session, producer["node_id"]))
                 if verdict["complete"]:
-                    conn.execute("INSERT OR REPLACE INTO graph_completed_reviews VALUES (?,?)",
-                                 (request, revision))
-            prefix = digest([prefix, node, verdict])
-            revisions[node["node_id"]] = revision
-            if node["completed"]:
-                candidates.add(node["node_id"])
-            prior.append(
-                dict(
-                    node,
-                    dependencies=verdict["dependencies"],
-                    accesses=verdict["accesses"],
-                    judgment_complete=verdict["complete"],
-                )
-            )
+                    conn.execute("INSERT OR REPLACE INTO graph_completed_reviews VALUES (?,?)", (request, revision))
+            assessed[key] = (revision, verdict)
+            return revision, verdict
+
+        for index, node in enumerate(calls):
             if node["event_id"] == event_id:
-                current_verdict = verdict
-                current_revision = revision
+                current_revision, current_verdict = assess(index)
                 current_node = node["node_id"]
+                break
     if current_verdict is None:
         raise GraphUnavailable("current_node_missing")
     with sqlite3.connect(db_path, timeout=5) as conn:
@@ -350,6 +402,9 @@ def analyze_properties(
                 else "no_protected_path_observed",
             )
         result = {"node_id": current_node, "action": action, "reason": reason, "path": path}
+        if action == "unavailable":
+            result["retryable"] = False
+            result["evidence_needs"] = unresolved_dependencies(conn, workspace, current_node)
         conn.execute(
             "INSERT OR REPLACE INTO graph_progress VALUES (?,?,?,?)",
             (
@@ -394,3 +449,24 @@ def dependency_complete(conn, workspace, node):
             return False
         pending.extend(revision_parents(conn, workspace, *current))
     return True
+
+
+def unresolved_dependencies(conn, workspace, node):
+    head = conn.execute("SELECT revision FROM graph_heads WHERE workspace=? AND node=?", (workspace, node)).fetchone()
+    pending = [(node, head[0])] if head else []
+    seen, needs = set(), []
+    while pending:
+        current = pending.pop()
+        if current in seen:
+            continue
+        if len(seen) >= 200_000:
+            raise GraphUnavailable("graph_traversal_budget_exceeded")
+        seen.add(current)
+        row = conn.execute("SELECT verdict FROM graph_revisions WHERE workspace=? AND node=? AND revision=?", (workspace, *current)).fetchone()
+        if row:
+            value = json.loads(row[0])
+            if not value["complete"]:
+                needs.append(dict(node_id=current[0], revision=current[1], reason=value["reason"],
+                                  requests=value.get("evidence_requests", []), receipts=value.get("evidence_receipts", [])))
+        pending.extend(revision_parents(conn, workspace, *current))
+    return needs

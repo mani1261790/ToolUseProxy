@@ -62,6 +62,9 @@ def run(phase: str, db_path: Path) -> int:
                 if definitions.is_file()
                 else "package-runtime-without-plugin-manifest",
             }
+            from tooluseproxy.engine.requirements import observe_runtime_definitions, observe_managed_resources
+            payload["_tooluseproxy_definitions"] = observe_runtime_definitions(payload.get("tool_input"))
+            payload["_tooluseproxy_resource_catalog"] = observe_managed_resources(db_path.parent) if payload["_tooluseproxy_definitions"] else None
             event = event_from(runtime_phase, payload, root)
             # No whole-DB initialization, source-file read, cleanup, or legacy analysis here.
             journal.record(event)

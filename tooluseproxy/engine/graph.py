@@ -145,6 +145,8 @@ def load_calls(
                 "output": None,
                 "completed": False,
                 "observation": "pre",
+                "definition_observations": payload.get("_tooluseproxy_definitions", {}),
+                "resource_catalog": payload.get("_tooluseproxy_resource_catalog"),
             }
         else:
             if node_id not in calls:
@@ -159,6 +161,8 @@ def load_calls(
                     "workspace_root": workspace_root, "resolved_cwd": execution_cwd,
                     "output": payload["tool_response"], "completed": True,
                     "observation": "post_only",
+                    "definition_observations": payload.get("_tooluseproxy_definitions", {}),
+                "resource_catalog": payload.get("_tooluseproxy_resource_catalog"),
                 }
                 continue
             node = calls[node_id]

@@ -73,6 +73,8 @@ def decide(db, event, operation, *, max_attempts=3, budget_seconds=480,
                              (count, json.dumps(result), 'complete' if complete else 'running', event.event_id, owner))
             if complete:
                 return result
+            if result.get('retryable') is False:
+                break
             if attempt + 1 < max_attempts:
                 sleep(min(2 ** attempt, max(0, deadline-clock())))
         with transaction(db) as conn:

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 
 from tooluseproxy.engine.evidence import EvidenceStore, EvidenceNeed
-from tooluseproxy.engine.payload import PayloadResolver, ResolutionError, safe_parts
+from tooluseproxy.engine.payload import PayloadResolver, ResolutionError
 
 
 def schema(conn):
@@ -47,8 +47,9 @@ def snapshot_resources(store, event, resources=None):
                 ):
                     continue
                 try:
-                    safe_parts(item["path"])
-                except ResolutionError:
+                    from tooluseproxy.engine.requirements import resource_identity
+                    item = dict(item, path=resource_identity(item["path"], row[0]))
+                except (ResolutionError, ValueError, OSError):
                     continue
                 normalized.append(item)
             conn.execute(
@@ -86,8 +87,14 @@ def snapshot_resources(store, event, resources=None):
         if event.phase == "pre_tool_use" and item["mode"] != "read":
             continue
         try:
-            content, observation = resolver.read_file(item["path"], budget)
-            stamp = json.dumps(observation["fingerprint"])
+            external = item["path"].startswith("/")
+            if external:
+                from tooluseproxy.engine.requirements import external_generation
+                stamp = json.dumps(external_generation(item["path"]))
+                content = ("metadata-generation:" + stamp).encode()
+            else:
+                content, observation = resolver.read_file(item["path"], budget)
+                stamp = json.dumps(observation["fingerprint"])
             if event.phase == "post_tool_use" and item["mode"] == "read":
                 with ledger.transaction() as conn:
                     before = conn.execute(
@@ -111,8 +118,8 @@ def snapshot_resources(store, event, resources=None):
                 item["mode"],
                 status,
                 "inference",
-                {"whole": True},
-                "declared access with controller snapshot",
+                {"metadata_only": True} if external else {"whole": True},
+                "declared access with metadata generation" if external else "declared access with controller snapshot",
             )
             with ledger.transaction() as conn:
                 conn.execute(

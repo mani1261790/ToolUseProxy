@@ -301,6 +301,15 @@ class PayloadResolver:
         return content, {"path": path, "fingerprint": fingerprint(after), "event": self.event}
 
     def unchanged(self, result):
+        context = getattr(self, "definition_context", None)
+        if context is not None:
+            from tooluseproxy.engine.requirements import acquire
+            for receipt in context.get("execution_definitions", []):
+                if receipt["status"] != "observed":
+                    continue
+                fresh = acquire(context, [{"path": receipt["path"], "reason": receipt["reason"]}])[0]
+                if fresh["status"] != "observed" or fresh["sha256"] != receipt["sha256"]:
+                    return False
         for part in result.parts:
             if part.version.resource.kind == "repository_object":
                 from tooluseproxy.engine.repository_evidence import git_read
