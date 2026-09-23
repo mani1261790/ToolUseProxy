@@ -138,10 +138,11 @@ def screen_externality(db_path, event, model, provider):
             except ValueError:
                 pass
         if not verdict["complete"]:
-            verdict = {"externality": "external", "complete": True, "reason": "screening_requires_inspection"}
-    except Exception:
-        # A screening failure is not permission to skip detailed analysis.
-        return {"externality": "external", "complete": True, "reason": "screening_unavailable_requires_inspection"}
+            raise GraphUnavailable("externality_incomplete")
+    except (GraphUnavailable, JudgeProviderError):
+        raise
+    except Exception as exc:
+        raise GraphUnavailable("externality_invalid") from exc
     with sqlite3.connect(db_path) as conn:
         conn.execute("INSERT OR REPLACE INTO semantic_externality_checks VALUES (?,?,?,?)", (request_hash, event.event_id, json.dumps(verdict), int((time.monotonic()-started)*1000)))
     return verdict
@@ -186,77 +187,80 @@ def _process_once(store, event, *, judge=None, screening_judge=None, target_judg
     try:
         if not event.workspace_id or not event.session_id or not event.tool_use_id:
             raise GraphUnavailable("semantic_identity_missing")
-        with session_lock(store.db_path, event.workspace_id, event.session_id, background=background):
-            node_id = "call:" + digest([event.workspace_id, event.session_id, event.tool_use_id])
-            with sqlite3.connect(store.db_path) as conn:
-                initialize(conn)
-                conn.execute("INSERT OR IGNORE INTO semantic_flow_nodes (node_id,workspace_id,session_id,event_id,request_hash,verdict_json) VALUES (?,?,?,?,?,?)", (node_id,event.workspace_id,event.session_id,event.event_id,"","{}"))
-            if event.phase == "post_tool_use":
-                # Actual output is already in the journal. Analyze its provenance
-                # on demand before a later possible external transmission.
-                from tooluseproxy.engine.lineage import snapshot_resources
-                snapshot_resources(store, event)
-                if config.get("background_provenance") is True:
-                    from tooluseproxy.engine.jobs import enqueue
-                    enqueue(store.db_path,event,model)
-                result = {"action": "observed", "reason": "provenance_deferred", "path": [], "node_id": node_id}
-            else:
-                from tooluseproxy.viewer_process import issued_viewer_open
-                local_viewer = issued_viewer_open(
+        # Recording and explicit-outbound screening must not wait for a model
+        # holding the graph-analysis lock. Serialize graph mutation only below.
+        node_id = "call:" + digest([event.workspace_id, event.session_id, event.tool_use_id])
+        with sqlite3.connect(store.db_path) as conn:
+            initialize(conn)
+            conn.execute("INSERT OR IGNORE INTO semantic_flow_nodes (node_id,workspace_id,session_id,event_id,request_hash,verdict_json) VALUES (?,?,?,?,?,?)", (node_id,event.workspace_id,event.session_id,event.event_id,"","{}"))
+        if event.phase == "post_tool_use":
+            # Actual output is already in the journal. Analyze its provenance
+            # on demand before a later possible external transmission.
+            from tooluseproxy.engine.lineage import snapshot_resources
+            snapshot_resources(store, event)
+            if config.get("background_provenance") is True:
+                from tooluseproxy.engine.jobs import enqueue
+                enqueue(store.db_path,event,model)
+            result = {"action": "observed", "reason": "provenance_deferred", "path": [], "node_id": node_id}
+        else:
+            from tooluseproxy.viewer_process import issued_viewer_open
+            local_viewer = issued_viewer_open(
+                store.db_path,
+                event.workspace_root,
+                event.workspace_id,
+                event.raw_payload.get("tool_name"),
+                event.raw_payload.get("tool_input"),
+            )
+            screen = (
+                {
+                    "externality": "local",
+                    "complete": True,
+                    "reason": "issued_tooluseproxy_viewer",
+                    "resources": [],
+                }
+                if local_viewer
+                else screen_externality(
                     store.db_path,
-                    event.workspace_root,
-                    event.workspace_id,
-                    event.raw_payload.get("tool_name"),
-                    event.raw_payload.get("tool_input"),
+                    event,
+                    model,
+                    screening_judge
+                    or judge
+                    or CodexSemanticJudge(config.get("model"), timeout=15),
                 )
-                screen = (
-                    {
-                        "externality": "local",
-                        "complete": True,
-                        "reason": "issued_tooluseproxy_viewer",
-                        "resources": [],
-                    }
+            )
+            from tooluseproxy.engine.lineage import snapshot_resources
+            snapshot_resources(store, event, screen.get("resources", []))
+            if screen["externality"] == "local" and screen["complete"]:
+                result = {
+                    "action": "allow",
+                    "reason": "issued_tooluseproxy_viewer"
                     if local_viewer
-                    else screen_externality(
-                        store.db_path,
-                        event,
-                        model,
-                        screening_judge
-                        or judge
-                        or CodexSemanticJudge(config.get("model"), timeout=15),
-                    )
-                )
-                from tooluseproxy.engine.lineage import snapshot_resources
-                snapshot_resources(store, event, screen.get("resources", []))
-                if screen["externality"] == "local" and screen["complete"]:
-                    result = {
-                        "action": "allow",
-                        "reason": "issued_tooluseproxy_viewer"
-                        if local_viewer
-                        else "local_provenance_deferred",
-                        "path": [],
-                        "node_id": node_id,
-                    }
-                else:
-                    sources = [
-                        dict(asdict(source), node_id="source:" + source.source_id)
-                        for source in store.list_protected_sources_for_workspace(event.workspace_id)
-                    ]
-                    started = time.monotonic()
-                    provider = judge or CodexSemanticJudge(config.get("model"), timeout=60)
+                    else "local_provenance_deferred",
+                    "path": [],
+                    "node_id": node_id,
+                }
+            else:
+                sources = [
+                    dict(asdict(source), node_id="source:" + source.source_id)
+                    for source in store.list_protected_sources_for_workspace(event.workspace_id)
+                ]
+                started = time.monotonic()
+                provider = judge or CodexSemanticJudge(config.get("model"), timeout=60)
 
-                    def bounded_judge(records):
-                        if background:
-                            from tooluseproxy.engine.jobs import foreground_waiting
-                            if foreground_waiting(store.db_path, event.workspace_id, event.session_id):
-                                raise GraphUnavailable("foreground_priority")
-                        if time.monotonic() - started > 480 or (deadline is not None and time.monotonic() >= deadline):
-                            raise GraphUnavailable("semantic_analysis_budget_exceeded")
-                        if len(json.dumps(records, ensure_ascii=False).encode()) > 512_000:
-                            raise GraphUnavailable("semantic_prompt_budget_exceeded")
-                        return provider(records)
+                def bounded_judge(records):
+                    if background:
+                        from tooluseproxy.engine.jobs import foreground_waiting
+                        if foreground_waiting(store.db_path, event.workspace_id, event.session_id):
+                            raise GraphUnavailable("foreground_priority")
+                    if time.monotonic() - started > 480 or (deadline is not None and time.monotonic() >= deadline):
+                        raise GraphUnavailable("semantic_analysis_budget_exceeded")
+                    if len(json.dumps(records, ensure_ascii=False).encode()) > 512_000:
+                        raise GraphUnavailable("semantic_prompt_budget_exceeded")
+                    return provider(records)
 
-                    def graph_decision(evidence=None):
+                def graph_decision(evidence=None):
+                    with session_lock(store.db_path, event.workspace_id,
+                                      event.session_id, background=background):
                         return analyze_properties(
                             store.db_path,
                             event.workspace_id,
@@ -266,31 +270,41 @@ def _process_once(store, event, *, judge=None, screening_judge=None, target_judg
                             bounded_judge,
                             model=model,
                             current_evidence=evidence,
+                            require_external=True,
                             sources_refresh=lambda: [dict(asdict(source), node_id="source:" + source.source_id) for source in store.list_protected_sources_for_workspace(event.workspace_id)],
                         )
 
-                    if sources:
-                        from tooluseproxy.engine.inspection import inspect_and_decide
-                        def target_provider(records):
-                            if time.monotonic() - started > 480 or (deadline is not None and time.monotonic() >= deadline):
-                                raise GraphUnavailable("semantic_analysis_budget_exceeded")
-                            if (target_judge is None and not records.get("execution_definitions")
-                                    and screen.get("transmission", {}).get("complete") is True
-                                    and not any(t["kind"] == "unresolved" for t in screen["transmission"]["targets"])):
-                                return screen["transmission"]
-                            return (target_judge or provider)(records)
-                        result = inspect_and_decide(store, event, sources, target_provider,
-                                                    graph_decision, node_id, model, graph_with_evidence=graph_decision)
-                    else:
-                        result = graph_decision()
+                if sources:
+                    from tooluseproxy.engine.inspection import inspect_and_decide
+                    def target_provider(records):
+                        if time.monotonic() - started > 480 or (deadline is not None and time.monotonic() >= deadline):
+                            raise GraphUnavailable("semantic_analysis_budget_exceeded")
+                        if (target_judge is None and not records.get("execution_definitions")
+                                and screen.get("transmission", {}).get("complete") is True
+                                and not any(t["kind"] == "unresolved" for t in screen["transmission"]["targets"])):
+                            return screen["transmission"]
+                        return (target_judge or provider)(records)
+                    result = inspect_and_decide(store, event, sources, target_provider,
+                                                graph_decision, node_id, model, graph_with_evidence=graph_decision)
+                else:
+                    result = graph_decision()
 
     except (GraphUnavailable, JudgeProviderError) as exc:
         result["reason"] = str(exc)
-        if isinstance(exc, GraphUnavailable) and str(exc).startswith(("invalid_", "output_selection_")):
+        if isinstance(exc, GraphUnavailable) and str(exc).startswith((
+            "invalid_", "output_selection_", "property_graph_incomplete",
+        )):
             result["retryable"] = False
-    except Exception:
-        # Never echo provider errors that may contain recorded/private content.
-        pass
+    except Exception as exc:
+        from tooluseproxy.engine.jobs import PriorityYield
+        if isinstance(exc, PriorityYield):
+            result["reason"] = "foreground_priority"
+        else:
+            # Preserve the exception type, never its message/private payload.
+            result["error_type"] = type(exc).__name__
+            result["retryable"] = False
+    if result.get("reason") == "property_graph_incomplete":
+        result["retryable"] = False
     if event.phase == "post_tool_use" and result["action"] != "unavailable":
         result["action"] = "observed"
     try:

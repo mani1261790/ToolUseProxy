@@ -45,9 +45,12 @@ Do not say 「流出しないことを確認しました」 when only registrati
 ## Explain the product accurately
 
 ToolUseProxy records Hook-visible ToolCalls in events.db. An independent `codex exec`
-judges information dependencies and possible external communication. The policy
+judges information dependencies and explicit outbound operations. The policy
 traverses those dependencies and stops external calls connected to registered sources. Independent exact-content DLP also checks resolved transmission contents; a DLP match is a distinct reason, not an inferred graph edge.
 This is inferred provenance, not proof of complete information-flow tracking.
+The boundary is the recorded invocation and tool contract, including visible inline
+code and compound commands. Hidden communication inside scripts, hooks or local
+services is outside coverage; this Plugin does not enforce network isolation.
 
 The judge receives recorded ToolCall inputs, outputs, registered-source metadata, and bounded local resource evidence needed to resolve a transmission. New setup also enables background provenance analysis, which uses the model.
 They may contain private information. It is NOT a local-only comparison and does NOT
@@ -56,7 +59,9 @@ and the data it receives before initial setup. Reuse explicit consent already gi
 do not ask for the same approval again.
 
 When judgment times out, fails, or lacks evidence, report **判定未完了**. This version
-retains the operation pending a completed judgment and retries analysis. Never describe
+retains the operation pending a completed judgment. Transient failures may retry;
+missing evidence waits for a new request instead of repeatedly analyzing unchanged
+records. Never describe
 such a result as a detected leak, a safe operation, or a completed protection decision.
 The finite host Hook deadline cannot hold a call forever: a pending response withholds
 execution using the host deny mechanism, while retaining the unfinished judgment.
@@ -85,7 +90,9 @@ without any `--protect` argument. Do not anticipate a later registration request
 Setup creates configuration and recording tables and starts the live log viewer.
 Report initialization separately if a file registration or viewer startup fails.
 Finish with the returned short Unsetup guidance, not a test or another confirmation.
-Open the returned viewer URL in Codex's browser side panel when available. A URL in
+Open the returned viewer URL in Codex's browser side panel when available. A successful
+open_in_codex result completes opening; do not then create a second browser tab to
+open the same URL again. A URL in
 JSON alone is not an opened screen. If the viewer fails, explain that configuration
 and viewer startup are separate outcomes; use `logs` to retry.
 
