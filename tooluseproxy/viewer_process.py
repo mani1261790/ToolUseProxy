@@ -14,6 +14,63 @@ from urllib.parse import urlsplit
 from tooluseproxy.engine.graph import digest
 
 
+def issued_viewer_open(
+    db: Path, workspace: str, workspace_id: str, tool_name: object, tool_input: object
+) -> bool:
+    """Recognize only the exact local viewer capability issued for this workspace."""
+    if tool_name != "mcp__codex_app__open_in_codex" or not isinstance(tool_input, dict):
+        return False
+    if set(tool_input) - {"target", "placement"}:
+        return False
+    if tool_input.get("placement") not in (None, "right", "bottom"):
+        return False
+    target = tool_input.get("target")
+    if not isinstance(target, dict) or set(target) != {"type", "url"}:
+        return False
+    if target.get("type") != "browser" or not isinstance(target.get("url"), str):
+        return False
+
+    status = db.parent / ("viewer-" + digest(workspace) + ".json")
+    try:
+        metadata = status.lstat()
+        if status.is_symlink() or not status.is_file():
+            return False
+        if metadata.st_uid != os.getuid() or metadata.st_mode & 0o077:
+            return False
+        if metadata.st_size > 8192:
+            return False
+        record = json.loads(status.read_text(encoding="utf-8"))
+        issued = record.get("url")
+        parsed = urlsplit(issued)
+        valid = bool(
+            record.get("status") == "ready"
+            and record.get("workspace_root") == workspace
+            and record.get("workspace_id") == workspace_id
+            and issued == target["url"]
+            and parsed.scheme == "http"
+            and parsed.hostname == "127.0.0.1"
+            and parsed.port is not None
+            and parsed.username is None
+            and parsed.password is None
+            and parsed.query == ""
+            and parsed.fragment == ""
+            and parsed.path.startswith("/")
+            and len(parsed.path) > 2
+        )
+        if not valid:
+            return False
+        connection = http.client.HTTPConnection("127.0.0.1", parsed.port, timeout=0.5)
+        try:
+            connection.request("GET", parsed.path, headers={"Host": f"127.0.0.1:{parsed.port}"})
+            response = connection.getresponse()
+            response.read(1024)
+            return response.status == 200 and response.getheader("X-ToolUseProxy-Viewer") == "v1"
+        finally:
+            connection.close()
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return False
+
+
 def start(db: Path, workspace: Path):
     status = db.parent / ("viewer-" + digest(str(workspace)) + ".json")
     if status.exists() and not status.is_symlink():

@@ -1,6 +1,6 @@
 {
   "name": "tooluseproxy",
-  "version": "0.2.0-alpha.7",
+  "version": "0.2.0-alpha.8",
   "description": "ToolCall dependency graphs judged by Codex, with mechanical source-reachability checks.",
   "author": {
     "name": "ToolUseProxy contributors",

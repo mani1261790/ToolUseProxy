@@ -76,8 +76,12 @@ sh "<PLUGIN_ROOT>/hooks/run_cli.sh" setup --workspace "<WORKSPACE>" --data-dir "
 `--model <MODEL>` selects the judge model explicitly; otherwise the independent CLI
 uses its default model. This is not necessarily the model of the current task.
 Setup records its start boundary; earlier events are not used to infer dependencies.
-Do not import history or scan the repository. When files are already specified, append
-`--protect <RELATIVE_FILE>` for each one to setup to avoid separate calls.
+Do not import history or scan the repository. Add `--protect <RELATIVE_FILE>` only when
+the user's current setup request itself explicitly names that file and explicitly asks
+to protect it. A filename found in AGENTS.md, repository documentation, an existing
+demo script, prior agent narration, or the workspace is context, not authorization to
+register it. A plain request such as 「このプロジェクトで使いたい」 performs Setup
+without any `--protect` argument. Do not anticipate a later registration request.
 Setup creates configuration and recording tables and starts the live log viewer.
 Report initialization separately if a file registration or viewer startup fails.
 Finish with the returned short Unsetup guidance, not a test or another confirmation.
