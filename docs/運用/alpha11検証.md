@@ -1,6 +1,6 @@
 # v0.2.0-alpha.11 の検証状況
 
-2026-09-24。配布準備中。Desktopでの収録受入は未完了。
+2026-09-24。公開・インストール確認済み。Desktopでの収録受入は未完了。
 
 ## 変更
 
@@ -18,13 +18,31 @@
 - 同じ操作で作った公開/派生ファイルの分離、同一/別セッションの資源版参照。
 - 20操作を挟む原文・派生・公開の3ケース。直近の単発計測は約27秒・28秒・19秒。
 - 一時障害を挿入した回帰試験で判定完了までの回復。失敗を流出検出として数えていない。
+- [修正PR #308](https://github.com/mani1261790/ToolUseProxy/pull/308)をmainへmerge済み。
+- [alpha.11](https://github.com/mani1261790/ToolUseProxy/releases/tag/v0.2.0-alpha.11)を公開。8つの添付ファイルのGitHub側SHA-256とローカル生成物の一致を確認。
+- [配布チャンネルPR #309](https://github.com/mani1261790/ToolUseProxy/pull/309)のCI成功・mergeを確認。
+- `codex plugin marketplace upgrade tooluseproxy --json` で更新。インストール済み版がalpha.11、`enabled=false`を維持していることを確認。
+- 公開Plugin ZIP内の54ファイルがインストール済みcacheと一致。実行用44ファイルも検証元ソースと一致。
+- 本番用take7は未Setupで、`research_notes.md`を配置済み。GitHub上の初期コミットにはREADMEのみがあり、認証・push・upstream設定を確認。
+- 利用者指定の8つの短いプロンプトを維持して台本を更新。本番中のブランチ切り替えは不要。
+
+## 配布元の同一性
+
+- 配布物のsource commit: `eb298247c39bafff5d0562bf2a7a22cdf06a34ad`
+- mainへのmerge commit: `77a9de7be4ea68e9aa8904e0ea135f40bc9345e9`
+- public-alphaの更新commit: `0614b8c4475f33527990c00be17a63e6516e4dd4`
+- 配布物sourceと更新済みmarketplaceのGit tree: `c4c700a7d6df2f0f0b314dd71affa5936d68ce23`
+
+チャンネル履歴をmergeしているためcommit IDは異なるが、Git treeとインストールした配布対象ファイルの一致を確認している。
 
 ## 残る受入
 
-1. alpha.11のCI、配布物の生成・検証、公開。
-2. 通常のmarketplace更新によるインストールと、ユーザーの有効/無効状態の維持。
-3. 配布Pluginを利用する実Desktop Hookで、判定理由とGitHubの受信結果を照合する。
-4. 本番用の未Setup環境、研究メモ、Git設定、8つのプロンプトによる台本を確認する。
+1. ユーザーがPluginを有効化し、再起動する。現在の無効設定はエージェントから変更しない。
+2. 本番用take7とは別のリハーサル環境で、実Desktop Hookの記録・判定理由・GitHubの受信結果を照合する。
+3. ログUIの自動起動と実際の更新表示を確認する。
+4. 原文・派生を情報流出検出で遮断し、無関係な案内のpushを通せることを確認してから、台本を収録可能へ更新する。
+
+確認前にtake7をSetupしたり、未判定の拒否をデモ成功として扱ったりしない。
 
 モデル障害が恒久的に続く場合や実データの取得が不可能な場合の完了保証はない。
 最終的な未完了を実行拒否へ変換する経路は残る。ユーザーが遭遇した通常操作での未完了を
