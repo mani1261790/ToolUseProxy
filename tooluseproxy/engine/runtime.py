@@ -312,6 +312,11 @@ def _process_once(store, event, *, judge=None, screening_judge=None, target_judg
 
     except (GraphUnavailable, JudgeProviderError) as exc:
         result["reason"] = str(exc)
+        if isinstance(exc, JudgeProviderError):
+            if exc.code in ('codex_exec_unavailable', 'semantic_provider_used_tools'):
+                result['retryable'] = False
+            else:
+                result['retry_scope'] = 'provider'
         if isinstance(exc, GraphUnavailable) and str(exc).startswith((
             "invalid_", "output_selection_", "property_graph_incomplete",
         )):

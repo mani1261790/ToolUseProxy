@@ -39,6 +39,29 @@ def test_bad_result_never_grants_permission(tmp_path):
     assert result['action'] == 'pending'
 
 
+def test_provider_can_recover_after_three_fast_failures_within_same_budget(tmp_path):
+    elapsed, calls = [0.0], []
+    def operation(deadline):
+        calls.append(deadline)
+        return (dict(action='allow', reason='complete') if len(calls) == 5 else
+                dict(action='unavailable', reason='semantic_provider_failed', retry_scope='provider'))
+    result = decide(tmp_path / 'events.db', event(), operation, budget_seconds=60,
+                    clock=lambda: elapsed[0], sleep=lambda duration: elapsed.__setitem__(0, elapsed[0]+duration))
+    assert result['action'] == 'allow'
+    assert calls == [60] * 5 and elapsed[0] == 15
+
+
+def test_provider_retry_does_not_extend_the_live_deadline(tmp_path):
+    elapsed, calls = [0.0], []
+    def operation(deadline):
+        calls.append(deadline)
+        return dict(action='unavailable', reason='semantic_provider_failed', retry_scope='provider')
+    result = decide(tmp_path / 'events.db', event(), operation, budget_seconds=10,
+                    clock=lambda: elapsed[0], sleep=lambda duration: elapsed.__setitem__(0, elapsed[0]+duration))
+    assert result['action'] == 'pending'
+    assert elapsed[0] == 10 and calls == [10] * 4
+
+
 def test_missing_evidence_does_not_schedule_unchanged_background_retry(tmp_path):
     from tooluseproxy.engine.pending import resume
     db = tmp_path / 'events.db'

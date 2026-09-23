@@ -59,7 +59,8 @@ def decide(db, event, operation, *, max_attempts=3, budget_seconds=480,
             sleep(min(0.1, max(0, deadline-clock())))
         result = dict(action='unavailable', reason='judgment_budget', path=[], node_id=None)
         count = 0
-        for attempt in range(max_attempts):
+        attempt = 0
+        while True:
             if clock() >= deadline:
                 break
             try:
@@ -83,8 +84,13 @@ def decide(db, event, operation, *, max_attempts=3, budget_seconds=480,
                 return result
             if result.get('retryable') is False:
                 break
-            if attempt + 1 < max_attempts:
-                sleep(min(2 ** attempt, max(0, deadline-clock())))
+            attempt += 1
+            # A fast transport failure must not spend an arbitrary three-strike
+            # allowance while most of the live Hook budget remains. Evidence or
+            # programming failures retain their bounded attempt policy.
+            if result.get('retry_scope') != 'provider' and attempt >= max_attempts:
+                break
+            sleep(min(2 ** min(attempt - 1, 5), max(0, deadline-clock())))
         with transaction(db) as conn:
             state = 'needs_evidence' if result.get('retryable') is False else 'waiting'
             conn.execute("UPDATE pending_judgments SET state=?,held=1,lease_until=0,retry_at=? WHERE event=? AND owner=?",
