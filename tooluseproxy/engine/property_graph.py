@@ -69,14 +69,13 @@ def validate(value, candidates):
         raise GraphUnavailable("invalid_property_reason")
     if not isinstance(value["dependencies"], list) or not isinstance(value["accesses"], list):
         raise GraphUnavailable("invalid_property_lists")
-    seen = set()
+    dependencies = {}
     for edge in value["dependencies"]:
         if (
             not isinstance(edge, dict)
             or set(edge) - {"selection"} != {"node_id", "reason"}
             or not isinstance(edge["node_id"], str)
             or edge["node_id"] not in candidates
-            or edge["node_id"] in seen
             or not isinstance(edge["reason"], str)
             or not 0 < len(edge["reason"]) <= 4000
         ):
@@ -87,8 +86,15 @@ def validate(value, candidates):
             or not isinstance(selection["text"], str) or not 0 < len(selection["text"]) <= 128_000
         ):
             raise GraphUnavailable("invalid_output_selection")
-        seen.add(edge["node_id"])
-    seen = set()
+        old = dependencies.get(edge["node_id"])
+        # Multiple fields from one producer form one graph edge. Preserve all
+        # contributions by widening conflicting selections, never dropping an
+        # edge or paying for another model request to fix a list duplicate.
+        dependencies[edge["node_id"]] = (
+            dict(edge, selection=None)
+            if old is not None and old.get("selection") != selection else edge
+        )
+    accesses = {}
     for access in value["accesses"]:
         if not isinstance(access, dict) or set(access) != {"path", "mode", "reason"}:
             raise GraphUnavailable("invalid_access")
@@ -107,9 +113,7 @@ def validate(value, candidates):
         ):
             raise GraphUnavailable("invalid_access")
         key = (path, access["mode"])
-        if key in seen:
-            raise GraphUnavailable("duplicate_access")
-        seen.add(key)
+        accesses[key] = access
     requests = value.get("evidence_requests", [])
     if not isinstance(requests, list) or len(requests) > 8:
         raise GraphUnavailable("invalid_evidence_requests")
@@ -119,7 +123,7 @@ def validate(value, candidates):
             raise GraphUnavailable("invalid_evidence_request")
     if value["complete"] and requests:
         raise GraphUnavailable("completed_with_evidence_requests")
-    return value
+    return dict(value, dependencies=list(dependencies.values()), accesses=list(accesses.values()))
 
 
 def persist(conn, workspace, session, node, revision, model, verdict, parent_revisions=None):
@@ -264,26 +268,12 @@ def analyze_properties(
             "INSERT OR REPLACE INTO graph_progress VALUES (?,?,?,?)",
             (workspace, session, event_id, "analyzing"),
         )
-    from tooluseproxy.engine.lineage import attach_witnesses, pending_producers, link_producers
+    from tooluseproxy.engine.lineage import attach_witnesses, link_producers
 
     visiting = set() if _visiting is None else _visiting
     if event_id in visiting or len(visiting) >= 64:
         raise GraphUnavailable("resource_lineage_expansion_budget")
     visiting.add(event_id)
-    with sqlite3.connect(db_path, timeout=5) as conn:
-        producers = pending_producers(conn, workspace, session, event_id, model)
-    for producer, producer_session in producers:
-        analyze_properties(
-            db_path,
-            workspace,
-            producer_session,
-            producer,
-            sources,
-            judge,
-            model=model,
-            sources_refresh=sources_refresh,
-            _visiting=visiting,
-        )
     with sqlite3.connect(db_path, timeout=5) as conn:
         calls = load_calls(conn, workspace, session, event_id, 50_000, 64_000_000)
     if not calls:
@@ -321,7 +311,11 @@ def analyze_properties(
             if cached and not reusable(json.loads(cached[0]), producer):
                 cached = None
             candidates = {n["node_id"] for n in calls[:index] if n["completed"]}
-            if cached:
+            from tooluseproxy.engine.contracts import provenance_contract
+            mechanical = provenance_contract(focused)
+            if mechanical is not None:
+                verdict = validate(mechanical, candidates)
+            elif cached:
                 verdict = validate(json.loads(cached[0]), candidates)
             else:
                 from tooluseproxy.engine.review import review
@@ -366,13 +360,26 @@ def analyze_properties(
             # ToolCall edge: demand-driven analysis must materialize that revision.
             from tooluseproxy.engine.lineage import matching_producers
             reads = {a["path"] for a in verdict["accesses"] if a["mode"] == "read"}
-            for origin_event, origin_session, path, _ in matching_producers(conn, workspace, producer["event_id"]):
-                if origin_session == session and path in reads:
+            origins = matching_producers(conn, workspace, producer["event_id"])
+            for origin_event, origin_session, path, _ in origins:
+                if path not in reads:
+                    continue
+                if origin_session == session:
                     origin_index = next((i for i,n in enumerate(calls[:index]) if n["event_id"] == origin_event), None)
                     if origin_index is not None:
                         assess(origin_index, None, depth+1)
+                else:
+                    # Materialize only generations actually consumed by this
+                    # value, not every earlier read in the entire session.
+                    # The producer recursively checks its own current evidence
+                    # and caches; policy roots never decide which edges to keep.
+                    analyze_properties(
+                        db_path, workspace, origin_session, origin_event,
+                        sources, judge, model=model, sources_refresh=sources_refresh,
+                        _visiting=visiting,
+                    )
             resource_links = []
-            for origin_event, _, path, _ in matching_producers(conn, workspace, producer["event_id"]):
+            for origin_event, _, path, _ in origins:
                 if path in reads:
                     parent = conn.execute("SELECT h.node,h.revision FROM graph_heads h JOIN graph_revisions r ON r.revision=h.revision JOIN graph_accesses a ON a.revision=r.revision WHERE h.workspace=? AND r.event=? AND a.path=? AND a.mode='write'", (workspace, origin_event, path)).fetchone()
                     if parent:

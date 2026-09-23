@@ -87,6 +87,43 @@ def test_observed_generation_links_sessions_and_expands_pending_producer(history
         assert conn.execute("SELECT COUNT(*) FROM flow_file_observations").fetchone()[0] == 4
 
 
+def test_materializing_parent_does_not_invalidate_unchanged_observation_cache(history):
+    _, store, record, _ = history
+    send = record("b", "send", "pre_tool_use", "send", [{"path": "derived", "mode": "read"}])
+    queried = []
+
+    def counted(records):
+        queried.append(records["current_call"]["event_id"])
+        return judge(records)
+
+    args = (store.db_path, send.workspace_id, send.session_id, send.event_id,
+            [{"node_id": "source:private", "path": "private"}], counted)
+    assert analyze_properties(*args)["action"] == "block"
+    count = len(queried)
+    assert count == 3
+    assert analyze_properties(*args)["action"] == "block"
+    assert len(queried) == count
+
+
+def test_unrelated_prior_cross_session_read_is_not_analyzed(history):
+    _, store, record, _ = history
+    record("b", "old", "pre_tool_use", "send", [{"path": "derived", "mode": "read"}])
+    record("b", "old", "post_tool_use", "send", response="old unrelated content")
+    send = record("b", "send", "pre_tool_use", "public-send")
+    queried = []
+
+    def only_current(records):
+        queried.append(records["current_call"]["event_id"])
+        assert records["current_call"]["event_id"] == send.event_id
+        return dict(externality="external", complete=True, reason="independent content",
+                    dependencies=[], accesses=[])
+
+    result = analyze_properties(store.db_path, send.workspace_id, send.session_id,
+                                send.event_id, [], only_current)
+    assert result["action"] == "allow"
+    assert queried == [send.event_id]
+
+
 @pytest.mark.parametrize("same_content", [False, True])
 def test_unobserved_replacement_never_inherits_old_producer(history, same_content):
     root, store, record, _ = history

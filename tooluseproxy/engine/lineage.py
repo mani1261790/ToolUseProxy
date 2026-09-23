@@ -235,36 +235,6 @@ def matching_producers(conn, workspace, event):
     return list(dict.fromkeys([*live, *immutable]))
 
 
-def pending_producers(conn, workspace, session, event, model="codex_default"):
-    from tooluseproxy.engine.judge import PROMPT_VERSION
-    # Current transmission and earlier observed reads in this session can need
-    # producers from another session. Raw observations remain the source of truth.
-    schema(conn)
-    end = conn.execute("SELECT sequence_no FROM events WHERE event_id=?", (event,)).fetchone()
-    if not end:
-        return []
-    events = conn.execute(
-        """SELECT DISTINCT e.event_id FROM events e JOIN flow_file_observations o ON o.event=e.event_id
-        WHERE e.workspace_id=? AND e.session_id=? AND e.sequence_no<=? AND o.mode='read'
-        AND (o.status='observed' OR e.event_id=?)""",
-        (workspace, session, end[0], event),
-    ).fetchall()
-    result = []
-    for (consumer,) in events:
-        for producer, other_session, _, __ in matching_producers(conn, workspace, consumer):
-            if other_session == session:
-                continue
-            known = conn.execute(
-                """SELECT 1 FROM graph_heads h JOIN graph_revisions r ON r.revision=h.revision
-                WHERE h.workspace=? AND r.event=? AND r.prompt=? AND r.model=?
-                  AND json_extract(r.verdict,'$.complete')=1""",
-                (workspace, producer, PROMPT_VERSION, model),
-            ).fetchone()
-            if not known and (producer, other_session) not in result:
-                result.append((producer, other_session))
-    return result
-
-
 def link_producers(conn, workspace, node, revision, verdict):
     schema(conn)
     reads = {item["path"] for item in verdict["accesses"] if item["mode"] == "read"}
@@ -308,11 +278,10 @@ def attach_witnesses(conn, workspace, node):
         ]
         origins = []
         for event, _, path, version in matching_producers(conn, workspace, node["event_id"]):
-            head = conn.execute(
-                "SELECT h.revision FROM graph_heads h JOIN graph_revisions r ON r.revision=h.revision WHERE h.workspace=? AND r.event=?",
-                (workspace, event),
-            ).fetchone()
             origins.append(
-                dict(path=path, version=version, judgment_revision=head[0] if head else None)
+                # A model result is not an observation. Including the mutable
+                # graph head here invalidated history caches whenever a parent
+                # was analyzed, even though no ToolCall evidence had changed.
+                dict(path=path, version=version, producer_event=event)
             )
         node["resource_origins"] = origins

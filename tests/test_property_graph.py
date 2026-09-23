@@ -5,6 +5,44 @@ from tooluseproxy.engine.journal import Journal, event_from
 from tooluseproxy.engine.property_graph import analyze_properties, reach, schema
 
 
+def test_duplicate_edges_preserve_all_contributions_without_model_retry():
+    from tooluseproxy.engine.property_graph import validate
+    from tooluseproxy.engine.graph import GraphUnavailable
+    import pytest
+
+    value = dict(externality="external", complete=True, reason="fixture", accesses=[],
+                 dependencies=[dict(node_id="parent", reason="field", selection={"text": text})
+                               for text in ["first", "second", "second"]])
+    result = validate(value, {"parent"})
+    assert len(result["dependencies"]) == 1
+    assert result["dependencies"][0]["selection"] is None
+    with pytest.raises(GraphUnavailable, match="invalid_property_edge"):
+        validate(value, set())
+
+
+def test_witnessed_read_uses_no_model_and_late_registration_still_blocks(tmp_path):
+    from tooluseproxy.engine.lineage import snapshot_resources
+
+    root = tmp_path.resolve()
+    (root / "notes").write_text("synthetic private content")
+    store = Journal(root / "events.db")
+    store.initialize()
+    for phase in ("pre_tool_use", "post_tool_use"):
+        event = event_from(phase, dict(cwd=str(root), session_id="s", tool_use_id="read",
+            tool_name="Bash", tool_input={"command": "cat notes"},
+            tool_response="synthetic private content"), str(root))
+        store.record(event)
+        snapshot_resources(store, event, [{"path": "notes", "mode": "read"}])
+
+    def no_model(records):
+        raise AssertionError("witnessed read should not request semantic analysis")
+
+    args = (store.db_path, event.workspace_id, "s", event.event_id)
+    assert analyze_properties(*args, [], no_model, require_external=True)["action"] == "allow"
+    assert analyze_properties(*args, [{"node_id": "secret", "path": "notes"}],
+                              no_model, require_external=True)["action"] == "block"
+
+
 def test_late_protection_reuses_edges_and_keeps_old_policy_result(tmp_path):
     root = tmp_path / "workspace"
     root.mkdir()

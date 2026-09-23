@@ -53,3 +53,13 @@ def test_explicit_remote_contract_only_routes_to_inspection():
     assert result["externality"] == "external"
     assert "action" not in result and "transmission" not in result
     assert communication_contract("Bash", {"command": "git push origin main; cat private"}) is None
+
+
+@pytest.mark.parametrize("command", ["cat *.md", "cat a b", "cat -n a", "cat ~/a", "cat a | head"])
+def test_unresolved_read_semantics_requires_model(command):
+    from tooluseproxy.engine.contracts import provenance_contract
+
+    node = dict(tool_name="Bash", input={"command": command}, completed=True,
+                workspace_root="/workspace", resolved_cwd="/workspace", output="content",
+                resource_observations=[dict(path="a", mode="read", status="observed")])
+    assert provenance_contract(node) is None

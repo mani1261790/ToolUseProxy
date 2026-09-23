@@ -8,6 +8,39 @@ They classify communication only; they never grant an outbound permission.
 import shlex
 
 
+def provenance_contract(node):
+    """A witnessed, literal single-file read has a known content origin.
+
+    This creates a resource read, never an independent/public value. Resource
+    generation links and the current protection policy still apply. Unsupported
+    syntax, missing observations and transformations require semantic review.
+    """
+    words = literal_words(node.get("tool_name"), node.get("input"))
+    if not node.get("completed") or not words or len(words) != 2 or words[0] != "cat":
+        return None
+    path = words[1]
+    if not path or path.startswith(("-", "/")) or any(c in path for c in "~*?[]"):
+        return None
+    if node.get("resolved_cwd") != node.get("workspace_root"):
+        return None
+    import posixpath
+
+    if posixpath.normpath(path) != path or path.startswith("../") or path == "..":
+        return None
+    witnessed = [r for r in node.get("resource_observations", [])
+                 if r["mode"] == "read" and r["status"] == "observed"]
+    if len(witnessed) != 1 or witnessed[0]["path"] != path:
+        return None
+    # No shell diagnostics/envelope is mistaken for file content. Structured
+    # tool responses use their existing semantic adapter instead.
+    if not isinstance(node.get("output"), str):
+        return None
+    return dict(externality="local", complete=True,
+                reason="witnessed single-file content read", dependencies=[],
+                accesses=[dict(path=path, mode="read", reason="observed file content")],
+                evidence_requests=[])
+
+
 def literal_words(tool_name, tool_input):
     if tool_name != "Bash" or not isinstance(tool_input, dict):
         return None
