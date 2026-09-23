@@ -163,3 +163,40 @@ def test_multiline_output_selection_uses_observed_text(tmp_path):
             return verdict()
         return verdict(deps=[{'node_id':records['previous_calls'][0]['node_id'], 'reason':'uses both lines', 'selection':{'text':text}}])
     assert analyze_properties(db,event.workspace_id,'s',event.event_id,[],judge)['action']=='allow'
+
+
+def test_directory_evidence_is_typed_bounded_and_never_reads_children(tmp_path):
+    from tooluseproxy.engine.requirements import acquire
+    directory = tmp_path / '.git'
+    directory.mkdir()
+    (directory / 'config').write_text('private content must not be returned')
+    (directory / 'protected_sources.json').write_text('forbidden')
+    (directory / 'link').symlink_to(tmp_path.parent)
+    records = {'current_call': {'workspace_root': str(tmp_path), 'input': {}}}
+    requests = [{'path': '.git', 'reason': 'repository metadata structure'}]
+    value = acquire(records, requests)[0]
+    assert value['status'] == 'observed' and value['kind'] == 'directory_entries'
+    assert json.loads(value['content']) == [
+        {'name': 'config', 'kind': 'file'}, {'name': 'link', 'kind': 'symlink'}]
+    assert 'private content' not in json.dumps(value)
+    limited = acquire(records, requests, directory_limit=1)[0]
+    assert limited['status'] == 'unavailable'
+    assert limited['failure_code'] == 'directory_entry_budget'
+    assert 'content' not in limited
+
+
+def test_resolved_output_transfer_cannot_be_omitted_by_semantic_judge(tmp_path):
+    from tooluseproxy.engine.graph import load_calls
+    _, db, event = fixture(tmp_path, 'derived private value')
+    with sqlite3.connect(db) as conn:
+        producer = load_calls(conn, event.workspace_id, 's', event.event_id)[0]
+    def judge(records):
+        if records['current_call']['node_id'] == producer['node_id']:
+            return verdict(accesses=[dict(path='private.txt', mode='read', reason='content origin')])
+        return verdict()  # A missing inferred edge cannot erase a resolved transfer.
+    result = analyze_properties(db, event.workspace_id, 's', event.event_id,
+        [{'node_id': 'source:private', 'path': 'private.txt'}], judge,
+        current_evidence=[dict(observation={'source_node_id': producer['node_id']},
+                               content='derived private value', encoding='utf-8')])
+    assert result['action'] == 'block'
+    assert result['path'][0] == 'source:private'

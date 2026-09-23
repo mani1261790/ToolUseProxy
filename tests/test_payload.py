@@ -38,6 +38,29 @@ def file_target(path, offset=0, length=None):
     return dict(kind="file", path=path, offset=offset, length=length)
 
 
+def test_observed_output_value_has_exact_extent_and_producer_identity(setup):
+    _, make = setup
+    resolver = make()
+    resolver.observed_calls = ({'node_id': 'call:producer', 'event_id': 'post:producer',
+                                'completed': True, 'output': {'value': 'PUBLIC PRIVATE'}},)
+    result = resolver.resolve(dict(kind='observed', pointer='/previous_calls/0/output/value',
+                                   offset=0, length=6))
+    assert result.coverage == 'complete'
+    assert result.parts[0].content == b'PUBLIC'
+    assert result.parts[0].version.resource.kind == 'event_output'
+    assert result.parts[0].observation['source_node_id'] == 'call:producer'
+
+
+@pytest.mark.parametrize('pointer', ['/previous_calls/0/input', '/previous_calls/8/output',
+                                     '/tool_input/body', '/previous_calls/0/output/missing'])
+def test_observed_target_cannot_select_unprovided_records_or_inputs(setup, pointer):
+    _, make = setup
+    resolver = make()
+    resolver.observed_calls = ({'completed': True, 'output': {'value': 'content'}},)
+    result = resolver.resolve(dict(kind='observed', pointer=pointer, offset=0, length=None))
+    assert result.coverage != 'complete' and not result.parts
+
+
 def test_inline_comes_from_actual_input_and_does_not_store_plaintext(setup):
     root, make = setup
     resolver = make()

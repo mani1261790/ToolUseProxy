@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import posixpath
 import sqlite3
+import time
 from collections import deque
 from contextlib import closing
 
@@ -325,6 +326,33 @@ def analyze_properties(
             else:
                 from tooluseproxy.engine.review import review
                 verdict = review(db_path, request, records, judge, validate, evidence_context=evidence_context)
+            # A transmitted value selected from a controller-loaded observation
+            # has a mandatory producer edge. A model cannot omit that provenance.
+            observed_edges = {}
+            for part in producer.get('payload_observations', []):
+                parent = part.get('observation', {}).get('source_node_id')
+                if parent is None:
+                    continue
+                if parent not in candidates:
+                    raise GraphUnavailable('observed_transmission_parent_missing')
+                original = calls[by_id[parent]]['output']
+                original = original if isinstance(original, str) else json.dumps(original, ensure_ascii=False, sort_keys=True)
+                content = part.get('content', '')
+                output_selection = ({'text': content} if part.get('encoding') == 'utf-8'
+                             and content and original.count(content) == 1 else None)
+                old = observed_edges.get(parent)
+                if old is not None and old['selection'] != output_selection:
+                    output_selection = None
+                observed_edges[parent] = dict(node_id=parent, selection=output_selection,
+                                              reason='controller-resolved transmitted output')
+            if observed_edges:
+                dependencies = {edge['node_id']: edge for edge in verdict['dependencies']}
+                for parent, edge in observed_edges.items():
+                    old = dependencies.get(parent)
+                    if old is not None and old.get('selection') != edge['selection']:
+                        edge = dict(edge, selection=None)
+                    dependencies[parent] = edge
+                verdict = dict(verdict, dependencies=list(dependencies.values()))
             # Relative and absolute aliases must name the same policy resource.
             from tooluseproxy.engine.requirements import resource_identity
             verdict = dict(verdict, accesses=[dict(a, path=resource_identity(a["path"], producer["workspace_root"])) for a in verdict["accesses"]])
@@ -384,6 +412,7 @@ def analyze_properties(
             "INSERT OR IGNORE INTO graph_policies VALUES (?,?)",
             (policy_revision, json.dumps(sources)),
         )
+        traversal_started = time.monotonic_ns()
         complete = dependency_complete(conn, workspace, current_node)
         roots, policy_complete = bindings(conn, workspace, session, sources)
         path = reach(conn, workspace, session, current_node, roots)
@@ -397,7 +426,8 @@ def analyze_properties(
             action, reason = "unavailable", "property_graph_incomplete"
         else:
             action, reason = "allow", "no_protected_path_observed"
-        result = {"node_id": current_node, "action": action, "reason": reason, "path": path}
+        result = {"node_id": current_node, "action": action, "reason": reason, "path": path,
+                  "reachability_ms": (time.monotonic_ns() - traversal_started) / 1_000_000}
         if action == "unavailable":
             result["retryable"] = False
             result["evidence_needs"] = unresolved_dependencies(conn, workspace, current_node)

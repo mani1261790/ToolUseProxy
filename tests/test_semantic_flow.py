@@ -167,7 +167,7 @@ def test_history_limit_does_not_silently_allow(fixture):
 
 def test_timeout_is_retried_and_retained_without_dispatch(fixture):
     store, record = fixture
-    event = record("one", "git add public.txt")
+    event = record("one", "custom_operation public.txt")
     register_fixture_source(store, event.workspace_id)
     config = {
         "workspaces": {
