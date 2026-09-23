@@ -60,6 +60,34 @@ def test_expired_lease_recovery_and_owner_fencing(tmp_path):
     assert claim(store.db_path, event.workspace_id, now=1202) is None
 
 
+def test_incomplete_background_work_has_finite_attempts(tmp_path):
+    _, store, event = fixture(tmp_path)
+    enqueue(store.db_path, event, 'codex_default')
+    for _ in range(3):
+        job = claim(store.db_path, event.workspace_id)
+        assert job is not None
+        finish(store.db_path, job, 'pending', 'analysis_incomplete')
+    assert claim(store.db_path, event.workspace_id) is None
+
+
+def test_local_calls_and_post_recording_do_not_wait_for_graph_lock(tmp_path):
+    import concurrent.futures
+    from tooluseproxy.engine.runtime import _process_once
+    root, store, post = fixture(tmp_path)
+    pre = event_from('pre_tool_use', dict(cwd=str(root), session_id='s',
+        tool_use_id='local-next', tool_name='Bash', tool_input={'command':'cat readme'}), str(root))
+    with concurrent.futures.ThreadPoolExecutor() as pool:
+        with session_lock(store.db_path, post.workspace_id, post.session_id):
+            # The actual graph lock is held throughout; neither operation may
+            # acquire it or call the provenance provider.
+            observed = pool.submit(_process_once, store, post, judge=lambda _: 1/0)
+            assert observed.result(timeout=2)['action'] == 'observed'
+            local = pool.submit(_process_once, store, pre, judge=lambda _: 1/0,
+                screening_judge=lambda _: dict(externality='local', complete=True,
+                    reason='no_explicit_send', resources=[]))
+            assert local.result(timeout=2)['action'] == 'allow'
+
+
 def test_worker_judges_outside_write_transaction_and_respects_activation(tmp_path, monkeypatch):
     root, store, event = fixture(tmp_path)
     enqueue(store.db_path, event, "codex_default")
@@ -135,7 +163,7 @@ def test_repeated_crash_does_not_leave_permanent_running_state(tmp_path):
         assert conn.execute("SELECT status FROM flow_jobs").fetchone()[0] == "failed"
 
 
-def test_incomplete_background_result_remains_retryable(tmp_path, monkeypatch):
+def test_incomplete_background_result_waits_for_new_evidence(tmp_path, monkeypatch):
     root, store, event = fixture(tmp_path)
     enqueue(store.db_path, event, 'codex_default')
     monkeypatch.setattr('tooluseproxy.integrations.activation.enabled_workspace_root', lambda *_: str(root))
@@ -143,7 +171,7 @@ def test_incomplete_background_result_remains_retryable(tmp_path, monkeypatch):
                         lambda *_args, **_kwargs: {'action':'unavailable','reason':'retry'})
     assert drain(store.db_path, event.workspace_id, lease_factory=no_authority) == 0
     with sqlite3.connect(store.db_path) as conn:
-        assert conn.execute('SELECT status,reason FROM flow_jobs').fetchone() == ('pending','analysis_incomplete')
+        assert conn.execute('SELECT status,reason FROM flow_jobs').fetchone() == ('paused','analysis_incomplete')
     monkeypatch.setattr('tooluseproxy.engine.property_graph.analyze_properties',
                         lambda *_args, **_kwargs: {'action':'allow','reason':'complete'})
-    assert drain(store.db_path, event.workspace_id, lease_factory=no_authority) == 1
+    assert drain(store.db_path, event.workspace_id, lease_factory=no_authority) == 0

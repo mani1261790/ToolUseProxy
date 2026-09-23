@@ -39,6 +39,20 @@ def test_bad_result_never_grants_permission(tmp_path):
     assert result['action'] == 'pending'
 
 
+def test_missing_evidence_does_not_schedule_unchanged_background_retry(tmp_path):
+    from tooluseproxy.engine.pending import resume
+    db = tmp_path / 'events.db'
+    result = decide(db, event(), lambda _: dict(
+        action='unavailable', reason='property_graph_incomplete', retryable=False))
+    assert result['action'] == 'pending'
+    with sqlite3.connect(db) as conn:
+        assert conn.execute('SELECT state,attempts FROM pending_judgments').fetchone() == (
+            'needs_evidence', 1)
+    assert resume(db, 'w', now=10**12, operation=lambda *_: 1/0) == 0
+    # An explicit new delivery may bring new evidence and must be evaluated.
+    assert decide(db, event(), lambda _: dict(action='allow', reason='new_evidence'))['action'] == 'allow'
+
+
 def test_resume_judges_saved_event_but_never_runs_its_command(tmp_path):
     from tooluseproxy.app import main
     from tooluseproxy.engine.journal import Journal, event_from

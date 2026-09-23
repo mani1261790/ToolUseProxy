@@ -78,8 +78,9 @@ def decide(db, event, operation, *, max_attempts=3, budget_seconds=480,
             if attempt + 1 < max_attempts:
                 sleep(min(2 ** attempt, max(0, deadline-clock())))
         with transaction(db) as conn:
-            conn.execute("UPDATE pending_judgments SET state='waiting',held=1,lease_until=0,retry_at=? WHERE event=? AND owner=?",
-                         (wall()+min(300, 5 * 2 ** min(count // 3, 6)), event.event_id, owner))
+            state = 'needs_evidence' if result.get('retryable') is False else 'waiting'
+            conn.execute("UPDATE pending_judgments SET state=?,held=1,lease_until=0,retry_at=? WHERE event=? AND owner=?",
+                         (state, wall()+min(300, 5 * 2 ** min(count // 3, 6)), event.event_id, owner))
         return dict(result, action='pending')
     except (sqlite3.Error, OSError):
         # Failure to persist a decision is never permission to execute.

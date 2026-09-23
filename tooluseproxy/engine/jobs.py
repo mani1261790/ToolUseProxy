@@ -74,7 +74,7 @@ def finish(db, job, status, reason=""):
     if status not in ("done", "failed", "paused", "pending"):
         raise ValueError("invalid_job_outcome")
     with transaction(db) as conn:
-        if status == "pending":
+        if status == "pending" and reason == "foreground_priority":
             conn.execute(
                 "UPDATE flow_jobs SET attempts=MAX(attempts-1,0) WHERE scope=? AND event=? AND model=? AND owner=? AND status='running'",
                 (job["scope"], job["event"], job["model"], job["owner"]),
@@ -150,7 +150,7 @@ def drain(db, scope, *, provider=None, max_jobs=32, lease_factory=None):
                             model=job["model"],
                         )
             if result["action"] == "unavailable":
-                finish(db, job, "pending", "analysis_incomplete")
+                finish(db, job, "paused", "analysis_incomplete")
                 break
             finish(db, job, "done")
             completed += 1
