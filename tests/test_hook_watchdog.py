@@ -13,7 +13,7 @@ from tooluseproxy_hook_watchdog import run_child
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_fast_child_output_and_exit_code_are_preserved() -> None:
+def test_failed_child_cannot_release_a_pending_call() -> None:
     expected = b'{"result":"ok"}\n'
     stdout = io.BytesIO()
     with tempfile.TemporaryFile() as stdin:
@@ -31,11 +31,13 @@ def test_fast_child_output_and_exit_code_are_preserved() -> None:
             timeout_seconds=1.0,
         )
 
-    assert result == 3
-    assert stdout.getvalue() == expected
+    assert result == 0
+    details = json.loads(stdout.getvalue())["hookSpecificOutput"]
+    assert details["permissionDecision"] == "deny"
+    assert "semantic_child_failed" in details["permissionDecisionReason"]
 
 
-def test_timeout_is_a_warning_not_a_leak_finding() -> None:
+def test_timeout_retains_execution_without_claiming_a_leak() -> None:
     sentinel = "WATCHDOG.SLOW.CHILD.MUST.NOT.LEAK"
     stdout = io.BytesIO()
     started = time.monotonic()
@@ -63,8 +65,8 @@ def test_timeout_is_a_warning_not_a_leak_finding() -> None:
     assert result == 0
     assert elapsed < 1.0
     assert details["hookEventName"] == "PreToolUse"
-    assert "permissionDecision" not in details
-    assert "semantic_watchdog_timeout" in details["additionalContext"]
+    assert details["permissionDecision"] == "deny"
+    assert "semantic_watchdog_timeout" in details["permissionDecisionReason"]
     assert sentinel not in stdout.getvalue().decode("utf-8")
 
 
@@ -80,3 +82,22 @@ def test_both_launchers_invoke_the_watchdog() -> None:
         content = (REPO_ROOT / launcher).read_text(encoding="utf-8")
         assert "tooluseproxy_hook_watchdog.py" in content
         assert 'tooluseproxy_plugin.py" hook' not in content
+
+
+def test_invalid_or_empty_pre_output_cannot_release_execution():
+    for response in ('', 'not-json', 'null', '{"hookSpecificOutput":{"additionalContext":"warning"}}'):
+        stdout = io.BytesIO()
+        with tempfile.TemporaryFile() as stdin:
+            result = run_child([sys.executable, '-c', f'print({response!r})'],
+                               phase='pre-tool-use', stdin=stdin, stdout=stdout)
+        details = json.loads(stdout.getvalue())['hookSpecificOutput']
+        assert result == 0 and details['permissionDecision'] == 'deny'
+        assert 'semantic_child_invalid_response' in details['permissionDecisionReason']
+
+
+def test_explicit_noop_response_preserves_host_approval_rules():
+    stdout = io.BytesIO()
+    with tempfile.TemporaryFile() as stdin:
+        run_child([sys.executable, '-c', 'print("{}")'], phase='pre-tool-use',
+                  stdin=stdin, stdout=stdout)
+    assert json.loads(stdout.getvalue()) == {}

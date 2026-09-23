@@ -213,7 +213,7 @@ def test_stopped_v2_hook_cannot_open_database_or_start_judge(tmp_path, monkeypat
     payload = {"cwd": str(tmp_path)}
     monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO(json.dumps(payload).encode())))
     assert run("pre-tool-use", tmp_path / "events.db") == 0
-    assert capsys.readouterr().out == ""
+    assert json.loads(capsys.readouterr().out) == {}
     assert not (tmp_path / "events.db").exists()
 
 

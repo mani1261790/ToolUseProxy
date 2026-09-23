@@ -19,6 +19,8 @@ def schema(conn):
             revision TEXT PRIMARY KEY, workspace TEXT NOT NULL, session TEXT NOT NULL,
             node TEXT NOT NULL, event TEXT NOT NULL, model TEXT NOT NULL, prompt TEXT NOT NULL,
             verdict TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+        CREATE TABLE IF NOT EXISTS graph_completed_reviews (
+            request TEXT PRIMARY KEY, revision TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS graph_heads (
             workspace TEXT NOT NULL, session TEXT NOT NULL, node TEXT NOT NULL,
             revision TEXT NOT NULL, PRIMARY KEY(workspace,session,node));
@@ -277,19 +279,26 @@ def analyze_properties(
         for node in calls:
             attach_witnesses(conn, workspace, node)
             records = {"previous_calls": prior, "current_call": node}
-            revision = digest(["history-chain-v1", prefix, node])
+            request = digest(["history-chain-v2", prefix, node])
             cached = conn.execute(
-                "SELECT verdict FROM graph_revisions WHERE revision=?", (revision,)
+                "SELECT r.verdict FROM graph_completed_reviews c "
+                "JOIN graph_revisions r ON r.revision=c.revision WHERE c.request=?", (request,)
             ).fetchone()
             if cached:
                 verdict = validate(json.loads(cached[0]), candidates)
             else:
                 from tooluseproxy.engine.review import review
-                verdict = review(db_path, revision, records, judge, validate)
+                verdict = review(db_path, request, records, judge, validate)
+            # A recovered verdict creates a new immutable revision. Old policy
+            # checks still point at the actual incomplete verdict they observed.
+            revision = digest([request, verdict])
             complete = complete and verdict["complete"]
             with conn:
                 persist(conn, workspace, session, node, revision, model, verdict, revisions)
                 link_producers(conn, workspace, node, revision, verdict)
+                if verdict["complete"]:
+                    conn.execute("INSERT OR REPLACE INTO graph_completed_reviews VALUES (?,?)",
+                                 (request, revision))
             prefix = digest([prefix, node, verdict])
             revisions[node["node_id"]] = revision
             if node["completed"]:

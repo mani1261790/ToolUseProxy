@@ -23,7 +23,7 @@ PHASES = {
 }
 BOUNDARY = (
     "ToolUseProxyはToolCallの記録からモデルで依存関係を推定し、外部通信時に秘密情報源への"
-    "経路を検査します。未判定時は警告して継続するため安全確認済みとは扱わないでください。"
+    "経路を検査します。判定中は実行を保留し、判定完了後に実行可否を決めます。"
     "WebSearchなどHookに届かないhosted toolへ、保護情報や派生内容を入力しないでください。"
 )
 
@@ -40,9 +40,11 @@ def run(phase: str, db_path: Path) -> int:
             raise ValueError("invalid_hook_payload")
         with workspace_authority_lease(db_path, payload.get("cwd")) as state:
             if state is not None and state.phase != "active":
+                print("{}", flush=True)
                 return 0
             root = enabled_workspace_root(db_path, payload.get("cwd"))
             if root is None:
+                print("{}", flush=True)
                 return 0
             journal = Journal(db_path)
             plugin = Path(os.environ.get("PLUGIN_ROOT", Path(__file__).resolve().parents[2]))

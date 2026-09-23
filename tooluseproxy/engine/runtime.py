@@ -24,11 +24,11 @@ def configuration(db_path: Path, workspace_id: str | None) -> dict | None:
     if (
         config.get("provider") != "codex_exec"
         or config.get("send_recorded_content") is not True
-        or config.get("failure_policy") != "allow_with_warning"
+        or config.get("failure_policy") not in ("allow_with_warning", "wait_for_decision")
         or config.get("mode") != "enforce"
     ):
         raise GraphUnavailable("invalid_semantic_configuration")
-    return config
+    return dict(config, failure_policy="wait_for_decision")
 
 
 @contextmanager
@@ -88,13 +88,14 @@ def hook_output(result: dict, phase: str) -> dict:
                 ),
             }
         }
-    if result["action"] == "unavailable":
+    if result["action"] in ("unavailable", "pending"):
         return {
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
-                "additionalContext": "ToolUseProxyの情報流判定を完了できませんでした。流出検出ではありません。"
-                "設定された障害時方針により、このHookは操作を遮断しません。安全確認は未完了です。"
-                "（" + result["reason"] + "）",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": "ToolUseProxyは判定完了を待って、この操作の実行を保留しています。"
+                "流出検出による拒否ではありません。障害を解消して再要求すると再検査します。"
+                "判定を省略して実行しないでください。（" + result["reason"] + "）",
             }
         }
     # Do not return permissionDecision=allow: retain the host's approval rules.
@@ -147,12 +148,28 @@ def screen_externality(db_path, event, model, provider):
 
 
 def process_hook(store, event, *, judge=None, screening_judge=None, target_judge=None) -> dict | None:
+    if event.phase != "pre_tool_use":
+        result = _process_once(store, event, judge=judge, screening_judge=screening_judge,
+                               target_judge=target_judge)
+        return None if result is None else hook_output(result, event.phase)
+    try:
+        if configuration(store.db_path, event.workspace_id) is None:
+            return None
+    except Exception:
+        return hook_output(dict(action="pending", reason="invalid_semantic_configuration"), event.phase)
+    from tooluseproxy.engine.pending import decide
+    result = decide(store.db_path, event, lambda deadline: _process_once(
+        store, event, judge=judge, screening_judge=screening_judge,
+        target_judge=target_judge, deadline=deadline))
+    return hook_output(result, event.phase)
+
+
+def _process_once(store, event, *, judge=None, screening_judge=None, target_judge=None,
+                  deadline=None) -> dict | None:
     try:
         config = configuration(store.db_path, event.workspace_id)
     except (ValueError, OSError, AttributeError):
-        return hook_output(
-            {"action": "unavailable", "reason": "invalid_semantic_configuration"}, event.phase
-        )
+        return {"action": "unavailable", "reason": "invalid_semantic_configuration"}
     if config is None:
         return None
     if event.phase not in ("pre_tool_use", "post_tool_use"):
@@ -199,7 +216,7 @@ def process_hook(store, event, *, judge=None, screening_judge=None, target_judge
                     provider = judge or CodexSemanticJudge(config.get("model"), timeout=60)
 
                     def bounded_judge(records):
-                        if time.monotonic() - started > 480:
+                        if time.monotonic() - started > 480 or (deadline is not None and time.monotonic() >= deadline):
                             raise GraphUnavailable("semantic_analysis_budget_exceeded")
                         if len(json.dumps(records, ensure_ascii=False).encode()) > 512_000:
                             raise GraphUnavailable("semantic_prompt_budget_exceeded")
@@ -220,9 +237,11 @@ def process_hook(store, event, *, judge=None, screening_judge=None, target_judge
                     if sources:
                         from tooluseproxy.engine.inspection import inspect_and_decide
                         def target_provider(records):
-                            if time.monotonic() - started > 480:
+                            if time.monotonic() - started > 480 or (deadline is not None and time.monotonic() >= deadline):
                                 raise GraphUnavailable("semantic_analysis_budget_exceeded")
-                            if target_judge is None and not records.get("execution_definitions") and screen.get("transmission") is not None:
+                            if (target_judge is None and not records.get("execution_definitions")
+                                    and screen.get("transmission", {}).get("complete") is True
+                                    and not any(t["kind"] == "unresolved" for t in screen["transmission"]["targets"])):
                                 return screen["transmission"]
                             return (target_judge or provider)(records)
                         result = inspect_and_decide(store, event, sources, target_provider,
@@ -258,4 +277,4 @@ def process_hook(store, event, *, judge=None, screening_judge=None, target_judge
             )
     except sqlite3.Error:
         result = {"action": "unavailable", "reason": "semantic_audit_write_failed"}
-    return hook_output(result, event.phase)
+    return result

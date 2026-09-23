@@ -41,6 +41,7 @@ line-length = 100
 [tool.pytest.ini_options]
 testpaths = [
   "tests/test_product_v2.py",
+  "tests/test_pending.py",
   "tests/test_property_graph.py",
   "tests/test_evidence.py",
   "tests/test_payload.py",

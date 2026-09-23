@@ -150,12 +150,16 @@ def inspect_transmission(store, event, provider, *, model="codex_default"):
                 cached = conn.execute(
                     "SELECT verdict_json FROM flow_target_plans WHERE key=?", (key,)
                 ).fetchone()
+            if cached:
+                prior = json.loads(cached[0])
+                if not prior.get("complete") or any(t["kind"] == "unresolved" for t in prior.get("targets", [])):
+                    cached = None
             value = json.loads(cached[0]) if cached else provider(records)
             target = validate_targets(value)
-            if not cached:
+            if not cached and value["complete"] and not any(t["kind"] == "unresolved" for t in value["targets"]):
                 with ledger.transaction() as conn:
                     conn.execute(
-                        "INSERT INTO flow_target_plans VALUES (?,?,?,?) ON CONFLICT DO NOTHING",
+                        "INSERT OR REPLACE INTO flow_target_plans VALUES (?,?,?,?)",
                         (key, event.workspace_id, event.event_id, json.dumps(value)),
                     )
             advanced = False

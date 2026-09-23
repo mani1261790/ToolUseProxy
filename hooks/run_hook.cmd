@@ -73,7 +73,7 @@ echo %inactive_message%（技術情報: %inactive_code%） 1>&2
 exit /b 0
 
 :emit_pre
-echo {"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":"%inactive_message% 判定未完了のため、遮断せず継続します。（技術情報: %inactive_code%）"}}
+echo {"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"%inactive_message% 判定完了まで実行を保留します。復旧後に再検査してください。（技術情報: %inactive_code%）"}}
 exit /b 0
 
 :emit_session
