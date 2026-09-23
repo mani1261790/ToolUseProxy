@@ -165,7 +165,7 @@ def process_hook(store, event, *, judge=None, screening_judge=None, target_judge
 
 
 def _process_once(store, event, *, judge=None, screening_judge=None, target_judge=None,
-                  deadline=None) -> dict | None:
+                  deadline=None, background=False) -> dict | None:
     try:
         config = configuration(store.db_path, event.workspace_id)
     except (ValueError, OSError, AttributeError):
@@ -186,7 +186,7 @@ def _process_once(store, event, *, judge=None, screening_judge=None, target_judg
     try:
         if not event.workspace_id or not event.session_id or not event.tool_use_id:
             raise GraphUnavailable("semantic_identity_missing")
-        with session_lock(store.db_path, event.workspace_id, event.session_id):
+        with session_lock(store.db_path, event.workspace_id, event.session_id, background=background):
             node_id = "call:" + digest([event.workspace_id, event.session_id, event.tool_use_id])
             with sqlite3.connect(store.db_path) as conn:
                 initialize(conn)
@@ -216,6 +216,10 @@ def _process_once(store, event, *, judge=None, screening_judge=None, target_judg
                     provider = judge or CodexSemanticJudge(config.get("model"), timeout=60)
 
                     def bounded_judge(records):
+                        if background:
+                            from tooluseproxy.engine.jobs import foreground_waiting
+                            if foreground_waiting(store.db_path, event.workspace_id, event.session_id):
+                                raise GraphUnavailable("foreground_priority")
                         if time.monotonic() - started > 480 or (deadline is not None and time.monotonic() >= deadline):
                             raise GraphUnavailable("semantic_analysis_budget_exceeded")
                         if len(json.dumps(records, ensure_ascii=False).encode()) > 512_000:

@@ -47,7 +47,19 @@ function draw(data) {
   $('status').textContent=data.nodes.length?'矢印: 依存元 → 利用先':'来歴グラフはまだありません';
   $('updated').textContent=`最終確認 ${new Date().toLocaleTimeString('ja-JP')}`;
   $('checks').replaceChildren();
-  for(const c of data.checks){const p=el('p',c.action==='block'?(c.reason==='protected_content_match'?'保護内容との一致で停止。グラフの有無とは独立した判定です。':'保護情報につながる来歴を検出し、停止しました。'):c.action==='unavailable'?'検査は未完了です。流出検出ではありません。':'この操作の判定は通過です。');p.className=`check ${c.action==='block'?'blocked':''}`;$('checks').append(p);}
+  const held = (data.judgments||[]).find(j=>j.state!=='complete'||j.held);
+  if(held){
+    const message=held.state==='complete'?'再判定が完了しました。元の操作は自動実行されません。実行を要求すると、その時点の状態で再検査します。':`判定中・実行を保留しています。判定の試行: ${held.attempts}回。流出検出ではありません。`;
+    const p=el('p',message);p.className='check';$('checks').append(p);
+  }
+  for(const c of data.checks){
+    let message;
+    if(c.action==='block')message=c.reason==='protected_content_match'?'保護内容との一致を検出しました。':'保護情報につながる来歴を検出しました。';
+    else if(c.action==='unavailable')message='検査は未完了です。流出検出ではありません。';
+    else if(c.action==='observed')message='操作後の記録です。実行前の許可判定とは別の記録です。';
+    else message='検査結果: 許可。実行の有無はログで確認してください。';
+    const p=el('p',message);p.className=`check ${c.action==='block'?'blocked':''}`;$('checks').append(p);
+  }
   const nodes=[...data.nodes].reverse(), positions=new Map();
   // Ancestors appear above their consumers. Fan-in stays visible in alternating lanes.
   const depths=new Map();for(const n of nodes)depths.set(n.id,0);

@@ -17,7 +17,9 @@ def transaction(db):
             event TEXT PRIMARY KEY, workspace TEXT NOT NULL, session TEXT NOT NULL,
             state TEXT NOT NULL, owner TEXT, lease_until REAL NOT NULL DEFAULT 0,
             attempts INTEGER NOT NULL DEFAULT 0, retry_at REAL NOT NULL DEFAULT 0,
-            result TEXT NOT NULL DEFAULT '{}')''')
+            result TEXT NOT NULL DEFAULT '{}', held INTEGER NOT NULL DEFAULT 0)''')
+        if 'held' not in {r[1] for r in conn.execute('PRAGMA table_info(pending_judgments)')}:
+            conn.execute('ALTER TABLE pending_judgments ADD COLUMN held INTEGER NOT NULL DEFAULT 0')
         conn.execute('''CREATE TABLE IF NOT EXISTS judgment_attempts (
             event TEXT NOT NULL, attempt INTEGER NOT NULL, result TEXT NOT NULL,
             PRIMARY KEY(event,attempt))''')
@@ -48,6 +50,7 @@ def decide(db, event, operation, *, max_attempts=3, budget_seconds=480,
                 (event.event_id, event.workspace_id, event.session_id or '', 'running', owner, wall()+700))
         deadline = clock() + budget_seconds
         result = dict(action='unavailable', reason='judgment_budget', path=[], node_id=None)
+        count = 0
         for attempt in range(max_attempts):
             if clock() >= deadline:
                 break
@@ -73,9 +76,67 @@ def decide(db, event, operation, *, max_attempts=3, budget_seconds=480,
             if attempt + 1 < max_attempts:
                 sleep(min(2 ** attempt, max(0, deadline-clock())))
         with transaction(db) as conn:
-            conn.execute("UPDATE pending_judgments SET state='waiting',lease_until=0,retry_at=? WHERE event=? AND owner=?",
-                         (wall()+5, event.event_id, owner))
+            conn.execute("UPDATE pending_judgments SET state='waiting',held=1,lease_until=0,retry_at=? WHERE event=? AND owner=?",
+                         (wall()+min(300, 5 * 2 ** min(count // 3, 6)), event.event_id, owner))
         return dict(result, action='pending')
     except (sqlite3.Error, OSError):
         # Failure to persist a decision is never permission to execute.
         return dict(pending, reason='judgment_state_unavailable')
+
+
+def status(db, workspace):
+    if not db.is_file():
+        return {}
+    with sqlite3.connect(db) as conn:
+        if not conn.execute("SELECT 1 FROM sqlite_master WHERE name='pending_judgments'").fetchone():
+            return {}
+        return dict(conn.execute('SELECT state,COUNT(*) FROM pending_judgments WHERE workspace=? GROUP BY state',
+                                 (workspace,)))
+
+
+def resume(db, workspace, *, max_jobs=4, provider=None, now=None, operation=None):
+    """Reassess saved PreToolUse observations, without dispatching their tools.
+
+    The host must request execution again; a completed background review is not
+    an execution capability. That new request rechecks current policy/resources.
+    """
+    from tooluseproxy.engine.journal import Event
+    from tooluseproxy.engine.runtime import configuration, _process_once
+    from tooluseproxy.integrations.activation import enabled_workspace_root
+    from tooluseproxy.integrations.authority import registered_workspace_authority_lease
+
+    now = time.time() if now is None else now
+    if not status(db, workspace):
+        return 0
+    with sqlite3.connect(db) as conn:
+        rows = conn.execute('''SELECT p.event FROM pending_judgments p
+            WHERE p.workspace=? AND ((p.state='waiting' AND p.retry_at<=?)
+            OR (p.state='running' AND p.lease_until<=?)) ORDER BY p.retry_at LIMIT ?''',
+            (workspace, now, now, max_jobs)).fetchall()
+    completed = 0
+    for (event_id,) in rows:
+        # Respect the same administrator boundary used by live Hooks. Unsetup
+        # waits for these bounded reads/judgments; no setting is re-enabled here.
+        with sqlite3.connect(db) as conn:
+            with registered_workspace_authority_lease(db, conn, workspace) as authority:
+                if authority is not None and authority.phase != 'active':
+                    continue
+                config = configuration(db, workspace)
+                if not config:
+                    continue
+                row = conn.execute('''SELECT phase,workspace_root,session_id,tool_use_id,payload_json
+                    FROM events WHERE event_id=? AND workspace_id=?''', (event_id, workspace)).fetchone()
+                if not row or row[0] != 'pre_tool_use':
+                    continue
+                phase, root, session, tool, raw = row
+                if enabled_workspace_root(db, root) != root:
+                    continue
+                event = Event(event_id, phase, workspace, root, session, tool, json.loads(raw))
+                from tooluseproxy.engine.journal import Journal
+                def evaluate(deadline):
+                    if operation is not None:
+                        return operation(event, deadline)
+                    return _process_once(Journal(db), event, judge=provider, deadline=deadline, background=True)
+                result = decide(db, event, evaluate)
+                completed += result['action'] in ('allow', 'block')
+    return completed

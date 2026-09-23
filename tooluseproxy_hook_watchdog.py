@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import json
+import os
+import signal
 import subprocess
 import sys
 from pathlib import Path
@@ -21,14 +23,25 @@ def run_child(
     timeout_seconds: float = PRE_TOOL_CHILD_TIMEOUT_SECONDS,
 ) -> int:
     try:
-        completed = subprocess.run(
-            list(command),
-            stdin=stdin,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            timeout=timeout_seconds,
-            check=False,
-        )
+        with subprocess.Popen(
+            list(command), stdin=stdin, stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL, start_new_session=os.name == "posix",
+        ) as child:
+            try:
+                output, _ = child.communicate(timeout=timeout_seconds)
+            except subprocess.TimeoutExpired:
+                # Terminate descendants that share the Hook group. The Codex
+                # transport owns a separate group and its own bounded timeout.
+                if os.name == "posix":
+                    try:
+                        os.killpg(child.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                else:
+                    child.kill()
+                child.communicate()
+                raise
+            completed = subprocess.CompletedProcess(command, child.returncode, output)
     except (subprocess.TimeoutExpired, OSError) as error:
         reason = "semantic_watchdog_timeout" if isinstance(error, subprocess.TimeoutExpired) else "semantic_start_failed"
         return pending_output(stdout, phase, reason)

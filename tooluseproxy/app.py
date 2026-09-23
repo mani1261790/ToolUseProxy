@@ -309,8 +309,12 @@ def main(argv=None):
                 from tooluseproxy.engine.workspace import make_workspace_id
                 from tooluseproxy.engine.jobs import drain, queue_status
                 scope = make_workspace_id(str(root))
+                from tooluseproxy.engine.pending import resume, status as pending_status
+                resumed = resume(paths.db_path, scope) if args.operation == "run" else 0
                 count = drain(paths.db_path, scope) if args.operation == "run" else 0
-                result, code = {"completed": count, "queue": queue_status(paths.db_path, scope)}, 0
+                result, code = {"completed": count, "queue": queue_status(paths.db_path, scope),
+                                "judgments_completed": resumed, "judgments": pending_status(paths.db_path, scope),
+                                "tools_executed": False}, 0
             elif args.command in ("status", "doctor"):
                 from tooluseproxy.engine.workspace import make_workspace_id
 

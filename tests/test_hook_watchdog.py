@@ -101,3 +101,20 @@ def test_explicit_noop_response_preserves_host_approval_rules():
         run_child([sys.executable, '-c', 'print("{}")'], phase='pre-tool-use',
                   stdin=stdin, stdout=stdout)
     assert json.loads(stdout.getvalue()) == {}
+
+
+def test_watchdog_terminates_nested_judge_group(tmp_path):
+    import os
+    import pytest
+    if os.name != 'posix':
+        pytest.skip('POSIX process groups')
+    marker = tmp_path/'nested-must-not-finish'
+    nested = f'import time; from pathlib import Path; time.sleep(0.5); Path({str(marker)!r}).touch()'
+    command = f'import subprocess,sys,time; subprocess.Popen([sys.executable,"-c",{nested!r}]); time.sleep(5)'
+    with tempfile.TemporaryFile() as stdin:
+        output = io.BytesIO()
+        assert run_child([sys.executable,'-c',command], phase='pre-tool-use',
+                         stdin=stdin, stdout=output, timeout_seconds=0.15) == 0
+    time.sleep(0.6)
+    assert not marker.exists()
+    assert json.loads(output.getvalue())['hookSpecificOutput']['permissionDecision'] == 'deny'

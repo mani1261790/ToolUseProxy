@@ -362,3 +362,24 @@ def test_graph_receives_recorded_directory_context(fixture):
     assert node['cwd'] == json.loads(raw)['cwd']
     assert node['workspace_root'] == root
     assert node['resolved_cwd'] == resolved
+
+
+def test_transient_model_failure_completes_same_hook_before_allow(fixture):
+    store, record = fixture
+    event = record('send-after-recovery', 'send public information')
+    (store.db_path.parent/'semantic-flow.json').write_text(json.dumps({'workspaces': {
+        event.workspace_id: {'provider':'codex_exec', 'send_recorded_content':True,
+                            'mode':'enforce', 'failure_policy':'wait_for_decision'}}}))
+    calls = []
+    def judge(_):
+        calls.append(True)
+        if len(calls) == 1:
+            raise JudgeProviderError('codex_exec_timeout')
+        return dict(verdict(externality='external'), accesses=[])
+    output = process_hook(store, event, judge=judge,
+                          screening_judge=lambda _: dict(externality='external',complete=True,reason='fixture'))
+    assert output == {} and len(calls) == 2
+    with sqlite3.connect(store.db_path) as conn:
+        attempts = [json.loads(r[0])['action'] for r in conn.execute('SELECT result FROM judgment_attempts ORDER BY attempt')]
+        assert attempts == ['unavailable','allow']
+        assert conn.execute('SELECT state,held FROM pending_judgments').fetchone() == ('complete',0)

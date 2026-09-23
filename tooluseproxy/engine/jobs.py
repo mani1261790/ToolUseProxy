@@ -140,7 +140,7 @@ def drain(db, scope, *, provider=None, max_jobs=32, lease_factory=None):
                         return judge(records)
 
                     with session_lock(Path(db), scope, job["session"], background=True):
-                        analyze_properties(
+                        result = analyze_properties(
                             Path(db),
                             scope,
                             job["session"],
@@ -149,6 +149,9 @@ def drain(db, scope, *, provider=None, max_jobs=32, lease_factory=None):
                             bounded,
                             model=job["model"],
                         )
+            if result["action"] == "unavailable":
+                finish(db, job, "pending", "analysis_incomplete")
+                break
             finish(db, job, "done")
             completed += 1
         except BackgroundDisabled:

@@ -133,3 +133,17 @@ def test_repeated_crash_does_not_leave_permanent_running_state(tmp_path):
     assert claim(store.db_path, event.workspace_id, now=1803) is None
     with sqlite3.connect(store.db_path) as conn:
         assert conn.execute("SELECT status FROM flow_jobs").fetchone()[0] == "failed"
+
+
+def test_incomplete_background_result_remains_retryable(tmp_path, monkeypatch):
+    root, store, event = fixture(tmp_path)
+    enqueue(store.db_path, event, 'codex_default')
+    monkeypatch.setattr('tooluseproxy.integrations.activation.enabled_workspace_root', lambda *_: str(root))
+    monkeypatch.setattr('tooluseproxy.engine.property_graph.analyze_properties',
+                        lambda *_args, **_kwargs: {'action':'unavailable','reason':'retry'})
+    assert drain(store.db_path, event.workspace_id, lease_factory=no_authority) == 0
+    with sqlite3.connect(store.db_path) as conn:
+        assert conn.execute('SELECT status,reason FROM flow_jobs').fetchone() == ('pending','analysis_incomplete')
+    monkeypatch.setattr('tooluseproxy.engine.property_graph.analyze_properties',
+                        lambda *_args, **_kwargs: {'action':'allow','reason':'complete'})
+    assert drain(store.db_path, event.workspace_id, lease_factory=no_authority) == 1

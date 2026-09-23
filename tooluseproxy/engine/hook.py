@@ -85,7 +85,7 @@ def run(phase: str, db_path: Path) -> int:
         )
     print(json.dumps(result, ensure_ascii=False), flush=True)
     # The response is emitted before starting optional asynchronous work.
-    if runtime_phase == "post_tool_use":
+    if runtime_phase in ("pre_tool_use", "post_tool_use"):
         try:
             from tooluseproxy.engine.runtime import configuration
             config = configuration(db_path,event.workspace_id)
