@@ -303,7 +303,7 @@ def test_local_work_defers_provenance_but_later_send_is_blocked(fixture, monkeyp
 
 
 @pytest.mark.parametrize('screen_result', ['unknown', 'incomplete', 'error', 'invalid'])
-def test_uncertain_screening_always_runs_full_analysis(fixture, screen_result):
+def test_failed_screening_does_not_expand_into_implementation_analysis(fixture, screen_result):
     store, record = fixture
     event = record('opaque', 'run opaque script')
     configure_runtime(store, event.workspace_id)
@@ -321,13 +321,12 @@ def test_uncertain_screening_always_runs_full_analysis(fixture, screen_result):
         return verdict(externality='unknown', complete=False)
 
     result = process_hook(store, event, judge=detail, screening_judge=screen)
-    assert len(detailed) == 2
-    assert "validation_feedback" in detailed[-1]
+    assert detailed == []
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
 @pytest.mark.parametrize('value', ['unknown', 'incomplete', 'timeout'])
-def test_screening_without_local_evidence_routes_to_inspection(fixture, value):
+def test_failed_screening_is_not_a_completed_external_classification(fixture, value):
     from tooluseproxy.engine.runtime import screen_externality
     store, record = fixture
     event = record('opaque', './custom-task')
@@ -337,9 +336,8 @@ def test_screening_without_local_evidence_routes_to_inspection(fixture, value):
             raise TimeoutError()
         return verdict(externality='unknown' if value == 'unknown' else 'local', complete=False)
 
-    result = screen_externality(store.db_path, event, 'fixture', provider)
-    assert result['externality'] == 'external'
-    assert result['complete'] is True
+    with pytest.raises(GraphUnavailable, match='externality_'):
+        screen_externality(store.db_path, event, 'fixture', provider)
 
 
 def test_potential_external_does_not_block_without_protected_path(fixture):

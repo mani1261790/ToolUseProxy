@@ -60,11 +60,18 @@ def test_late_protection_reuses_edges_and_keeps_old_policy_result(tmp_path):
     result = analyze_properties(*args, protected, judge)
     assert result["action"] == "block" and result["path"][0] == "source:new"
     assert len(queries) == 2
+    assert analyze_properties(*args, [], judge)["action"] == "allow"
+    assert len(queries) == 2  # Removal also reuses the same provenance graph.
+    local = events[1]
+    # Provenance's communication label must not override an external routing
+    # decision made by the caller. The read still reaches the protected source.
+    assert analyze_properties(db, local.workspace_id, 's', local.event_id,
+        protected, judge, require_external=True)['action'] == 'block'
     with sqlite3.connect(db) as conn:
         assert conn.execute("SELECT COUNT(*) FROM graph_revisions").fetchone()[0] == 2
         decisions = [
             json.loads(row[0])["action"]
-            for row in conn.execute("SELECT result FROM graph_policy_checks")
+            for row in conn.execute("SELECT result FROM graph_policy_checks WHERE event=?", (event.event_id,))
         ]
         assert decisions == ["allow", "block"]
         assert conn.execute("SELECT COUNT(*) FROM graph_policies").fetchone()[0] == 2

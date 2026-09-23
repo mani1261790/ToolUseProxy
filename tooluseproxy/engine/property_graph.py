@@ -254,6 +254,7 @@ def analyze_properties(
     model="codex_default",
     sources_refresh=None,
     current_evidence=None,
+    require_external=False,
     _visiting=None,
 ):
     with sqlite3.connect(db_path, timeout=5) as conn:
@@ -386,7 +387,7 @@ def analyze_properties(
         complete = dependency_complete(conn, workspace, current_node)
         roots, policy_complete = bindings(conn, workspace, session, sources)
         path = reach(conn, workspace, session, current_node, roots)
-        if current_verdict["externality"] == "local":
+        if current_verdict["externality"] == "local" and not require_external:
             # Local work need not wait for provenance that only a later send needs.
             # Keep incomplete verdicts intact so that send still requires inspection.
             action, reason = "allow", "local_operation"
@@ -395,12 +396,7 @@ def analyze_properties(
         elif not complete or not policy_complete:
             action, reason = "unavailable", "property_graph_incomplete"
         else:
-            action, reason = (
-                "allow",
-                "local_operation"
-                if current_verdict["externality"] == "local"
-                else "no_protected_path_observed",
-            )
+            action, reason = "allow", "no_protected_path_observed"
         result = {"node_id": current_node, "action": action, "reason": reason, "path": path}
         if action == "unavailable":
             result["retryable"] = False
