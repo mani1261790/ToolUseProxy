@@ -6,9 +6,11 @@ receives synthetic records. This is not a Desktop Hook or remote-receiver test.
 """
 
 import contextlib
+import argparse
 import io
 import json
 import subprocess
+import sqlite3
 import tempfile
 import time
 from pathlib import Path
@@ -18,6 +20,12 @@ from tooluseproxy.engine.runtime import _process_once
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--gap", type=int, default=0,
+                        help="Synthetic unrelated calls between reading and sending")
+    args = parser.parse_args()
+    if not 0 <= args.gap <= 1000:
+        parser.error("gap must be between 0 and 1000")
     base = Path(tempfile.mkdtemp(prefix="tup-three-cases-"))
     root = base / "workspace"
     root.mkdir()
@@ -89,6 +97,9 @@ def main():
     _process_once(store, read)
     post = record("post_tool_use", "read", "cat research_notes.md", notes)
     _process_once(store, post)
+    for i in range(args.gap):
+        record("pre_tool_use", f"gap-{i}", "git status --short")
+        record("post_tool_use", f"gap-{i}", "git status --short", "")
     results = []
 
     def check(label, expected):
@@ -104,6 +115,11 @@ def main():
             path=v.get("path"),
         )
         results.append(r)
+        with sqlite3.connect(store.db_path) as conn:
+            r["model_phases"] = [dict(phase=phase, calls=count, seconds=seconds)
+                for phase, count, seconds in conn.execute(
+                    "SELECT phase,count(*),round(sum(duration_ms)/1000,3) FROM flow_phase_timings WHERE event=? GROUP BY phase",
+                    (e.event_id,))]
         print(json.dumps(r, ensure_ascii=False), flush=True)
         (base / "report.json").write_text(
             json.dumps(

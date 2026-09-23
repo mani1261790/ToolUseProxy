@@ -54,6 +54,29 @@ def schema(conn):
     """)
 
 
+def selection_texts(selection):
+    """Normalize a finite union of observed fragments, without widening to all output."""
+    if not isinstance(selection, dict) or set(selection) not in ({"text"}, {"texts"}):
+        raise GraphUnavailable("invalid_output_selection")
+    texts = [selection["text"]] if "text" in selection else selection["texts"]
+    if (not isinstance(texts, list) or not texts
+        or any(not isinstance(text, str) or not text for text in texts)
+        or sum(len(text) for text in texts) > 128_000):
+        raise GraphUnavailable("invalid_output_selection")
+    return sorted(set(texts))
+
+
+def merge_selections(left, right):
+    # Whole-output evidence subsumes fragments; distinct fragments do not imply
+    # that an unrelated field in the same observation contributed information.
+    if left is None or right is None:
+        return None
+    texts = sorted(set(selection_texts(left) + selection_texts(right)))
+    result = {"text": texts[0]} if len(texts) == 1 else {"texts": texts}
+    selection_texts(result)
+    return result
+
+
 def validate(value, candidates):
     if not isinstance(value, dict) or set(value) - {"evidence_requests", "evidence_receipts"} != {
         "externality",
@@ -81,18 +104,12 @@ def validate(value, candidates):
         ):
             raise GraphUnavailable("invalid_property_edge")
         selection = edge.get("selection")
-        if selection is not None and (
-            not isinstance(selection, dict) or set(selection) != {"text"}
-            or not isinstance(selection["text"], str) or not 0 < len(selection["text"]) <= 128_000
-        ):
-            raise GraphUnavailable("invalid_output_selection")
+        if selection is not None:
+            selection_texts(selection)
         old = dependencies.get(edge["node_id"])
-        # Multiple fields from one producer form one graph edge. Preserve all
-        # contributions by widening conflicting selections, never dropping an
-        # edge or paying for another model request to fix a list duplicate.
         dependencies[edge["node_id"]] = (
-            dict(edge, selection=None)
-            if old is not None and old.get("selection") != selection else edge
+            dict(edge, selection=merge_selections(old.get("selection"), selection))
+            if old is not None else edge
         )
     accesses = {}
     for access in value["accesses"]:
@@ -302,7 +319,7 @@ def analyze_properties(
             focused = dict(producer)
             if selection is not None:
                 observed = producer["output"] if isinstance(producer["output"], str) else json.dumps(producer["output"], ensure_ascii=False, sort_keys=True)
-                if not producer["completed"] or observed.count(selection["text"]) != 1:
+                if not producer["completed"] or any(observed.count(text) != 1 for text in selection_texts(selection)):
                     raise GraphUnavailable("output_selection_missing_or_ambiguous")
                 focused["required_output"] = dict(selection, observation_hash=digest(producer["output"]))
             records = {"previous_calls": calls[:index], "current_call": focused}
@@ -335,16 +352,16 @@ def analyze_properties(
                 output_selection = ({'text': content} if part.get('encoding') == 'utf-8'
                              and content and original.count(content) == 1 else None)
                 old = observed_edges.get(parent)
-                if old is not None and old['selection'] != output_selection:
-                    output_selection = None
+                if old is not None:
+                    output_selection = merge_selections(old['selection'], output_selection)
                 observed_edges[parent] = dict(node_id=parent, selection=output_selection,
                                               reason='controller-resolved transmitted output')
             if observed_edges:
                 dependencies = {edge['node_id']: edge for edge in verdict['dependencies']}
                 for parent, edge in observed_edges.items():
                     old = dependencies.get(parent)
-                    if old is not None and old.get('selection') != edge['selection']:
-                        edge = dict(edge, selection=None)
+                    if old is not None:
+                        edge = dict(edge, selection=merge_selections(old.get('selection'), edge['selection']))
                     dependencies[parent] = edge
                 verdict = dict(verdict, dependencies=list(dependencies.values()))
             # Relative and absolute aliases must name the same policy resource.

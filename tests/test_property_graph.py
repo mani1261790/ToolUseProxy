@@ -15,7 +15,7 @@ def test_duplicate_edges_preserve_all_contributions_without_model_retry():
                                for text in ["first", "second", "second"]])
     result = validate(value, {"parent"})
     assert len(result["dependencies"]) == 1
-    assert result["dependencies"][0]["selection"] is None
+    assert result["dependencies"][0]["selection"] == {"texts": ["first", "second"]}
     with pytest.raises(GraphUnavailable, match="invalid_property_edge"):
         validate(value, set())
 

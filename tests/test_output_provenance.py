@@ -49,6 +49,46 @@ def test_selected_output_has_own_revision_and_preserves_incomplete_operation(tmp
         assert json.loads(whole[0])['complete'] is False
 
 
+@pytest.mark.parametrize('include_private', [False, True])
+def test_multiple_transmitted_fragments_do_not_inherit_unselected_fields(tmp_path, include_private):
+    from tooluseproxy.engine.graph import load_calls
+    from tooluseproxy.engine.property_graph import selection_texts
+    output = {'public_a': '受付は一階です', 'public_b': '名札をお取りください',
+              'private': '試作品の試験温度は73度です'}
+    _, db, event = fixture(tmp_path, output)
+    with sqlite3.connect(db) as conn:
+        producer = load_calls(conn, event.workspace_id, 's', event.event_id)[0]
+    selected = [output['public_a'], output['public_b']]
+    if include_private:
+        selected.append(output['private'])
+    scopes = []
+
+    def judge(records):
+        node = records['current_call']
+        if node['node_id'] != producer['node_id']:
+            return verdict()  # Resolved transfers must survive an omitted model edge.
+        focus = node.get('required_output')
+        texts = selection_texts({k: v for k, v in focus.items() if k != 'observation_hash'}) if focus else list(output.values())
+        scopes.append(texts)
+        return verdict(accesses=[dict(path='private.txt', mode='read', reason='selected temperature')]
+                       if output['private'] in texts else [])
+
+    result = analyze_properties(db, event.workspace_id, 's', event.event_id,
+        [{'node_id': 'source:p', 'path': 'private.txt'}], judge,
+        current_evidence=[dict(observation={'source_node_id': producer['node_id']},
+                               content=text, encoding='utf-8') for text in selected])
+    assert result['action'] == ('block' if include_private else 'allow')
+    assert scopes == [sorted(selected)]
+
+
+@pytest.mark.parametrize('selection', [{'texts': []}, {'texts': ['ok', '']},
+    {'texts': ['ok', 1]}, {'texts': 'not-an-array'}, {'text': 'a', 'texts': ['b']}])
+def test_malformed_fragment_union_cannot_be_interpreted_as_independence(selection):
+    from tooluseproxy.engine.property_graph import validate
+    with pytest.raises(GraphUnavailable, match='invalid_output_selection'):
+        validate(verdict(deps=[dict(node_id='parent', reason='value', selection=selection)]), {'parent'})
+
+
 @pytest.mark.parametrize('selected_access', [True, False])
 def test_selection_never_means_public_or_complete(tmp_path, selected_access):
     root, db, event = fixture(tmp_path, 'derived-private-value')
