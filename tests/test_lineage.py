@@ -237,3 +237,23 @@ def test_changed_repository_ref_replaces_immutable_read_set(history):
     resolver.persist(target,{},resolver.resolve(target))
     with sqlite3.connect(store.db_path) as conn:
         assert conn.execute('SELECT path FROM flow_immutable_reads').fetchall() == [('public',)]
+
+
+@pytest.mark.parametrize('send_session', ['a', 'b'])
+def test_external_resource_generation_preserves_protected_origin(tmp_path, send_session):
+    root, store, record, writer = make_history(tmp_path)
+    external=(tmp_path/'outside.txt').resolve()
+    record('a','outside-write','pre_tool_use','outside-write',[{'path':str(external),'mode':'write'}])
+    external.write_text('derived representation outside project')
+    record('a','outside-write','post_tool_use','outside-write',response='done')
+    send=record(send_session,'external-send','pre_tool_use','external-send',[{'path':str(external),'mode':'read'}])
+    def external_judge(records):
+        step=records['current_call']['input']['step']
+        if step in ('outside-write','external-send'):
+            deps=[] if step=='external-send' else [{'node_id':records['previous_calls'][0]['node_id'],'reason':'derived from private read'}]
+            return dict(externality='external' if step=='external-send' else 'local',complete=True,
+                        reason='fixture',dependencies=deps,accesses=[{'path':str(external),'mode':'read' if step=='external-send' else 'write','reason':'fixture'}])
+        return judge(records)
+    result=analyze_properties(store.db_path,send.workspace_id,send.session_id,send.event_id,
+                              [{'node_id':'source:private','path':'private'}],external_judge)
+    assert result['action']=='block' and result['path'][0]=='source:private'

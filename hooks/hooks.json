@@ -1,5 +1,5 @@
 {
-  "description": "Semantic dependency graph using codex exec. Recorded I/O is sent to the configured judge. External calls with protected ancestry are denied; unavailable judgments warn without denying.",
+  "description": "Semantic dependency graphs judged by Codex with evidence acquisition and output-scoped provenance. Incomplete judgments retain the operation; they never grant permission.",
   "hooks": {
     "SessionStart": [
       {

@@ -256,6 +256,8 @@ def _process_once(store, event, *, judge=None, screening_judge=None, target_judg
 
     except (GraphUnavailable, JudgeProviderError) as exc:
         result["reason"] = str(exc)
+        if isinstance(exc, GraphUnavailable) and str(exc).startswith(("invalid_", "output_selection_")):
+            result["retryable"] = False
     except Exception:
         # Never echo provider errors that may contain recorded/private content.
         pass

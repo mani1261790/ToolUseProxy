@@ -321,7 +321,8 @@ def test_uncertain_screening_always_runs_full_analysis(fixture, screen_result):
         return verdict(externality='unknown', complete=False)
 
     result = process_hook(store, event, judge=detail, screening_judge=screen)
-    assert len(detailed) == 3
+    assert len(detailed) == 2
+    assert "validation_feedback" in detailed[-1]
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
