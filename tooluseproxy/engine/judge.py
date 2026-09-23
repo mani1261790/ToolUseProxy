@@ -207,7 +207,12 @@ class CodexSemanticJudge:
                 raise JudgeProviderError("semantic_provider_used_tools")
             if not output.exists() or output.stat().st_size > 128 * 1024:
                 raise JudgeProviderError("semantic_provider_output_missing_or_large")
-            value = _loads_no_duplicate_keys(output.read_bytes())
+            try:
+                value = _loads_no_duplicate_keys(output.read_bytes())
+            except (json.JSONDecodeError, UnicodeError) as exc:
+                raise JudgeProviderError('semantic_provider_invalid_json') from exc
+            if not isinstance(value, dict):
+                raise JudgeProviderError('semantic_provider_invalid_shape')
             if not screening and not targets and value.get('evidence_requests'):
                 raise JudgeProviderError('semantic_unexpected_evidence_request')
             return value

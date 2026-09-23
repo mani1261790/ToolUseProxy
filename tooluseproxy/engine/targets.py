@@ -151,6 +151,7 @@ def inspect_transmission(store, event, provider, *, model="codex_default"):
     from tooluseproxy.engine.evidence import EvidenceNeed, EvidenceStore
     from tooluseproxy.engine.graph import digest
     from tooluseproxy.engine.payload import PayloadResolver
+    from tooluseproxy.engine.codex import JudgeProviderError
 
     ledger = EvidenceStore(store.db_path)
     ledger.initialize()
@@ -268,6 +269,10 @@ def inspect_transmission(store, event, provider, *, model="codex_default"):
                 advanced = True
             if not advanced:
                 break
+    except JudgeProviderError:
+        # Transport failure is not missing evidence. Let the live Hook retry
+        # this stage, preserving successful cached plans and graph reviews.
+        raise
     except Exception:
         target = {"kind": "collection", "members": [{"kind": "reference"}], "complete": False}
         ledger.add_need(

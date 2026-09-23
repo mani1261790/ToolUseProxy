@@ -87,11 +87,11 @@ def test_non_due_pending_does_not_call_model(tmp_path):
     assert resume(db, 'w', now=0, operation=lambda *_: (_ for _ in ()).throw(AssertionError())) == 0
 
 
-def test_concurrent_delivery_never_duplicates_in_flight_analysis(tmp_path):
+def test_concurrent_delivery_waits_then_revalidates_without_in_flight_duplication(tmp_path):
     from concurrent.futures import ThreadPoolExecutor
     from threading import Event
     db = tmp_path/'events.db'
-    started, release = Event(), Event()
+    started, release, revalidated = Event(), Event(), Event()
     def operation(_):
         started.set()
         assert release.wait(5)
@@ -99,14 +99,20 @@ def test_concurrent_delivery_never_duplicates_in_flight_analysis(tmp_path):
     with ThreadPoolExecutor() as pool:
         first = pool.submit(decide, db, event(), operation)
         assert started.wait(5)
+        def changed_policy(_):
+            assert release.is_set()
+            revalidated.set()
+            return {'action': 'block', 'reason': 'policy changed'}
+        second = pool.submit(decide, db, event(), changed_policy)
         try:
-            second = decide(db, event(), lambda _: (_ for _ in ()).throw(AssertionError()))
-            assert second['action'] == 'pending'
+            assert not revalidated.wait(0.15)
+            assert not second.done()
         finally:
             release.set()
         assert first.result()['action'] == 'allow'
+        assert second.result()['action'] == 'block'
     with sqlite3.connect(db) as conn:
-        assert conn.execute('SELECT COUNT(*) FROM judgment_attempts').fetchone()[0] == 1
+        assert conn.execute('SELECT COUNT(*) FROM judgment_attempts').fetchone()[0] == 2
 
 
 def test_stale_owner_cannot_publish_a_decision(tmp_path):
