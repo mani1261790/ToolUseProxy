@@ -118,3 +118,31 @@ def test_resume_respects_inactive_authority(tmp_path, monkeypatch):
                   operation=lambda *_: (_ for _ in ()).throw(AssertionError())) == 0
     with sqlite3.connect(db) as conn:
         assert conn.execute('SELECT state,attempts FROM pending_judgments').fetchone() == ('waiting',3)
+
+
+def test_persisted_outage_resumes_through_real_runtime_pipeline(tmp_path):
+    from tooluseproxy.app import main
+    from tooluseproxy.engine.journal import Journal, event_from
+    from tooluseproxy.engine.pending import resume
+    root = tmp_path/'workspace'
+    root.mkdir()
+    data = tmp_path/'data'
+    assert main(['setup','--workspace',str(root),'--data-dir',str(data),
+                 '--accept-judge-data','--no-viewer','--json']) == 0
+    store = Journal(data/'events.db')
+    observed = event_from('pre_tool_use',dict(cwd=str(root),session_id='s',tool_use_id='send',
+        tool_name='Bash',tool_input={'command':'send public data'}),str(root))
+    store.record(observed)
+    decide(store.db_path, observed, lambda _: {'action':'unavailable','reason':'offline'},
+           sleep=lambda _:None)
+    stages = []
+    def judge(records):
+        stages.append(records.get('stage','provenance'))
+        return {'externality':'external','complete':True,'reason':'fixture',
+                'dependencies':[],'accesses':[]}
+    assert resume(store.db_path, observed.workspace_id, provider=judge, now=10**12) == 1
+    assert 'externality' in stages and 'provenance' in stages
+    with sqlite3.connect(store.db_path) as conn:
+        assert conn.execute('SELECT state,attempts,held FROM pending_judgments').fetchone() == ('complete',4,1)
+        assert conn.execute('SELECT action FROM semantic_flow_decisions').fetchone()[0] == 'allow'
+        assert conn.execute("SELECT COUNT(*) FROM events WHERE phase='post_tool_use'").fetchone()[0] == 0

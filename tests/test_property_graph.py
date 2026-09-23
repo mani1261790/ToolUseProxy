@@ -320,3 +320,22 @@ def test_incomplete_review_can_recover_without_rewriting_past_policy(tmp_path):
         history = [json.loads(r[0])["action"] for r in conn.execute(
             'SELECT result FROM graph_policy_checks ORDER BY rowid')]
     assert history == ["unavailable", "allow"]
+
+
+def test_changed_payload_observation_invalidates_completed_review(tmp_path):
+    root=tmp_path/'workspace'
+    root.mkdir()
+    store=Journal(tmp_path/'events.db')
+    store.initialize()
+    event=event_from('pre_tool_use',dict(cwd=str(root),session_id='s',tool_use_id='send',
+        tool_name='fixture',tool_input={'operation':'send revision'}),str(root))
+    store.record(event)
+    seen=[]
+    def judge(records):
+        observation=records['current_call']['payload_observations']
+        seen.append(observation)
+        return dict(externality='external',complete=True,reason='fixture',accesses=[],dependencies=[])
+    args=(store.db_path,event.workspace_id,'s',event.event_id,[],judge)
+    for value in ('first','first','changed'):
+        assert analyze_properties(*args,current_evidence=[{'content':value}])['action']=='allow'
+    assert seen==[[{'content':'first'}],[{'content':'changed'}]]

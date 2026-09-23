@@ -7,7 +7,7 @@ from tooluseproxy.engine.graph import digest
 from tooluseproxy.engine.targets import inspect_transmission
 
 
-def inspect_and_decide(store, event, sources, provider, graph_decision, node_id, model):
+def inspect_and_decide(store, event, sources, provider, graph_decision, node_id, model, *, graph_with_evidence=None):
     def current_sources():
         return [
             dict(asdict(source), node_id="source:" + source.source_id)
@@ -44,7 +44,20 @@ def inspect_and_decide(store, event, sources, provider, graph_decision, node_id,
     except Exception:
         # This path cannot suppress an independently established graph block.
         pass
-    result = graph_decision()
+    evidence = None
+    if resolution is not None:
+        import base64
+        evidence = []
+        for part in resolution.parts:
+            try:
+                content = part.content.decode("utf-8")
+                encoding = "utf-8"
+            except UnicodeError:
+                content = base64.b64encode(part.content).decode()
+                encoding = "base64"
+            evidence.append(dict(observation=part.observation, version=part.version.token,
+                                 content=content, encoding=encoding))
+    result = graph_with_evidence(evidence) if graph_with_evidence is not None else graph_decision()
     if resolver is not None and resolution is not None and not resolver.unchanged(resolution):
         return dict(result, action="unavailable", reason="payload_changed_after_inspection")
     if result["action"] == "allow" and result["reason"] != "local_operation":

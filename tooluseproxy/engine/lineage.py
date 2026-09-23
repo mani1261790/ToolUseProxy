@@ -134,8 +134,45 @@ def snapshot_resources(store, event, resources=None):
 
 
 def record_transmission_snapshots(resolver, result):
+    # Bind committed blob bytes to the same path/content generation as a prior
+    # file observation, without claiming that the working tree still has them.
+    aliases = []
+    for part in result.parts:
+        if part.version.resource.kind == "repository_object" and part.observation["object_kind"] == "blob":
+            from pathlib import PurePosixPath
+            from tooluseproxy.engine.evidence import ContentVersion, Resource
+            for path in part.observation["paths"]:
+                path = str(PurePosixPath(part.observation["repository"]) / path)
+                value = ContentVersion(Resource(resolver.scope, "file", path),
+                                       part.version.token, resolver.event, len(part.content))
+                resolver.store.add_version(value)
+                try:
+                    current, observation = resolver.read_file(path, {"bytes": resolver.max_bytes})
+                    matches_current = resolver.token(current) == part.version.token
+                except (OSError, ValueError):
+                    matches_current = False
+                if not matches_current:
+                    # A historical blob must not lose a known producer merely
+                    # because the current file has changed or disappeared.
+                    with resolver.store.transaction() as conn:
+                        schema(conn)
+                        known = conn.execute(
+                            "SELECT 1 FROM flow_file_observations WHERE scope=? AND path=? AND version=? AND mode='write' AND status='observed' LIMIT 1",
+                            (resolver.scope, path, value.identity)).fetchone()
+                    if known:
+                        from tooluseproxy.engine.evidence import EvidenceNeed
+                        need = EvidenceNeed("origin", path, "historical_snapshot_origin_requires_review")
+                        result.needs.append(need)
+                        result.coverage = "partial"
+                        resolver.store.add_need(resolver.scope, resolver.event, need)
+                    continue
+                aliases.append((path, value.identity, json.dumps(observation["fingerprint"])))
     with resolver.store.transaction() as conn:
         schema(conn)
+        for path, version, evidence in aliases:
+            conn.execute(
+                "INSERT INTO flow_file_observations(scope,event,path,version,mode,status,fingerprint_json) VALUES (?,?,?,?,?,?,?) ON CONFLICT DO NOTHING",
+                (resolver.scope, resolver.event, path, version, "read", "planned", evidence))
         for part in result.parts:
             if part.version.resource.kind == "file":
                 conn.execute(

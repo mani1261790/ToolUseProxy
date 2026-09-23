@@ -235,6 +235,7 @@ def analyze_properties(
     *,
     model="codex_default",
     sources_refresh=None,
+    current_evidence=None,
     _visiting=None,
 ):
     with sqlite3.connect(db_path, timeout=5) as conn:
@@ -278,6 +279,8 @@ def analyze_properties(
     with closing(sqlite3.connect(db_path, timeout=5)) as conn:
         for node in calls:
             attach_witnesses(conn, workspace, node)
+            if node["event_id"] == event_id and current_evidence is not None:
+                node["payload_observations"] = current_evidence
             records = {"previous_calls": prior, "current_call": node}
             request = digest(["history-chain-v2", prefix, node])
             cached = conn.execute(

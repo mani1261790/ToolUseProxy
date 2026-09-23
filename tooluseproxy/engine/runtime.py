@@ -226,7 +226,7 @@ def _process_once(store, event, *, judge=None, screening_judge=None, target_judg
                             raise GraphUnavailable("semantic_prompt_budget_exceeded")
                         return provider(records)
 
-                    def graph_decision():
+                    def graph_decision(evidence=None):
                         return analyze_properties(
                             store.db_path,
                             event.workspace_id,
@@ -235,6 +235,7 @@ def _process_once(store, event, *, judge=None, screening_judge=None, target_judg
                             sources,
                             bounded_judge,
                             model=model,
+                            current_evidence=evidence,
                             sources_refresh=lambda: [dict(asdict(source), node_id="source:" + source.source_id) for source in store.list_protected_sources_for_workspace(event.workspace_id)],
                         )
 
@@ -249,7 +250,7 @@ def _process_once(store, event, *, judge=None, screening_judge=None, target_judg
                                 return screen["transmission"]
                             return (target_judge or provider)(records)
                         result = inspect_and_decide(store, event, sources, target_provider,
-                                                    graph_decision, node_id, model)
+                                                    graph_decision, node_id, model, graph_with_evidence=graph_decision)
                     else:
                         result = graph_decision()
 

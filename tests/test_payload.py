@@ -267,3 +267,66 @@ def test_inline_byte_extent_does_not_include_local_only_text(setup):
     result = make().resolve(dict(kind="inline", pointer="/tool_input/body", offset=1, length=3))
     assert result.parts[0].content == b"ell"
     assert result.parts[0].extent == {"offset": 1, "length": 3}
+
+
+def repository_fixture(root):
+    import subprocess
+    def git(*args):
+        return subprocess.check_output(['git','-C',str(root),*args],stderr=subprocess.DEVNULL)
+    git('init','-b','fixture')
+    git('config','user.name','Fixture')
+    git('config','user.email','fixture@example.invalid')
+    return git
+
+
+def test_repository_snapshot_reads_committed_history_not_current_files(setup):
+    root,make=setup
+    git=repository_fixture(root)
+    (root/'note').write_text('original committed content')
+    git('add','note')
+    git('commit','-m','first')
+    git('rm','note')
+    git('commit','-m','delete')
+    (root/'note').write_text('uncommitted replacement')
+    resolver=make()
+    target=dict(kind='snapshot',format='git',path='.',revision='HEAD')
+    result=resolver.resolve(target)
+    assert result.coverage=='complete'
+    assert any(p.content==b'original committed content' for p in result.parts)
+    assert not any(p.content==b'uncommitted replacement' for p in result.parts)
+    assert {'commit','tree','blob'} <= {p.observation['object_kind'] for p in result.parts}
+    assert resolver.unchanged(result)
+    git('add','note')
+    git('commit','-m','new')
+    assert not resolver.unchanged(result)
+
+
+def test_repository_snapshot_rejects_missing_revision_and_bounds_objects(setup):
+    root,make=setup
+    git=repository_fixture(root)
+    (root/'note').write_text('fixture')
+    git('add','note')
+    git('commit','-m','first')
+    resolver=make()
+    for revision in ('--help','missing','HEAD:file'):
+        assert resolver.resolve(dict(kind='snapshot',format='git',path='.',revision=revision)).coverage=='unsupported'
+    resolver.max_members=1
+    assert resolver.resolve(dict(kind='snapshot',format='git',path='.',revision='HEAD')).coverage=='unsupported'
+
+
+def test_repository_snapshot_never_invokes_hooks_or_lazy_fetch(setup):
+    root,make=setup
+    git=repository_fixture(root)
+    (root/'note').write_text('fixture')
+    git('add','note')
+    git('commit','-m','first')
+    marker=root/'must-not-run'
+    hook=root/'.git/hooks/pre-push'
+    hook.write_text('#!/bin/sh\ntouch '+str(marker)+'\n')
+    hook.chmod(0o700)
+    resolver=make()
+    assert resolver.resolve(dict(kind='snapshot',format='git',path='.',revision='HEAD')).coverage=='complete'
+    assert not marker.exists()
+    git('config','remote.fake.promisor','true')
+    result=resolver.resolve(dict(kind='snapshot',format='git',path='.',revision='HEAD'))
+    assert result.coverage=='unsupported' and result.needs[0].reason=='repository_requires_remote_objects'
