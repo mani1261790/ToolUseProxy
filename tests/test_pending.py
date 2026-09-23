@@ -155,7 +155,7 @@ def test_persisted_outage_resumes_through_real_runtime_pipeline(tmp_path):
         return {'externality':'external','complete':True,'reason':'fixture',
                 'dependencies':[],'accesses':[]}
     assert resume(store.db_path, observed.workspace_id, provider=judge, now=10**12) == 1
-    assert 'externality' in stages and 'provenance' in stages
+    assert stages == []  # The current empty policy now completes mechanically.
     with sqlite3.connect(store.db_path) as conn:
         assert conn.execute('SELECT state,attempts,held FROM pending_judgments').fetchone() == ('complete',4,1)
         assert conn.execute('SELECT action FROM semantic_flow_decisions').fetchone()[0] == 'allow'

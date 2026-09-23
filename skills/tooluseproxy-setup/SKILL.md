@@ -48,6 +48,9 @@ ToolUseProxy records Hook-visible ToolCalls in events.db. An independent `codex 
 judges information dependencies and explicit outbound operations. The policy
 traverses those dependencies and stops external calls connected to registered sources. Independent exact-content DLP also checks resolved transmission contents; a DLP match is a distinct reason, not an inferred graph edge.
 This is inferred provenance, not proof of complete information-flow tracking.
+With no registered sources, observations are retained without invoking judgment
+models. This is an empty protection policy, not a claim that the content is public.
+Every delivery reads the current registrations; adding a source resumes inspection.
 The boundary is the recorded invocation and tool contract, including visible inline
 code and compound commands. Hidden communication inside scripts, hooks or local
 services is outside coverage; this Plugin does not enforce network isolation.

@@ -93,7 +93,8 @@ def run(phase: str, db_path: Path) -> int:
         try:
             from tooluseproxy.engine.runtime import configuration
             config = configuration(db_path,event.workspace_id)
-            if config and config.get("background_provenance") is True:
+            if (config and config.get("background_provenance") is True
+                    and journal.list_protected_sources_for_workspace(event.workspace_id)):
                 from tooluseproxy.engine.worker import kick
                 kick(db_path,event.workspace_id)
         except Exception:
