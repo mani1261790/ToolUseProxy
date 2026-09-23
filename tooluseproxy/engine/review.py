@@ -70,8 +70,9 @@ def review(db, revision, records, judge, validate, *, request_bytes=REQUEST_BYTE
         all_complete = all_complete and value["complete"]
         external = external or value["externality"] == "external"
         for edge in value["dependencies"]:
+            from tooluseproxy.engine.property_graph import merge_selections
             old = dependencies.get(edge["node_id"])
-            dependencies[edge["node_id"]] = edge if old is None or old.get("selection") == edge.get("selection") else dict(edge, selection=None)
+            dependencies[edge["node_id"]] = edge if old is None else dict(edge, selection=merge_selections(old.get("selection"), edge.get("selection")))
         for access in value["accesses"]:
             accesses[(access["path"], access["mode"])] = access
     # Every batch is assessed. Any unresolved batch keeps the union incomplete;

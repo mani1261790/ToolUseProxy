@@ -121,7 +121,12 @@ def screen_externality(db_path, event, model, provider):
     try:
         if len(json.dumps(records, ensure_ascii=False).encode()) > 64_000:
             raise GraphUnavailable("externality_input_large")
-        verdict = provider(records)
+        from tooluseproxy.engine.contracts import communication_contract
+        verdict = communication_contract(records['tool_name'], records['tool_input'])
+        if verdict is None:
+            from tooluseproxy.engine.timing import measure
+            with measure(db_path, event.event_id, "classification_model"):
+                verdict = provider(records)
         if (verdict.get("externality") not in ("local", "external")
                 or type(verdict.get("complete")) is not bool
                 or not isinstance(verdict.get("reason"), str)):
@@ -255,7 +260,13 @@ def _process_once(store, event, *, judge=None, screening_judge=None, target_judg
                     for source in store.list_protected_sources_for_workspace(event.workspace_id)
                 ]
                 started = time.monotonic()
-                provider = judge or CodexSemanticJudge(config.get("model"), timeout=60)
+                from tooluseproxy.engine.timing import measure
+                model_provider = judge or CodexSemanticJudge(config.get("model"), timeout=60)
+
+                def provider(records):
+                    phase = "target_model" if records.get("stage") == "transmission_targets" else "semantic_model"
+                    with measure(store.db_path, event.event_id, phase):
+                        return model_provider(records)
 
                 def bounded_judge(records):
                     if background:
@@ -301,6 +312,11 @@ def _process_once(store, event, *, judge=None, screening_judge=None, target_judg
 
     except (GraphUnavailable, JudgeProviderError) as exc:
         result["reason"] = str(exc)
+        if isinstance(exc, JudgeProviderError):
+            if exc.code in ('codex_exec_unavailable', 'semantic_provider_used_tools'):
+                result['retryable'] = False
+            else:
+                result['retry_scope'] = 'provider'
         if isinstance(exc, GraphUnavailable) and str(exc).startswith((
             "invalid_", "output_selection_", "property_graph_incomplete",
         )):

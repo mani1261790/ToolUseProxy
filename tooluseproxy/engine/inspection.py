@@ -5,6 +5,7 @@ from dataclasses import asdict
 from tooluseproxy.engine.dlp import inspect_dlp, sources_unchanged
 from tooluseproxy.engine.graph import digest
 from tooluseproxy.engine.targets import inspect_transmission
+from tooluseproxy.engine.codex import JudgeProviderError
 
 
 def inspect_and_decide(store, event, sources, provider, graph_decision, node_id, model, *, graph_with_evidence=None):
@@ -41,6 +42,10 @@ def inspect_and_decide(store, event, sources, provider, graph_decision, node_id,
             issues.append("transmission_coverage_incomplete")
         if not stable_policy:
             issues.append("protection_policy_changed_during_inspection")
+    except JudgeProviderError:
+        # Do not run provenance with absent payloads after a transient failure:
+        # that can turn a retryable transport outage into terminal missing evidence.
+        raise
     except Exception:
         # This path cannot suppress an independently established graph block.
         pass

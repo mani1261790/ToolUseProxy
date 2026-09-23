@@ -38,20 +38,29 @@ def decide(db, event, operation, *, max_attempts=3, budget_seconds=480,
     """
     owner = secrets.token_hex(16)
     pending = dict(action='pending', reason='judgment_in_progress', path=[], node_id=None)
+    deadline = clock() + budget_seconds
     try:
-        with transaction(db) as conn:
-            row = conn.execute('SELECT state,lease_until FROM pending_judgments WHERE event=?',
-                               (event.event_id,)).fetchone()
-            if row and row[0] == 'running' and row[1] > wall():
-                return pending
-            conn.execute('''INSERT INTO pending_judgments(event,workspace,session,state,owner,lease_until)
-                VALUES (?,?,?,?,?,?) ON CONFLICT(event) DO UPDATE SET
-                state=excluded.state,owner=excluded.owner,lease_until=excluded.lease_until''',
-                (event.event_id, event.workspace_id, event.session_id or '', 'running', owner, wall()+700))
-        deadline = clock() + budget_seconds
+        while True:
+            with transaction(db) as conn:
+                row = conn.execute('SELECT state,lease_until FROM pending_judgments WHERE event=?',
+                                   (event.event_id,)).fetchone()
+                busy = row and row[0] == 'running' and row[1] > wall()
+                if not busy:
+                    conn.execute('''INSERT INTO pending_judgments(event,workspace,session,state,owner,lease_until)
+                        VALUES (?,?,?,?,?,?) ON CONFLICT(event) DO UPDATE SET
+                        state=excluded.state,owner=excluded.owner,lease_until=excluded.lease_until''',
+                        (event.event_id, event.workspace_id, event.session_id or '', 'running', owner, wall()+700))
+                    break
+            # Another live delivery is evidence of work in progress, not a
+            # missing judgment. Wait outside the transaction, then revalidate
+            # current resources/policy using its completed lower-level caches.
+            if clock() >= deadline:
+                return dict(pending, reason='judgment_wait_budget')
+            sleep(min(0.1, max(0, deadline-clock())))
         result = dict(action='unavailable', reason='judgment_budget', path=[], node_id=None)
         count = 0
-        for attempt in range(max_attempts):
+        attempt = 0
+        while True:
             if clock() >= deadline:
                 break
             try:
@@ -75,8 +84,13 @@ def decide(db, event, operation, *, max_attempts=3, budget_seconds=480,
                 return result
             if result.get('retryable') is False:
                 break
-            if attempt + 1 < max_attempts:
-                sleep(min(2 ** attempt, max(0, deadline-clock())))
+            attempt += 1
+            # A fast transport failure must not spend an arbitrary three-strike
+            # allowance while most of the live Hook budget remains. Evidence or
+            # programming failures retain their bounded attempt policy.
+            if result.get('retry_scope') != 'provider' and attempt >= max_attempts:
+                break
+            sleep(min(2 ** min(attempt - 1, 5), max(0, deadline-clock())))
         with transaction(db) as conn:
             state = 'needs_evidence' if result.get('retryable') is False else 'waiting'
             conn.execute("UPDATE pending_judgments SET state=?,held=1,lease_until=0,retry_at=? WHERE event=? AND owner=?",

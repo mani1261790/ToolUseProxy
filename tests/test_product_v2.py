@@ -176,6 +176,64 @@ def test_product_import_does_not_load_legacy_analysis():
     subprocess.run([sys.executable, "-c", code], check=True)
 
 
+def test_target_transport_failure_recovers_before_provenance(tmp_path, capsys):
+    from tooluseproxy.engine.codex import JudgeProviderError
+    from tooluseproxy.engine.journal import event_from
+    from tooluseproxy.engine.pending import decide
+    from tooluseproxy.engine.runtime import _process_once, hook_output
+
+    root, data, args, _ = setup(tmp_path, capsys)
+    (root / 'private.txt').write_text('Synthetic protected coefficient 0.73')
+    (root / 'public.txt').write_text('Collect your badge at reception')
+    main(['protect', 'add', *args, '--path', 'private.txt'])
+    capsys.readouterr()
+    store = Journal(data / 'events.db')
+    event = event_from('pre_tool_use', dict(cwd=str(root), session_id='s', tool_use_id='send',
+                       tool_name='upload_file', tool_input={'path': 'public.txt'}), str(root))
+    calls = []
+
+    def targets(records):
+        calls.append('targets')
+        if len(calls) == 1:
+            raise JudgeProviderError('semantic_provider_failed')
+        return dict(complete=True, reason='explicit file', targets=[dict(kind='file',
+            path='public.txt', pointer=None, offset=0, length=None, reason='uploaded file')])
+
+    def semantic(records):
+        calls.append('semantic')
+        assert records['current_call']['payload_observations'][0]['content'] == 'Collect your badge at reception'
+        return dict(externality='external', complete=True, reason='independent public content',
+                    dependencies=[], accesses=[dict(path='public.txt', mode='read', reason='sent file')])
+
+    result = decide(store.db_path, event, lambda deadline: _process_once(store, event,
+        screening_judge=lambda _: dict(externality='external', complete=True, reason='explicit send'),
+        target_judge=targets, judge=semantic, deadline=deadline), sleep=lambda _: None)
+    assert calls == ['targets', 'targets', 'semantic']
+    assert result['action'] == 'allow' and hook_output(result, 'pre_tool_use') == {}
+    with sqlite3.connect(store.db_path) as conn:
+        assert conn.execute('SELECT state,attempts FROM pending_judgments').fetchone() == ('complete', 2)
+        attempts = [json.loads(row[0]) for row in conn.execute('SELECT result FROM judgment_attempts ORDER BY attempt')]
+    assert attempts[0]['reason'] == 'semantic_provider_failed'
+    assert attempts[0].get('retryable') is not False
+
+
+def test_malformed_model_output_remains_retryable_without_exposing_content(monkeypatch):
+    from types import SimpleNamespace
+    from tooluseproxy.engine.judge import CodexSemanticJudge
+    from tooluseproxy.engine.codex import JudgeProviderError
+    import pytest
+
+    for raw, expected in [(b'{"synthetic-private":', 'semantic_provider_invalid_json'),
+                          (b'[]', 'semantic_provider_invalid_shape')]:
+        def process(argv, stdin, cwd, environment, timeout):
+            (cwd / 'verdict.json').write_bytes(raw)
+            return SimpleNamespace(returncode=0, stdout=b'', stderr=b'')
+        monkeypatch.setattr('tooluseproxy.engine.judge._run_process', process)
+        with pytest.raises(JudgeProviderError) as caught:
+            CodexSemanticJudge()({'stage': 'transmission_targets'})
+        assert str(caught.value) == expected
+
+
 def test_setup_configuration_cannot_silently_change_judge(tmp_path, capsys):
     _, data, args, _ = setup(tmp_path, capsys)
     before = (data / "semantic-flow.json").read_bytes()

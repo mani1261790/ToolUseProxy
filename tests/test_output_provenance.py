@@ -49,6 +49,46 @@ def test_selected_output_has_own_revision_and_preserves_incomplete_operation(tmp
         assert json.loads(whole[0])['complete'] is False
 
 
+@pytest.mark.parametrize('include_private', [False, True])
+def test_multiple_transmitted_fragments_do_not_inherit_unselected_fields(tmp_path, include_private):
+    from tooluseproxy.engine.graph import load_calls
+    from tooluseproxy.engine.property_graph import selection_texts
+    output = {'public_a': '受付は一階です', 'public_b': '名札をお取りください',
+              'private': '試作品の試験温度は73度です'}
+    _, db, event = fixture(tmp_path, output)
+    with sqlite3.connect(db) as conn:
+        producer = load_calls(conn, event.workspace_id, 's', event.event_id)[0]
+    selected = [output['public_a'], output['public_b']]
+    if include_private:
+        selected.append(output['private'])
+    scopes = []
+
+    def judge(records):
+        node = records['current_call']
+        if node['node_id'] != producer['node_id']:
+            return verdict()  # Resolved transfers must survive an omitted model edge.
+        focus = node.get('required_output')
+        texts = selection_texts({k: v for k, v in focus.items() if k != 'observation_hash'}) if focus else list(output.values())
+        scopes.append(texts)
+        return verdict(accesses=[dict(path='private.txt', mode='read', reason='selected temperature')]
+                       if output['private'] in texts else [])
+
+    result = analyze_properties(db, event.workspace_id, 's', event.event_id,
+        [{'node_id': 'source:p', 'path': 'private.txt'}], judge,
+        current_evidence=[dict(observation={'source_node_id': producer['node_id']},
+                               content=text, encoding='utf-8') for text in selected])
+    assert result['action'] == ('block' if include_private else 'allow')
+    assert scopes == [sorted(selected)]
+
+
+@pytest.mark.parametrize('selection', [{'texts': []}, {'texts': ['ok', '']},
+    {'texts': ['ok', 1]}, {'texts': 'not-an-array'}, {'text': 'a', 'texts': ['b']}])
+def test_malformed_fragment_union_cannot_be_interpreted_as_independence(selection):
+    from tooluseproxy.engine.property_graph import validate
+    with pytest.raises(GraphUnavailable, match='invalid_output_selection'):
+        validate(verdict(deps=[dict(node_id='parent', reason='value', selection=selection)]), {'parent'})
+
+
 @pytest.mark.parametrize('selected_access', [True, False])
 def test_selection_never_means_public_or_complete(tmp_path, selected_access):
     root, db, event = fixture(tmp_path, 'derived-private-value')
@@ -163,3 +203,40 @@ def test_multiline_output_selection_uses_observed_text(tmp_path):
             return verdict()
         return verdict(deps=[{'node_id':records['previous_calls'][0]['node_id'], 'reason':'uses both lines', 'selection':{'text':text}}])
     assert analyze_properties(db,event.workspace_id,'s',event.event_id,[],judge)['action']=='allow'
+
+
+def test_directory_evidence_is_typed_bounded_and_never_reads_children(tmp_path):
+    from tooluseproxy.engine.requirements import acquire
+    directory = tmp_path / '.git'
+    directory.mkdir()
+    (directory / 'config').write_text('private content must not be returned')
+    (directory / 'protected_sources.json').write_text('forbidden')
+    (directory / 'link').symlink_to(tmp_path.parent)
+    records = {'current_call': {'workspace_root': str(tmp_path), 'input': {}}}
+    requests = [{'path': '.git', 'reason': 'repository metadata structure'}]
+    value = acquire(records, requests)[0]
+    assert value['status'] == 'observed' and value['kind'] == 'directory_entries'
+    assert json.loads(value['content']) == [
+        {'name': 'config', 'kind': 'file'}, {'name': 'link', 'kind': 'symlink'}]
+    assert 'private content' not in json.dumps(value)
+    limited = acquire(records, requests, directory_limit=1)[0]
+    assert limited['status'] == 'unavailable'
+    assert limited['failure_code'] == 'directory_entry_budget'
+    assert 'content' not in limited
+
+
+def test_resolved_output_transfer_cannot_be_omitted_by_semantic_judge(tmp_path):
+    from tooluseproxy.engine.graph import load_calls
+    _, db, event = fixture(tmp_path, 'derived private value')
+    with sqlite3.connect(db) as conn:
+        producer = load_calls(conn, event.workspace_id, 's', event.event_id)[0]
+    def judge(records):
+        if records['current_call']['node_id'] == producer['node_id']:
+            return verdict(accesses=[dict(path='private.txt', mode='read', reason='content origin')])
+        return verdict()  # A missing inferred edge cannot erase a resolved transfer.
+    result = analyze_properties(db, event.workspace_id, 's', event.event_id,
+        [{'node_id': 'source:private', 'path': 'private.txt'}], judge,
+        current_evidence=[dict(observation={'source_node_id': producer['node_id']},
+                               content='derived private value', encoding='utf-8')])
+    assert result['action'] == 'block'
+    assert result['path'][0] == 'source:private'

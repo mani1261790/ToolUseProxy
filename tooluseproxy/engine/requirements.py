@@ -10,7 +10,7 @@ import os
 import stat
 
 
-def acquire(records, requests, *, budget=128_000):
+def acquire(records, requests, *, budget=128_000, directory_limit=128):
     node = records['current_call']
     root = Path(node['workspace_root'])
     runtime = Path(__file__).resolve().parents[2]
@@ -40,6 +40,32 @@ def acquire(records, requests, *, budget=128_000):
                     raise ValueError('not_a_runtime_definition')
             with open_resource(str(selected), relative) as (fd, _, _):
                 before = os.fstat(fd)
+                if stat.S_ISDIR(before.st_mode):
+                    entries = []
+                    used = 0
+                    with os.scandir(fd) as listing:
+                        for entry in listing:
+                            if entry.name == 'protected_sources.json':
+                                continue
+                            if len(entries) >= directory_limit:
+                                raise ValueError('directory_entry_budget')
+                            kind = ('symlink' if entry.is_symlink() else
+                                    'directory' if entry.is_dir(follow_symlinks=False) else
+                                    'file' if entry.is_file(follow_symlinks=False) else 'special')
+                            used += len(entry.name.encode('utf-8')) + len(kind) + 40
+                            if used > budget:
+                                raise ValueError('directory_byte_budget')
+                            entries.append(dict(name=entry.name, kind=kind))
+                    if fingerprint(before) != fingerprint(os.fstat(fd)):
+                        raise ValueError('directory_changed')
+                    budget -= used
+                    entries.sort(key=lambda item: item['name'])
+                    data = json.dumps(entries, ensure_ascii=False, sort_keys=True).encode()
+                    outcome.update(status='observed', kind='directory_entries',
+                                   content=data.decode(), sha256=hashlib.sha256(data).hexdigest(),
+                                   temporal_scope='current_directory_not_historical_execution')
+                    results.append(outcome)
+                    continue
                 if not stat.S_ISREG(before.st_mode) or before.st_size > budget:
                     raise ValueError('definition_budget_or_type')
                 data = os.read(fd, budget + 1)
@@ -54,11 +80,21 @@ def acquire(records, requests, *, budget=128_000):
             current_hash = hashlib.sha256(data).hexdigest()
             if observed_hash is not None and current_hash != observed_hash:
                 raise ValueError('definition_changed_since_observation')
-            outcome.update(status='observed', content=data.decode('utf-8'),
+            outcome.update(status='observed', kind='file_content', content=data.decode('utf-8'),
                            sha256=hashlib.sha256(data).hexdigest(),
                            temporal_scope='matches_hook_observation' if observed_hash else 'current_definition_not_historical_execution')
         except (ValueError, OSError, UnicodeError) as exc:
             outcome['failure'] = type(exc).__name__
+            # Only allowlisted codes, never exception text that may contain data.
+            known = {'outside_evidence_roots', 'not_a_runtime_definition',
+                     'definition_budget_or_type', 'definition_changed_or_large',
+                     'ambiguous_definition_observation', 'definition_changed_since_observation',
+                     'directory_entry_budget', 'directory_byte_budget', 'directory_changed',
+                     'control_state_not_payload', 'resource_path_not_canonical_relative'}
+            outcome['failure_code'] = (str(exc) if type(exc) is ValueError and str(exc) in known
+                                       else 'not_found' if isinstance(exc, FileNotFoundError)
+                                       else 'permission_denied' if isinstance(exc, PermissionError)
+                                       else 'evidence_unavailable')
         results.append(outcome)
     return results
 
