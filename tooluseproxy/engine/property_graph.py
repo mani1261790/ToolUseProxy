@@ -269,7 +269,7 @@ def analyze_properties(
         raise GraphUnavailable("resource_lineage_expansion_budget")
     visiting.add(event_id)
     with sqlite3.connect(db_path, timeout=5) as conn:
-        producers = pending_producers(conn, workspace, session, event_id)
+        producers = pending_producers(conn, workspace, session, event_id, model)
     for producer, producer_session in producers:
         analyze_properties(
             db_path,
