@@ -68,7 +68,16 @@ def graph_snapshot(conn, event_id, workspace=None, limit=200):
             versions = [dict(r) for r in conn.execute('SELECT path,version,mode FROM flow_file_observations WHERE scope=? AND event=? LIMIT 64', (scope, row[1]))]
         selected_output = 'graph_output_selections' in tables and conn.execute(
             'SELECT 1 FROM graph_output_selections WHERE revision=?', (revision,)).fetchone() is not None
-        nodes.append(dict(provenance_scope='selected_output' if selected_output else 'operation', versions=versions, id=revision, node=row[0], event=row[1], session=row[2], tool=row[4], time=row[5], complete=verdict.get('complete') is True, accesses=accesses))
+        selected_resources = conn.execute('SELECT selection_json FROM graph_resource_selections WHERE revision=?',
+                                          (revision,)).fetchone() if 'graph_resource_selections' in tables else None
+        if selected_resources:
+            resource_scope = json.loads(selected_resources[0])
+            selected_versions = {(v['path'], v['version']) for v in resource_scope}
+            versions = [v for v in versions if (v['path'], v['version']) in selected_versions]
+        provenance_scope = ('selected_values' if selected_output and selected_resources else
+                            'selected_resources' if selected_resources else
+                            'selected_output' if selected_output else 'operation')
+        nodes.append(dict(provenance_scope=provenance_scope, versions=versions, id=revision, node=row[0], event=row[1], session=row[2], tool=row[4], time=row[5], complete=verdict.get('complete') is True, accesses=accesses))
         if 'graph_revision_links' in tables:
             for parent in conn.execute('SELECT l.parent_revision FROM graph_revision_links l JOIN graph_revisions r ON r.revision=l.parent_revision WHERE l.revision=? AND r.workspace=? LIMIT 401', (revision, scope)):
                 if len(edges) >= 400:

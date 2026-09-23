@@ -235,31 +235,6 @@ def matching_producers(conn, workspace, event):
     return list(dict.fromkeys([*live, *immutable]))
 
 
-def link_producers(conn, workspace, node, revision, verdict):
-    schema(conn)
-    reads = {item["path"] for item in verdict["accesses"] if item["mode"] == "read"}
-    for producer, _, path, version in matching_producers(conn, workspace, node["event_id"]):
-        if path not in reads:
-            continue
-        parent = conn.execute(
-            """SELECT h.node,h.revision FROM graph_heads h
-            JOIN graph_revisions r ON r.revision=h.revision JOIN graph_accesses a ON a.revision=r.revision
-            WHERE h.workspace=? AND r.event=? AND a.path=? AND a.mode='write' """,
-            (workspace, producer, path),
-        ).fetchone()
-        if not parent:
-            continue
-        parent_node, parent_revision = parent
-        conn.execute(
-            "INSERT OR IGNORE INTO graph_edges VALUES (?,?,?,?)",
-            (revision, parent_node, node["node_id"], "witnessed resource generation: " + version),
-        )
-        conn.execute(
-            "INSERT OR IGNORE INTO graph_revision_links VALUES (?,?,?)",
-            (revision, parent_node, parent_revision),
-        )
-
-
 def attach_witnesses(conn, workspace, node):
     schema(conn)
     rows = conn.execute(

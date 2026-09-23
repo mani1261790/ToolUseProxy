@@ -16,6 +16,9 @@ def test_graph_uses_pinned_cross_session_ancestry_without_payload(tmp_path):
     assert {n['session'] for n in graph['nodes']} == {'a','b'}
     assert '0.73' not in str(graph)
     assert all('input' not in n and 'output' not in n for n in graph['nodes'])
+    scoped = [n for n in graph['nodes'] if n['provenance_scope'] == 'selected_resources']
+    assert len(scoped) == 1
+    assert {v['path'] for v in scoped[0]['versions']} == {'derived'}
     assert LogReader(store.db_path, 'different').graph(send.event_id)['nodes'] == []
     with sqlite3.connect(store.db_path) as conn:
         conn.execute('DELETE FROM graph_heads')
