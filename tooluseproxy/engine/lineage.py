@@ -235,7 +235,8 @@ def matching_producers(conn, workspace, event):
     return list(dict.fromkeys([*live, *immutable]))
 
 
-def pending_producers(conn, workspace, session, event):
+def pending_producers(conn, workspace, session, event, model="codex_default"):
+    from tooluseproxy.engine.judge import PROMPT_VERSION
     # Current transmission and earlier observed reads in this session can need
     # producers from another session. Raw observations remain the source of truth.
     schema(conn)
@@ -255,8 +256,9 @@ def pending_producers(conn, workspace, session, event):
                 continue
             known = conn.execute(
                 """SELECT 1 FROM graph_heads h JOIN graph_revisions r ON r.revision=h.revision
-                WHERE h.workspace=? AND r.event=?""",
-                (workspace, producer),
+                WHERE h.workspace=? AND r.event=? AND r.prompt=? AND r.model=?
+                  AND json_extract(r.verdict,'$.complete')=1""",
+                (workspace, producer, PROMPT_VERSION, model),
             ).fetchone()
             if not known and (producer, other_session) not in result:
                 result.append((producer, other_session))

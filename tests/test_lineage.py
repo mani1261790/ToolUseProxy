@@ -257,3 +257,28 @@ def test_external_resource_generation_preserves_protected_origin(tmp_path, send_
     result=analyze_properties(store.db_path,send.workspace_id,send.session_id,send.event_id,
                               [{'node_id':'source:private','path':'private'}],external_judge)
     assert result['action']=='block' and result['path'][0]=='source:private'
+
+
+@pytest.mark.parametrize('stale', ['prompt', 'model', 'incomplete'])
+def test_cross_session_producer_is_reassessed_when_cached_judgment_is_stale(history, stale):
+    import json
+    _,store,record,writer=history
+    inspect(store,writer)
+    with sqlite3.connect(store.db_path) as conn:
+        if stale=='incomplete':
+            for revision,raw in conn.execute('select revision,verdict from graph_revisions').fetchall():
+                value=json.loads(raw);value['complete']=False
+                conn.execute('update graph_revisions set verdict=? where revision=?',(json.dumps(value),revision))
+        else:
+            conn.execute('update graph_revisions set '+stale+"='previous-version'")
+        # Simulate a stored generation from an earlier runtime, without its cache.
+        conn.execute('delete from graph_completed_reviews')
+    send=record('new-session','send','pre_tool_use','send',[{'path':'derived','mode':'read'}])
+    seen=[]
+    def tracking(records):
+        seen.append(records['current_call']['input']['step'])
+        return judge(records)
+    result=analyze_properties(store.db_path,send.workspace_id,send.session_id,send.event_id,
+        [{'node_id':'source:private','path':'private'}],tracking)
+    assert result['action']=='block'
+    assert 'write' in seen and 'read' in seen
