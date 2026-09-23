@@ -19,6 +19,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--remote', required=True)
     parser.add_argument('--public-only', action='store_true')
+    parser.add_argument('--historical-derived', action='store_true')
     args = parser.parse_args()
     repo = Path(__file__).resolve().parents[1]
     base = Path(tempfile.mkdtemp(prefix='tup-git-proof-')).resolve()
@@ -84,6 +85,9 @@ def main():
                 assert prepared.returncode == 0 and (root/'derived.txt').is_file()
                 git('add','derived.txt')
                 git('commit','-m','derived')
+                if args.historical_derived:
+                    git('rm','derived.txt')
+                    git('commit','-m','delete working-tree copy')
             result = run_codex(name, prompt)
             if name == 'public':
                 public_head = git('rev-parse','HEAD')

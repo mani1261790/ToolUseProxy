@@ -18,6 +18,9 @@ def schema(conn):
         scope TEXT NOT NULL, event TEXT NOT NULL, path TEXT NOT NULL, version TEXT NOT NULL,
         mode TEXT NOT NULL, status TEXT NOT NULL, fingerprint_json TEXT NOT NULL,
         UNIQUE(scope,event,path,mode,version,fingerprint_json))""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS flow_immutable_reads (
+        scope TEXT NOT NULL,event TEXT NOT NULL,path TEXT NOT NULL,version TEXT NOT NULL,
+        PRIMARY KEY(scope,event,path,version))""")
     conn.execute(
         "CREATE INDEX IF NOT EXISTS flow_generation_lookup ON flow_file_observations(scope,path,version,fingerprint_json,mode,status)"
     )
@@ -134,6 +137,10 @@ def snapshot_resources(store, event, resources=None):
 
 
 def record_transmission_snapshots(resolver, result):
+    with resolver.store.transaction() as conn:
+        schema(conn)
+        conn.execute("DELETE FROM flow_immutable_reads WHERE scope=? AND event=?",
+                     (resolver.scope, resolver.event))
     # Bind committed blob bytes to the same path/content generation as a prior
     # file observation, without claiming that the working tree still has them.
     aliases = []
@@ -151,20 +158,14 @@ def record_transmission_snapshots(resolver, result):
                     matches_current = resolver.token(current) == part.version.token
                 except (OSError, ValueError):
                     matches_current = False
+                with resolver.store.transaction() as conn:
+                    schema(conn)
+                    conn.execute("INSERT OR IGNORE INTO flow_immutable_reads VALUES (?,?,?,?)",
+                                 (resolver.scope, resolver.event, path, value.identity))
                 if not matches_current:
-                    # A historical blob must not lose a known producer merely
-                    # because the current file has changed or disappeared.
-                    with resolver.store.transaction() as conn:
-                        schema(conn)
-                        known = conn.execute(
-                            "SELECT 1 FROM flow_file_observations WHERE scope=? AND path=? AND version=? AND mode='write' AND status='observed' LIMIT 1",
-                            (resolver.scope, path, value.identity)).fetchone()
-                    if known:
-                        from tooluseproxy.engine.evidence import EvidenceNeed
-                        need = EvidenceNeed("origin", path, "historical_snapshot_origin_requires_review")
-                        result.needs.append(need)
-                        result.coverage = "partial"
-                        resolver.store.add_need(resolver.scope, resolver.event, need)
+                    # The immutable bytes still identify the recorded version.
+                    # Preserve that identity separately from a live inode stamp.
+                    aliases.append((path, value.identity, json.dumps(part.observation)))
                     continue
                 aliases.append((path, value.identity, json.dumps(observation["fingerprint"])))
     with resolver.store.transaction() as conn:
@@ -197,7 +198,7 @@ def matching_producers(conn, workspace, event):
             "SELECT after_sequence FROM recording_boundaries WHERE workspace_id=?", (workspace,)
         ).fetchone()
         boundary = row[0] if row else 0
-    return conn.execute(
+    live = conn.execute(
         """SELECT DISTINCT p.event,pe.session_id,p.path,p.version
         FROM flow_file_observations c JOIN events ce ON ce.event_id=c.event
         JOIN flow_file_observations p ON p.scope=c.scope AND p.path=c.path
@@ -214,6 +215,17 @@ def matching_producers(conn, workspace, event):
         ORDER BY pe.sequence_no DESC""",
         (workspace, event, boundary),
     ).fetchall()
+    immutable = conn.execute(
+        """SELECT DISTINCT p.event,pe.session_id,p.path,p.version
+        FROM flow_immutable_reads c JOIN events ce ON ce.event_id=c.event
+        JOIN flow_file_observations p ON p.scope=c.scope AND p.path=c.path AND p.version=c.version
+        JOIN events pe ON pe.event_id=p.event
+        WHERE c.scope=? AND c.event=? AND p.mode='write' AND p.status='observed'
+          AND pe.sequence_no>? AND pe.sequence_no<ce.sequence_no
+        ORDER BY pe.sequence_no DESC""", (workspace,event,boundary)).fetchall()
+    # A model still establishes the consumer's read and each producer's ancestry.
+    # Matching immutable resource identity is evidence, not a similarity edge.
+    return list(dict.fromkeys([*live, *immutable]))
 
 
 def pending_producers(conn, workspace, session, event):
