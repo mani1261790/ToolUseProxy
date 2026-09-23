@@ -213,7 +213,7 @@ def test_stopped_v2_hook_cannot_open_database_or_start_judge(tmp_path, monkeypat
     payload = {"cwd": str(tmp_path)}
     monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO(json.dumps(payload).encode())))
     assert run("pre-tool-use", tmp_path / "events.db") == 0
-    assert capsys.readouterr().out == ""
+    assert json.loads(capsys.readouterr().out) == {}
     assert not (tmp_path / "events.db").exists()
 
 
@@ -255,7 +255,8 @@ def test_skill_and_product_metadata_describe_the_same_engine():
     metadata = json.loads((root / ".codex-plugin/plugin.json").read_text())
     assert metadata["version"].startswith("0.2.")
     assert "codex exec" in skill and "inputs, outputs" in skill
-    assert "warns and continues" in skill
+    assert "pending a completed judgment" in skill
+    assert "warns and continues" not in skill
     assert (
         "Hook implementation writes to its local data\ndirectory and does not make network requests"
         not in skill

@@ -259,3 +259,83 @@ def test_local_operation_defers_incomplete_provenance_but_send_does_not(tmp_path
         )
     )
     assert graph.analyze_properties(db, "w", "s", "e2", [], judge)["action"] == "unavailable"
+
+
+def test_recording_can_start_with_post_observation_without_poisoning_future_calls(tmp_path):
+    """Setup executes before activation, but its Post arrives after activation."""
+    from tooluseproxy.engine.graph import load_calls
+    root = tmp_path / "workspace"
+    root.mkdir()
+    store = Journal(tmp_path / "events.db")
+    store.initialize()
+    events = []
+    for tool, phase in [("setup", "post_tool_use"), ("send", "pre_tool_use")]:
+        event = event_from(phase, {
+            "cwd": str(root), "session_id": "s", "tool_use_id": tool,
+            "tool_name": "test", "tool_input": {"call": tool},
+            **({"tool_response": "setup completed"} if tool == "setup" else {}),
+        }, str(root))
+        store.record(event)
+        events.append(event)
+    with sqlite3.connect(store.db_path) as conn:
+        calls = load_calls(conn, events[-1].workspace_id, "s", events[-1].event_id)
+    assert len(calls) == 2
+    assert calls[0]["observation"] == "post_only"
+    assert calls[0]["completed"] and calls[0]["output"] == "setup completed"
+    assert calls[1]["observation"] == "pre"
+    seen = []
+
+    def judge(records):
+        seen.append(records)
+        return {"complete": True, "externality": "external",
+                "reason": "fixture", "dependencies": [], "accesses": []}
+
+    result = analyze_properties(store.db_path, events[-1].workspace_id,
+                                "s", events[-1].event_id, [], judge)
+    assert result["action"] == "allow"
+    assert seen[-1]["previous_calls"][0]["observation"] == "post_only"
+
+
+def test_incomplete_review_can_recover_without_rewriting_past_policy(tmp_path):
+    root = tmp_path / "workspace"
+    root.mkdir()
+    store = Journal(tmp_path / "events.db")
+    store.initialize()
+    event = event_from("pre_tool_use", dict(cwd=str(root), session_id="s",
+        tool_use_id="send", tool_name="fixture", tool_input={"send": True}), str(root))
+    store.record(event)
+    attempts = []
+
+    def judge(records):
+        attempts.append(records)
+        return dict(complete=len(attempts) > 1, externality="external",
+                    reason="fixture", dependencies=[], accesses=[])
+
+    args = (store.db_path, event.workspace_id, "s", event.event_id, [], judge)
+    assert analyze_properties(*args)["action"] == "unavailable"
+    assert analyze_properties(*args)["action"] == "allow"
+    assert analyze_properties(*args)["action"] == "allow"
+    assert len(attempts) == 2
+    with sqlite3.connect(store.db_path) as conn:
+        history = [json.loads(r[0])["action"] for r in conn.execute(
+            'SELECT result FROM graph_policy_checks ORDER BY rowid')]
+    assert history == ["unavailable", "allow"]
+
+
+def test_changed_payload_observation_invalidates_completed_review(tmp_path):
+    root=tmp_path/'workspace'
+    root.mkdir()
+    store=Journal(tmp_path/'events.db')
+    store.initialize()
+    event=event_from('pre_tool_use',dict(cwd=str(root),session_id='s',tool_use_id='send',
+        tool_name='fixture',tool_input={'operation':'send revision'}),str(root))
+    store.record(event)
+    seen=[]
+    def judge(records):
+        observation=records['current_call']['payload_observations']
+        seen.append(observation)
+        return dict(externality='external',complete=True,reason='fixture',accesses=[],dependencies=[])
+    args=(store.db_path,event.workspace_id,'s',event.event_id,[],judge)
+    for value in ('first','first','changed'):
+        assert analyze_properties(*args,current_evidence=[{'content':value}])['action']=='allow'
+    assert seen==[[{'content':'first'}],[{'content':'changed'}]]

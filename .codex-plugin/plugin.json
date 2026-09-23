@@ -1,6 +1,6 @@
 {
   "name": "tooluseproxy",
-  "version": "0.2.0-alpha.4",
+  "version": "0.2.0-alpha.5",
   "description": "ToolCall dependency graphs judged by Codex, with mechanical source-reachability checks.",
   "author": {
     "name": "ToolUseProxy contributors",
@@ -19,7 +19,7 @@
   "interface": {
     "displayName": "ToolUseProxy",
     "shortDescription": "ToolCallの意味依存グラフと送信判定",
-    "longDescription": "ToolCallのI/Oを独立したCodex判定モデルに渡して依存関係を推定し、登録情報源へつながる外部通信を実行前に止めます。判定不能時は警告して継続します。",
+    "longDescription": "ToolCallのI/Oを独立したCodex判定モデルに渡して依存関係を推定し、登録情報源へつながる外部通信を実行前に止めます。判定中は実行を保留し、再試行します。",
     "developerName": "ToolUseProxy contributors",
     "category": "Developer Tools",
     "capabilities": [

@@ -106,8 +106,8 @@ class PluginArtifactTest(unittest.TestCase):
         windows = (REPO_ROOT / "hooks" / "run_hook.cmd").read_text(encoding="utf-8")
         self.assertIn("workspace_may_be_enabled", posix)
         self.assertIn(":workspace_may_be_enabled", windows)
-        self.assertNotIn('"permissionDecision":"deny"', posix)
-        self.assertNotIn('"permissionDecision":"deny"', windows)
+        self.assertIn('"permissionDecision":"deny"', posix)
+        self.assertIn('"permissionDecision":"deny"', windows)
 
     def test_bundle_bytes_are_reproducible(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

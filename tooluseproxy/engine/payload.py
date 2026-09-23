@@ -17,7 +17,7 @@ from pathlib import Path, PurePosixPath
 
 from tooluseproxy.engine.evidence import ContentVersion, EvidenceNeed, EvidenceStore, Resource
 
-RESOLVER_VERSION = "payload-v1"
+RESOLVER_VERSION = "payload-v2"
 
 
 class ResolutionError(ValueError):
@@ -227,6 +227,31 @@ class PayloadResolver:
                         )
                     )
                     return
+                if kind == "snapshot":
+                    if set(item) != {"kind", "format", "path", "revision"} or item["format"] != "git":
+                        raise ResolutionError("invalid_snapshot_target")
+                    from tooluseproxy.engine.repository_evidence import snapshot, SnapshotUnavailable
+                    path = item["path"]
+                    if path != ".":
+                        safe_parts(path)
+                    root = self.root / path
+                    if root.resolve() != root or not root.is_dir():
+                        raise ResolutionError("repository_path_not_local")
+                    try:
+                        oid, parts = snapshot(root, item["revision"], max_bytes=budget["bytes"],
+                                              max_objects=budget["members"])
+                    except (ValueError, OSError, UnicodeError, SnapshotUnavailable) as exc:
+                        raise ResolutionError(str(exc)) from None
+                    for part in parts:
+                        content = part["content"]
+                        budget["bytes"] -= len(content)
+                        budget["members"] -= 1
+                        resource = Resource(self.scope, "repository_object", path + ":" + part["oid"])
+                        value = ContentVersion(resource, self.token(content), self.event, len(content))
+                        result.parts.append(Part(value, content, {"offset":0,"length":len(content)},
+                            {"event":self.event,"repository":path,"revision":item["revision"],
+                             "head":oid,"object":part["oid"],"object_kind":part["kind"],"paths":part["paths"]}))
+                    return
                 result.needs.append(
                     EvidenceNeed(
                         "execution_definition" if kind == "transform" else "resource_version",
@@ -277,6 +302,17 @@ class PayloadResolver:
 
     def unchanged(self, result):
         for part in result.parts:
+            if part.version.resource.kind == "repository_object":
+                from tooluseproxy.engine.repository_evidence import git_read
+                try:
+                    observed = part.observation
+                    current = git_read(self.root/observed["repository"], 'rev-parse', '--verify',
+                                       observed["revision"]+'^{commit}').decode().strip()
+                    if current != observed["head"]:
+                        return False
+                except (ValueError, OSError):
+                    return False
+                continue
             if part.version.resource.kind != "file":
                 continue
             try:
@@ -291,6 +327,8 @@ class PayloadResolver:
         unit = self.store.add_transmission(self.scope, self.event, target, destination)
         for part in result.parts:
             self.store.add_version(part.version)
+        from tooluseproxy.engine.lineage import record_transmission_snapshots
+        record_transmission_snapshots(self, result)
         identity = self.store.add_resolution(
             self.scope,
             unit,
@@ -302,6 +340,4 @@ class PayloadResolver:
         )
         for need in result.needs:
             self.store.add_need(self.scope, self.event, need)
-        from tooluseproxy.engine.lineage import record_transmission_snapshots
-        record_transmission_snapshots(self, result)
         return identity

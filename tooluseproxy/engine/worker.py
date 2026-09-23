@@ -4,10 +4,13 @@ import argparse
 import fcntl
 import subprocess
 import sys
+import time
+import sqlite3
 from pathlib import Path
 
 from tooluseproxy.engine.graph import digest
 from tooluseproxy.engine.jobs import drain
+from tooluseproxy.engine.pending import resume
 
 
 def kick(db, scope):
@@ -35,7 +38,19 @@ def main():
         except BlockingIOError:
             return
         # A finite batch avoids runaway provider use. Pending jobs survive exit.
+        resume(args.db, args.scope)
         drain(args.db, args.scope)
+        # Follow a short outage automatically with backoff. Persistent outages
+        # stay in the durable queue for the next Hook or explicit analyze run.
+        for _ in range(3):
+            with sqlite3.connect(args.db) as conn:
+                exists = conn.execute("SELECT 1 FROM sqlite_master WHERE name='pending_judgments'").fetchone()
+                row = conn.execute("SELECT MIN(retry_at) FROM pending_judgments WHERE workspace=? AND state='waiting'",
+                                   (args.scope,)).fetchone() if exists else None
+            if not row or row[0] is None or row[0] - time.time() > 60:
+                break
+            time.sleep(max(0, row[0] - time.time()))
+            resume(args.db, args.scope)
 
 
 if __name__ == "__main__":

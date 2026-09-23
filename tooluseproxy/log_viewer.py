@@ -226,7 +226,7 @@ class LogReader:
                 "ORDER BY sequence_no DESC LIMIT 50",
                 (PAYLOAD_LIMIT, PAYLOAD_LIMIT, *params),
             ).fetchall()
-            events, decisions = [], []
+            events, decisions, judgments = [], [], []
             forecasts = self.attach_forecasts(conn)
             tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master")}
             for row in reversed(rows):
@@ -257,6 +257,13 @@ class LogReader:
                         "WHERE event_id=? AND workspace_id=? AND session_id=?",
                         (event['event_id'], event['workspace_id'], event['session_id']),
                     ))
+                if "pending_judgments" in tables:
+                    judgment = conn.execute(
+                        "SELECT event,state,attempts,result,held FROM pending_judgments "
+                        "WHERE event=? AND workspace=?", (event["event_id"], event["workspace_id"])
+                    ).fetchone()
+                    if judgment:
+                        judgments.append(dict(judgment))
                 if forecasts:
                     decisions.extend({
                         "decision_id": item["id"], "action": "block", "hook_event": "PreToolUse",
@@ -269,7 +276,7 @@ class LogReader:
                         "AND json_extract(body,'$.structure.session')=? LIMIT 100",
                         (event["workspace_id"], event["event_id"], event["session_id"]),
                     ))
-            return {"events": events, "decisions": decisions, "event_limit": 50}
+            return {"events": events, "decisions": decisions, "judgments": judgments, "event_limit": 50}
 
 
 def make_server(reader, port=0):

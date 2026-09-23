@@ -176,3 +176,64 @@ def test_unrelated_incomplete_observation_does_not_poison_send(tmp_path, monkeyp
         )
 
     assert graph.analyze_properties(db, "scope", "s", "two", [], classify)["action"] == "allow"
+
+
+def test_committed_generation_links_to_recorded_writer(history):
+    from test_payload import repository_fixture
+    from tooluseproxy.engine.payload import PayloadResolver
+    from tooluseproxy.engine.evidence import EvidenceStore
+    root,store,record,_=history
+    git=repository_fixture(root)
+    git('add','derived')
+    git('commit','-m','fixture derived')
+    event=record('b','push','pre_tool_use','send')
+    resolver=PayloadResolver(EvidenceStore(store.db_path),event.workspace_id,event.event_id,root)
+    target=dict(kind='snapshot',format='git',path='.',revision='HEAD')
+    resolution=resolver.resolve(target)
+    assert resolution.coverage=='complete'
+    resolver.persist(target,{},resolution)
+    result=inspect(store,event)
+    assert result['action']=='block' and result['path'][0]=='source:private'
+
+
+def test_historical_committed_generation_does_not_silently_lose_known_origin(history):
+    from test_payload import repository_fixture
+    from tooluseproxy.engine.payload import PayloadResolver
+    from tooluseproxy.engine.evidence import EvidenceStore
+    root,store,record,_=history
+    git=repository_fixture(root)
+    git('add','derived')
+    git('commit','-m','fixture derived')
+    (root/'derived').unlink()
+    event=record('b','push','pre_tool_use','send')
+    resolver=PayloadResolver(EvidenceStore(store.db_path),event.workspace_id,event.event_id,root)
+    target=dict(kind='snapshot',format='git',path='.',revision='HEAD')
+    resolution=resolver.resolve(target)
+    resolver.persist(target,{},resolution)
+    assert resolution.coverage=='complete'
+    result=inspect(store,event)
+    assert result['action']=='block' and result['path'][0]=='source:private'
+
+
+def test_changed_repository_ref_replaces_immutable_read_set(history):
+    from test_payload import repository_fixture
+    from tooluseproxy.engine.payload import PayloadResolver
+    from tooluseproxy.engine.evidence import EvidenceStore
+    root,store,record,_=history
+    git=repository_fixture(root)
+    git('add','derived')
+    git('commit','-m','derived')
+    event=record('b','push','pre_tool_use','send')
+    resolver=PayloadResolver(EvidenceStore(store.db_path),event.workspace_id,event.event_id,root)
+    target=dict(kind='snapshot',format='git',path='.',revision='HEAD')
+    resolver.persist(target,{},resolver.resolve(target))
+    with sqlite3.connect(store.db_path) as conn:
+        assert conn.execute('SELECT COUNT(*) FROM flow_immutable_reads').fetchone()[0] > 0
+    git('checkout','--orphan','public-only')
+    git('rm','-rf','.')
+    (root/'public').write_text('public fixture')
+    git('add','public')
+    git('commit','-m','public')
+    resolver.persist(target,{},resolver.resolve(target))
+    with sqlite3.connect(store.db_path) as conn:
+        assert conn.execute('SELECT path FROM flow_immutable_reads').fetchall() == [('public',)]
