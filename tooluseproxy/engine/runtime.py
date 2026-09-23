@@ -193,15 +193,25 @@ def _process_once(store, event, *, judge=None, screening_judge=None, target_judg
         with sqlite3.connect(store.db_path) as conn:
             initialize(conn)
             conn.execute("INSERT OR IGNORE INTO semantic_flow_nodes (node_id,workspace_id,session_id,event_id,request_hash,verdict_json) VALUES (?,?,?,?,?,?)", (node_id,event.workspace_id,event.session_id,event.event_id,"","{}"))
+        # A policy with no protected roots has no protected path. Read the
+        # current registration table under the same writer boundary as add;
+        # never cache this result across deliveries. Observations stay available
+        # for demand-driven provenance if a source is registered later.
+        with sqlite3.connect(store.db_path) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            empty_policy = not store.list_protected_sources_for_workspace(event.workspace_id)
         if event.phase == "post_tool_use":
             # Actual output is already in the journal. Analyze its provenance
             # on demand before a later possible external transmission.
             from tooluseproxy.engine.lineage import snapshot_resources
             snapshot_resources(store, event)
-            if config.get("background_provenance") is True:
+            if not empty_policy and config.get("background_provenance") is True:
                 from tooluseproxy.engine.jobs import enqueue
                 enqueue(store.db_path,event,model)
             result = {"action": "observed", "reason": "provenance_deferred", "path": [], "node_id": node_id}
+        elif empty_policy:
+            result = {"action": "allow", "reason": "no_registered_sources",
+                      "path": [], "node_id": node_id}
         else:
             from tooluseproxy.viewer_process import issued_viewer_open
             local_viewer = issued_viewer_open(
@@ -225,7 +235,7 @@ def _process_once(store, event, *, judge=None, screening_judge=None, target_judg
                     model,
                     screening_judge
                     or judge
-                    or CodexSemanticJudge(config.get("model"), timeout=15),
+                    or CodexSemanticJudge(config.get("model"), timeout=60),
                 )
             )
             from tooluseproxy.engine.lineage import snapshot_resources
