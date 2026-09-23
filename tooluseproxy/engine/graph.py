@@ -144,16 +144,33 @@ def load_calls(
                 "resolved_cwd": execution_cwd,
                 "output": None,
                 "completed": False,
+                "observation": "pre",
             }
         else:
             if node_id not in calls:
-                raise GraphUnavailable("pre_tool_record_missing")
+                # Activation may happen inside a ToolCall. Its Post is an actual
+                # observation, even though its Pre predates the recording scope.
+                # Preserve this evidence without inventing a Pre or an allow.
+                if "tool_input" not in payload or "tool_response" not in payload:
+                    raise GraphUnavailable("post_observation_incomplete")
+                calls[node_id] = {
+                    "node_id": node_id, "event_id": eid, "tool_name": tool_name,
+                    "input": tool_input, "cwd": payload.get("cwd"),
+                    "workspace_root": workspace_root, "resolved_cwd": execution_cwd,
+                    "output": payload["tool_response"], "completed": True,
+                    "observation": "post_only",
+                }
+                continue
             node = calls[node_id]
             if (node["input"] != tool_input or node["tool_name"] != tool_name
                     or node["cwd"] != payload.get("cwd") or node["workspace_root"] != workspace_root
                     or node["resolved_cwd"] != execution_cwd):
                 raise GraphUnavailable("post_tool_input_mismatch")
+            if node["completed"] and node["output"] != payload.get("tool_response"):
+                raise GraphUnavailable("conflicting_post_observation")
             node.update(output=payload.get("tool_response"), completed=True, event_id=eid)
+            if node["observation"] == "pre":
+                node["observation"] = "paired"
     return list(calls.values())
 
 

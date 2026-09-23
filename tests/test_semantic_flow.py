@@ -145,7 +145,8 @@ def test_incomplete_is_not_a_leak_detection(fixture):
         lambda _: verdict(externality="unknown", complete=False),
     )
     assert result["action"] == "unavailable"
-    assert "permissionDecision" not in hook_output(result, "pre_tool_use")["hookSpecificOutput"]
+    assert hook_output(result, "pre_tool_use")["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "保留" in hook_output(result, "pre_tool_use")["hookSpecificOutput"]["permissionDecisionReason"]
 
 
 def test_history_limit_does_not_silently_allow(fixture):
@@ -164,7 +165,7 @@ def test_history_limit_does_not_silently_allow(fixture):
         )
 
 
-def test_timeout_is_recorded_and_does_not_deny(fixture):
+def test_timeout_is_retried_and_retained_without_dispatch(fixture):
     store, record = fixture
     event = record("one", "git add public.txt")
     config = {
@@ -183,7 +184,9 @@ def test_timeout_is_recorded_and_does_not_deny(fixture):
         raise JudgeProviderError("codex_exec_timeout")
 
     output = process_hook(store, event, judge=timeout)
-    assert "permissionDecision" not in output["hookSpecificOutput"]
+    assert output["hookSpecificOutput"]["permissionDecision"] == "deny"
+    with sqlite3.connect(store.db_path) as conn:
+        assert conn.execute("SELECT state,attempts FROM pending_judgments").fetchone() == ("waiting", 3)
     with sqlite3.connect(store.db_path) as conn:
         assert conn.execute("SELECT action,reason FROM semantic_flow_decisions").fetchone() == (
             "unavailable",
@@ -203,8 +206,8 @@ def test_semantic_watchdog_does_not_convert_timeout_to_leak():
             timeout_seconds=0.02,
         )
     output = json.loads(stdout.getvalue())
-    assert "permissionDecision" not in output["hookSpecificOutput"]
-    assert "semantic_watchdog_timeout" in output["hookSpecificOutput"]["additionalContext"]
+    assert output["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "semantic_watchdog_timeout" in output["hookSpecificOutput"]["permissionDecisionReason"]
 
 
 def test_traversal_tolerates_cycles_and_produces_root_to_sink_order():
@@ -318,8 +321,8 @@ def test_uncertain_screening_always_runs_full_analysis(fixture, screen_result):
         return verdict(externality='unknown', complete=False)
 
     result = process_hook(store, event, judge=detail, screening_judge=screen)
-    assert len(detailed) == 1
-    assert 'additionalContext' in result['hookSpecificOutput']
+    assert len(detailed) == 3
+    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
 @pytest.mark.parametrize('value', ['unknown', 'incomplete', 'timeout'])
@@ -359,3 +362,24 @@ def test_graph_receives_recorded_directory_context(fixture):
     assert node['cwd'] == json.loads(raw)['cwd']
     assert node['workspace_root'] == root
     assert node['resolved_cwd'] == resolved
+
+
+def test_transient_model_failure_completes_same_hook_before_allow(fixture):
+    store, record = fixture
+    event = record('send-after-recovery', 'send public information')
+    (store.db_path.parent/'semantic-flow.json').write_text(json.dumps({'workspaces': {
+        event.workspace_id: {'provider':'codex_exec', 'send_recorded_content':True,
+                            'mode':'enforce', 'failure_policy':'wait_for_decision'}}}))
+    calls = []
+    def judge(_):
+        calls.append(True)
+        if len(calls) == 1:
+            raise JudgeProviderError('codex_exec_timeout')
+        return dict(verdict(externality='external'), accesses=[])
+    output = process_hook(store, event, judge=judge,
+                          screening_judge=lambda _: dict(externality='external',complete=True,reason='fixture'))
+    assert output == {} and len(calls) == 2
+    with sqlite3.connect(store.db_path) as conn:
+        attempts = [json.loads(r[0])['action'] for r in conn.execute('SELECT result FROM judgment_attempts ORDER BY attempt')]
+        assert attempts == ['unavailable','allow']
+        assert conn.execute('SELECT state,held FROM pending_judgments').fetchone() == ('complete',0)

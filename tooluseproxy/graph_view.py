@@ -17,6 +17,10 @@ def graph_snapshot(conn, event_id, workspace=None, limit=200):
     if 'semantic_flow_decisions' in tables:
         result['checks'] = [dict(r) for r in conn.execute(
             f'SELECT action,reason,event_id FROM semantic_flow_decisions WHERE workspace_id=? AND event_id IN ({marks})', (scope, *related))]
+    result['judgments'] = []
+    if 'pending_judgments' in tables:
+        result['judgments'] = [dict(r) for r in conn.execute(
+            f'SELECT event,state,attempts,held FROM pending_judgments WHERE workspace=? AND event IN ({marks})', (scope, *related))]
     result['needs'] = []
     if 'flow_needs' in tables:
         result['needs'] = [dict(r) for r in conn.execute(

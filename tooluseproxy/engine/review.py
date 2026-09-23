@@ -50,14 +50,16 @@ def review(db, revision, records, judge, validate, *, request_bytes=REQUEST_BYTE
             cached = conn.execute(
                 "SELECT verdict FROM graph_review_parts WHERE review=? AND batch=?", (revision, key)
             ).fetchone()
+        if cached and not json.loads(cached[0]).get("complete"):
+            cached = None
         value = validate(
             json.loads(cached[0]) if cached else judge(request),
             {node["node_id"] for node in previous if node["completed"]},
         )
-        if not cached:
+        if not cached and value["complete"]:
             with sqlite3.connect(db, timeout=5) as conn:
                 conn.execute(
-                    "INSERT INTO graph_review_parts VALUES (?,?,?) ON CONFLICT DO NOTHING",
+                    "INSERT OR REPLACE INTO graph_review_parts VALUES (?,?,?)",
                     (revision, key, json.dumps(value)),
                 )
         all_complete = all_complete and value["complete"]

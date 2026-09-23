@@ -55,8 +55,12 @@ and the data it receives before initial setup. Reuse explicit consent already gi
 do not ask for the same approval again.
 
 When judgment times out, fails, or lacks evidence, report **判定未完了**. This version
-warns and continues. Never describe such a result as a detected leak, a safe operation,
-or an automatic protection success. It never bypasses Codex's own approval rules.
+retains the operation pending a completed judgment and retries analysis. Never describe
+such a result as a detected leak, a safe operation, or a completed protection decision.
+The finite host Hook deadline cannot hold a call forever: a pending response withholds
+execution using the host deny mechanism, while retaining the unfinished judgment.
+`analyze run` can resume saved judgments; it never executes their original tools.
+After recovery, a new tool request must recheck current resources and policy. It never bypasses Codex's own approval rules.
 
 ## Setup
 

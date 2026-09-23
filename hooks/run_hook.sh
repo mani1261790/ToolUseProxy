@@ -71,7 +71,7 @@ emit_inactive() {
             printf '{"hookSpecificOutput":{"hookEventName":"SubagentStart","additionalContext":"%s WebSearchなどのhosted toolはToolUseProxyで検査・遮断できません。保護対象やそこから得た内容をhosted toolへ入力しないでください。（技術情報: %s）"}}\n' "$message" "$code"
             ;;
         pre-tool-use)
-            printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":"%s 判定未完了のため、遮断せず継続します。安全確認済みとは扱わないでください。（技術情報: %s）"}}\n' "$message" "$code"
+            printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"%s 判定完了まで実行を保留します。復旧後に再検査してください。（技術情報: %s）"}}\n' "$message" "$code"
             ;;
         post-tool-use)
             printf '{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"%s（技術情報: %s）"}}\n' "$message" "$code"

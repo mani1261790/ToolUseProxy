@@ -92,7 +92,7 @@ def _save_configuration(db: Path, workspace: str, model):
         "send_recorded_content": True,
         "background_provenance": True,
         "mode": "enforce",
-        "failure_policy": "allow_with_warning",
+        "failure_policy": "wait_for_decision",
     }
     if existing is not None and existing != config:
         raise ValueError("existing_judge_configuration_differs")
@@ -131,7 +131,7 @@ def _setup(args, paths, root):
         return {
             "status": "consent_required",
             "message": "ToolCallのI/Oと必要なローカル資源の証拠をCodexの判定モデルへ渡します。バックグラウンド解析もモデルを使用します。"
-            "送信先と、判定不能時は警告して継続する方針を確認してから設定してください。",
+            "送信先と、判定中は実行を保留する方針を確認してから設定してください。",
         }, 1
     if not paths.db_path.exists() and (root / "protected_sources.json").exists():
         return {
@@ -155,7 +155,7 @@ def _setup(args, paths, root):
         "db_path": str(paths.db_path),
         "judge": "codex_exec",
         "model": args.model,
-        "failure_policy": "allow_with_warning",
+        "failure_policy": "wait_for_decision",
         "hook_verified": False,
     }
     return _finish_setup(args, paths, root, result)
@@ -309,8 +309,12 @@ def main(argv=None):
                 from tooluseproxy.engine.workspace import make_workspace_id
                 from tooluseproxy.engine.jobs import drain, queue_status
                 scope = make_workspace_id(str(root))
+                from tooluseproxy.engine.pending import resume, status as pending_status
+                resumed = resume(paths.db_path, scope) if args.operation == "run" else 0
                 count = drain(paths.db_path, scope) if args.operation == "run" else 0
-                result, code = {"completed": count, "queue": queue_status(paths.db_path, scope)}, 0
+                result, code = {"completed": count, "queue": queue_status(paths.db_path, scope),
+                                "judgments_completed": resumed, "judgments": pending_status(paths.db_path, scope),
+                                "tools_executed": False}, 0
             elif args.command in ("status", "doctor"):
                 from tooluseproxy.engine.workspace import make_workspace_id
 
@@ -324,7 +328,7 @@ def main(argv=None):
                         "queue": queue_status(paths.db_path, make_workspace_id(str(root))),
                         "administrator": administrator_status(),
                         "hook_verified": False,
-                        "failure_policy": "allow_with_warning",
+                        "failure_policy": "wait_for_decision",
                     },
                     0,
                 )

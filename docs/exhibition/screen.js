@@ -313,11 +313,19 @@ function renderDetail(data) {
   $('title').textContent = selected.tool_name;
   $('identity').textContent = `${timeLabel(selected.recorded_at)} · ${phaseLabel(selected)} · プロジェクト: ${projectLabel(selected.workspace_id)} · セッション: ${scopeLabel(selected.session_id)}`;
   $('decisions').replaceChildren();
-  if (!data.decisions.length) $('decisions').append(node('p', '判定は未記録です。許可・成功を意味するものではありません。', 'hint'));
+  if (!data.decisions.length && !(data.judgments || []).length) $('decisions').append(node('p', '判定は未記録です。許可・成功を意味するものではありません。', 'hint'));
+  const pending = (data.judgments || []).find(j => j.state !== 'complete' || j.held);
+  if (pending) {
+    const box = node('div', undefined, 'decision');
+    box.append(node('strong', pending.state === 'complete' ? '再判定が完了しました' : '判定中・実行を保留'),
+      node('p', pending.state === 'complete' ? '保留後の再判定結果です。操作を自動実行した記録ではありません。再度の実行要求では、内容と設定を再検査します。' : '判定を完了するために再試行します。流出検出による拒否とは異なります。'),
+      node('small', `判定の試行 ${pending.attempts}回`));
+    $('decisions').append(box);
+  }
   for (const d of data.decisions) {
     const box = node('div', undefined, d.action === 'block' ? 'decision blocked' : 'decision');
     box.append(node('strong', d.action === 'block' ? 'ToolUseProxy: ブロック判定' : `ToolUseProxy: ${d.action}`),
-      node('p', d.user_message || d.reason), node('small', `${d.hook_event || 'Hook未記録'} · ${timeLabel(d.created_at)}`));
+      node('p', pending?.held ? `再検査の結果: ${d.reason}` : d.user_message || d.reason), node('small', `${d.hook_event || 'Hook未記録'} · ${timeLabel(d.created_at)}`));
     $('decisions').append(box);
   }
   $('io').replaceChildren();
