@@ -472,3 +472,64 @@ def test_transmission_reuses_definition_evidence_but_not_graph_permission(setup)
     assert resolution.coverage=='complete' and resolver.unchanged(resolution)
     (root/'behavior.txt').write_text('changed behavior')
     assert not resolver.unchanged(resolution)
+
+
+def test_acquisition_recipe_reuses_work_but_refreshes_configuration_and_payload(setup):
+    import json
+    from tooluseproxy.engine.targets import inspect_transmission
+    root, make = setup
+    existing = make()
+    store = Journal(existing.store.path)
+    with sqlite3.connect(store.db_path) as conn:
+        raw = json.loads(conn.execute('SELECT payload_json FROM events WHERE event_id=?',
+                                     (existing.event,)).fetchone()[0])
+    queried = []
+
+    def provider(records):
+        assert 'previous_calls' not in records
+        receipts = records.get('execution_definitions', [])
+        queried.append(bool(receipts))
+        if not receipts:
+            return dict(complete=False, reason='requires current configuration', targets=[
+                dict(kind='unresolved', path='send.conf', pointer=None, offset=0, length=None,
+                     reason='current payload selection')])
+        return dict(complete=True, reason='configured payload', targets=[
+            dict(kind='file', path=receipts[0]['content'], pointer=None, offset=0,
+                 length=None, reason='selected payload')])
+
+    for i, path in enumerate(['first.txt', 'first.txt', 'second.txt']):
+        (root / 'send.conf').write_text(path)
+        (root / path).write_text(f'new-body-{i}')
+        event = event_from('pre_tool_use', dict(raw, tool_use_id=f'acquire-{i}'), str(root))
+        store.record(event)
+        _, result, _ = inspect_transmission(store, event, provider)
+        assert result.coverage == 'complete'
+        assert result.parts[0].content == f'new-body-{i}'.encode()
+    # First acquisition + plan; zero model calls on reuse; changed evidence
+    # reuses only the acquisition recipe and requires a new plan assessment.
+    assert queried == [False, True, True]
+
+
+def test_cached_acquisition_with_missing_evidence_never_becomes_complete(setup):
+    import json
+    from tooluseproxy.engine.targets import inspect_transmission
+    root, make = setup
+    existing = make()
+    store = Journal(existing.store.path)
+    with sqlite3.connect(store.db_path) as conn:
+        raw = json.loads(conn.execute('SELECT payload_json FROM events WHERE event_id=?',
+                                     (existing.event,)).fetchone()[0])
+    requested = []
+
+    def provider(records):
+        requested.append(records.get('history_status'))
+        return dict(complete=False, reason='definition unavailable', targets=[
+            dict(kind='unresolved', path='missing.conf', pointer=None, offset=0,
+                 length=None, reason='required definition')])
+
+    for i in range(2):
+        event = event_from('pre_tool_use', dict(raw, tool_use_id=f'missing-{i}'), str(root))
+        store.record(event)
+        _, result, _ = inspect_transmission(store, event, provider)
+        assert result.coverage != 'complete'
+    assert requested.count('observed') == 2  # fallback remains event-scoped
