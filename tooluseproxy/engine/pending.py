@@ -86,9 +86,10 @@ def decide(db, event, operation, *, max_attempts=3, budget_seconds=480,
                 break
             attempt += 1
             # A fast transport failure must not spend an arbitrary three-strike
-            # allowance while most of the live Hook budget remains. Evidence or
-            # programming failures retain their bounded attempt policy.
-            if result.get('retry_scope') != 'provider' and attempt >= max_attempts:
+            # allowance while most of the live Hook budget remains. Model
+            # review repair also resumes its checkpoints in this delivery.
+            # Evidence/programming failures retain their bounded policy.
+            if result.get('retry_scope') not in ('provider', 'review') and attempt >= max_attempts:
                 break
             sleep(min(2 ** min(attempt - 1, 5), max(0, deadline-clock())))
         with transaction(db) as conn:
