@@ -631,3 +631,31 @@ def test_setup_discloses_background_and_does_not_change_existing(tmp_path, capsy
     assert main(args) == 0
     capsys.readouterr()
     assert json.loads(saved.read_text()) == value
+
+
+def test_cli_access_errors_are_actionable_without_exposing_exception_values(tmp_path, capsys, monkeypatch):
+    import errno
+    import tooluseproxy.app as app
+
+    root = tmp_path / "project"
+    root.mkdir()
+    readonly = sqlite3.OperationalError("private database content")
+    readonly.sqlite_errorcode = sqlite3.SQLITE_READONLY | (1 << 8)
+    cases = [
+        (PermissionError(errno.EPERM, "private path"), "filesystem_access_required", "permission_denied"),
+        (readonly, "filesystem_access_required", "database_readonly"),
+        (sqlite3.OperationalError("private table is locked"), "operation_unavailable", None),
+        (ValueError("private configuration"), "operation_unavailable", None),
+    ]
+    for error, expected, reason in cases:
+        def fail(*_args, **_kwargs):
+            raise error
+        monkeypatch.setattr(app, "_setup", fail)
+        assert main(["setup", "--workspace", str(root), "--data-dir", str(tmp_path / "data"),
+                     "--accept-judge-data", "--no-viewer"]) == 1
+        output = capsys.readouterr().out
+        result = json.loads(output)
+        assert result["status"] == expected
+        assert result.get("reason") == reason
+        assert "private" not in output
+        assert not (tmp_path / "data/events.db").exists()
