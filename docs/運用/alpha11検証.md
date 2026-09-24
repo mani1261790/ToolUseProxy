@@ -1,6 +1,6 @@
 # v0.2.0-alpha.11 の検証状況
 
-2026-09-24。配布準備中。Desktopでの収録受入は未完了。
+2026-09-24。公開・インストール確認済み。Desktopでの収録受入は未完了。
 
 ## 変更
 
@@ -18,15 +18,63 @@
 - 同じ操作で作った公開/派生ファイルの分離、同一/別セッションの資源版参照。
 - 20操作を挟む原文・派生・公開の3ケース。直近の単発計測は約27秒・28秒・19秒。
 - 一時障害を挿入した回帰試験で判定完了までの回復。失敗を流出検出として数えていない。
+- [修正PR #308](https://github.com/mani1261790/ToolUseProxy/pull/308)をmainへmerge済み。
+- [alpha.11](https://github.com/mani1261790/ToolUseProxy/releases/tag/v0.2.0-alpha.11)を公開。8つの添付ファイルのGitHub側SHA-256とローカル生成物の一致を確認。
+- [配布チャンネルPR #309](https://github.com/mani1261790/ToolUseProxy/pull/309)のCI成功・mergeを確認。
+- `codex plugin marketplace upgrade tooluseproxy --json` で更新。インストール済み版がalpha.11、`enabled=false`を維持していることを確認。
+- 公開Plugin ZIP内の54ファイルがインストール済みcacheと一致。実行用44ファイルも検証元ソースと一致。
+- 本番用take7は未Setupで、`research_notes.md`を配置済み。GitHub上の初期コミットにはREADMEのみがあり、認証・push・upstream設定を確認。
+- 利用者指定の8つの短いプロンプトを維持して台本を更新。本番中のブランチ切り替えは不要。
+
+## 配布元の同一性
+
+- 配布物のsource commit: `eb298247c39bafff5d0562bf2a7a22cdf06a34ad`
+- mainへのmerge commit: `77a9de7be4ea68e9aa8904e0ea135f40bc9345e9`
+- public-alphaの更新commit: `0614b8c4475f33527990c00be17a63e6516e4dd4`
+- 配布物sourceと更新済みmarketplaceのGit tree: `c4c700a7d6df2f0f0b314dd71affa5936d68ce23`
+
+チャンネル履歴をmergeしているためcommit IDは異なるが、Git treeとインストールした配布対象ファイルの一致を確認している。
 
 ## 残る受入
 
-1. alpha.11のCI、配布物の生成・検証、公開。
-2. 通常のmarketplace更新によるインストールと、ユーザーの有効/無効状態の維持。
-3. 配布Pluginを利用する実Desktop Hookで、判定理由とGitHubの受信結果を照合する。
-4. 本番用の未Setup環境、研究メモ、Git設定、8つのプロンプトによる台本を確認する。
+1. ユーザーによる有効化後、`codex plugin list` でalpha.11の `installed, enabled` を確認済み。エージェントによる有効設定の変更は行っていない。
+2. 本番用take7とは別のリハーサル環境で、実Desktop Hookの記録・判定理由・GitHubの受信結果を照合する。
+3. ログUIの自動起動と実際の更新表示を確認する。
+4. 原文・派生を情報流出検出で遮断し、無関係な案内のpushを通せることを確認してから、台本を収録可能へ更新する。
+
+確認前にtake7をSetupしたり、未判定の拒否をデモ成功として扱ったりしない。
 
 モデル障害が恒久的に続く場合や実データの取得が不可能な場合の完了保証はない。
 最終的な未完了を実行拒否へ変換する経路は残る。ユーザーが遭遇した通常操作での未完了を
 解消したことは実Hookで確認し、未完了の拒否を保護成功や収録可能の証拠にしない。
 この文書を、一般的な見逃しゼロ・誤遮断ゼロの証明として扱わない。
+
+### Desktopリハーサル開始
+
+専用タスク `01a0d0a5-7b64-73a1-9552-b0f3c20f0c13` で、指定された8プロンプトを順に検証する。
+作業ルートは `/Users/mani/Documents/Codex/2026-09-24/tooluseproxy-alpha11-rehearsal`。
+GitHubの `codex/rehearsal-alpha11` はREADMEだけの初期コミット
+`c9bc6cc2e75fb2b20df970cc5590394ae091adbb` から開始し、架空の研究メモを未追跡で用意した。
+本番用take7とは別環境。現時点ではSetup依頼を送った段階であり、遮断・許可の受入結果は未取得。
+
+
+### 実Hookで確認した結果と追加修正
+
+- Setupは保護登録0件で完了。その後の明示依頼で `research_notes.md` だけを登録。
+- Pre/Post記録をDBで確認。ログUIは独立した検証タブで描画され、3件から4件へリロードなしで更新された。
+- タスクの `open_in_codex` は表示待ち（queued）。非表示タスク上のパネル表示は未確認であり、UIの自動表示まで成功とはしない。
+- 原文の `git push`（sequence 39366）は `protected_source_reachable` によるblock。判定未完了ではない。
+- GitHub APIでブランチ先端が初期commit `c9bc6cc2e75fb2b20df970cc5590394ae091adbb` のままであることを別途確認。
+- 続く先端確認（`git ls-remote` を含む操作、sequence 39375）は `output_selection_missing_or_ambiguous` で未完了。これを受入失敗として記録し、派生・公開送信の検証はまだ進めていない。
+
+修正: モデルが返す出力断片を、依存先への再帰展開より前に実観測と照合する。
+従来は構造だけを検証した後、親ノードの展開時に初めて不一致を検出していたため、
+既存のモデル訂正ループへ戻れなかった。今回は同じ証拠に対して断片選択を訂正させる。
+断片の勝手な全体化や依存削除、未完了allowは行わない。意味判定契約はv15。
+回帰試験では存在しない断片と重複する断片の両方について、訂正後の派生block・独立allowを確認。
+変更後の全体試験は289件成功・1件スキップ。配布版への反映と実Hook再受入は未実施。
+
+同じ実Hook失敗記録を専用DBへ抽出し、送信対象の特定とグラフ判定を実モデルで再実行した。
+送信対象の取得はcomplete、結果は `allow / no_protected_path_observed`（65.046秒）。
+元コマンドは実行していない。これは判定処理の再生であり、実Hook再受入ではない。
+修正配布版はalpha.12として準備する。

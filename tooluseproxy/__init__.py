@@ -1,3 +1,3 @@
 """Public package facade for ToolUseProxy."""
 
-__version__ = "0.2.0a11"
+__version__ = "0.2.0a12"

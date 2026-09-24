@@ -112,6 +112,32 @@ def test_selection_must_identify_one_actual_observation(tmp_path, text):
         analyze_properties(db, event.workspace_id, 's', event.event_id, [], judge)
 
 
+@pytest.mark.parametrize('bad_selection', ['absent', 'repeat'])
+@pytest.mark.parametrize('protected', [False, True])
+def test_invalid_selection_is_repaired_before_parent_expansion(tmp_path, bad_selection, protected):
+    _, db, event = fixture(tmp_path, 'repeat repeat selected-value')
+    feedback = []
+    def judge(records):
+        if records['current_call'].get('required_output'):
+            assert records['current_call']['required_output']['text'] == 'selected-value'
+            return verdict(accesses=[dict(path='private.txt', mode='read', reason='value origin')]
+                           if protected else [])
+        error = records.get('validation_feedback')
+        if error:
+            feedback.append(error)
+            assert 'output_selection_missing_or_ambiguous' in error['error']
+        return verdict(deps=[dict(node_id=records['previous_calls'][0]['node_id'],
+                                  reason='uses selected value',
+                                  selection={'text': 'selected-value' if error else bad_selection})])
+    result = analyze_properties(db, event.workspace_id, 's', event.event_id,
+        [{'node_id': 'source:p', 'path': 'private.txt'}], judge)
+    assert result['action'] == ('block' if protected else 'allow')
+    assert len(feedback) == 1
+    with sqlite3.connect(db) as conn:
+        selections = conn.execute('select selection_json from graph_output_selections').fetchall()
+    assert [json.loads(row[0]) for row in selections] == [{'text': 'selected-value'}]
+
+
 def test_requirement_acquisition_adds_real_evidence_before_retry(tmp_path):
     (tmp_path/'transform.py').write_text('value = 42\n')
     records={'current_call':{'workspace_root':str(tmp_path),'input':{'command':'python transform.py'}},'previous_calls':[]}
