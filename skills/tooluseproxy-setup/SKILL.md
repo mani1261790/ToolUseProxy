@@ -61,13 +61,15 @@ reuse the running Codex conversation internally. Explain the selected model/prov
 and the data it receives before initial setup. Reuse explicit consent already given;
 do not ask for the same approval again.
 
-When judgment times out, fails, or lacks evidence, report **判定未完了**. This version
-retains the operation pending a completed judgment. Transient failures may retry;
-missing evidence waits for a new request instead of repeatedly analyzing unchanged
-records. Never describe
-such a result as a detected leak, a safe operation, or a completed protection decision.
-The finite host Hook deadline cannot hold a call forever: a pending response withholds
-execution using the host deny mechanism, while retaining the unfinished judgment.
+Repairable incomplete or invalid model assessments are retried within the same Hook,
+with feedback and reuse of completed reviews whose evidence still matches. Transient
+provider failures also retry. Missing policy bindings cannot be invented.
+If judgment still cannot complete, report **判定未完了**, never a detected leak, a safe
+operation, or a completed protection decision. The current runtime still has finite
+wait and Hook deadlines: exhausting them may withhold execution via the host deny
+mechanism. This is an unresolved operational failure, not an accepted protection
+outcome or proof that the model is unavailable. The Plugin configures the Hook
+timeout; it is not an immutable Codex limit.
 `analyze run` can resume saved judgments; it never executes their original tools.
 After recovery, a new tool request must recheck current resources and policy. It never bypasses Codex's own approval rules.
 
