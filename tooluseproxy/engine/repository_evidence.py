@@ -24,6 +24,11 @@ def git_read(root, *args, limit=1_048_576):
                GIT_NO_REPLACE_OBJECTS='1', GIT_NO_LAZY_FETCH='1', GIT_TERMINAL_PROMPT='0')
     argv = ['git','--no-optional-locks','-c','core.fsmonitor=false',
             '-c','core.hooksPath='+os.devnull,'-C',str(root),*args]
+    return bounded_read(argv, env, limit=limit)
+
+
+def bounded_read(argv, env, *, limit, accepted_codes=(0,)):
+    """Run only controller-owned read queries, with bounded output and lifetime."""
     with subprocess.Popen(argv, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                           stderr=subprocess.DEVNULL) as child:
         result = bytearray()
@@ -40,7 +45,11 @@ def git_read(root, *args, limit=1_048_576):
                     result.extend(chunk)
                     if len(result)>limit:
                         raise SnapshotUnavailable('repository_evidence_budget')
-                if child.wait(timeout=max(0.01,deadline-time.monotonic())):
+                try:
+                    code = child.wait(timeout=max(0.01,deadline-time.monotonic()))
+                except subprocess.TimeoutExpired:
+                    raise SnapshotUnavailable('repository_read_timeout') from None
+                if code not in accepted_codes:
                     raise SnapshotUnavailable('repository_read_failed')
             finally:
                 if child.poll() is None:

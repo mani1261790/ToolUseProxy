@@ -18,7 +18,7 @@ from pathlib import Path, PurePosixPath
 
 from tooluseproxy.engine.evidence import ContentVersion, EvidenceNeed, EvidenceStore, Resource
 
-RESOLVER_VERSION = "payload-v2"
+RESOLVER_VERSION = "payload-v3"
 
 
 class ResolutionError(ValueError):
@@ -156,13 +156,14 @@ class PayloadResolver:
                             )
                         )
                     return
-                if kind in ("inline", "observed"):
+                if kind in ("inline", "observed", "context"):
                     if set(item) not in (
                         {"kind", "pointer"},
                         {"kind", "pointer", "offset", "length"},
                     ):
                         raise ResolutionError("invalid_inline_target")
                     origin = None
+                    context_origin = None
                     if kind == "observed":
                         match = re.fullmatch(r'/previous_calls/(0|[1-9][0-9]*)/output(/.*)?', item['pointer'])
                         calls = getattr(self, 'observed_calls', ())
@@ -175,6 +176,16 @@ class PayloadResolver:
                         # arbitrary pointers into instructions or hidden metadata.
                         content = pointer_value({'tool_input': {'value': origin['output']}},
                                                 '/tool_input/value' + (match[2] or ''))
+                    elif kind == 'context':
+                        context = getattr(self, 'definition_context', {}).get('invocation_context')
+                        prefix = '/invocation_context/facts/'
+                        if (not context or context['status'] != 'observed'
+                                or not item['pointer'].startswith(prefix)
+                                or item['pointer'].startswith(prefix + 'origins/')):
+                            raise ResolutionError('context_pointer_missing')
+                        content = pointer_value({'tool_input': context['facts']},
+                                                '/tool_input/' + item['pointer'][len(prefix):])
+                        context_origin = context['facts'].get('origins', {}).get(item['pointer'])
                     else:
                         content = pointer_value(document, item["pointer"])
                     if len(content) > budget["bytes"]:
@@ -198,7 +209,11 @@ class PayloadResolver:
                     selected = (
                         content[offset:] if length is None else content[offset : offset + length]
                     )
-                    resource = Resource(self.scope, "event_output" if origin else "event_input",
+                    if context_origin is not None:
+                        context_origin = dict(context_origin, projection=dict(
+                            context_origin['projection'], offset=offset, length=len(selected)))
+                    resource = Resource(self.scope, ('invocation_context' if kind == 'context' else
+                                                     "event_output" if origin else "event_input"),
                                         (origin['event_id'] if origin else self.event) + item["pointer"])
                     value = ContentVersion(resource, self.token(content), self.event, len(content))
                     result.parts.append(
@@ -208,6 +223,7 @@ class PayloadResolver:
                             {"offset": offset, "length": len(selected)},
                             {"event": origin['event_id'] if origin else self.event,
                              "pointer": item["pointer"],
+                             **({'context_origin': context_origin} if context_origin else {}),
                              **({'source_node_id': origin['node_id']} if origin else {})},
                         )
                     )
@@ -321,6 +337,9 @@ class PayloadResolver:
     def unchanged(self, result):
         context = getattr(self, "definition_context", None)
         if context is not None:
+            from tooluseproxy.engine.invocation_context import unchanged
+            if not unchanged(context):
+                return False
             from tooluseproxy.engine.requirements import acquire
             for receipt in context.get("execution_definitions", []):
                 if receipt["status"] != "observed":
