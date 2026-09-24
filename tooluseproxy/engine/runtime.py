@@ -159,14 +159,23 @@ def process_hook(store, event, *, judge=None, screening_judge=None, target_judge
                                target_judge=target_judge)
         return None if result is None else hook_output(result, event.phase)
     try:
-        if configuration(store.db_path, event.workspace_id) is None:
+        config = configuration(store.db_path, event.workspace_id)
+        if config is None:
             return None
     except Exception:
         return hook_output(dict(action="pending", reason="invalid_semantic_configuration"), event.phase)
     from tooluseproxy.engine.pending import decide
-    result = decide(store.db_path, event, lambda deadline: _process_once(
-        store, event, judge=judge, screening_judge=screening_judge,
-        target_judge=target_judge, deadline=deadline))
+    # Retain transport recovery state for the entire delivery. Reconstructing
+    # this provider on every attempt would reset its timeout to the failed limit.
+    provider = judge if judge is not None else CodexSemanticJudge(config.get("model"), timeout=60)
+
+    def evaluate(deadline):
+        if hasattr(provider, "deadline"):
+            provider.deadline = deadline
+        return _process_once(store, event, judge=provider, screening_judge=screening_judge,
+                             target_judge=target_judge, deadline=deadline)
+
+    result = decide(store.db_path, event, evaluate)
     return hook_output(result, event.phase)
 
 
@@ -317,7 +326,10 @@ def _process_once(store, event, *, judge=None, screening_judge=None, target_judg
                 result['retryable'] = False
             else:
                 result['retry_scope'] = 'provider'
-        if isinstance(exc, GraphUnavailable) and str(exc).startswith((
+        from tooluseproxy.engine.review import ReviewRetry
+        if isinstance(exc, ReviewRetry):
+            result["retry_scope"] = "review"
+        elif isinstance(exc, GraphUnavailable) and str(exc).startswith((
             "invalid_", "output_selection_", "property_graph_incomplete",
         )):
             result["retryable"] = False
@@ -329,8 +341,6 @@ def _process_once(store, event, *, judge=None, screening_judge=None, target_judg
             # Preserve the exception type, never its message/private payload.
             result["error_type"] = type(exc).__name__
             result["retryable"] = False
-    if result.get("reason") == "property_graph_incomplete":
-        result["retryable"] = False
     if event.phase == "post_tool_use" and result["action"] != "unavailable":
         result["action"] = "observed"
     try:

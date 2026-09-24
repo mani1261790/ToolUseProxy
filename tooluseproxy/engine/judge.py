@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -184,6 +185,7 @@ class CodexSemanticJudge:
     def __init__(self, model: str | None = None, timeout: float = 60):
         self.model = model
         self.timeout = timeout
+        self.deadline = None
 
     def __call__(self, records: dict) -> dict:
         # Empty cwd and disabled tools/hooks prevent recursive policy evaluation.
@@ -206,13 +208,24 @@ class CodexSemanticJudge:
                 # Routing and locating supplied values are bounded extraction
                 # tasks; semantic inheritance retains the configured effort.
                 argv[-1:-1] = ["-c", 'model_reasoning_effort="low"']
-            result = _run_process(
-                argv,
-                (prompt + "\nRECORDS=" + json.dumps(records, ensure_ascii=False)).encode(),
-                root,
-                _minimal_codex_environment(),
-                self.timeout,
-            )
+            remaining = (self.timeout if self.deadline is None else
+                         max(0, self.deadline - time.monotonic()))
+            if remaining <= 0:
+                raise JudgeProviderError("codex_exec_timeout")
+            try:
+                result = _run_process(
+                    argv,
+                    (prompt + "\nRECORDS=" + json.dumps(records, ensure_ascii=False)).encode(),
+                    root,
+                    _minimal_codex_environment(),
+                    min(self.timeout, remaining),
+                )
+            except JudgeProviderError as error:
+                if error.code == "codex_exec_timeout":
+                    # Retry a slow inference with more time rather than repeatedly
+                    # killing it at the same cutoff. Never extend the live Hook.
+                    self.timeout = min(self.timeout * 2, 480)
+                raise
             if result.returncode:
                 raise JudgeProviderError("semantic_provider_failed")
             if codex_events_contain_tool_activity(result.stdout):
