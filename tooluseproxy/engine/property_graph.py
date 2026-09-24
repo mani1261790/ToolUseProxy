@@ -79,6 +79,31 @@ def merge_selections(left, right):
     return result
 
 
+def validate_observed_dependencies(value, candidates, observations):
+    """Validate selectors while the producing assessment can still be corrected."""
+    value = validate(value, candidates)
+    for edge in value['dependencies']:
+        selection = edge.get('selection')
+        if selection is None:
+            continue
+        parent = observations[edge['node_id']]
+        observed = parent['output']
+        if not isinstance(observed, str):
+            observed = json.dumps(observed, ensure_ascii=False, sort_keys=True)
+        counts = [observed.count(text) for text in selection_texts(selection)]
+        if not parent['completed'] or any(count != 1 for count in counts):
+            # No payload text in diagnostics. The unchanged record is already
+            # available to the reviewer; repair the edge, never silently widen it.
+            raise GraphUnavailable(
+                'output_selection_missing_or_ambiguous: '
+                f"parent={edge['node_id']}; occurrences={counts}; "
+                'select an exact unique fragment of the recorded output; '
+                'for structured output use its JSON representation; '
+                'retain every actual contribution and do not invent observations'
+            )
+    return value
+
+
 def validate(value, candidates):
     if not isinstance(value, dict) or set(value) - {"evidence_requests", "evidence_receipts"} != {
         "externality",
@@ -338,15 +363,26 @@ def analyze_properties(
             if cached and not reusable(json.loads(cached[0]), producer):
                 cached = None
             candidates = {n["node_id"] for n in calls[:index] if n["completed"]}
+            def validate_current(value, candidate_ids):
+                return validate_observed_dependencies(value, candidate_ids,
+                    {n['node_id']: n for n in calls[:index]})
+
+            cached_verdict = None
+            if cached:
+                try:
+                    cached_verdict = validate_current(json.loads(cached[0]), candidates)
+                except GraphUnavailable:
+                    # An invalid cached selection needs a fresh assessment.
+                    cached = None
             from tooluseproxy.engine.contracts import provenance_contract
             mechanical = provenance_contract(focused)
             if mechanical is not None:
-                verdict = validate(mechanical, candidates)
+                verdict = validate_current(mechanical, candidates)
             elif cached:
-                verdict = validate(json.loads(cached[0]), candidates)
+                verdict = cached_verdict
             else:
                 from tooluseproxy.engine.review import review
-                verdict = review(db_path, request, records, judge, validate, evidence_context=evidence_context)
+                verdict = review(db_path, request, records, judge, validate_current, evidence_context=evidence_context)
             # A transmitted value selected from a controller-loaded observation
             # has a mandatory producer edge. A model cannot omit that provenance.
             observed_edges = {}
