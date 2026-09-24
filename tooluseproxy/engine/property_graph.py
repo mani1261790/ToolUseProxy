@@ -412,7 +412,30 @@ def analyze_properties(
                 verdict = dict(verdict, dependencies=list(dependencies.values()))
             # Relative and absolute aliases must name the same policy resource.
             from tooluseproxy.engine.requirements import resource_identity
-            verdict = dict(verdict, accesses=[dict(a, path=resource_identity(a["path"], producer["workspace_root"])) for a in verdict["accesses"]])
+            context_projections = {}
+            context_accesses = []
+            for part in producer.get('payload_observations', []):
+                origin = part.get('observation', {}).get('context_origin')
+                if origin is None:
+                    continue
+                path = resource_identity(origin['path'], producer['workspace_root'])
+                context_projections.setdefault(path, []).append(origin['projection'])
+                context_accesses.append(dict(path=path, mode='read',
+                                             reason='controller-observed configuration value'))
+            for part in producer.get('payload_observations', []):
+                observation = part.get('observation', {})
+                if observation.get('context_origin'):
+                    continue
+                # A separately submitted whole file must not be narrowed to a
+                # configuration field just because both share an origin path.
+                paths = [observation['path']] if 'path' in observation else []
+                for path in paths:
+                    context_projections.pop(resource_identity(path, producer['workspace_root']), None)
+            accesses = {}
+            for access in verdict['accesses'] + context_accesses:
+                access = dict(access, path=resource_identity(access['path'], producer['workspace_root']))
+                accesses[(access['path'], access['mode'])] = access
+            verdict = dict(verdict, accesses=list(accesses.values()))
             # Collect all demands on each producer BEFORE reviewing it. A consumer
             # can use several files and output fragments from the same operation.
             # One focused parent revision must cover their union, not whichever
@@ -425,7 +448,10 @@ def analyze_properties(
             for origin_event, origin_session, path, version in origins:
                 if path not in reads:
                     continue
-                demands.setdefault((origin_event, origin_session), []).append(dict(path=path, version=version))
+                demand = dict(path=path, version=version)
+                if path in context_projections:
+                    demand['projections'] = context_projections[path]
+                demands.setdefault((origin_event, origin_session), []).append(demand)
             semantic_edges = {edge['node_id']: edge for edge in verdict['dependencies']}
             resource_links = []
             for (origin_event, origin_session), requested in sorted(demands.items()):
