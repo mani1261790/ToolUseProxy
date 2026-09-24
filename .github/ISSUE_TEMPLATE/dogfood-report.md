@@ -1,61 +1,46 @@
 ---
-name: Dogfood report
-about: ToolUseProxyを実projectで試した結果を値非保持で報告する
-title: "[Dogfood] "
+name: 利用結果の報告
+about: ToolUseProxyを実際に使った結果を、機密情報を含めず報告する
+title: "[利用結果] "
 labels: evaluation, productization
 assignees: ""
 ---
 
 ## 公開してよい情報だけを記載
 
-このIssueへproject名、repository path、ユーザー名を含むabsolute path、source値、secret、token、raw Hook payload、`events.db`、task transcriptを貼らないでください。security-sensitiveな結果は公開Issueを作らず、`SECURITY.md`の非公開窓口を使用してください。
+保護対象の本文、認証情報、私的なプロジェクト名や絶対パス、Hookの生データ、`events.db`、会話全文は貼らないでください。脆弱性や保護回避の報告は[非公開の窓口](https://github.com/mani1261790/ToolUseProxy/security/advisories/new)を利用してください。[報告手順](https://github.com/mani1261790/ToolUseProxy/blob/main/SECURITY.md)も確認できます。
 
 ## 環境
 
-- OSとversion:
-- surface: `codex_cli_tui` / Codex Desktop/GUI
-- Codex DesktopまたはCLIのversion:
-- ToolUseProxy Plugin version:
-- install元: `public-alpha` / immutable tag / local candidate
-- 新規install / update / reinstall:
+- OSと版：
+- Codex Desktop / CLI とその版：
+- ToolUseProxyの版：
+- 導入元：public-alpha / 固定タグ / 開発版
+- 新規導入 / 更新 / 再導入：
+- Codexの権限設定：
 
-## Setup
+## 初期設定
 
-- ToolUseProxy Pluginの有効数: 1 / その他
-- 3 Hookをreviewした: yes / no
-- 3 Hookがtrusted: yes / no
-- setup apply: passed / failed / not run
-- read-only verification: passed / failed / not run
-- 表示されたcommand承認回数:
-- 承認理由はworkspace外のPlugin data操作だと理解できた: yes / no
-- 広い再利用可能permissionを要求された: yes / no
+- 有効なToolUseProxyプラグインの数：
+- 5種類のHookを確認・信頼したか：はい / いいえ / 未確認
+- 初期設定：成功 / 失敗 / 未実施
+- 保護登録：成功 / 失敗 / 未実施
+- ログ画面：開いた / 開けない / 未実施
+- 権限申請の回数と、説明で分かりにくかった点：
 
 ## 動作結果
 
-- public operation: allowed / blocked / not run
-- protected operation: blocked before execution / executed / not run
-- public side effect件数:
-- protected side effect件数:
-- exact block件数:
-- raw protected value exposure件数:
-- 通常作業での予期しないblock件数:
+- 期待した結果：
+- 実際の判定：通常承認へ / 内容一致で遮断 / 保護経路で遮断 / 判定未完了 / 不明
+- 操作は実行されたか：はい / いいえ / 未確認
+- 受信先への到達：確認した / 到達していないことを確認した / 未確認
+- 予期しない遮断や判定未完了の件数：
+- 表示された理由コード（機密情報を除く）：
+- 復旧・再試行後の結果：
 
 ## 分かりやすさ
 
-- Hook trustの判断は分かりやすかった: yes / no
-- setup承認の判断は分かりやすかった: yes / no
-- protected source登録の判断は分かりやすかった: yes / no / not used
-- 追加で必要だった質問の件数:
-- 迷った画面や説明（protected dataを含めずに記載）:
+- 初期設定、登録、権限申請、停止理由について迷った点：
+- 再現に必要な架空のデータと操作手順：
 
-## Failureまたは停止
-
-- status: passed / needs_followup / stopped
-- value-freeなfailure code:
-- 失敗後に同じ操作を再試行した: yes / no
-- Plugin codeをdisable / removeした: yes / no
-- Plugin dataを保持した: yes / no
-
-## 補足
-
-期待結果と実結果の差を、syntheticな名称と件数だけで記載してください。
+登録完了、判定結果、実際の実行・到達は分けて記載してください。未確認の結果を成功や安全として記載する必要はありません。

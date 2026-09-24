@@ -1,3 +1,5 @@
+> v0.1時代の設計・運用・評価資料です。ここにある機能や手順はv0.2の通常実行経路とは異なります。現在の説明は[エッジ生成と送信判定](../設計/エッジ生成と送信判定.md)と[文書一覧](../索引.md)を参照してください。
+
 # Codex Desktop update / rollback 検証計画
 
 Issue [#62](https://github.com/mani1261790/ToolUseProxy/issues/62)では、Codex Desktopで異なる二つのPlugin versionを入れ替え、管理データの保持、安全なrollback、Disableを挟まないRemoveを実機確認します。
@@ -54,7 +56,7 @@ run途中でDesktop本体も更新されたため、update証拠は`combined_des
 旧版はimmutable commitの`git archive`、新版はrelease-candidate builderの検証済みPlugin ZIPから作ります。harnessは各artifactについて、少なくとも次をstateへ保存します。
 
 - 宣言versionとPython package version
-- source commit
+- ソースのコミット
 - 元artifact SHA-256
 - 展開後の全file inventoryとPlugin tree SHA-256
 - Hook定義とlauncherのSHA-256
@@ -218,11 +220,11 @@ Markdown記号を承認UI用の1行文字列へ埋め込みません。
 
 1. 共通support moduleの抽出と既存Desktop Phase B回帰test
 2. 二artifact builder / verifierとread-only `plan`
-3. old install / baseline / update checkpoint
+3. 旧版の導入 / 比較基準 / 更新時の確認点
 4. 新版migration、data保持、public / protected verifier
 5. schema非互換停止とbackup rollback
 6. direct Removeと新規task verifier
-7. resumable cleanup / abort
+7. 再開可能な整理 / 中止
 8. unit / integration test、文書、Issue checklist更新
 9. 人によるDesktop実機run
 

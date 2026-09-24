@@ -11,9 +11,9 @@ HTTPSで859bytesを取得し、そのSHA-256が生成receiptの
 改行・整形せず保存した。digestをURLに指定した取得は404で、tagから取得した原本の
 SHA-256を照合している。
 
-- manifest SHA-256: `500a1f067a9f782620b40bee6f7b0c89e17ae61f686b92c24933e4ca4b2b8b41`
+- 定義ファイルのSHA-256： `500a1f067a9f782620b40bee6f7b0c89e17ae61f686b92c24933e4ca4b2b8b41`
 - 生成イベント記録SHA-256（receiptの`events_sha`）: `a37e9987e1ef2298880049753f868b818ea2c700fc2bad9a2d56ee1ac142a02c`
-- model blob SHA-256: `a3de86cd1c132c822487ededd47a324c50491393e6565cd14bafa40d0b8e686f`
+- モデル本体のSHA-256： `a3de86cd1c132c822487ededd47a324c50491393e6565cd14bafa40d0b8e686f`
 
 manifestに列挙されたconfig/model/template/license/paramsの5ファイルだけを、既存の
 ローカルblobsから読んだ。各digestはsha256形式に限定し、O_NOFOLLOWで開き、通常ファイルと

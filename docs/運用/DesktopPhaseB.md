@@ -1,4 +1,6 @@
-# Codex Desktop Phase B
+> v0.1時代の設計・運用・評価資料です。ここにある機能や手順はv0.2の通常実行経路とは異なります。現在の説明は[エッジ生成と送信判定](../設計/エッジ生成と送信判定.md)と[文書一覧](../索引.md)を参照してください。
+
+# Codex Desktopの実機確認（第2段階）
 
 Issue [#53](https://github.com/mani1261790/ToolUseProxy/issues/53)では、CLI TUIの結果を流用せず、Codex Desktop / GUI上のPlugin install、Hook review、public allow、static protected block、dynamic protected fail-closed、disable / remove、同一版reinstallを人と実証します。
 

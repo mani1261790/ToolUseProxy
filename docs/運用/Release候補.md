@@ -19,7 +19,7 @@ release builderは`build`、`packaging`、`pyproject-hooks`、`setuptools`、`wh
 
 - Python wheel
 - Python sdist
-- clean Codex Plugin marketplace ZIP
+- 不要なファイルを含めないCodexプラグインの配布ZIP
 - `tooluseproxy-authority-admin.py`（自動導入・権限昇格はしない）
 - `release-manifest.json`
 - CycloneDX 1.7 `*.cdx.json`

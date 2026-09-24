@@ -1,3 +1,5 @@
+> v0.1時代の設計・運用・評価資料です。ここにある機能や手順はv0.2の通常実行経路とは異なります。現在の説明は[エッジ生成と送信判定](../設計/エッジ生成と送信判定.md)と[文書一覧](../索引.md)を参照してください。
+
 # Externality Protectionロードマップ
 
 ## 現在地
@@ -21,7 +23,7 @@ Hookはnetwork通信やLLM待機を行いません。LLM分類はjobごとに新
 
 正本とする2026-08-12のcapability probeは、Codex CLI 0.145.0、固定value-free envelope 2件、probe contract `codex-externality-probe-v2`を使い、local `5,208 ms` / `local`、risk `4,511 ms` / `possibly_external`、reason code 0でeligibleでした。これは実projectの精度評価ではありません。
 
-## Phase 2: isolated dogfood
+## 第2段階：隔離した環境での試用
 
 状態: 実装・自動test・2026-08-12のfresh `0.1.0-alpha.8` artifact runまで完了。
 
@@ -51,7 +53,7 @@ Hookはnetwork通信やLLM待機を行いません。LLM分類はjobごとに新
 - public unknownの誤block率
 - static / adapter / reviewed rule別の寄与
 - queue重複排除率とreview件数
-- Hook p50 / p95 latency
+- Hook処理時間の中央値 / 95パーセンタイル
 - raw exposure、workspace混線、既存block downgradeが各0
 
 ## Phase 4: 運用UX
@@ -68,8 +70,8 @@ review表示は、利用者が構造要約、判定、影響、revisionを一画
 
 - full test、package、lifecycle、ruff、diff checkが合格
 - Hook内network 0
-- protected side effect 0
-- raw exposure 0
+- 保護対象操作による作用0件
+- 保護内容の露出0件
 - public local / public unknownの意図しないdeny 0
 - stale / invalid reviewからrule採用0
 - 文書と実挙動が一致
@@ -81,4 +83,4 @@ review表示は、利用者が構造要約、判定、影響、revisionを一画
 - 実network ground truthの完全観測
 - 数学的な偽陰性ゼロ
 - LLM分類の自動承認
-- cross-platform scheduler
+- 複数OSに対応する実行管理

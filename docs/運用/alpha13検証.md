@@ -5,7 +5,7 @@
 ## 配布
 
 - PR #313をmainへ、#314をpublic-alphaへmerge。両方の4項目のCI成功を確認。
-- source commit: `ac4f0b78533b89037235498958b718486968bf9a`。
+- ソースのコミット： `ac4f0b78533b89037235498958b718486968bf9a`。
 - Release v0.2.0-alpha.13の8添付ファイルをSHA-256で照合。
 - 通常のmarketplace upgrade成功。launcher 0.2.0a13、Plugin内54ファイルの一致を確認。
 - 全体テスト291件成功、1件スキップ。

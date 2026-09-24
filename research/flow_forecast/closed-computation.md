@@ -28,7 +28,7 @@ AST検査は任意Pythonを安全に実行するsandboxではない。plain JSON
 
 ## 実測再評価
 
-source baa060b379b0ebe5ffa7580f3097ba5e6ab29417、/private/tmp/tooluseproxy-204-checked-world-collection-v1。
+ソースのコミット baa060b379b0ebe5ffa7580f3097ba5e6ab29417、/private/tmp/tooluseproxy-204-checked-world-collection-v1。
 
 observe/4は在庫引当=no、会議調整=no、private明細=yes（protected-source → value-3 → receiver）。enforceは全件censored/unknown。3群すべてtrainであり、学習用開発診断。compare prepare/evaluateまで確認し、総合結果はinconclusive_do_not_adopt。結果hashと正解数は results/checked-task-worlds-20260919.json。
 

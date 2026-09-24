@@ -481,10 +481,10 @@ def test_skill_and_product_metadata_describe_the_same_engine():
     skill = (root / "skills/tooluseproxy-setup/SKILL.md").read_text()
     metadata = json.loads((root / ".codex-plugin/plugin.json").read_text())
     assert metadata["version"].startswith("0.2.")
-    assert "codex exec" in skill and "inputs, outputs" in skill
-    assert "pending a completed judgment" in skill
-    assert "current setup request itself explicitly names that file" in skill
-    assert "A plain request such as 「このプロジェクトで使いたい」 performs Setup" in skill
+    assert "codex exec" in skill and "入力・出力" in skill
+    assert "判定完了まで実行を保留" in skill
+    assert "今回の初期設定の依頼で利用者自身がそのファイルを明示" in skill
+    assert "「このプロジェクトで使いたい」だけなら `--protect` を付けず" in skill
     assert "warns and continues" not in skill
     assert (
         "Hook implementation writes to its local data\ndirectory and does not make network requests"

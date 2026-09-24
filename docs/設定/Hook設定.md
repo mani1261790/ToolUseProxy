@@ -1,4 +1,6 @@
-# Hook Setup
+> v0.1時代の設計・運用・評価資料です。ここにある機能や手順はv0.2の通常実行経路とは異なります。現在の説明は[エッジ生成と送信判定](../設計/エッジ生成と送信判定.md)と[文書一覧](../索引.md)を参照してください。
+
+# Hookの設定
 
 このリポジトリには、Codex の `SessionStart` / `SubagentStart` / `PreToolUse` / `PostToolUse` / `Stop` に接続するための最小スクリプトを置いています。
 
@@ -130,7 +132,7 @@ Codex の GUI か設定ファイルで、次の command を指定します。`/a
 - `PostToolUse` -> `TOOLUSEPROXY_WORKSPACE_ROOT=/absolute/path/to/workspace python3 /absolute/path/to/ToolUseProxy/hooks/monitor_post_tool.py`
 - `Stop` -> `TOOLUSEPROXY_WORKSPACE_ROOT=/absolute/path/to/workspace python3 /absolute/path/to/ToolUseProxy/hooks/monitor_stop.py`
 
-### workspace identity
+### プロジェクトの同定
 
 `TOOLUSEPROXY_WORKSPACE_ROOT`の指定を推奨します。rootは既存の絶対directoryで、root自身がsymlinkではなく、Hook payloadの`cwd`がその配下にある必要があります。canonical rootのSHA-256から安定した`workspace_id`を作り、lexical rootと実行時cwdも別fieldで監査保存します。rootを指定しない場合はHook payloadの`cwd`自体をworkspace rootとして扱うため、同じrepositoryでもsubdirectoryごとに別workspaceになり得ます。
 
@@ -354,7 +356,7 @@ shell変数、command substitution、glob / brace / tilde展開、body以外のd
 
 この抽出はshell、subprocess、networkを実行せず、fileも読みません。上限は1 segmentあたり32値、1値32 KiB、合計128 KiBです。projection値を追加fragment、DB row、評価report本文へ複製しません。
 
-### File-backed payload shadow
+### ファイルを使う送信内容の観測試験
 
 production PreToolUseで値なしの観測だけを有効にするには、Bash policyとshadowの二つをopt-inにします。
 
@@ -377,7 +379,7 @@ python3 scripts/report_sink_payload_shadow.py \
 
 このresolverが取得するのは実行前のfile snapshotです。Hook完了後にfileが変わるTOCTOUを解消せず、実際にcurlが送ったbytesも証明しません。したがって、既存graphではfile-backed operandを引き続き`coarse_fallback`として扱い、no-matchを送信の安全証明とは表示しません。
 
-### File-backed payload exact-only enforcement
+### ファイルを使う送信内容の完全一致による遮断
 
 TUIで検証済みのexact evidenceだけを実行前denyへ接続する場合は、Bash policyとenforcementを明示opt-inにします。既定値は無効です。
 
@@ -407,7 +409,7 @@ event保存時は、実際に`events.payload_json`へ入れるJSONを1回だけs
 
 Post event本体を保存した後、runnerはdormantなredaction confirmationを独立したfail-soft境界で呼びます。対象は将来rendererが保存する`mode = enforce AND status = rendered`の単一planだけで、現行preview / prepared eligible planは候補hashと一致しても遷移しません。enforce planの全immutable列とbounded target集合がstorageで再証明済みeligible previewのexact cloneであること、全decision link、完了analysis run、current profile / registry versionが一致することを要求します。exact Pre call scopeを先に検索し、candidateがなければ同じcoarse identityのnarrow Pre sidecarを最大32件だけ確認して、欠損・破損をsilentに無視せず未確認にします。候補が1件だけある場合にcurrent Post、所有Pre、同scopeの最小sequence Postをsidecarから検証します。confirmation SQLは`events` tableを一切読みません。Post metadata欠落は`post_payload_bytes_unavailable`、Pre scope metadata欠落は`pre_scope_metadata_unavailable`、integrity不一致は`post_payload_metadata_invalid`、1 MiB超過は`post_payload_bytes_exceeded`として未確認にします。`post_input_stable`かつfile inputなしのprofileについて、record時に32 KiB / 32 fields / depth 8以内で得たcanonical full-input hashを比較します。一致は`post_confirmed`、boundedなhash不一致は`post_mismatch`、oversize・profile drift・曖昧候補は未確認のままです。terminal replayとcompare-and-setの前にも全linkを再証明します。10 msの短いaudit read transactionを使い、実際に終端状態へ進める1 rowだけwriterへupgradeします。失敗しても記録済みPost eventをrollbackせず、stdoutやinput本文を出しません。現行runtimeは`rendered` planも`updatedInput`も生成しないためproductionではno-opです。
 
-- critical: `permissionDecision: deny`
+- 重大な検出： `permissionDecision: deny`
 - high: `additionalContext`を返して実行継続
 - medium以下またはfindingなし: stdoutなしで実行継続
 - session / workspace / tool identity欠落、解析例外: 初期化後のPreToolUseは実行前deny
@@ -517,7 +519,7 @@ source manifestの基準directoryはeventのcanonical workspace rootです。`pr
 
 保存先はローカルの SQLite ファイルです。
 
-- Plugin: `PLUGIN_DATA/events.db`
+- プラグインの保存先： `PLUGIN_DATA/events.db`
 - 明示指定: `TOOLUSEPROXY_DB_PATH`または`TOOLUSEPROXY_DATA_DIR/events.db`
 - package既定: OSごとのuser data directory配下の`events.db`
 

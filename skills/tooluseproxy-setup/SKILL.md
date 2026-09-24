@@ -1,206 +1,122 @@
 ---
 name: tooluseproxy-setup
-description: Set up or inspect ToolUseProxy v0.2, register protected files, and open its live ToolCall log viewer. Explain Codex judge data transmission and incomplete judgments accurately.
+description: ToolUseProxy v0.2の初期設定・状態確認・指定ファイルの保護登録・ライブのToolCallログ表示を行う。判定用Codexへのデータ送信と、判定未完了時の実行保留を正確に説明する。
 ---
 
 # ToolUseProxy v0.2
 
-This skill describes the semantic dependency engine. Do not reuse v0.1 setup profiles,
-commands, or claims. Use the currently installed Plugin's launcher; a cached older
-skill is not evidence of the current runtime. Check the launcher's `--version` once when resolving the installation; reuse that result
-within the task unless the installation changes.
-If the catalog path is stale, locate `tooluseproxy-setup/SKILL.md` under the ToolUseProxy Plugin cache in one scoped lookup and derive the launcher from that actual package root. Do not search unrelated projects or memories for an ordinary setup request.
-If it is not v0.2, explain the version mismatch instead of applying these commands.
+このSkillは意味依存グラフを使う現行エンジンの手順です。v0.1の設定プロファイル、コマンド、機能説明を流用しないでください。実際にインストールされたプラグインの起動スクリプトを使います。古いSkillのキャッシュだけでは、実行する版を確認したことになりません。インストール先を特定したときに `--version` を一度確認し、変更がなければ同じタスク内でその結果を再利用します。
 
-## Route the request, then finish that operation
+カタログのパスが古い場合は、ToolUseProxyのプラグインキャッシュに範囲を限定して `tooluseproxy-setup/SKILL.md` を探し、実在するパッケージのルートから起動スクリプトを特定します。通常の初期設定のために無関係なプロジェクトや記憶を探索しません。v0.2でなければ、これらのコマンドを適用せず版の不一致を説明します。
 
-| User intent | Action | Finish with |
+## 依頼された操作を選び、その操作を完了する
+
+| 利用者の依頼 | 実行すること | 完了時に伝えること |
 | --- | --- | --- |
-| 「このプロジェクトで使いたい」 | Setup once; open its viewer in the side panel | 初期設定とログ画面の結果 |
-| 「private.txtを保護して」 | Direct `protect add` for that exact file | 登録した相対パスとファイル全体という範囲 |
+| 「このプロジェクトで使いたい」 | 初期設定し、ログをサイドパネルで開く | 初期設定とログ画面それぞれの結果 |
+| 「private.txtを保護して」 | 指定ファイルに直接 `protect add` | 登録した相対パスと、ファイル全体という範囲 |
 | 「何を登録してた？」 | `protect list` | 登録一覧 |
-| 「ログ見せて」 | `logs`, then open the returned URL | 表示したこと |
-| 「設定どうなってる？」 | `status` | 設定状態。稼働の証明にはしない |
-| 「本当に止まるか試したい」 | Separately scoped verification | 実際に観測した判定と実行結果 |
+| 「ログ見せて」 | `logs` を実行し、返されたURLを開く | 表示した結果 |
+| 「設定どうなってる？」 | `status` | 設定状態。保護の稼働証明とはしない |
+| 「本当に止まるか試したい」 | 範囲を決めた別の検証 | 実際に観測した判定と実行結果 |
 
-A named-file registration request already authorizes that registration. Do not turn
-it into a mandatory plan → confirmation → add → list → test sequence. Ask only if
-the target or scope is genuinely missing (e.g. 「秘密っぽいものを全部」); do not scan
-files to invent the answer. If setup is missing, handle the one-time data-handling
-agreement, set up, and continue the already requested registration.
+ファイルを名指しした保護依頼は、その登録の承認です。計画、再確認、登録、一覧、送信試験を毎回必須の一連の操作にしません。「秘密っぽいものを全部」など、対象や範囲が不足する場合だけ質問します。答えを作るためにファイルを走査しません。未設定なら、初回のデータの扱いへの同意と初期設定を済ませ、依頼済みの登録を続けます。
 
-Registration is a metadata operation: do not read the file, invoke a judge, generate
-a canary, attempt a push/send, or run a protection test as part of it. A fresh-Hook
-check is not a prerequisite for completing registration. Offer detailed diagnosis
-when requested or when an actual failure needs it; do not start it after every success.
-Do not append old recording/demo scripts to normal use.
+登録はメタデータの操作です。本文の読み取り、判定モデルの呼出し、試験用データの作成、pushや送信、保護テストを登録の一部にしません。新しいHookの到達確認も登録完了の前提ではありません。詳しい診断は、依頼された場合か実際の失敗に必要な場合に行い、成功のたびに追加しません。通常利用に古い収録台本を付け足しません。
 
-Reuse the resolved workspace, data directory, installed version, and prior explicit
-consent. An `already_registered` or `already_configured` result completes the request;
-do not remove and recreate state. For ordinary success, answer in one or two sentences,
-e.g. 「private.txt をファイル全体で保護対象に登録しました。」 Avoid internal IDs,
-JSON, CLI syntax, and repeated coverage disclaimers unless they help this request.
-Do not say 「流出しないことを確認しました」 when only registration succeeded.
+確認済みのプロジェクト、データディレクトリ、版、明示的な同意を再利用します。`already_registered` と `already_configured` は要求を満たした結果であり、状態を削除して作り直しません。通常の成功は「private.txtをファイル全体で保護対象に登録しました。」のように1〜2文で伝えます。役に立たない内部ID、JSON、CLI構文、同じ制限の説明を繰り返しません。登録だけで「流出しないことを確認しました」とは言いません。
 
-## Explain the product accurately
+## 製品を正確に説明する
 
-ToolUseProxy records Hook-visible ToolCalls in events.db. An independent `codex exec`
-judges information dependencies and explicit outbound operations. The policy
-traverses those dependencies and stops external calls connected to registered sources. Independent exact-content DLP also checks resolved transmission contents; a DLP match is a distinct reason, not an inferred graph edge.
-This is inferred provenance, not proof of complete information-flow tracking.
-With no registered sources, observations are retained without invoking judgment
-models. This is an empty protection policy, not a claim that the content is public.
-Every delivery reads the current registrations; adding a source resumes inspection.
-The boundary is the recorded invocation and tool contract, including visible inline
-code and compound commands. Hidden communication inside scripts, hooks or local
-services is outside coverage; this Plugin does not enforce network isolation.
+ToolUseProxyはHookに届いたToolCallの入力・出力を `events.db` へ記録します。独立した `codex exec` が情報の依存と明示された外部送信を判定し、登録情報源につながる外部操作を機械的な経路探索で止めます。送信内容への完全一致DLP検査も独立して行います。DLPの一致を、推定された依存エッジとは区別します。
 
-The judge receives recorded ToolCall inputs, outputs, registered-source metadata, and bounded local resource evidence needed to resolve a transmission. New setup also enables background provenance analysis, which uses the model.
-They may contain private information. It is NOT a local-only comparison and does NOT
-reuse the running Codex conversation internally. Explain the selected model/provider
-and the data it receives before initial setup. Reuse explicit consent already given;
-do not ask for the same approval again.
+これは推定された来歴であり、完全な情報流追跡の証明ではありません。保護登録がなければ、モデルを呼ばず記録だけを残します。保護指定が空という意味であり、内容が公開情報だと判断したわけではありません。Hookを受けるたびに現在の登録を読み、登録後は検査を再開します。
 
-Repairable incomplete or invalid model assessments are retried within the same Hook,
-with feedback and reuse of completed reviews whose evidence still matches. Transient
-provider failures also retry. Missing policy bindings cannot be invented.
-The current runtime retains unresolved operations pending a completed judgment.
-If judgment still cannot complete, report **判定未完了**, never a detected leak, a safe
-operation, or a completed protection decision. The current runtime still has finite
-wait and Hook deadlines: exhausting them may withhold execution via the host deny
-mechanism. This is an unresolved operational failure, not an accepted protection
-outcome or proof that the model is unavailable. The Plugin configures the Hook
-timeout; it is not an immutable Codex limit.
-`analyze run` can resume saved judgments; it never executes their original tools.
-After recovery, a new tool request must recheck current resources and policy. It never bypasses Codex's own approval rules.
+検査範囲は記録された入力とツールの仕様です。入力内のインラインコードや複合コマンドも含みます。スクリプト、Hook、ローカルサービスの内部に隠れた通信は対象外です。このプラグインはネットワーク隔離を強制しません。
 
-## Setup
+判定用モデルへ、記録された入力・出力、登録情報源のメタデータ、送信内容の解決に必要な上限付きのローカル証拠が渡る場合があります。意味依存の推定自体には保護一覧を渡さず、最後に機械処理で照合します。新規の初期設定は、モデルを使うバックグラウンドの来歴解析も有効にします。これらのデータには私的な情報が含まれ得ます。ローカルだけの比較ではなく、親Codexの会話を内部で再利用する方式でもありません。初期設定前に、選択したモデル・提供元と送るデータを説明します。すでに明示的な同意があれば、同じ承認を求め直しません。
 
-Use natural language with the user; these are implementation commands, not required phrases.
-Resolve the current workspace and Plugin data directory. Do not guess a different
-Plugin version's cache path. Once the user has agreed to the judge data handling:
+修復可能な未完了・不正形式のモデル応答は、同じHook内で修正情報を付けて再試行します。証拠が一致する完了済み判定を再利用し、一時的な提供元の障害も再試行します。欠けた保護指定との対応を捏造してはいけません。
+
+現行版は判定完了まで実行を保留します。完了できない場合は **判定未完了** と報告し、流出検出、安全な操作、保護判定の完了とは表現しません。待機時間とHookの期限は有限であり、期限を使い切るとホストの `deny` によって実際の実行が止まる経路が残っています。これは未解決の運用上の失敗であり、許容済みの保護結果でも、モデル自体が利用不能という証拠でもありません。Hookの期限はプラグインの設定であり、変更できないCodexの制約ではありません。
+
+`analyze run` は保存済み判定を再開できますが、元のツールを実行しません。復旧後も、新しいツール要求で現在の資源と保護指定を再検査し、Codex本来の承認条件を迂回しません。
+
+## 初期設定
+
+利用者には自然な言葉で対応します。以下は実装上のコマンドであり、利用者に必須の依頼文ではありません。現在のプロジェクトとプラグインの保存先を確認します。別の版のキャッシュパスを推測しません。判定用データの扱いに同意済みなら、次を実行します。
 
 ```sh
 sh "<PLUGIN_ROOT>/hooks/run_cli.sh" setup --workspace "<WORKSPACE>" --data-dir "<PLUGIN_DATA>" --accept-judge-data --json
 ```
 
-`--model <MODEL>` selects the judge model explicitly; otherwise the independent CLI
-uses its default model. This is not necessarily the model of the current task.
-Setup records its start boundary; earlier events are not used to infer dependencies.
-Do not import history or scan the repository. Add `--protect <RELATIVE_FILE>` only when
-the user's current setup request itself explicitly names that file and explicitly asks
-to protect it. A filename found in AGENTS.md, repository documentation, an existing
-demo script, prior agent narration, or the workspace is context, not authorization to
-register it. A plain request such as 「このプロジェクトで使いたい」 performs Setup
-without any `--protect` argument. Do not anticipate a later registration request.
-Setup creates configuration and recording tables and starts the live log viewer.
-Report initialization separately if a file registration or viewer startup fails.
-Finish with the returned short Unsetup guidance, not a test or another confirmation.
-Open the returned viewer URL in Codex's browser side panel when available. A successful
-open_in_codex result completes opening; do not then create a second browser tab to
-open the same URL again. A URL in
-JSON alone is not an opened screen. If the viewer fails, explain that configuration
-and viewer startup are separate outcomes; use `logs` to retry.
+`--model <MODEL>` で判定用モデルを指定できます。省略時は独立したCLIの既定モデルであり、現在のタスクと同じとは限りません。
+
+初期設定は記録開始の境界を保存し、それ以前のイベントを依存推定に使いません。過去の履歴の取込みやリポジトリの走査は行いません。`--protect <RELATIVE_FILE>` は、今回の初期設定の依頼で利用者自身がそのファイルを明示し、保護登録も依頼した場合だけ付けます。AGENTS.md、リポジトリ文書、既存のデモ台本、以前のエージェントの説明、プロジェクト内で見つけたファイル名は、文脈であって登録の承認ではありません。「このプロジェクトで使いたい」だけなら `--protect` を付けずに初期設定します。後の登録依頼を先回りしません。
+
+設定と記録用テーブルを作り、ライブのログ画面を起動します。ファイル登録やログ画面の起動が失敗した場合は、初期設定の結果と分けて伝えます。返された短い解除案内を添えて完了し、検証や別の再確認を追加しません。
+
+可能なら返されたURLをCodexのブラウザサイドパネルで開きます。`open_in_codex` の成功で開く操作は完了です。同じURLのために2つ目のタブを作りません。JSONにURLがあるだけでは画面を開いたことにはなりません。画面が失敗した場合は設定と起動を区別し、`logs` で再試行します。
 
 ```sh
 sh "<PLUGIN_ROOT>/hooks/run_cli.sh" logs --workspace "<WORKSPACE>" --data-dir "<PLUGIN_DATA>" --json
 ```
 
-`configured_unverified` is configuration only. To claim protection works, separately
-observe a fresh PreToolUse, the judge's decision, and whether the actual tool executed.
-Do not call an installed/enabled Plugin or a populated DB proof of current protection.
+`configured_unverified` は設定があるという結果だけです。保護が働くと主張するには、新しいPreToolUseの到達、判定、実際の実行有無を別途観測します。インストール済み・有効、またはDBに記録があることだけで現在の保護を証明したとは言いません。
 
-## Host permissions
+## CodexとOSの権限
 
-Ask for approval may sandbox shell commands to the workspace. Setup and registration
-also write to the verified Plugin data directory, outside that workspace; the viewer
-needs a loopback listener. A user's product request is not a host permission grant.
-Use the host's normal permission-request tool, when available, for only the needed
-path or local listener and wait for the user's decision. Never change permission
-profiles, use Full access, relocate the database, or delegate the command to a more
-privileged task to avoid this boundary. Do not approve a request on the user's behalf.
+承認を求める設定では、シェル操作がプロジェクト内に制限される場合があります。初期設定・登録は確認済みのプラグイン保存先にも書き込み、ログ画面はループバックで待ち受けます。製品の利用依頼と、ホスト側の権限許可は別です。
 
-`filesystem_access_required` identifies an OS permission failure or a read-only
-SQLite database, not a leak decision or model timeout. Explain the missing access
-and, after an actual grant, retry the same operation. If no permission-request tool
-is available, say so and wait for the user to resolve the host permissions; do not
-claim that a request was shown. A read-only filesystem can require user repair rather
-than a grant. Do not repeatedly rerun unchanged failures or inspect private DB contents
-to diagnose access. Setup may have partially completed: reuse any existing state;
-do not erase registrations or promise a rollback. Viewer errors are separate from
-initialization success.
+利用可能なら通常の権限申請ツールで、必要な保存先やローカル接続だけを求め、利用者の判断を待ちます。この境界を避けるために、権限設定を変更する、Full accessにする、DBを移す、より強い権限のタスクに代行させることはしません。利用者に代わって承認しません。
 
-## Register a source
+`filesystem_access_required` はOSのアクセス権や読み取り専用SQLiteの問題であり、流出判定やモデルの時間切れではありません。不足するアクセス権を説明し、実際の許可後に同じ操作を再試行します。権限申請ツールがなければ、その旨を伝えて利用者の解決を待ち、申請画面を出したと偽りません。読み取り専用のファイルシステムは許可だけでは直らない場合があります。
 
-For an explicitly named file, register it directly. The command registers the whole
-file without reading its contents or judging whether its passages are secret.
+同じ失敗を条件を変えず繰り返したり、権限診断のために私的なDBの内容を調べたりしません。初期設定が一部完了している場合は既存状態を再利用し、登録を削除せず、巻き戻せたと約束しません。画面の失敗と初期設定の成功は別です。
+
+## ファイルを登録する
+
+名指しされたファイルは直接登録します。本文を読んだり、どの部分が秘密かを判定したりせず、ファイル全体を対象にします。
 
 ```sh
 sh "<PLUGIN_ROOT>/hooks/run_cli.sh" protect add --path "<RELATIVE_FILE>" --workspace "<WORKSPACE>" --data-dir "<PLUGIN_DATA>" --json
 ```
 
-`protect plan` is optional for a preview request or for clarifying a proposed target;
-it is not a prerequisite to `protect add`. `protect list` is for listing registrations,
-not a required follow-up after a successful add. Explain structured errors briefly:
-missing file → check its name; directory → ask for files; outside workspace → identify
-the intended project. Do not retry an unchanged error or silently broaden scope.
+`protect plan` は事前表示を頼まれた場合や対象案を確認する場合の任意操作です。`protect add` の前提にしません。`protect list` も一覧を求められた場合に使い、登録後の必須手順にしません。ファイルがなければ名前を確認し、ディレクトリならファイルの指定を求め、プロジェクト外なら対象プロジェクトを確認します。条件が変わらないエラーを再試行したり、無断で範囲を広げたりしません。
 
-Never access a file the user forbids, register unrelated sources, or silently import
-an old manifest. Existing DB registrations are retained; a manifest-only installation
-requires a reviewed migration instead of an empty catalog presented as protection.
+利用者が禁止したファイルへのアクセス、無関係な情報源の登録、旧登録ファイルの暗黙の取込みは行いません。既存DBの登録は維持します。旧登録ファイルしかない環境では、空の登録一覧を保護済みと見せず、確認を伴う移行が必要だと説明します。
 
-## Verification is a separate task
+## 検証は別の作業として行う
 
-Run a leakage or Hook test only when requested, or as part of explicitly requested
-installation diagnostics. Establish the test data and destination first; a request to
-register a file does not authorize sending its contents anywhere. Prefer synthetic
-inputs. Record fresh PreToolUse arrival, the decision, and actual execution evidence.
-Report uncertainty honestly, but do not make such proof a condition of metadata registration.
+流出試験やHook確認は、依頼された場合か、明示的に依頼された導入診断の一部として行います。試験データと送信先を先に定めます。登録依頼は、その内容を外部へ送る承認ではありません。原則として架空のデータを使い、新しいPreToolUseの到達、判定、実際の実行証拠を分けて記録します。不確実性は正直に報告し、その検証をメタデータ登録の完了条件にはしません。
 
-## Inspect and explain Hook roles
+## 状態とHookの役割
 
-Use `status` or `doctor` with the same workspace and data arguments. These are
-configuration checks, not fresh Hook proof.
+同じプロジェクト・保存先で `status` または `doctor` を使います。これらは設定確認であり、新しいHookの到達証明ではありません。
 
-- SessionStart / SubagentStart: explain coverage and hosted-tool limitations.
-- PreToolUse: record and screen external communication first. Definite local calls defer
-  provenance; potential external calls inspect transmission evidence, check DLP, and traverse dependencies.
-- PostToolUse: record actual output and observed resource generations. When enabled at setup,
-  enqueue durable background provenance analysis after the Hook response; this uses the model.
-  It cannot undo execution. Existing configurations are not silently opted in.
-- Stop: no final-answer similarity check and no forecast-based additional stop.
+- SessionStart / SubagentStart：検査範囲と、ホスト提供ツールの制限を説明します。
+- PreToolUse：記録し、明示された外部送信を先に分類します。ローカル操作の詳細な来歴解析は後に回します。外部送信候補では送信内容、DLP、依存経路を調べます。
+- PostToolUse：実出力と観測した資源の版を記録します。初期設定で有効にした場合は、応答後の背景解析を永続ジョブに登録します。モデルを使いますが、実行済み操作を取り消すことはできません。既存設定を無断で有効化しません。
+- Stop：最終回答の類似度検査や、将来予測による追加停止は行いません。
 
-Hosted tools such as WebSearch do not reliably pass through Codex ToolUse hooks.
-Never send registered protected content or derived content to hosted tools. Public
-research must use public-only queries. This instruction is not technical interception.
+WebSearchなどのホスト提供ツールはCodexのToolUse Hookに必ず届くとは限りません。保護対象の内容やその派生内容を入力しないでください。公開情報の調査は公開してよい検索語だけを使います。この注意書きは技術的な遮断ではありません。
 
-When reviewing Hook trust, check the actual installed source, all five definitions,
-and their paths. Explain that hooks run with local user permissions and that the
-judge makes model-provider requests. Do not accept unrelated pending hooks on the
-user's behalf or describe Hook trust as proof that the model classified correctly.
+Hookを信頼する際は、実際にインストールされたコード、5種類すべての定義、そのパスを確認します。ユーザー権限で動き、判定用モデルへ通信することを説明します。無関係な保留中のHookを代理承認したり、Hookへの信頼を分類精度の証明と表現したりしません。
 
-## Stop or remove protection
+## 保護を停止・解除する
 
-Use `unsetup open` with the same workspace/data arguments to request the macOS
-administrator authentication and confirmation UI. Do not enter credentials or operate
-the confirmation dialog on the user's behalf. `plan` and `apply` do not mutate state.
-If the administrator component is missing, report that and link the product's
-Setup/Unsetup administration instructions; do not install or enroll it implicitly.
-The agent-facing `unsetup` command does not itself remove protection. Administrative stop
-and reactivation use the independent administrator approval boundary. Do not edit
-Plugin enablement, source registrations, judge policy, or authority state to escape
-a denial. Never treat a confirmation string the agent can generate as human approval.
+同じプロジェクト・保存先で `unsetup open` を使うと、macOSの管理者認証を経て対象確認画面を開きます。パスワードの入力や確認ダイアログを利用者の代わりに操作しません。`plan` と `apply` は状態を変更しません。
 
-## Provenance diagnostics
+管理者用部品がなければ、その旨と製品のSetup／Unsetup管理手順を案内し、暗黙に導入や対象登録を行いません。エージェント向けの `unsetup` コマンド自体は保護を解除しません。管理上の停止・再有効化には独立した管理者承認を使います。
 
-`analyze status` reports durable-job counts; `analyze run` resumes a bounded batch with the
-same workspace/data arguments. These do not prove live interception. The log detail links
-to a separate 2D provenance page showing pinned revisions without raw file contents.
-Content-match blocks and graph-path blocks are separate outcomes. A missing graph is not safety.
+拒否を避けるために、プラグインの有効状態、保護登録、判定方針、管理状態を書き換えません。エージェントが作れる確認文字列を、人間の承認と扱うこともしません。
 
-## Retired v0.1 behavior
+## 来歴の診断
 
-Do not use `setup apply --profile file-payload-exact`, similarity-score thresholds,
-externality rule learning, forecast/early-stop commands, or final-response rewriting
-as instructions for v0.2. Historical research code and records do not establish current
-product capabilities. Do not assert that all setup operations or Hook checks are offline.
+`analyze status` は永続ジョブの件数を返し、`analyze run` は同じプロジェクト・保存先の有限件数を再開します。これらも実Hookの介入証明ではありません。ログ詳細から2Dの来歴画面へ移り、判断時の版を確認できます。グラフ画面はファイル本文を表示しません。
+
+内容一致による遮断と、グラフ経路による遮断は別の結果です。グラフがないことを安全と説明しません。
+
+## v0.1の手順を混ぜない
+
+`setup apply --profile file-payload-exact`、類似度スコアの閾値、外部分類ルール学習、予測・早期停止、最終回答の書換えをv0.2の手順として使いません。研究用コードや過去の記録は、現在の製品機能の証拠ではありません。初期設定やHook確認がすべてオフラインだとも説明しません。

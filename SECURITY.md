@@ -1,25 +1,32 @@
-# Security policy
+# セキュリティと非公開の報告
 
-## Supported versions
+[紹介](README.md) · [対応範囲](SUPPORT.md) · [データの扱い](PRIVACY.md) · [文書一覧](docs/索引.md)
 
-ToolUseProxy is currently a public alpha. Security fixes are applied
-only to the latest `0.2.0-alpha.x` release. Older alpha builds are unsupported.
+## 脆弱性を報告する
 
-## Reporting a vulnerability
+保護を回避できる操作、保護内容の意図しない送信、ログや管理機能への不正なアクセスなどは、**[GitHubの非公開報告フォーム](https://github.com/mani1261790/ToolUseProxy/security/advisories/new)** から連絡してください。GitHubへのログインが必要です。
 
-Do not open a public Issue when a report may contain a secret, protected source,
-local path, Hook payload, database content, or instructions for bypassing a
-security boundary.
+1. フォームを開き、問題の概要と影響を記載します。
+2. ToolUseProxyの版、OS、Codexの版、再現手順を添えます。
+3. 可能な限り、実際の秘密情報を架空の値に置き換えます。
+4. 期待した判定、実際の判定、操作が実行されたか、受信先に情報が届いたかを区別して記載します。未確認の項目は未確認のままで構いません。
 
-Use GitHub's private vulnerability reporting form instead:
+非公開フォームが利用できない場合も、再現手順や機密情報を公開Issueへ移さないでください。公開Issueには「非公開の報告窓口に接続できない」という連絡だけを記載できます。
 
-<https://github.com/mani1261790/ToolUseProxy/security/advisories/new>
+## 公開しないでほしい情報
 
-Include the affected ToolUseProxy version, operating system, Codex version,
-reproduction steps, and security impact. Replace real secrets and private
-content with synthetic values before submitting whenever possible.
+実際の保護対象の本文、認証情報、個人を識別できるパス、Hookの生データ、`events.db`、タスクの会話全文、保護を回避する詳細な手順は公開Issueに添付しないでください。非公開の報告でも、調査に不要な情報は省いてください。
 
-ToolUseProxy is a research implementation, not a complete DLP system. Until a
-fix is available, disable enforcement or remove the Plugin and follow the
-retention guidance in [PRIVACY.md](PRIVACY.md). If a real credential may have
-been exposed, revoke or rotate it independently of this report.
+通常の不具合や改善案は[Issues](https://github.com/mani1261790/ToolUseProxy/issues)で受け付けます。公開してよい内容だけを記載してください。
+
+## 修正の対象
+
+セキュリティ修正の対象は、最新の `0.2.0-alpha.x` 公開版です。旧アルファ版とv0.1系への修正提供は行いません。利用中の版は[リリース一覧](https://github.com/mani1261790/ToolUseProxy/releases)と照合してください。
+
+ToolUseProxyは研究用の実装です。モデルによる依存推定、Hookの観測範囲、同じOS権限からの変更などの限界があります。[対応範囲](SUPPORT.md)に記載した範囲を超える保護は保証しません。
+
+## 問題が見つかったとき
+
+修正や確認が済むまでは、問題のある経路で秘密情報を扱う作業を避けてください。停止・解除が必要な場合は、人が[Setup／Unsetupの管理手順](docs/運用/Setup-Unsetup.md)を確認して操作します。エージェントに認証や保護解除の代行をさせないでください。
+
+実際の認証情報が漏れた可能性がある場合、その失効・再発行は報告と別に行ってください。プラグインの停止や削除だけでは、保存済みのログや送信済みの情報は消えません。[データの保持と削除](PRIVACY.md)も確認してください。

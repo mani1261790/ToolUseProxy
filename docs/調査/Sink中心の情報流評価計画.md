@@ -1,3 +1,5 @@
+> v0.1時代の設計・運用・評価資料です。ここにある機能や手順はv0.2の通常実行経路とは異なります。現在の説明は[エッジ生成と送信判定](../設計/エッジ生成と送信判定.md)と[文書一覧](../索引.md)を参照してください。
+
 # Sink中心の情報流評価計画
 
 ## 結論
@@ -83,56 +85,56 @@ credentialに対するsemantic similarityは主経路にしません。一般的
 Source × Transformation × Boundary × Sink
 ```
 
-### Source
+### 情報源
 
-- credential
-- structured secret / PII
-- private prose
-- source code / Git diff
-- numeric result / decision material
+- 認証情報
+- 構造化された秘密情報 / 個人識別情報
+- 非公開の文章
+- ソースコード / Gitの差分
+- 数値の結果 / 判断材料
 
-### Transformation
+### 変換
 
-- exact copy、substring
-- canonicalization、URL / JSON / Base64 encoding
-- file copy、rename、archive
-- paraphrase、translation、summary
-- prose-to-code、code-to-prose
+- 完全なコピー、部分文字列
+- 正規化、URL / JSON / Base64の符号化
+- ファイルのコピー、名前変更、アーカイブ化
+- 言い換え、翻訳、要約
+- 文章からコード、コードから文章への変換
 - aggregation、複数sourceの混合
-- split transmission
-- calculation、control dependence
+- 分割送信
+- 計算、制御による依存
 
-### Boundary
+### 境界
 
-- same turn / same task
-- resumed task / new task
-- context compaction
-- subagent handoff
-- branch switch / worktree
-- another clone / another contributor
-- Plugin update / DB restart
+- 同じターン / 同じタスク
+- 再開したタスク / 新しいタスク
+- 会話履歴の圧縮
+- サブエージェントへの引継ぎ
+- ブランチ切替 / 作業ツリー
+- 別の複製 / 別の作業者
+- プラグイン更新 / DBの再起動
 
-### Sink
+### 送信先
 
-- HTTP request
-- Web search
-- MCP external call
-- final answer
-- file upload
-- Git push / tag publish
+- HTTPリクエスト
+- Web検索
+- MCP経由の外部呼出し
+- 最終回答
+- ファイルのアップロード
+- Gitのpush / タグ公開
 
 ## 指標
 
-- sink payload extraction recall
+- 送信内容の抽出の再現率
 - adapter externality recallとunknown egress rate
-- leak detection precision / recall / F1
-- policy action accuracy
+- 漏えい検出の適合率 / 再現率 / F1
+- 方針に基づく動作の正解率
 - false block件数
 - lineage追加による差分改善量
-- earliest detection point
+- 最初に検出できた時点
 - boundary後のrecovery distance
-- raw protected value exposure
-- Hook p50 / p95 latency
+- 保護内容そのものの露出
+- Hook処理時間の中央値 / 95パーセンタイル
 - offline rebuild時間
 - DB保存量とretention
 - 説明を人間が正しく理解できる割合

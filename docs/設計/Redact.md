@@ -1,3 +1,5 @@
+> v0.1時代の設計・運用・評価資料です。ここにある機能や手順はv0.2の通常実行経路とは異なります。現在の説明は[エッジ生成と送信判定](エッジ生成と送信判定.md)と[文書一覧](../索引.md)を参照してください。
+
 # Redact設計
 
 Redactは、protected source由来の情報を含むtool inputから、送信してはいけない部分を除いてからtoolを実行する介入です。目的はblockを減らすことではなく、外部へ渡る値を安全に縮小できる場合だけ、元の操作を限定的に継続できるようにすることです。
@@ -75,7 +77,7 @@ runtime redactを将来有効にする場合も、次をすべて満たす必要
 
 ## tool別の推奨範囲
 
-### MCP
+### 外部ツール連携（MCP）
 
 最初のpreview対象として最も適しています。argumentsはJSON objectで、field境界をJSON Pointerとして監査できるためです。ただし、tool名のverb推定だけでは不十分です。
 
@@ -130,7 +132,7 @@ profileとfixture、全scalar value / JSON key fallbackに加え、plannerも実
 
 Codexは一部MCP toolで、PreToolUse後かつserver送信前にOpenAI file argumentsを内部変換し、その変換後objectをPostToolUseの`tool_input`へ載せます。この場合、正当な内部変換でもfull-input hashは不一致になります。初期profileはこのtool / fieldを対象外とし、`post_input_stable: true`を確認できるtoolだけでfull-input hashを使います。将来対応する場合は、Codexが変更しないcontrol / redactable pointerだけのprojected hashを別schemaで導入し、`post_transformed`とcompeting Hookによる`post_override`を区別してから対象へ加えます。
 
-### Bash
+### シェル操作（Bash）
 
 Bashは初期runtime対象にしません。`updatedInput`はcommand文字列全体であり、data、送信先、option、redirection、shell controlが同じ文字列に混在するためです。
 
@@ -153,7 +155,7 @@ Bashは初期runtime対象にしません。`updatedInput`はcommand文字列全
 
 これらは元のPreToolUse denyを維持します。完全なshell parserを導入するのではなく、静的に証明できるdata operand profileだけを増やします。
 
-### apply_patch
+### ファイル編集（apply_patch）
 
 自動runtime redactの対象にしません。
 
@@ -168,7 +170,7 @@ Bashは初期runtime対象にしません。`updatedInput`はcommand文字列全
 
 代替案として、`.md` / `.txt`などの明示plaintextだけを対象に、added lineのraw exact spanを書き換えるpreviewは設計できます。その場合も、再parse後にoperation数、順序、kind、source / target / move path、context、removed lineが全て同一であることが必要です。これはpublic artifact sinkを定義した後の研究候補であり、現在のexternal sink対策より先には置きません。
 
-## data model
+## データ構造
 
 planはpolicy decisionとは別のcall単位auditとして保存します。1つのcallに複数source / sink findingがあるため、1 decisionへ押し込めません。以下のschemaはpreview監査として実装済みです。
 
@@ -343,7 +345,7 @@ plannerは既存の`session-incremental`結果を入力にし、全DBやworkspac
 
 新規audit insertでは、同じtransaction内で完了済みrunのcurrent-call critical assignmentを`idx_lineage_assignments_run_sink_score`から最大33 rowだけ確認します。33件目があればaudit保存を中止し、既存denyを維持します。32件以下ならsource evidenceを同じ32 KiB / finding、128 KiB / callで取得してpure plannerを決定論的に再実行し、plan metadataと全targetを完全比較します。このため、無関係sourceへの差し替え、case-insensitive lineageだけをraw matchと偽る変更、全critical findingの一部だけを保存する変更、有限集合外の`rejection_code`は受理しません。plannerの50 ms deadlineでrejectしたcaseと32件を超えるcaseは決定論的なhash-only auditとして再証明できないため保存せず、block outputだけを返します。
 
-## failure fallback
+## 失敗時の処理
 
 redactはcritical external sinkに対するblockを置き換える候補です。そのため、redact固有の失敗で先に確定したdenyを弱めてはいけません。
 
@@ -383,7 +385,7 @@ Codex CLI `0.142.5`の公式sourceでは、matching PreToolUse Hookは同じorig
 
 環境変数で「唯一のrewriterだと仮定する」と宣言するだけでは、安全性の証明にはなりません。研究用のopt-in E2Eには使えても、本番のStop保証とは分けて扱います。
 
-## Hook latency budget
+## Hookの処理時間の上限
 
 redact plannerはlocal JSON、indexed DB row、hash、tool profileだけを使います。
 
@@ -407,9 +409,9 @@ redact plannerはlocal JSON、indexed DB row、hash、tool profileだけを使�
 
 推奨budget:
 
-- pure planner p95 `<= 10 ms`、32 fields / 32 KiB input
+- 計画処理単体の95パーセンタイル `<= 10 ms`、32項目 / 32 KiBの入力
 - redaction追加overhead p95 `<= 25 ms`
-- planner hard deadline `50 ms`
+- 計画処理の強制終了期限 `50 ms`
 - PreToolUse全体p95 `< 300 ms`
 - network call、embedding、workspace scan、全DB graph loadは0回
 
@@ -438,20 +440,20 @@ benchmarkはeligible、rejected、複数targetの3caseを同じroundで測り、
 次の順序を推奨します。
 
 1. `Define MCP outbound field profiles`（実装済み）
-   - exact server/tool profile
-   - outbound / redactable / control pointer
+   - サーバー・ツールが完全一致する設定
+   - 送信対象 / 書換え可能箇所 / 制御項目へのポインター
    - 同じprofileから全outbound pointerをadapterのfragment / sinkへ変換
    - unknown shapeのreject
    - server固有fixture
 2. `Add redaction preview planner`（実装済み）
    - call内全finding集約
-   - whole-field replacement plan
-   - structural validation
+   - 項目全体の置換計画
+   - 構造の検証
    - runtime outputは引き続きblock
 3. `Persist redaction preview audits`（実装済み）
-   - plan / target schema
+   - 計画 / 対象のスキーマ
    - hash-only保存
-   - workspace / session scope
+   - プロジェクト / セッションの範囲
    - current-call全critical findingの後にpreviewを接続し、eligible / rejectedを原子的に保存
    - event-scopeの既定dry-run cleanup
 4. `Confirm rewritten inputs from PostToolUse`（実装済み）
@@ -462,7 +464,7 @@ benchmarkはeligible、rejected、複数targetの3caseを同じroundで測り、
    - wideなevent rowと分離したpayload / scope / Post observation sidecar
    - legacy rowをbackfillせず、欠落時は未確認
    - plans-firstで、confirmation中の`events` readを0にする
-   - metadata / observer version、row integrity digest、immutable replay
+   - メタデータ / 観測器の版、行の整合性ダイジェスト、不変の記録による再現
    - metadata失敗時もcore eventと既存denyを維持
 6. `Persist dormant redact decision linkage`（実装済み）
    - preview BLOCK decisionから全finding分のversioned REDACT identityを導出する
@@ -472,15 +474,15 @@ benchmarkはeligible、rejected、複数targetの3caseを同じroundで測り、
 7. enforcement gateを再評価
    - Codex 0.142.5の複数rewriterは一般Hook環境で解消不能なため、runtime rendererを実装しない
    - upstreamのexclusive composition、final input再検査、または完全管理されたsingleton配備境界が成立した場合だけ再評価する
-8. `Prototype static Bash data-operand redaction`
+8. Bashの静的なデータ引数を書き換える試作
    - MCPの安全性と監査を検証した後
    - apply_patch automatic redactは対象外のまま維持
 
 各項目を別commitにし、preview plannerとruntime enforcementを同じcommitへ混ぜません。最初の6項目を実装しても、gateを満たすまではHook stdoutへ`updatedInput`を返しません。
 
-## tests
+## 試験
 
-### planner unit test
+### 計画処理の単体試験
 
 pure plannerは32 testsで、以下のhappy path、all-or-nothing、実MCP adapter metadata、profile coverage、scope、source evidence、cap、determinism、latencyを検証済みです。DB保存とHook runtimeの監査接続は別の作業単位で実装し、runtime rewriteと混ぜていません。
 
@@ -549,21 +551,21 @@ pure plannerは32 testsで、以下のhappy path、all-or-nothing、実MCP adapt
 
 ローカルstdio MCP serverに、受信argumentsをhashと固定markerだけで記録する`publish_text`を用意します。実secretではなくダミーprotected valueを使います。
 
-1. eligible preview
+1. 条件を満たす事前表示
    - exact profileの`content` fieldにダミーprotected value
    - planはeligible、pointerとhashを保存
    - runtimeはまだdenyし、server call 0、Post 0
-2. aggregate reject
+2. まとめた拒否結果
    - redactable fieldとunknown fieldの両方にprotected value
    - plan全体をrejectし、server call 0
    - synthetic multi-field fixtureでpublic messageとprotected attachmentを同居させ、attachment findingを作ってserver call 0
-3. public call
+3. 公開情報の呼出し
    - planなし、既存のallow経路でserver call 1
 4. 将来enforce E2E
    - gateを満たした隔離設定だけで実施
    - serverがplaceholderを受信し、original markerを受信しない
    - Post input hashとplan hashが一致する
-5. competing rewriter
+5. 競合する書換え処理
    - 2つのPreToolUse Hookが異なるrewriteを返す
    - completion orderで結果が変わることを確認し、production-ready判定には使わない
 
