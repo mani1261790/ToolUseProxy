@@ -48,12 +48,12 @@ def test_inherited_settings_and_environment_are_fresh(repository, monkeypatch):
     assert [s['value'] for s in settings if s['key'] == 'push.default'] == ['current', 'matching']
 
 
-def test_unresolved_includes_are_not_default_settings(repository):
-    _, home, records = repository
-    (home / '.gitconfig').write_text('[include]\n path = /never/open/this\n')
+def test_forbidden_include_is_not_opened_or_treated_as_defaults(repository):
+    root, home, records = repository
+    (home / '.gitconfig').write_text(f'[include]\n path = {root / "protected_sources.json"}\n')
     receipt = observe(records)
     assert receipt['status'] == 'unavailable'
-    assert receipt['reason'] == 'context_config_includes_unresolved'
+    assert receipt['reason'] == 'context_control_state_forbidden'
     assert receipt['facts'] == {}
     assert not unchanged({**records, 'invocation_context': receipt})
 
@@ -83,6 +83,69 @@ def test_current_branch_and_invocation_changes_invalidate_receipt(repository):
     assert not unchanged(records)
     records['invocation_context'] = observe(records)
     assert not unchanged({**records, 'tool_input': {'command': 'git push origin other'}})
+
+
+@pytest.mark.parametrize('condition', [None, 'onbranch:main', 'onbranch:other',
+                                      'gitdir:./../repo/.git', 'gitdir/i:./../REPO/.GIT',
+                                      'gitdir:**/repo/.git', 'gitdir/i:**/REPO/.GIT',
+                                      'hasconfig:remote.*.url:https://example.invalid/**'])
+def test_include_order_conditions_and_origins_match_native_git(repository, condition):
+    from tooluseproxy.engine.config_snapshot import rows
+    from tooluseproxy.engine.invocation_context import GIT_KEYS
+
+    root, home, records = repository
+    child = home / 'included.conf'
+    child.write_text('[push]\n default = matching\n[include]\n path = nested.conf\n')
+    nested = home / 'nested.conf'
+    nested.write_text('[push]\n pushOption = "one\\ntwo"\n followTags\n')
+    section = '[include]' if condition is None else f'[includeIf "{condition}"]'
+    (home / '.gitconfig').write_text('[push]\n default = current\n' + section + '\n path = included.conf\n'
+                                    '[push]\n default = simple\n')
+    with (root / '.git/config').open('a') as output:
+        output.write('[remote "origin"]\n url = https://example.invalid/repo\n')
+    receipt = observe(records)
+    assert receipt['status'] == 'observed', receipt
+    actual = receipt['facts']['settings']
+    raw = subprocess.run(['git', '-C', str(root), 'config', '--includes', '--show-origin',
+                          '--null', '--get-regexp', GIT_KEYS], check=True, capture_output=True).stdout
+    expected = [dict(key=key, value=value) for _, key, value in rows(raw)
+                if not key.lower().startswith(('include.', 'includeif.'))]
+    assert actual == expected
+    included = any(item['key'] == 'push.pushoption' for item in expected)
+    if included:
+        index = next(i for i, item in enumerate(actual) if item['key'] == 'push.pushoption')
+        origin = receipt['facts']['origins'][f'/invocation_context/facts/settings/{index}/value']
+        assert origin['path'] == str(nested)
+    records['invocation_context'] = receipt
+    assert unchanged(records)  # temporary snapshot names must not affect identity
+    child.write_text('[push]\n default = upstream\n')
+    assert unchanged(records) == (not included)
+
+
+def test_missing_include_has_native_empty_semantics_and_new_file_invalidates(repository):
+    _, home, records = repository
+    (home / '.gitconfig').write_text('[include]\n path = later.conf\n')
+    records['invocation_context'] = observe(records)
+    assert records['invocation_context']['status'] == 'observed'
+    assert unchanged(records)
+    (home / 'later.conf').write_text('[push]\n default = matching\n')
+    assert not unchanged(records)
+
+
+def test_inactive_forbidden_include_is_not_read_or_treated_as_active(repository, monkeypatch):
+    root, home, records = repository
+    (home / '.gitconfig').write_text(f'[includeIf "onbranch:other"]\n path = {root / "protected_sources.json"}\n')
+    from tooluseproxy.engine import config_snapshot
+    original = config_snapshot.bounded_read
+
+    def checked(argv, *args, **kwargs):
+        assert not any('protected_sources.json' in word for word in argv)
+        return original(argv, *args, **kwargs)
+
+    monkeypatch.setattr(config_snapshot, 'bounded_read', checked)
+    assert observe(records)['status'] == 'observed'
+    subprocess.run(['git', '-C', str(root), 'symbolic-ref', 'HEAD', 'refs/heads/other'], check=True)
+    assert observe(records)['reason'] == 'context_control_state_forbidden'
 
 
 def test_context_bytes_and_freshness_are_bound_to_resolution(repository, tmp_path):

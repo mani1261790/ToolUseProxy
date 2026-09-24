@@ -11,5 +11,6 @@ RUNTIME_FILES = (
     'tooluseproxy/engine/contracts.py', 'tooluseproxy/engine/timing.py', 'tooluseproxy/engine/runtime.py', 'tooluseproxy/engine/pending.py', 'tooluseproxy/engine/repository_evidence.py', 'tooluseproxy/engine/workspace.py',
     'tooluseproxy/engine/identity.py',
     'tooluseproxy/engine/invocation_context.py',
+    'tooluseproxy/engine/config_snapshot.py',
     'tooluseproxy/viewer/graph.html', 'tooluseproxy/viewer/graph.js', 'tooluseproxy/viewer/graph.css', 'tooluseproxy/viewer/theme.css', 'tooluseproxy/viewer/index.html', 'tooluseproxy/viewer/screen.js', 'tooluseproxy/viewer/screen.css',
 )

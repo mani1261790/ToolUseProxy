@@ -10,7 +10,7 @@ from tooluseproxy.engine.contracts import literal_words
 from tooluseproxy.engine.graph import digest
 from tooluseproxy.engine.repository_evidence import bounded_read
 
-CONTRACT = 'invocation-context-v2'
+CONTRACT = 'invocation-context-v3'
 GIT_KEYS = (r'^(push\..*|remote\..*|branch\..*|url\..*|submodule\..*|'
             r'include\..*|includeif\..*|extensions\.worktreeconfig)$')
 
@@ -56,30 +56,31 @@ def git_facts(cwd):
     if not (root / '.git').is_dir() or (root / '.git').is_symlink():
         raise ValueError('context_repository_metadata_unsupported')
     argv = ['git', '--no-pager', '--no-optional-locks', '-C', str(root)]
-    # No includes are opened by Git. An unresolved include is explicitly NOT a
-    # complete effective-config observation (including conditional includes).
+    # Recursive loading is evaluated only on controller-owned snapshots.
     raw = bounded_read([*argv, 'config', '--no-includes', '--show-origin', '--null', '--get-regexp', GIT_KEYS],
                        env, limit=64_000, accepted_codes=(0, 1))
     settings = []
-    fields = raw.split(b'\0')
-    if fields[-1] != b'' or (len(fields) - 1) % 2:
-        raise ValueError('context_config_output_invalid')
+    from tooluseproxy.engine.config_snapshot import rows, expand
+    values = expand(rows(raw), root, argv, env, GIT_KEYS)
     origins = {}
-    for index in range(0, len(fields) - 1, 2):
-        origin, row = fields[index:index + 2]
-        key, value = row.decode('utf-8').split('\n', 1)
-        if key.lower().startswith(('include.', 'includeif.')):
-            raise ValueError('context_config_includes_unresolved')
-        if origin.startswith(b'file:'):
-            path = Path(origin[5:].decode('utf-8'))
+    for origin, key, value in values:
+        if origin.startswith('file:'):
+            path = Path(origin[5:])
             path = (path if path.is_absolute() else root / path).resolve()
             if path.name == 'protected_sources.json':
                 raise ValueError('context_control_state_forbidden')
             origins[f'/invocation_context/facts/settings/{len(settings)}/value'] = dict(
                 path=str(path), projection=dict(kind='git_config_value', key=key, value=value))
         settings.append(dict(key=key, value=value))
-    branch = bounded_read([*argv, 'symbolic-ref', '--quiet', 'HEAD'], env,
-                          limit=4096, accepted_codes=(0, 1)).decode('utf-8').strip()
+    # Reading HEAD directly cannot invoke Git's live include loader.
+    from tooluseproxy.engine.payload import open_resource
+    with open_resource(root, '.git/HEAD') as (descriptor, _, __):
+        head = os.read(descriptor, 4097).decode('utf-8').strip()
+    if len(head) > 4096:
+        raise ValueError('context_head_budget')
+    branch = head[5:] if head.startswith('ref: refs/heads/') else None
+    if branch is None and not (len(head) in (40, 64) and all(c in '0123456789abcdef' for c in head)):
+        raise ValueError('context_head_unsupported')
     origins['/invocation_context/facts/head_ref'] = dict(path=str(root / '.git/HEAD'),
                                                        projection=dict(kind='git_head_ref', value=branch))
     return dict(settings=settings, head_ref=branch or None, origins=origins,
