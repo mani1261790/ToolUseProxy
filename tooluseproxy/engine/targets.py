@@ -309,6 +309,11 @@ def inspect_transmission(store, event, provider, *, model="codex_default"):
         )
     resolver.definition_context = records
     result = resolver.resolve(target)
+    context_resources = [dict(path=p.observation['context_origin']['path'], mode='read')
+                         for p in result.parts if p.observation.get('context_origin')]
+    if context_resources:
+        from tooluseproxy.engine.lineage import snapshot_resources
+        snapshot_resources(store, event, context_resources)
     identity = resolver.persist(target, {"boundary": "external"}, result)
     return resolver, result, identity
 

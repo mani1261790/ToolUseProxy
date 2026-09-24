@@ -133,3 +133,73 @@ def test_plan_reuse_invalidates_on_inherited_context_change(repository, tmp_path
     path.write_text('[remote "origin"]\n url = https://example.invalid/two\n')
     assert inspect(3).parts[0].content.endswith(b'/two')
     assert len(calls) == 2
+
+
+@pytest.mark.parametrize('chosen,expected', [('public', 'allow'), ('derived', 'block')])
+def test_selected_setting_traces_its_writer_without_tainting_other_settings(repository, tmp_path, chosen, expected):
+    from tooluseproxy.engine.lineage import snapshot_resources
+    from tooluseproxy.engine.property_graph import analyze_properties
+
+    root, _, records = repository
+    journal = Journal(tmp_path / 'events.db')
+    journal.initialize()
+    config = root / '.git/config'
+    text = config.read_text() + ('\n[remote "public"]\n url = https://example.invalid/public\n'
+                                 '[remote "derived"]\n url = https://example.invalid/derived-secret\n')
+
+    def record(phase, call, tool, inputs, output=None):
+        raw = dict(cwd=str(root), session_id='one', tool_use_id=call, tool_name=tool, tool_input=inputs)
+        if output is not None:
+            raw['tool_response'] = output
+        event = event_from(phase, raw, str(root))
+        journal.record(event)
+        return event
+
+    write = record('pre_tool_use', 'write', 'write_file', {'path': '.git/config', 'content': text})
+    snapshot_resources(journal, write, [dict(path='.git/config', mode='write')])
+    config.write_text(text)
+    written = record('post_tool_use', 'write', 'write_file', {'path': '.git/config', 'content': text}, 'Success')
+    snapshot_resources(journal, written)
+    send = record('pre_tool_use', 'send', 'Bash', records['tool_input'])
+
+    def target_provider(packet):
+        settings = packet['invocation_context']['facts']['settings']
+        index = next(i for i, value in enumerate(settings) if value['key'] == f'remote.{chosen}.url')
+        return dict(complete=True, reason='selected destination fixture', targets=[dict(kind='context',
+                    pointer=f'/invocation_context/facts/settings/{index}/value', path=None,
+                    offset=0, length=None, format=None, revision=None, reason='selected destination')])
+
+    _, resolution, _ = inspect_transmission(journal, send, target_provider)
+    assert resolution.coverage == 'complete'
+    evidence = [dict(observation=p.observation, content=p.content.decode(), encoding='utf-8') for p in resolution.parts]
+    analyzed = []
+
+    def semantic(packet):
+        current = packet['current_call']
+        accesses = []
+        if current['event_id'] == written.event_id:
+            selected = current['required_resources']
+            assert len(selected) == 1
+            projection = selected[0]['projections'][0]
+            assert projection['key'] == f'remote.{chosen}.url'
+            analyzed.append(projection)
+            if chosen == 'derived':
+                accesses = [dict(path='notes.txt', mode='read', reason='fixture value derived from notes')]
+        # Deliberately omit the configuration read; the controller must add it.
+        return dict(complete=True, externality='external' if current['event_id'] == send.event_id else 'local',
+                    reason='fixture', dependencies=[], accesses=accesses, evidence_requests=[])
+
+    result = analyze_properties(journal.db_path, send.workspace_id, 'one', send.event_id,
+                                [dict(node_id='source', path='notes.txt')], semantic,
+                                current_evidence=evidence, require_external=True)
+    assert result['action'] == expected
+    assert len(analyzed) == 1
+
+    # Registration changes do not need a fresh model verdict to protect the source.
+    def no_model(packet):
+        pytest.fail('stable semantic evidence should be reusable after registration')
+
+    protected = analyze_properties(journal.db_path, send.workspace_id, 'one', send.event_id,
+                                   [dict(node_id='config-source', path='.git/config')], no_model,
+                                   current_evidence=evidence, require_external=True)
+    assert protected['action'] == 'block'

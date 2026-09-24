@@ -10,8 +10,8 @@ from tooluseproxy.engine.contracts import literal_words
 from tooluseproxy.engine.graph import digest
 from tooluseproxy.engine.repository_evidence import bounded_read
 
-CONTRACT = 'invocation-context-v1'
-GIT_KEYS = (r'^(push\..*|remote\..*|branch\..*|url\..*|'
+CONTRACT = 'invocation-context-v2'
+GIT_KEYS = (r'^(push\..*|remote\..*|branch\..*|url\..*|submodule\..*|'
             r'include\..*|includeif\..*|extensions\.worktreeconfig)$')
 
 
@@ -55,22 +55,34 @@ def git_facts(cwd):
         raise ValueError('context_control_state_forbidden')
     if not (root / '.git').is_dir() or (root / '.git').is_symlink():
         raise ValueError('context_repository_metadata_unsupported')
-    argv = ['git', '--no-optional-locks', '-C', str(root)]
+    argv = ['git', '--no-pager', '--no-optional-locks', '-C', str(root)]
     # No includes are opened by Git. An unresolved include is explicitly NOT a
     # complete effective-config observation (including conditional includes).
-    raw = bounded_read([*argv, 'config', '--no-includes', '--null', '--get-regexp', GIT_KEYS],
+    raw = bounded_read([*argv, 'config', '--no-includes', '--show-origin', '--null', '--get-regexp', GIT_KEYS],
                        env, limit=64_000, accepted_codes=(0, 1))
     settings = []
-    for row in raw.split(b'\0'):
-        if not row:
-            continue
+    fields = raw.split(b'\0')
+    if fields[-1] != b'' or (len(fields) - 1) % 2:
+        raise ValueError('context_config_output_invalid')
+    origins = {}
+    for index in range(0, len(fields) - 1, 2):
+        origin, row = fields[index:index + 2]
         key, value = row.decode('utf-8').split('\n', 1)
         if key.lower().startswith(('include.', 'includeif.')):
             raise ValueError('context_config_includes_unresolved')
+        if origin.startswith(b'file:'):
+            path = Path(origin[5:].decode('utf-8'))
+            path = (path if path.is_absolute() else root / path).resolve()
+            if path.name == 'protected_sources.json':
+                raise ValueError('context_control_state_forbidden')
+            origins[f'/invocation_context/facts/settings/{len(settings)}/value'] = dict(
+                path=str(path), projection=dict(kind='git_config_value', key=key, value=value))
         settings.append(dict(key=key, value=value))
     branch = bounded_read([*argv, 'symbolic-ref', '--quiet', 'HEAD'], env,
                           limit=4096, accepted_codes=(0, 1)).decode('utf-8').strip()
-    return dict(settings=settings, head_ref=branch or None,
+    origins['/invocation_context/facts/head_ref'] = dict(path=str(root / '.git/HEAD'),
+                                                       projection=dict(kind='git_head_ref', value=branch))
+    return dict(settings=settings, head_ref=branch or None, origins=origins,
                 settings_scope='system, global, local, worktree and inherited command configuration; ordered, duplicates retained',
                 absent_settings='not configured in the observed scopes; standard Git defaults apply')
 
