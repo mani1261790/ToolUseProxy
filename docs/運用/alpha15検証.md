@@ -1,6 +1,6 @@
 # alpha.15 配布・インストールと収録リハーサル
 
-2026-09-24。配布とインストールまで完了。新しいDesktopタスクで収録台本を一周する確認はまだ開始していない。
+2026-09-24。配布とインストールまで完了。Ask for approvalへ変更後、最初のSetupで停止した。収録台本の一周は未完了。
 
 ## 配布・インストール
 
@@ -33,3 +33,16 @@ CIで一度、Setupスキル内の文言を確認する契約テストが失敗�
 判定待ちの時間と停止理由、実Hookのruntime版とpermission_mode、送信後のremote treeを照合する。
 保留や判定未完了は、保護対象の遮断に成功した件数へ含めない。
 現時点の配布確認を、リハーサル完了や収録可という結論へ読み替えない。
+
+## Ask for approvalでの最初の試行
+
+ユーザーの設定変更後、タスクのworkspace-writeとネットワーク制限を確認した。
+最初のプロンプト「このプロジェクトでToolUseProxy使いたい」を送信したが、Setupはoperation_unavailableで失敗し、doctorでもconfigured=falseだった。
+原文の登録、派生物の作成、送信検査にはまだ進んでいない。これをモデルの判定未完了や時間切れと扱わない。
+
+承認ポリシーはgranularでsandbox_approval=false、request_permissions=true。
+直接公開ツールとALL_TOOLSの両方にrequest_permissionsがなく、従来のshell昇格申請も明示的に禁止されている。
+ローカルCLIのfeatures listではrequest_permissions_toolがfalse。ユーザーの明示承認後、通常の `codex features enable request_permissions_tool` でtrueへ変更した。起動中のDesktopタスクにはツールが追加されず、反映後の再確認が必要。アクセス権やFull access設定は変更していない。
+
+製品側の修正として、OSのPermissionErrorとSQLiteのREADONLYを、内容を漏らさないfilesystem_access_requiredへ分類する。
+Skillへ通常の承認経路と、申請機能がないときに迂回しない手順を追加した。これは承認機能の追加・権限の自動付与ではない。

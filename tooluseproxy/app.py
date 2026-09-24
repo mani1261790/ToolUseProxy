@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import json
 import os
 import sqlite3
@@ -344,18 +345,28 @@ def main(argv=None):
                 result, code = start(paths.db_path, root), 0
         print(json.dumps(result, ensure_ascii=False))
         return code
-    except Exception:
-        # Errors can contain private paths or model context; use a value-free diagnostic.
-        print(
-            json.dumps(
-                {
-                    "status": "operation_unavailable",
-                    "message": "操作を完了できませんでした。"
-                    "旧版のコマンドや設定は自動適用しません。",
-                },
-                ensure_ascii=False,
-            )
-        )
+    except Exception as error:
+        # Exception text may contain private paths or content. Classify only
+        # stable OS/SQLite codes, without hiding permission failures as generic
+        # product errors or granting permissions ourselves.
+        sqlite_code = getattr(error, "sqlite_errorcode", None)
+        readonly = (isinstance(error, sqlite3.Error) and isinstance(sqlite_code, int)
+                    and sqlite_code & 0xff == sqlite3.SQLITE_READONLY)
+        permission = (isinstance(error, PermissionError) or
+                      isinstance(error, OSError) and error.errno in (errno.EACCES, errno.EPERM))
+        result = {
+            "status": "operation_unavailable",
+            "message": "操作を完了できませんでした。旧版のコマンドや設定は自動適用しません。",
+        }
+        if permission or readonly:
+            result = {
+                "status": "filesystem_access_required",
+                "reason": "database_readonly" if readonly else "permission_denied",
+                "message": "ファイルへのアクセス権限が不足しているか、データベースが読取り専用です。"
+                "Codexの通常の権限申請で必要な範囲だけ確認し、許可後に同じ操作を再実行してください。"
+                "申請機能が使えない場合は、その状態を報告してください。",
+            }
+        print(json.dumps(result, ensure_ascii=False))
         return 1
 
 

@@ -110,6 +110,26 @@ sh "<PLUGIN_ROOT>/hooks/run_cli.sh" logs --workspace "<WORKSPACE>" --data-dir "<
 observe a fresh PreToolUse, the judge's decision, and whether the actual tool executed.
 Do not call an installed/enabled Plugin or a populated DB proof of current protection.
 
+## Host permissions
+
+Ask for approval may sandbox shell commands to the workspace. Setup and registration
+also write to the verified Plugin data directory, outside that workspace; the viewer
+needs a loopback listener. A user's product request is not a host permission grant.
+Use the host's normal permission-request tool, when available, for only the needed
+path or local listener and wait for the user's decision. Never change permission
+profiles, use Full access, relocate the database, or delegate the command to a more
+privileged task to avoid this boundary. Do not approve a request on the user's behalf.
+
+`filesystem_access_required` identifies an OS permission failure or a read-only
+SQLite database, not a leak decision or model timeout. Explain the missing access
+and, after an actual grant, retry the same operation. If no permission-request tool
+is available, say so and wait for the user to resolve the host permissions; do not
+claim that a request was shown. A read-only filesystem can require user repair rather
+than a grant. Do not repeatedly rerun unchanged failures or inspect private DB contents
+to diagnose access. Setup may have partially completed: reuse any existing state;
+do not erase registrations or promise a rollback. Viewer errors are separate from
+initialization success.
+
 ## Register a source
 
 For an explicitly named file, register it directly. The command registers the whole
