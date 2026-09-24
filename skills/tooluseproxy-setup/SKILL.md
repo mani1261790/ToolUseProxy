@@ -64,6 +64,7 @@ do not ask for the same approval again.
 Repairable incomplete or invalid model assessments are retried within the same Hook,
 with feedback and reuse of completed reviews whose evidence still matches. Transient
 provider failures also retry. Missing policy bindings cannot be invented.
+The current runtime retains unresolved operations pending a completed judgment.
 If judgment still cannot complete, report **判定未完了**, never a detected leak, a safe
 operation, or a completed protection decision. The current runtime still has finite
 wait and Hook deadlines: exhausting them may withhold execution via the host deny
