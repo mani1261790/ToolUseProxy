@@ -549,7 +549,12 @@ def analyze_properties(
         result = {"node_id": current_node, "action": action, "reason": reason, "path": path,
                   "reachability_ms": (time.monotonic_ns() - traversal_started) / 1_000_000}
         if action == "unavailable":
-            result["retryable"] = False
+            # An unfinished model review is not a terminal policy decision.
+            # Retry it in this Hook, retaining completed parts. Missing policy
+            # bindings require real evidence and cannot be repaired by guessing.
+            result["retryable"] = policy_complete
+            if policy_complete:
+                result["retry_scope"] = "review"
             result["evidence_needs"] = unresolved_dependencies(conn, workspace, current_node)
         conn.execute(
             "INSERT OR REPLACE INTO graph_progress VALUES (?,?,?,?)",

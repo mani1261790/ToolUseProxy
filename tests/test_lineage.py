@@ -361,12 +361,14 @@ def test_cross_session_producer_is_reassessed_when_cached_judgment_is_stale(hist
     with sqlite3.connect(store.db_path) as conn:
         if stale=='incomplete':
             for revision,raw in conn.execute('select revision,verdict from graph_revisions').fetchall():
-                value=json.loads(raw);value['complete']=False
+                value=json.loads(raw)
+                value['complete']=False
                 conn.execute('update graph_revisions set verdict=? where revision=?',(json.dumps(value),revision))
         else:
             conn.execute('update graph_revisions set '+stale+"='previous-version'")
         # Simulate a stored generation from an earlier runtime, without its cache.
         conn.execute('delete from graph_completed_reviews')
+        conn.execute('delete from graph_review_parts')
     send=record('new-session','send','pre_tool_use','send',[{'path':'derived','mode':'read'}])
     seen=[]
     def tracking(records):
