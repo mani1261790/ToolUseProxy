@@ -1,4 +1,4 @@
-> Historical v0.1 documentation. Not instructions for v0.2.
+> v0.1時代の資料です。v0.2の利用手順ではありません。
 
 # プライバシーとデータ保持
 
@@ -50,8 +50,8 @@ Codex Pluginでは、Codexが渡す`PLUGIN_DATA`の下に`events.db`、利用pro
 
 Externality Judgeへ送る構造要約には、tool family、解析coverage、executable category、HTTP / socket / DNS / child processなどのclosed capability、dynamic code / 未知executable / workspace外参照などのclosed risk signal、bounded countだけを含めます。次は送信しません。
 
-- raw command、argument、source code、tool response、final answer
-- protected source、user prompt、transcript
+- 生のコマンド、引数、ソースコード、ツールの応答、最終回答
+- 保護情報源、利用者の入力、会話記録
 - URL、host、DNS label、workspace path、file name、独自identifier
 - credential、環境変数値
 

@@ -1,4 +1,4 @@
-> Historical v0.1 documentation. Not instructions for v0.2.
+> v0.1時代の資料です。v0.2の利用手順ではありません。
 
 # ToolUseProxy 5分クイックスタート
 
@@ -114,7 +114,7 @@ setup失敗、Hookの`modified`または`untrusted`、2つ目のToolUseProxy Plu
 
 正常にblockした場合は、「ToolUseProxyが外部送信を実行前に止めました」と「結果：外部操作は実行されていません」が先に表示されます。保護対象の本文、source ID、scoreは判断材料として表示しません。調査commandが必要な場合だけ、最後の「技術情報（通常は読む必要なし）」を確認できます。
 
-詳細な記録項目は[実projectでのドッグフード手順](docs/運用/Pluginドッグフード.md#実projectでのself-dogfood)と[dogfood report template](.github/ISSUE_TEMPLATE/dogfood-report.md)を利用できます。reportへsource値、raw Hook payload、SQLite DB、access token、ユーザーのabsolute pathを含めないでください。
+詳細な記録項目は[実projectでのドッグフード手順](../../運用/Pluginドッグフード.md#実projectでのself-dogfood)と[dogfood report template](../../../.github/ISSUE_TEMPLATE/dogfood-report.md)を利用できます。reportへsource値、raw Hook payload、SQLite DB、access token、ユーザーのabsolute pathを含めないでください。
 
 ## 7. 更新する
 
@@ -136,7 +136,7 @@ codex plugin remove tooluseproxy@tooluseproxy
 codex plugin marketplace remove tooluseproxy
 ```
 
-この操作ではlocal監査dataを削除しません。data削除は[Plugin導入ガイド](docs/設定/Plugin導入.md#disable--uninstall)に記載した、別の`uninstall plan`と明示承認が必要です。
+この操作ではlocal監査dataを削除しません。data削除は[Plugin導入ガイド](Plugin導入.md#無効化削除)に記載した、別の`uninstall plan`と明示承認が必要です。
 
 ## 30秒のsynthetic preview
 

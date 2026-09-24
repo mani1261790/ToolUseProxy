@@ -1,3 +1,5 @@
+> v0.1時代の設計・運用・評価資料です。ここにある機能や手順はv0.2の通常実行経路とは異なります。現在の説明は[エッジ生成と送信判定](エッジ生成と送信判定.md)と[文書一覧](../索引.md)を参照してください。
+
 # Policy判断
 
 Policy判断は、漏えい検知で得た finding を、実行時にどう扱うかという判断へ変換する層です。
@@ -58,7 +60,7 @@ private-source
 
 同じ `curl` でも、protected source 由来の情報が含まれない場合は許可でき、protected source 由来の情報が外部へ送られる場合は止める、という判断ができます。
 
-## PolicyDecision model
+## 判定結果のデータ構造（PolicyDecision）
 
 最小実装では、次のactionを使います。
 
@@ -163,9 +165,9 @@ render_codex_hook_output(decision, "PreToolUse")
 `PolicyExplanation` は、判断そのものではなく人間に見せる説明です。説明には次を含めます。
 
 - 何が起きたか
-- source node
-- sink type
-- score / severity
+- 情報源ノード
+- 送信先の種類
+- スコア / 重大度
 - `trace_lineage.py` で根拠経路を確認する command
 - 次にどう直すべきか
 
@@ -183,20 +185,20 @@ Stop hook runtimeで `block` / `warn` / `continue_review` を返した場合は�
 
 保存する情報:
 
-- decision id / finding id / analysis run id
-- hook event / action / severity
-- source node / sink candidate
-- sink type / score
-- user message / technical summary
-- trace command
-- path summary
+- 判定ID / 検出ID / 解析実行ID
+- Hookイベント / 判定動作 / 重大度
+- 情報源ノード / 送信候補
+- 送信先の種類 / スコア
+- 利用者への説明 / 技術的な要約
+- 追跡コマンド
+- 経路の要約
 
 保存しない情報:
 
-- raw artifact text
-- protected source text
-- tool input raw value
-- final answer raw value
+- 情報物の本文
+- 保護情報源の本文
+- ツール入力の生の値
+- 最終回答の生の値
 
 保存済みdecisionは次のCLIで確認します。
 
@@ -233,7 +235,7 @@ python3 scripts/evaluate_policy.py --analysis-run "$ANALYSIS_RUN_ID" --include-f
 
 `--analysis-run ID`と`--workspace-root PATH --latest`は排他的です。後者は指定workspaceのcompleted offline runだけを選び、global latestやruntime runへfallbackしません。
 
-text output:
+文章による出力：
 
 ```text
 analysis_run_id=...
@@ -247,7 +249,7 @@ hook_event: PreToolUse
 trace: python3 scripts/trace_lineage.py --analysis-run <analysis_run_id> --node sink_candidate:<id>
 ```
 
-JSON output:
+JSON形式の出力：
 
 ```json
 {
@@ -286,7 +288,7 @@ JSON output:
 - Stop hook が返したpolicy decisionのDB保存
 - `Stop` hook から `final_answer` の `continue_review` を返す最小接続
 - Stop hook では現在の `Stop` event 由来の `final_answer` sink だけを判断対象にする
-- text / JSON output
+- 文章 / JSON形式の出力
 - policy decision のテスト
 
 実Hookへ接続済みの範囲:

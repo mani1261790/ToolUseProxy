@@ -1,4 +1,4 @@
-> Historical v0.1 documentation. Not instructions for v0.2.
+> v0.1時代の資料です。v0.2の利用手順ではありません。
 
 # サポート範囲と既知の制限
 
@@ -21,7 +21,7 @@ Windowsでは既存manifestのruntime読み取りとlauncherを将来互換の�
 
 POSIX launcherもpackage metadataと同じPython 3.11 / 3.12だけを選びます。`TOOLUSEPROXY_PYTHON`や`python3`が3.13以降または3.10以前を指す場合は実行せず、別の対応runtimeを探した後にPreToolUseを安全停止します。PostToolUse / Stopは診断だけを返します。
 
-## Codex Plugin
+## Codexプラグイン
 
 - localでCodex CLIのmarketplace add / Plugin installを検証済み
 - Gitのmoving refを使う`codex plugin marketplace upgrade`で、alpha.1および3 Hook alpha.8からalpha.13へ置き換わり、Plugin dataが保持されることを実Codex CLIで自動検証。alpha.13ではmacOS上の未設定・設定済みprojectのCodex CLI実経路、alpha.12ではfresh Desktop配送を確認済み
@@ -77,8 +77,8 @@ Codex Plugin APIやHook payloadはToolUseProxyとは別に変更され得ます�
 - runtime policyは他のHookやtool自体をexclusiveに制御できず、ToolUseProxy単独で完全な外部送信防止を保証しない
 - Externality JudgeのCodex routeは事前probe合格と24時間以内のreceiptを要求する。実測latencyは約3.4〜6.3秒だが、この待ち時間はHook外workerに限定され、PreToolUseには入らない
 
-dataの詳細は[プライバシーとデータ保持](PRIVACY.md)、導入手順は[Codex Plugin導入](docs/設定/Plugin導入.md)、実装の優先順位は[実装タスク](docs/運用/実装タスク.md)を参照してください。
+dataの詳細は[プライバシーとデータ保持](PRIVACY.md)、導入手順は[Codex Plugin導入](../../設定/Plugin導入.md)、実装の優先順位は[実装タスク](../../運用/実装タスク.md)を参照してください。
 
 ## 問題報告
 
-[GitHub Issues](https://github.com/mani1261790/ToolUseProxy/issues)へ、OS、Python / Codex version、実行command、期待結果、実結果をsynthetic dataで報告してください。secret、raw Hook payload、`events.db`、absolute user pathは添付しないでください。security-sensitiveな内容は[非公開の脆弱性報告手順](SECURITY.md)を使用してください。
+[GitHub Issues](https://github.com/mani1261790/ToolUseProxy/issues)へ、OS、Python / Codex version、実行command、期待結果、実結果をsynthetic dataで報告してください。secret、raw Hook payload、`events.db`、absolute user pathは添付しないでください。security-sensitiveな内容は[非公開の脆弱性報告手順](../../../SECURITY.md)を使用してください。

@@ -4,7 +4,7 @@
 
 - 修正PR #310をmainへmerge。出力選択を実観測と照合してからグラフを展開し、不一致をモデル応答の訂正へ戻す。
 - 全体テスト289件成功・1件スキップ。Python 3.11/3.12、macOS package smoke、再現可能buildのCIはすべて成功。
-- source commit: `9e4652131f54332584b1865ba8e18d290f44a11d`。
+- ソースのコミット： `9e4652131f54332584b1865ba8e18d290f44a11d`。
 - Release `v0.2.0-alpha.12` を公開。GitHubの8添付ファイルをローカル候補のSHA-256と照合。
 - 配布チャンネルPR #311をCI成功後merge。通常のmarketplace upgradeを実施。
 - インストール済みlauncherは `0.2.0a12`。Plugin ZIP内の実装54ファイルがcacheと一致。

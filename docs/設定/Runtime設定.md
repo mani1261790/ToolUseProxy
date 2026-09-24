@@ -1,3 +1,5 @@
+> v0.1時代の設計・運用・評価資料です。ここにある機能や手順はv0.2の通常実行経路とは異なります。現在の説明は[エッジ生成と送信判定](../設計/エッジ生成と送信判定.md)と[文書一覧](../索引.md)を参照してください。
+
 # Workspace runtime設定
 
 ToolUseProxyの実行時policyは、workspaceごとに`PLUGIN_DATA/events.db`へ保存できます。Desktopや別taskでも同じworkspace登録と`PLUGIN_DATA`を使えば設定が引き継がれ、Plugin codeをremove / reinstallしてもmanaged dataを明示削除しない限り残ります。

@@ -1,3 +1,5 @@
+> v0.1時代の設計・運用・評価資料です。ここにある機能や手順はv0.2の通常実行経路とは異なります。現在の説明は[エッジ生成と送信判定](エッジ生成と送信判定.md)と[文書一覧](../索引.md)を参照してください。
+
 # Sink payload evidenceの設計
 
 ## 目的
@@ -6,9 +8,9 @@ ToolUseProxyは、外部sinkが送るpayloadを実行前に解決し、protected
 
 `sink payload evidence`は、解決した値をPreToolUse処理中だけ保持し、比較後は値を捨てるための境界です。返却・保存できるのは次の値なし情報だけです。
 
-- workspace ID
+- プロジェクトID
 - sink node IDとsegment index
-- resolver / evidence contract version
+- 内容解決処理 / 証拠の扱いの版
 - resolutionの`evaluated` / `unsupported`
 - comparisonの`evaluated` / `unsupported` / `not_run`
 - `static_values` / `resolved_file` / `coarse_fallback`
@@ -27,7 +29,7 @@ payload本文、payload由来hash、raw commandの複製、file pathはevidence�
 
 このcontractはproductionのopt-in shadow modeと、別の明示opt-in exact-only enforcementへ接続済みです。shadowだけでは`PreToolUse`のdeny、allow、Hook outputを変更しません。enforcementは評価済みのresolved-file exact / exact-substring evidenceだけをcritical blockへ昇格させ、semanticやunsupported入力をblockしません。
 
-## Shadow observation
+## 判定に反映しない観測
 
 workspace設定`file-payload-shadow=on`は、current Bash eventの`curl` HTTP sinkだけを観測します。互換用の`TOOLUSEPROXY_PRE_TOOL_FILE_PAYLOAD_SHADOW=1`も同じ機能を有効化し、環境変数がworkspace設定より優先されます。現在のruntime解析が使ったactive source chunksを`RuntimeAnalysisResult`から直接受け取り、manifest更新後のstale chunkや別workspaceのchunkを別queryで混ぜません。
 
@@ -37,16 +39,16 @@ shadow用SQLite tableへ保存するのは、status、有限のreason、snapshot
 
 `scripts/report_sink_payload_shadow.py`はidentityを出さず、status、match、decision diff、payload size bucket、p50 / p95 / p99 / max latencyだけをJSONで集計します。`would_block`は「現在のexact-only候補」であり、遮断が実行された意味ではありません。
 
-## Bounded file resolver
+## 上限付きのファイル内容の解決
 
 resolver v2が扱うのは、staticな`curl --data-binary @relative-file`と`--data-binary=@relative-file`です。
 
-- 1 path: 4 KiB
+- 1パス： 4 KiB
 - file reference: 1 commandあたり8件
-- 1 value: 32 KiB
+- 1値： 32 KiB
 - value: 1 commandあたり32件
 - payload合計: 128 KiB
-- resolution time budget: 200 ms
+- 内容解決の時間上限： 200 ms
 - 比較対象source chunk: 512件、1件32 KiB、合計512 KiB
 - regular UTF-8 textだけを許可
 - NUL、stdin、dynamic operand、workspace外、`..`を拒否

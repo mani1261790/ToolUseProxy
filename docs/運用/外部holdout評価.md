@@ -1,3 +1,5 @@
+> v0.1時代の設計・運用・評価資料です。ここにある機能や手順はv0.2の通常実行経路とは異なります。現在の説明は[エッジ生成と送信判定](../設計/エッジ生成と送信判定.md)と[文書一覧](../索引.md)を参照してください。
+
 # repository外holdout評価
 
 Similarity v2.1のdevelopment / validationはrepository内のsynthetic corpusです。規則をfreezeした後のblind評価には、本文をGitへ置かないrepository外holdoutを使います。
@@ -88,16 +90,16 @@ python -m hook_monitor.evaluation.external_holdout_cli \
 
 latencyはhardware依存なのでp50 / p95 / maxを集約表示しますが、固定GO thresholdには使いません。
 
-## public report
+## 公開する報告
 
 公開可能なJSONは次の情報だけを持ちます。
 
-- contract / runner version
+- 評価条件 / 実行器の版
 - pair / scenario / public category件数
 - overallとpublic category別の混同行列・accuracy
 - similarity method件数
 - parity件数とmismatch件数
-- aggregate latency
-- privacy / quality check
+- 処理時間の集計
+- プライバシー / 品質の確認
 
 case単位の診断surfaceは意図的に提供しません。NO-GO時は公開category単位の集約まで戻り、private環境内でcorpus管理者が原因を調べます。private入力や個別hashをIssue、PR、CI artifactへ添付してはいけません。

@@ -1,3 +1,5 @@
+> v0.1時代の設計・運用・評価資料です。ここにある機能や手順はv0.2の通常実行経路とは異なります。現在の説明は[エッジ生成と送信判定](../設計/エッジ生成と送信判定.md)と[文書一覧](../索引.md)を参照してください。
+
 # Sink-first比較評価
 
 ## 目的
@@ -41,7 +43,7 @@ python -m hook_monitor.evaluation.sink_benchmark_cli \
 
 semantic profileはrunner APIへbackendを渡せる設計ですが、CLIとHookでは有効にしていません。semantic-onlyの自動blockも行いません。
 
-## Dataset
+## データセット
 
 `tests/fixtures/sink_benchmark/v1`には12件あります。
 

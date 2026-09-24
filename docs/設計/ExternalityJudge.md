@@ -1,6 +1,8 @@
-# Externality Judge
+> v0.1時代の設計・運用・評価資料です。ここにある機能や手順はv0.2の通常実行経路とは異なります。現在の説明は[エッジ生成と送信判定](エッジ生成と送信判定.md)と[文書一覧](../索引.md)を参照してください。
 
-## Status
+# 外部通信の分類器
+
+## 実装状況
 
 Externality Judgeは、adapterで外部性を確定できないHook-visibleなlocal function callについて、外部通信の可能性を値非保持で評価するための実験境界です。現在は初見unknownの保守的な実行前保護、Hook外classification queue、人間review、承認済みlocal rule cacheまで実装しています。remote modelもworkerも既定では動きません。
 
@@ -20,38 +22,38 @@ Externality Judgeは次の順で判定材料を作ります。
 
 Externality Judgeはprotected sourceとの一致やlineageを判定しません。外部通信可能性とprotected flowは別の判断として維持します。
 
-## Value-free envelope
+## 値を含めない入力形式
 
 envelopeに含められる値はclosed enumとbounded countだけです。
 
-- tool family
+- ツールの分類
 - 解析coverage
-- executable category
+- 実行ファイルの区分
 - HTTP、socket、DNS、child processなどのcapability
 - dynamic code、未知のexecutable、workspace外参照などのrisk signal
 - segment、pipeline、redirection、file read、script fileの個数
 
 次の値は含めません。
 
-- raw command、argument、source code
-- protected source、user prompt、transcript
-- URL、host、DNS label
+- 生のコマンド、引数、ソースコード
+- 保護情報源、利用者の入力、会話記録
+- URL、ホスト名、DNS名
 - credential、環境変数値
 - workspace path、file name、独自identifier
 
 unknown identifierをremote modelへ説明するために本文や名前を追加しません。情報不足なら`unknown`として扱います。
 
-## Judge output
+## 分類器の出力
 
 judge outputは自由記述を持たないstrict schemaです。
 
-- verdict: `external` / `possibly_external` / `local` / `unknown`
-- confidence: `high` / `medium` / `low`
+- 判定（`verdict`）： `external` / `possibly_external` / `local` / `unknown`
+- 確信度（`confidence`）： `high` / `medium` / `low`
 - reason codes: 固定enumを1〜4件
 
 response refusal、timeout、HTTP error、JSON不正、schema不一致はprovider failureです。将来Hookへ接続する場合は、これらをallowへ変換してはいけません。
 
-## Provider boundary
+## モデル提供元との境界
 
 LLM judgeは`CodexExecJudge`だけです。ToolUseProxyはOpenAI API endpointを直接呼ばず、API keyを受け取りません。workerは各jobについて独立した`codex exec --ephemeral`を起動します。`--ignore-user-config`、`--ignore-rules`、read-only sandbox、output schemaを使い、Hook、Plugin、shell、browser、computer use、MCPにつながる機能を明示的に無効化します。実CLI versionでlocal caseとrisk caseを通すcapability probeに合格するまで、judgeとして利用できません。
 
@@ -102,7 +104,7 @@ tooluseproxy externality approve JOB_ID \
 - protected sourceやraw sourceをremote modelへ送るoptional mode
 - daemonやschedulerの自動install
 
-## Gate
+## 採用条件
 
 次の条件を満たすまでproduction policyへ接続しません。
 

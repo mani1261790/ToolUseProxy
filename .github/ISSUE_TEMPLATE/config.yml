@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: 脆弱性・保護回避を非公開で報告する
+    url: https://github.com/mani1261790/ToolUseProxy/security/advisories/new
+    about: 保護内容や回避手順を公開Issueに書かず、こちらから報告してください。
+  - name: 導入・仕組み・対応範囲を確認する
+    url: https://github.com/mani1261790/ToolUseProxy/blob/main/docs/索引.md
+    about: 初期設定、アルゴリズム、データの扱い、既知の制限の案内です。

@@ -1,7 +1,7 @@
 ---
 name: 週次進捗報告
 about: 1週間の研究進捗、結果、課題、次週の計画を記録する
-title: "[Weekly Report] YYYY-MM-DD - YYYY-MM-DD"
+title: "[週次報告] YYYY-MM-DD - YYYY-MM-DD"
 labels: weekly-report
 assignees: ""
 ---
@@ -20,11 +20,11 @@ assignees: ""
 
 ## 成果物
 
-- Pull Request:
-- Commit:
+- プルリクエスト：
+- コミット：
 - ドキュメント:
 - 実験ログ:
-- 関連Issue / Milestone:
+- 関連Issue / マイルストーン：
 - CI / 再現コマンド:
 
 ## 問題・未解決事項

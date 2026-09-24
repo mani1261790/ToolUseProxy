@@ -25,8 +25,8 @@ network observationは外部性のground truth候補です。TLSで暗号化さ�
 
 2026-08-11時点の公式仕様では、ローカルCodexのnetwork accessは既定で無効です。command networkを有効にした場合、`network_proxy`のdestination ruleはscript、program、subprocessへ適用されます。`network_proxy`自体はnetwork accessを許可せず、allowlist-firstで`deny`が優先します。
 
-- [Agent approvals & security](https://learn.chatgpt.com/docs/agent-approvals-security)
-- [Hooks](https://learn.chatgpt.com/docs/hooks)
+- [エージェントの承認とセキュリティ](https://learn.chatgpt.com/docs/agent-approvals-security)
+- [Hookの仕様](https://learn.chatgpt.com/docs/hooks)
 
 ToolUseProxyは、この境界を「漏えい判定器そのもの」にはしません。役割は次のとおり分離します。
 
@@ -70,10 +70,10 @@ PYTHONPATH=. python3 scripts/run_codex_network_live_probe.py \
 
 結果:
 
-- network policy decision event: 3 / 3
+- ネットワーク方針の判断イベント： 3 / 3
 - conversation単位のjoin: 3 / 3
-- event latency: p50 `107.714 ms`、p95 `109.363 ms`
-- app-server network approval: 0 / 3
+- イベントの遅延： p50 `107.714 ms`、p95 `109.363 ms`
+- アプリサーバーでのネットワーク承認： 0 / 3
 - `execution.id`によるTool Use単位の厳密join: 0 / 3
 - 同じOTel endpointへ届いた非network event: 54件
 - 値を含み得る`codex.tool_result` event: 3件
@@ -107,10 +107,10 @@ synthetic workspaceと専用runnerで、次の情報だけを記録します。
 
 - event / process / tool callと結合するためのID
 - executable familyとargv structure
-- protocol
-- destination class: loopback / private / public / reserved / unknown
-- port class
-- connection attempt / success / failure
+- プロトコル
+- 宛先の区分：ループバック / プライベート / 公開 / 予約済み / 不明
+- ポートの区分
+- 接続試行 / 成功 / 失敗
 - adapterが付けたsink type
 - join statusと観測時刻
 
@@ -141,17 +141,17 @@ python3 -m hook_monitor.evaluation.network_egress_cli \
 
 v1 baselineはadapter externality recall `0.308`、unknown egress rate `0.692`です。これはsynthetic labelに基づく現状仮説であり、実network ground truthではありません。精度をCI合否へ使わず、次sliceの実測で置き換えます。
 
-## Phase 2: adapter differential benchmark
+## 第2段階：操作変換器の比較評価
 
 同じcaseについて、adapter分類とnetwork observationを突き合わせます。
 
-- adapter externality recall
-- unknown egress rate
+- 操作変換器の外部通信検出の再現率
+- 分類できない外部送信の割合
 - external分類のprecision
 - tool eventとのjoin成功率 / 誤結合率
 - program / protocol / destination class別のcoverage gap
 - Hookと観測器のp50 / p95 latency
-- raw protected value exposure
+- 保護内容そのものの露出
 
 観測器が見えないhosted tool、TLSで見えないpayload、OS差を`unknown`として残します。見えないものをallowやsafeへ丸めません。
 

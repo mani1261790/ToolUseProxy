@@ -1,3 +1,5 @@
+> v0.1時代の設計・運用・評価資料です。ここにある機能や手順はv0.2の通常実行経路とは異なります。現在の説明は[エッジ生成と送信判定](../設計/エッジ生成と送信判定.md)と[文書一覧](../索引.md)を参照してください。
+
 # Pluginドッグフード
 
 公開Plugin marketplace artifactから、public alphaのlifecycleをsynthetic dataだけで反復する手順です。CodexのHook trustはユーザーがdefinitionをreviewして行うmanual gateであり、このrunnerは承認を自動化・迂回しません。
@@ -105,7 +107,7 @@ Codex CLIなしでartifact runtimeだけを検証するときは次を使いま�
 python3.11 scripts/dogfood_plugin.py --installation-mode extracted
 ```
 
-## manual Phase B
+## 第2段階の手動確認
 
 自動runnerはHook definitionのtrustや、Codexがdenyを受けて実tool invocationを0件にしたことを代行しません。manual Phase Bはrepository外の専用directoryへisolated `CODEX_HOME`、synthetic workspace、絶対pathでだけ呼ぶlocal fake `curl`を準備します。一時directoryはOSに削除される場合があるため、人が数日に分けて実行するときは本人だけが読める永続directoryを使います。
 
@@ -191,7 +193,7 @@ verify出力はroot path、source hash、candidate ID、tool input、raw canary�
 
 その後のhuman runでは7項目は出ましたが、`- ラベル: 長い文章`が連続し、承認時に読みづらいという評価でした。また`doctor`の一時的な`OperationalError`後もagentがscanと送信テストへ進み、protected callは遮断されませんでした。DBはrun終了後にSQLite `quick_check`とdoctorが正常へ戻り、恒久破損ではありませんでしたが、このrunは明確に不合格です。次の改修では縦型Markdown cardを採用しましたが、TUIの承認導線ではMarkdown記号がそのまま見え、改行も判断に利用できないことがhuman runで判明しました。このためMarkdown cardを廃止し、改行がすべて消えても読める全角ラベル区切りの短いplain textへ変更します。異常時に送信テストへ進まず停止する契約は維持します。
 
-## File-backed payload shadow Phase B
+## ファイル送信内容の観測試験（第2段階）
 
 Issue #45のshadow modeは、onboarding用Phase Bと分離して評価します。onboarding harnessは静的literalのdenyを確認するため、意図的に`@file`を禁止しています。file-backed shadow caseでは逆に、synthetic protected/public fileを絶対pathのlocal fake `curl`へ渡し、現在policyは両方をallowしたまま、shadowだけが`would_block` / `would_allow`を1件ずつ記録することを確認します。
 

@@ -26,7 +26,7 @@ Docker は既存の unprivileged / read-only / private bridge / scratch tmpfs �
 
 ## 2026-09-19 の実測
 
-source commit dd47854、各バッチ最大180秒。結果と hash は results/task-worlds-20260919.json。
+ソースのコミット dd47854、各バッチ最大180秒。結果と hash は results/task-worlds-20260919.json。
 
 - inventory/public: 11試行、14.56秒。observe は正常完了、保護マーカー受信なし。
 - calendar/public: 11試行、11.47秒。observe は正常完了、保護マーカー受信なし。

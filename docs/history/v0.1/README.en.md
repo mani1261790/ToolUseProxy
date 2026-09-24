@@ -1,77 +1,78 @@
-> Historical v0.1 documentation. Not instructions for v0.2.
+> v0.1時代の説明を日本語に訳した履歴資料です。v0.2の利用手順ではありません。[現在の紹介](../../../README.md)を参照してください。
 
-# ToolUseProxy
+# ToolUseProxy（v0.1.0-alpha.24当時）
 
-ToolUseProxy is a local-first research implementation for tracing information flow through Codex tool calls and reviewing high-confidence leaks before they leave the workspace.
+ToolUseProxyは、Codexのツール操作を通じた情報流を追跡し、確度の高い漏えいを作業領域から出る前に検査する、ローカル処理を中心とした研究実装です。[SecHack365](https://sechack365.nict.go.jp/)での研究・開発成果です。
 
-This project is a research and development outcome of [SecHack365](https://sechack365.nict.go.jp/).
+この資料の対象は `0.1.0-alpha.24` です。保存する解析本文の重複を減らし、30日を過ぎた詳細な操作記録と、7日を過ぎた条件を満たす移行前DBの退避を少量ずつ整理できます。大容量DBでも、計画の描画が終わった時点から5分間の確認時間を取ります。自動整理は新しい計画を利用者が確認するまで無効で、Hookの活動が再開すると処理を譲ります。
 
-This version is `0.1.0-alpha.24`. It deduplicates stored analysis text and can incrementally clean detailed operation records older than 30 days and eligible pre-migration database backups older than seven days. Even for a large database, the five-minute review window starts after plan rendering completes. Automatic cleanup is disabled until the user reviews a fresh plan and now yields when Hook activity resumes. Protected-source registrations, settings, user evaluations, improvement feedback, and records newer than 30 days are not deleted merely to reduce storage. Fixed-profile verification preserves additional user settings such as pilot recording. Exact local management commands remain available as a recovery path when the runtime database is unavailable, while look-alike commands do not receive that exception. Git status inspection is treated as local only when that invocation explicitly disables `core.fsmonitor`, which can otherwise start an external helper. The alpha.18 protected-source removal boundary remains in place. It is a research alpha, not a complete DLP system.
+容量を減らすためだけに、保護登録、設定、利用者の評価、改善用フィードバック、30日以内の記録を削除しません。固定プロファイルの検証でも、試行記録など利用者の追加設定を保持します。DBを利用できない場合は、厳密に一致したローカル管理コマンドを復旧経路として残し、似たコマンドには例外を与えません。Gitの状態確認をローカルとして扱うのは、その呼出しで外部の補助処理を起動し得る `core.fsmonitor` を明示的に無効化した場合だけです。alpha.18の保護登録解除の境界を維持します。完全なDLP製品ではなく、研究用のアルファ版です。
 
-Synthetic fixed-network evaluation is excluded from release ZIP, wheel, and sdist artifacts. Git-based marketplace updates also copy development files, but the normal Hook runtime does not import or automatically run this evaluation code.
+固定ネットワークを使う人工評価は、公開ZIP・wheel・sdistに含めません。Gitによるマーケットプレイス更新には開発ファイルもコピーされますが、通常のHookはこの評価コードを取り込んだり自動実行したりしません。
 
-The Codex Plugin integration milestone is complete for the supported alpha.12 scope. Current development focuses on ToolUseProxy's core detection quality: measuring real-project false blocks and misses, expanding sink payload resolution, and evaluating externality, semantics, lineage, and session boundaries. Follow the [current implementation order](docs/運用/実装タスク.md) and [Issue #99](https://github.com/mani1261790/ToolUseProxy/issues/99).
+当時のalpha.12の対応範囲では、Codexプラグイン統合の工程は完了しています。以後は、実プロジェクトでの誤停止・見逃し、送信内容の解決、外部性、意味、来歴、セッション境界の評価を優先しました。[当時の導入記録](Plugin導入.md)と[Issue #99](https://github.com/mani1261790/ToolUseProxy/issues/99)を参照してください。
 
-After upgrading to alpha.24, fully restart Codex and verify behavior in a new task. Review all five Hooks again if their definitions changed. Before enabling cleanup on real data, review a fresh cleanup plan. Alpha.12 and earlier could show initialization diagnostics in projects where ToolUseProxy had never been enabled.
+alpha.24への更新後はCodexを完全に再起動し、新しいタスクで確認します。Hook定義が変わった場合は5種類すべてを再確認します。実データの整理を有効にする前に新しい整理計画を確認してください。alpha.12以前では、未導入のプロジェクトにも初期設定の診断が出る場合がありました。
 
-ToolUseProxy is licensed under the [Apache License 2.0](LICENSE).
+ライセンスは [Apache License 2.0](../../../LICENSE) です。
 
-## What it does
+## 当時の機能
 
-- Records Codex `PreToolUse`, `PostToolUse`, and `Stop` events in local SQLite storage only for explicitly enabled workspaces.
-- Builds lineage from user-approved protected sources to tool inputs and final answers.
-- Suggests `.env` and JSON protected-source entries without displaying their values.
-- Requires explicit approval before changing `protected_sources.json`.
-- Removes one selected protected-source registration without deleting its file or other settings.
-- Checks every Hook-visible local tool and can deny protected information flow before execution when opt-in enforcement is enabled.
-- Stores allowlisted boolean runtime policy settings per workspace with revision-checked updates and value-free audit history.
-- Hooks stay local and use no remote embedding or ToolUseProxy telemetry. The experimental Externality Judge queues only value-free structural summaries locally. A first-seen unknown call is denied only when protected lineage reaches it; public-only calls continue. An explicitly run worker starts a new isolated, ephemeral Codex session for each job. ToolUseProxy does not call the OpenAI API directly or accept an API key. A revision-bound human review is required before an exact local rule can remove the conservative unknown sink.
+- 明示的に有効化したプロジェクトだけで、Codexの `PreToolUse`、`PostToolUse`、`Stop` をローカルSQLiteへ記録する。
+- 利用者が承認した保護情報源から、ツール入力と最終回答への来歴を作る。
+- 値を表示せずに `.env` やJSONの保護候補を提案する。
+- 保護登録ファイルを変更する前に、明示的な承認を求める。
+- 指定した1件の保護登録だけを解除し、元ファイルや他の設定を削除しない。
+- 明示的に保護を有効化した場合、Hookに届くローカル操作を検査し、実行前に保護情報の流れを拒否できる。
+- 許可された真偽値の実行設定をプロジェクトごとに保存し、版の一致と内容非保持の監査記録を確認する。
+- Hookはローカル処理のみで、外部埋め込みや独自テレメトリーを使わない。実験的な外部分類器は、値を含まない構造要約だけをローカルの待ち行列に保存する。初見の不明な操作は、保護情報の経路が届く場合だけ拒否し、公開情報だけなら進める。
 
-## Install the Plugin
+当時の外部分類器では、明示的に起動した処理がジョブごとに新しい独立した一時Codexセッションを使います。ToolUseProxyがOpenAI APIを直接呼んだり、APIキーを受け取ったりはしません。ローカル操作のルールを採用して不明分類による拒否を解除するには、版を固定した人間の確認が必要でした。
 
-Install from the protected `public-alpha` release channel:
+## 当時の導入・更新
 
-```bash
+公開チャンネルの導入コマンドは次のとおりでした。現在の導入には[現行の手順](../../../QUICKSTART.md)を使ってください。
+
+```sh
 codex plugin marketplace add mani1261790/ToolUseProxy --ref public-alpha
 codex plugin add tooluseproxy@tooluseproxy
 ```
 
-Install the marketplace and Plugin once per Codex environment, then use the
-same Plugin across multiple projects. Initialization, protected-source
-registration, runtime settings, and audit data remain workspace-scoped, so run
-the bundled setup skill when you first use each workspace.
+マーケットプレイスとプラグインはCodex環境ごとに一度導入し、複数プロジェクトで共有します。初期設定、保護登録、実行設定、監査データはプロジェクトごとです。初めて使うプロジェクトで付属Skillを実行します。
 
-Updates are explicit, not automatic:
+更新は明示的に行います。
 
-```bash
+```sh
 codex plugin marketplace upgrade tooluseproxy
 codex plugin list --json
 ```
 
-Use the immutable `v0.1.0-alpha.24` tag instead of `public-alpha` when reproducible version pinning matters. A pinned tag does not move when the marketplace is upgraded. Review the exact Hook definitions after installation or an update before trusting them, then fully restart Codex and begin a new task. A changed matcher, command, or source invalidates the earlier trust decision; a Hook with `trustStatus: modified` must be reviewed again. Then follow the [Japanese five-minute quickstart](QUICKSTART.md) to initialize ToolUseProxy and review protected-source proposals in batches of up to ten.
+再現実験では `public-alpha` の代わりに固定タグ `v0.1.0-alpha.24` を使います。固定タグは更新操作でも別の版に進みません。導入・更新後は実際のHook定義を確認して信頼し、Codexを完全に再起動して新しいタスクを始めます。対象条件、コマンド、ソースが変われば以前の承認は無効になり、`trustStatus: modified` のHookは再確認が必要です。当時の[クイックスタート](QUICKSTART.md)では、保護候補を最大10件ずつ確認していました。
 
-On Codex Desktop for macOS, alpha.12 passed a fresh August 31 run with all 35 checks true. The run verified two scoped command approvals, one public side effect, zero static or dynamic protected side effects, two pre-execution blocks, and zero raw protected-value exposures. Remove, same-version reinstall with managed-state reuse, final Remove, and cleanup also passed. Desktop task history records local shell calls as `exec_command`, while the canonical Hook matcher name is `Bash`; value-free markers, the Hook database, stable definition hashes, and task records remain the evidence boundary. Linux and Windows Desktop are not established by this result.
+macOSのCodex Desktopでは、8月31日のalpha.12の新規実行で35項目を確認しました。限定されたコマンド承認2回、公開操作の実行1件、静的・動的な保護対象操作の実行各0件、実行前遮断2件、保護本文の意図しない露出0件でした。削除、同じ版の再導入と管理データの再利用、最終的な削除・整理も成功しました。
 
-## Try the synthetic preview
+Desktopのタスク履歴ではローカルシェルが `exec_command`、Hookの標準名では `Bash` と記録されます。本文を含まない印、HookのDB、定義のハッシュ、タスク記録を証拠としました。この結果でLinux・WindowsのDesktopを確認したことにはなりません。
 
-Run the automated, synthetic preview from a checkout:
+## 人工データの確認
 
-```bash
+当時のチェックアウトでは、次の人工データの確認スクリプトを使いました。
+
+```sh
 python3.11 scripts/demo_plugin.py
 ```
 
-The preview does not replace manual Hook review or an actual Codex task.
+これは人によるHookの確認や、実際のCodexタスクでの検証の代わりではありません。旧コードの参照方法は[旧版の保管場所](../../../legacy/README.md)にあります。
 
-## Important boundaries
+## 当時の制限
 
-- PreToolUse enforcement is off by default.
-- PreToolUse runtime, policy, unsupported-payload, and bounded-analysis failures fail closed after setup. A missing database remains advisory so initial setup can run.
-- Local SQLite data can contain plaintext Hook payloads and protected-source chunks.
-- Removing the Plugin does not delete local audit data.
-- Protected-source onboarding and manifest migration are supported on macOS and Linux for this alpha, not Windows.
-- Hosted Web Search does not appear in the current `PreToolUse` / `PostToolUse` Hook surface, so ToolUseProxy cannot observe or technically block it before execution. `SessionStart` and `SubagentStart` Hooks add developer context instructing Codex never to send protected or derived content through hosted tools, but this is a mitigation rather than an enforcement boundary.
-- Additional input sent to a running process through `write_stdin` does not trigger another `PreToolUse`. Alpha.12 verifies the current Desktop wrapper containing exactly one nested `tools.exec_command`; this result does not generalize to other wrappers, multiple commands, other nested tools, or specialized Codex paths.
-- `configured_unverified` means the workspace files and settings exist but delivery to the current verification command is not proven. `active` applies only to Hook-visible local tools after a fresh opaque token binds that command's PreToolUse event to the exact installed runtime. The user does not generate, remember, or enter this internal token.
-- Local externality protection is enabled by the normal setup profile. The experimental LLM judge provider remains off by default; classification runs outside Hooks, never auto-promotes a rule, and cannot weaken an existing block. Its provider-specific processing and retention boundary is documented in [privacy and retention](PRIVACY.md).
+- 実行前の強制保護は初期値で無効。
+- 初期設定後は、実行処理、保護方針、未対応の入力、解析上限の失敗を実行拒否として扱う。DBがない場合だけ初期設定のため案内にとどめる。
+- SQLiteにHookの生データと保護内容の断片が平文で残る場合がある。
+- プラグインの削除では監査データを削除しない。
+- 保護登録と旧登録の移行はmacOS / Linuxに対応し、Windowsは未対応。
+- Hosted Web SearchはHookに現れず、技術的に観測・遮断できない。開始時の指示で保護内容や派生内容を入力しないよう伝えるが、強制保護ではない。
+- 実行中のプロセスへ `write_stdin` で追加した入力は再検査されない。alpha.12で確認したDesktopのラッパーは、単一の `tools.exec_command` を含む形だけ。他のラッパーや複数操作、別のツールへの一般化はできない。
+- `configured_unverified` は設定があるという意味で、検証対象へのHook配送の証明ではない。`active` は、新しい内部トークンでPreToolUseとインストール済みの版を対応付けた、Hookに届くローカル操作だけに適用する。利用者がこのトークンを入力することはない。
+- 当時の標準設定はローカルの外部性保護を有効にする。実験的なLLM分類器は初期値で無効で、Hook外で分類し、ルールを自動承認せず、既存の遮断を弱めない。
 
-Read [support and known limitations](SUPPORT.md), [privacy and retention](PRIVACY.md), [private vulnerability reporting](SECURITY.md), and the [Japanese project documentation](README.md) before using the alpha.
+当時の[対応範囲](SUPPORT.md)と[データの扱い](PRIVACY.md)は履歴として残しています。新しい報告には[現行の非公開窓口](../../../SECURITY.md)を使ってください。

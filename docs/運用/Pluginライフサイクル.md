@@ -1,4 +1,6 @@
-# Plugin upgrade / rollback rehearsal
+> v0.1時代の設計・運用・評価資料です。ここにある機能や手順はv0.2の通常実行経路とは異なります。現在の説明は[エッジ生成と送信判定](../設計/エッジ生成と送信判定.md)と[文書一覧](../索引.md)を参照してください。
+
+# プラグインの更新・復元のリハーサル
 
 public alphaのinstall、明示upgrade、safe rollback、disable、remove、data保持、明示uninstallをsynthetic dataだけで反復します。
 
@@ -6,14 +8,14 @@ public alphaのinstall、明示upgrade、safe rollback、disable、remove、data
 
 baselineはPlugin packagingを導入したimmutable commit `22974427ab62e55a00d21af164d8fc837cb5e8b7`です。
 
-- baseline: Plugin `0.1.0-alpha.1`、Python `0.1.0a1`、SQLite schema v1
+- 比較基準： Plugin `0.1.0-alpha.1`、Python `0.1.0a1`、SQLite schema v1
 - upgrade先: 現在の検証対象release candidate、Plugin `0.1.0-alpha.24`、SQLite schema v12
 
 baseline treeは`git archive`から一時directoryへ展開します。CI checkoutはこのcompatibility fixtureを取得できるようfull historyを使います。repositoryやworkspaceは変更しません。
 
 ## 実行
 
-### Codex native marketplace update
+### Codex標準のマーケットプレイス更新
 
 実Codex CLIがmoving marketplace refを更新し、install済みPluginをremove / reinstallなしに置き換える契約は専用testで検証します。
 
@@ -25,7 +27,7 @@ testはloopback HTTPだけを使う一時Git marketplaceを作り、同じrefを
 
 公開運用では同じmoving refとして保護branch `public-alpha`を使います。このbranchはreview済み・CI green・公開済みのrelease commitだけへfast-forwardし、force pushと削除を禁止します。immutable tagによるversion固定も引き続き提供します。
 
-### Artifact transition and rollback
+### 配布物の移行と復元
 
 Codex CLIを介さずartifactのcode transitionを検証します。
 

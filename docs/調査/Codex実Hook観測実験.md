@@ -15,7 +15,7 @@ ToolUseProxyが想定しているHook payloadと、実際のCodex CLIが送るpa
 
 - 実施日: 2026-07-11
 - Codex CLI: `0.142.5`
-- Model: `gpt-5.5`
+- モデル： `gpt-5.5`
 - Workspace: local ToolUseProxy checkout（実験者固有の絶対pathは省略）
 - Hook trust: 実験時のみ`--dangerously-bypass-hook-trust`
 - 保存先: `/private/tmp`配下の一時SQLite DB
@@ -57,7 +57,7 @@ Codexへ次の操作を順番に行わせた。
 
 すべてのイベントで同じ`session_id`と`turn_id`を取得できた。Pre/Postの対応には同じ`tool_use_id`が使われていた。
 
-### Bash
+### シェル操作（Bash）
 
 shell操作は`tool_name: "Bash"`として観測された。コマンドは次の位置に入る。
 
@@ -73,7 +73,7 @@ shell操作は`tool_name: "Bash"`として観測された。コマンドは次�
 
 `PostToolUse`では同じ`tool_input`に加えて、stdout相当の文字列が`tool_response`へ入った。現在のparserはこれを`tool_input` / `tool_output` artifactとして保存できた。
 
-### apply_patch
+### ファイル編集（apply_patch）
 
 ファイル編集は`tool_name: "apply_patch"`として観測された。入力は構造化されたpath/contentではなく、patch全体が`tool_input.command`に入る。
 
@@ -89,7 +89,7 @@ shell操作は`tool_name: "Bash"`として観測された。コマンドは次�
 
 2026-07-11の初回観測時、parserはpatch文字列をartifactとして保存できたが、当時の`FilesystemAdapter`は`apply_patch`を認識せず、編集対象path、削除内容、追加内容を`resource_version`へ接続できていなかった。この制約は、その後のoperation fragmentとsnapshot実装前の履歴である。
 
-### Stop
+### タスク終了（Stop）
 
 実際のStop payloadでは、最終回答本文は`last_assistant_message`に入った。
 
@@ -311,16 +311,16 @@ PreToolUseでは2つの`bash_segment`と、`overwrite` / `append`の2 operation�
 
 本文だけでは両者を区別できないため、classifierはどちらも`unknown / success_unconfirmed`として保存した。Bash snapshotとoperation-backed resource versionは作成しなかった。これはcapture失敗ではなく、Codex CLI `0.142.5`の実Hook payloadにstructured exit statusがない場合の意図したfail-open動作である。Bash segment分離は成立しているが、実Codexでのwrite snapshot確定には、将来のHook payloadで信頼できるstructured statusが必要になる。
 
-## Snapshot Hook latency benchmark
+## 状態取得を含むHook処理時間の計測
 
 2026-07-15に次の条件で正式benchmarkを実行した。
 
-- commit: `c842adb`
+- コミット： `c842adb`
 - OS: macOS 27 arm64
 - Python: `3.9.6`
 - SQLite: `3.54.0`
 - warmup 10回、計測100回
-- nearest-rank percentile
+- 最も近い順位による百分位数
 - 各sampleへ固有のPre/Post tool useを作り、Post Hookだけを計時
 - case順をroundごとにrotate
 - `TOOLUSEPROXY_SNAPSHOT_PLAINTEXT=0`
@@ -517,7 +517,7 @@ sidecar実装前の10 MiB rendered oversizeはp95 8.01 msだった。新しいco
 
 最終hash-only schemaでの再実行は、既定の`gpt-5.6-sol`がCodex CLIと非互換でturn開始前に失敗し、その後の明示的な`gpt-5.5`と`gpt-5.4-mini`はusage limitでturn開始前に停止した。いずれもHook eventやserver callを生成していないため有効試行へ数えていない。最終schemaはactual Hook entrypoint fixtureを含むlocal testで検証済みだが、実Codex再検証はusageが利用可能になった後の残件である。runtime rewriteは引き続き有効化していない。
 
-## Dormant derived redact decision linkage
+## 無効化した派生書換え判定との対応
 
 同日の次作業単位で、future rendererが一部findingだけを扱うことを防ぐ監査境界を追加した。eligible previewから`enforce / eligible` plan、preview targetのexact clone、全critical finding分のdecision linkを1 transactionで準備する。各linkは元の`block / PreToolUse` decision ID、versionedなderived REDACT decision ID、derivation version、metadata SHA-256だけを持ち、protected本文を保存しない。genericな`policy_decisions`へ派生rowは追加しない。
 
