@@ -1,6 +1,6 @@
 # Network egress観測とAudit改善計画（履歴）
 
-> この文書は2026-08-11までの調査過程とnegative resultを保存する履歴資料です。現行方針の正本ではありません。現在の研究方針は[現行研究方針](../../研究/現行研究方針.md)、外部通信可能性の実装ロードマップは[Externality Protectionロードマップ](../../運用/ExternalityProtectionRoadmap.md)を参照してください。
+> この文書は2026-08-11までの調査過程とnegative resultを保存する履歴資料です。現行方針の正本ではありません。現在の研究方針は[現行研究方針](../../研究/現行研究方針.md)、外部通信可能性の実装ロードマップは[Externality Protectionロードマップ](../v0.1/運用/ExternalityProtectionRoadmap.md)を参照してください。
 
 ## 結論
 
