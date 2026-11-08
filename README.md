@@ -15,7 +15,7 @@
 
 [SecHack365](https://sechack365.nict.go.jp/)で研究・開発しています。
 
-[導入する](QUICKSTART.md) · [仕組みとフローチャート](docs/設計/エッジ生成と送信判定.md) · [対応範囲](SUPPORT.md) · [ドキュメント一覧](docs/索引.md)
+[自分のMacで試す](https://github.com/mani1261790/ToolUseProxy/releases/tag/tester-20261108.2) · [導入手順](QUICKSTART.md) · [仕組みとフローチャート](docs/設計/エッジ生成と送信判定.md) · [対応範囲](SUPPORT.md) · [ドキュメント一覧](docs/索引.md)
 
 ## 何を確かめるのか
 
@@ -31,26 +31,15 @@
 
 公開済みの **[v0.2.0-alpha.16](https://github.com/mani1261790/ToolUseProxy/releases/tag/v0.2.0-alpha.16)** では、この3種類のGitHub送信をCodex Desktopの実Hookで確認しました。原文と派生手順書は実行前に遮断され、独立した案内だけが送信されました。[検証条件と記録](docs/履歴/v0.2/運用/alpha16検証.md)を公開しています。この1回の結果は、任意の操作や障害に対する保証ではありません。
 
-## 使い始める
+## 自分のプロジェクトで使う（macOS）
 
-プラグインは公開版を配信する `public-alpha` から導入します。
+たとえば、非公開の設計メモをもとに作った資料をCodexが送ろうとしたとき、送信前に立ち止まって宛先を確かめられます。確認画面で拒否するか、内容を確認して、その送信だけを許可できます。
 
-```sh
-codex plugin marketplace add mani1261790/ToolUseProxy --ref public-alpha
-codex plugin add tooluseproxy@tooluseproxy
-```
+1. **[Mac用ZIPをダウンロード](https://github.com/mani1261790/ToolUseProxy/releases/tag/tester-20261108.2)** して展開します。「はじめる.command」を開き、普段Codexで作業しているプロジェクトを選びます。
+2. 選んだプロジェクトをCodex Desktopで開き、標準権限（Full Accessはオフ）で、このプロジェクトのToolUseProxyのHookを確認して信頼します。
+3. 新しいチャットで、守りたいファイルを指定します。たとえば **「.codex/tooluseproxy-review/AGENT_INSTALL.md の手順で、非公開/設計.md を保護して、登録一覧を見せて」**。ファイル名は自分のものに置き換えてください。導入しただけでは登録は0件です。
 
-導入後、Codexで対象プロジェクトを開いて依頼します。
-
-> このプロジェクトでToolUseProxyを使いたい
-
-初期設定では、**記録した入力・出力や検査に必要な情報を、判定用モデルへ送ること**を確認します。記録はその時点から始まり、過去の作業は取り込みません。ログ画面も開きます。
-
-> research_notes.mdを保護して
-
-指定したファイル全体を登録します。登録だけなら本文の読み取りや送信テストは行いません。初期設定だけで勝手にファイルを保護登録することもありません。
-
-対応環境、更新、権限の確認、解除方法は[クイックスタート](QUICKSTART.md)にまとめています。`main`には配布後の変更も入るため、インストール済みの版は別途確認してください。
+Python 3.11または3.12、ログイン済みのCodex CLIとDesktop、自分のJev APIキーが必要です。判定には操作記録や必要なファイル内容をJev・Codexへ送ることがあり、それぞれの利用枠を使います。外部サービスで扱えるプロジェクトを選んでください。[Codexに導入を任せる手順と初回の確認ポイント](QUICKSTART.md)も用意しています。
 
 ## ログとグラフを見る
 
