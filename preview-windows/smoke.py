@@ -3,8 +3,11 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 os.environ.update(PYTHONUTF8='1',PYTHONIOENCODING='utf-8')
-with tempfile.TemporaryDirectory() as tmp:
- root=Path(tmp).resolve(); z=next(Path(__file__).parent.glob('*.zip'))
+if len(sys.argv)==1:
+ with tempfile.TemporaryDirectory() as tmp:
+  subprocess.run([sys.executable,'-X','utf8',str(Path(__file__).resolve()),tmp],check=True)
+else:
+ root=Path(sys.argv[1]).resolve(); z=next(Path(__file__).parent.glob('*.zip'))
  with zipfile.ZipFile(z) as archive:archive.extractall(root)
  kit=root/z.stem;project=root/'Project テスト';project.mkdir()
  file=project/'notes.txt';file.write_text('Fictionday synthetic reference: a violet coefficient of exactly 0.73147.')
