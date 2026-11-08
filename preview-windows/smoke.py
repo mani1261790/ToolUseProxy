@@ -4,7 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 os.environ.update(PYTHONUTF8='1',PYTHONIOENCODING='utf-8')
 with tempfile.TemporaryDirectory() as tmp:
- root=Path(tmp); z=next(Path(__file__).parent.glob('*.zip'))
+ root=Path(tmp).resolve(); z=next(Path(__file__).parent.glob('*.zip'))
  with zipfile.ZipFile(z) as archive:archive.extractall(root)
  kit=root/z.stem;project=root/'Project テスト';project.mkdir()
  file=project/'notes.txt';file.write_text('Fictionday synthetic reference: a violet coefficient of exactly 0.73147.')
@@ -28,7 +28,9 @@ with tempfile.TemporaryDirectory() as tmp:
  w=resolve_workspace(str(project));assert w.ready
  db=project/'.tooluseproxy/events.db'
  for name,want in [('notes.txt',True),('public.txt',False)]:
-  resolver=PayloadResolver(EvidenceStore(db),w.workspace_id,'synthetic-'+name,project)
+  event=event_from('pre_tool_use',dict(cwd=str(project),session_id='file-check',tool_use_id=name,tool_name='Bash',tool_input={'command':'upload '+name}),str(project))
+  Journal(db).record(event)
+  resolver=PayloadResolver(EvidenceStore(db),w.workspace_id,event.event_id,project)
   res=resolver.resolve(dict(kind='file',path=name,offset=0,length=None))
   assert res.coverage=='complete',res
   verdict=inspect_dlp(resolver,res,[dict(source_id='s',path='notes.txt')]);assert bool(verdict.matches)==want and not verdict.issues
@@ -42,4 +44,5 @@ with tempfile.TemporaryDirectory() as tmp:
  o=subprocess.run(hook,input=json.dumps(dict(cwd=str(project),session_id='windows-smoke',hook_event_name='SessionStart')),cwd=project,text=True,encoding='utf8',capture_output=True,check=True)
  assert isinstance(json.loads(o.stdout),dict)
  with sqlite3.connect(db) as conn:assert conn.execute("select count(*) from events where phase='session_start' and session_id='windows-smoke'").fetchone()[0]==1
+ conn.close()
  print('PASS: install, live configuration, registered source, file DLP match and unrelated nonmatch, exclusive lock, session-start launcher.')
