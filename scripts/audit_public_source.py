@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import zipfile
 import gzip
 import io
 import tarfile
@@ -309,6 +311,21 @@ def _scan_content(
     if len(content) > MAX_BLOB_BYTES:
         findings["oversized_blob"] += 1
         return 0
+    # Two historical CI snapshots contain the published Windows preview kit.
+    # Inspect every member; other unrecognized binary blobs remain findings.
+    if content.startswith(b"PK\x03\x04") and hashlib.sha256(content).hexdigest() in {
+        "985b47eb0745412bd5b516041e2cd8fffa8f3ee16d7615b92d34580008eb98ff",
+        "7c9ec511d94ab513a2a807646ec46fa72cb25566e12024379e99a22220370ebc",
+    }:
+        ignored = 0
+        with zipfile.ZipFile(io.BytesIO(content)) as archive:
+            for entry in archive.infolist():
+                if _forbidden_path(entry.filename):
+                    findings["forbidden_path"] += 1
+                if not entry.is_dir():
+                    ignored += _scan_content(archive.read(entry), findings, observations, binary_allowed=False)
+        observations["audited_archive"] += 1
+        return ignored
     if content.startswith(b"\x1f\x8b"):
         # Audit archived source rather than allowing opaque compressed binaries.
         ignored = 0

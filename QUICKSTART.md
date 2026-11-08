@@ -4,10 +4,11 @@
 
 ## 自分のMacで始める
 
-**[ToolUseProxyをダウンロードする（macOS）](https://github.com/mani1261790/ToolUseProxy/releases/tag/tester-20261108.2)**。普段使っているプロジェクトに初めて導入する方向けです。すでにToolUseProxyを設定したプロジェクトは上書きしません。
+**[ToolUseProxyをダウンロードする（macOS）](https://github.com/mani1261790/ToolUseProxy/releases/tag/tester-20261108.4)**。普段使っているプロジェクトに初めて導入する方向けです。すでにToolUseProxyを設定したプロジェクトは上書きしません。
 
 1. **準備する。** Codex Desktopとログイン済みのCodex CLI、Python 3.11または3.12、自分のJev APIキーを用意します。キーの保存方法はZIP内の `JEV_SETUP.md` にあります。キーをチャットに貼る必要はありません。判定時に必要な内容をJev・Codexへ渡すため、外部サービスで扱えるプロジェクトを選びます。
-2. **導入先を選ぶ。** ZIPを展開し「はじめる.command」を開きます。表示されたフォルダーが使いたいプロジェクトであることを確認して進めます。Codexに準備を任せたい場合は、展開先と対象プロジェクトを示して **「このZIPのAGENT_INSTALL.mdに従って、このプロジェクトに導入して」** と頼めます。
+2. 使いたいプロジェクトをCodex Desktopで開き、**「https://github.com/mani1261790/ToolUseProxy/releases/tag/tester-20261108.4 のMac版を、今開いているプロジェクトに導入して。」** と頼んでください。ZIPの取得・照合・展開・設定はCodexが行います。
+   導入前に、Codexは旧プラグイン側の対象プロジェクトの保護登録も確認します。登録がある場合や、既存登録の有無を確認できない場合はインストーラを実行せず、移行の確認が必要なことを案内してください。旧Hookを無効化したり、空の一覧で上書きしたりしないでください。
 3. **送信前の確認を有効にする。** 対象プロジェクトをDesktopで開き、Full Accessをオフにします。`/hooks` で、このプロジェクトのToolUseProxyの定義6個（送信前2個、その他4個）を確認して信頼し、新しいチャットを開きます。
 4. **守るファイルを選ぶ。** 「.codex/tooluseproxy-review/AGENT_INSTALL.md の手順で、研究ノート.md を保護して、登録一覧を見せて」と頼みます。ファイル名は実際のものに置き換えてください。一覧にその名前があれば登録できています。
 
