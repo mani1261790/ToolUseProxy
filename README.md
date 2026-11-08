@@ -4,7 +4,7 @@ Codexがファイルを外部に送る前に、登録した秘密ファイルや
 
 | OS | 試せる版と確認状況 |
 | --- | --- |
-| macOS | [テスター版](https://github.com/mani1261790/ToolUseProxy/releases/tag/tester-20261108.4)。Codex Desktopで、止めた送信を拒否するか、今回だけ許可するかを選べます。 |
+| macOS | [テスター版](https://github.com/mani1261790/ToolUseProxy/releases/tag/tester-20261108.5)。Codex Desktopで、止めた送信を拒否するか、今回だけ許可するかを選べます。 |
 | Windows | [プレビュー版](https://github.com/mani1261790/ToolUseProxy/releases/tag/windows-preview-20261108.1)。自動テストで基本動作を確認しています。「今回だけ許可」は使えません。 |
 | Linux | [以前の公開版（alpha.16）の導入手順](QUICKSTART.md#以前の公開版alpha16を使う方へ)があります。Ubuntuでは自動テストと配布物の検証まで確認済みです。Macテスター版に相当するLinux版の配布と、実際の送信確認画面の検証はまだです。 |
 
@@ -15,12 +15,12 @@ Codex Desktop、ログイン済みのCodex CLI、Python 3.11または3.12、自�
 **1. 使いたいプロジェクトをCodex Desktopで開き、次の一文を貼り付けます。**
 
 ```text
-https://github.com/mani1261790/ToolUseProxy/releases/tag/tester-20261108.4 のMac版を、今開いているプロジェクトに導入して。
+https://github.com/mani1261790/ToolUseProxy/releases/tag/tester-20261108.5 のMac版を、今開いているプロジェクトに導入して。
 ```
 
 CodexがZIPの取得・照合・展開・設定を行います。導入先を確認してください。APIキーをチャットに貼る必要はありません。
 
-**2. 送信前の確認を有効にします。** Full Accessをオフにして、`/hooks` でこのプロジェクトのToolUseProxyの6件を信頼し、新しいチャットを開きます。
+**2. 送信前の確認を有効にします。** Full Accessをオフにして、`/hooks` でこのプロジェクトのToolUseProxyの6件を信頼し、新しいチャットを開きます。 最初の依頼を送ると、Codex Desktopの右側にこのプロジェクトのログ画面が開きます。「ログを開いて」と頼む必要はありません。
 
 **3. 守りたいファイルを登録します。** 導入しただけでは保護対象は0件です。次の例のファイル名を自分のものに置き換えて頼み、登録一覧にその名前があることを確認してください。
 
