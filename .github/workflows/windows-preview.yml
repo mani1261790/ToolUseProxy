@@ -1,0 +1,21 @@
+name: Windows preview smoke
+on:
+  push:
+    branches: [codex/windows-preview-20261108]
+permissions:
+  contents: read
+jobs:
+  smoke:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: preview-windows
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install Codex CLI
+        run: npm install -g @openai/codex
+      - name: Verify ZIP in a native Windows process
+        run: python -X utf8 preview-windows/smoke.py
