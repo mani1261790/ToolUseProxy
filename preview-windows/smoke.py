@@ -28,7 +28,13 @@ else:
  assert [x['path'] for x in sources['sources']]==['notes.txt']
  sys.path.insert(0,str(rt))
  from tooluseproxy.engine.workspace import resolve_workspace
+ from tooluseproxy.engine import payload as payload_module
  from tooluseproxy.engine.payload import open_resource,PayloadResolver
+ original_fingerprint=payload_module.fingerprint
+ observed_fingerprints=[]
+ def traced_fingerprint(value):
+  result=original_fingerprint(value);observed_fingerprints.append(result);return result
+ payload_module.fingerprint=traced_fingerprint
  from tooluseproxy.engine.evidence import EvidenceStore
  from tooluseproxy.engine.dlp import inspect_dlp
  from tooluseproxy.engine import win_lock,worker
@@ -41,6 +47,7 @@ else:
   Journal(db).record(event)
   resolver=PayloadResolver(EvidenceStore(db),w.workspace_id,event.event_id,project)
   res=resolver.resolve(dict(kind='file',path=name,offset=0,length=None))
+  if res.coverage!='complete':print('Synthetic fixture fingerprint diagnostics:',observed_fingerprints[-4:],flush=True)
   assert res.coverage=='complete',res
   verdict=inspect_dlp(resolver,res,[dict(source_id='s',path='notes.txt')]);assert bool(verdict.matches)==want and not verdict.issues
  with (project/'test.lock').open('a') as a,(project/'test.lock').open('a') as b:
