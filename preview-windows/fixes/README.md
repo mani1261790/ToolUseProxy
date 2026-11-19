@@ -22,7 +22,7 @@ failure, or arbitrary installer errors.
   isolation and failed registration leaving no setup files.
 - check_mac_install.py passes the actual Mac installer and generated Hook
   command, plus a missing-source installation with no writes.
-- Windows native execution is pending. smoke.py now installs under an ancestor
+- Windows native execution passed: https://github.com/mani1261790/ToolUseProxy/actions/runs/44508479322 . smoke.py now installs under an ancestor
   .git, checks the ancestor remains untouched, then runs the same regression.
   Windows locking is platform-specific; Mac results do not substitute for Windows.
 
@@ -35,4 +35,8 @@ This verifies the input runtime manifest, patches the shared app.py, and updates
 its hash. runtime.patch is the reviewable source diff for both platforms.
 The original archives and installed runtimes are unchanged.
 The Windows 20261119.1 ZIP is the patched 20261108.1 kit; SHA256SUMS identifies it.
-No release assets have been uploaded.
+Publication follows merge. Existing partial-install recovery is tracked in #348.
+
+Mac updater source: mac-update-20261119.1.py. The release includes original
+20261108.5 and 20261108.6 manifests so supported installs can update without
+changing project DB, protected registrations or Codex settings.
