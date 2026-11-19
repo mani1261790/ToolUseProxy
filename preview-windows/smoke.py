@@ -7,15 +7,21 @@ if len(sys.argv)==1:
  with tempfile.TemporaryDirectory() as tmp:
   subprocess.run([sys.executable,'-X','utf8',str(Path(__file__).resolve()),tmp],check=True)
 else:
- root=Path(sys.argv[1]).resolve(); z=next(Path(__file__).parent.glob('*.zip'))
+ root=Path(sys.argv[1]).resolve(); z=Path(__file__).parent/'ToolUseProxy-Windows-20261119.1.zip'
  with zipfile.ZipFile(z) as archive:archive.extractall(root)
- kit=root/z.stem;project=root/'Project テスト';project.mkdir()
+ kit=root/z.stem
+ (root/'.git').mkdir()
+ parent_ignore=root/'.gitignore';parent_ignore.write_bytes(b'# parent sentinel\n')
+ project=root/'Project テスト';project.mkdir()
  file=project/'notes.txt';file.write_text('Fictionday synthetic reference: a violet coefficient of exactly 0.73147.')
  (project/'public.txt').write_text('Open house starts at noon.')
  def proc(*a,**kw):return subprocess.run([sys.executable,'-X','utf8',*map(str,a)],cwd=project,check=True,text=True,encoding='utf8',capture_output=True,**kw)
  install=[kit/'install.py','--workspace',project,'--protect','notes.txt','--accept-judge-data']
  proc(*install,'--plan');assert not (project/'.codex').exists()
- out=proc(*install);rt=project/'.codex/tooluseproxy-review/runtime'
+ out=proc(*install)
+ assert not (root/'.tooluseproxy').exists()
+ assert parent_ignore.read_bytes()==b'# parent sentinel\n'
+ rt=project/'.codex/tooluseproxy-review/runtime'
  c=tomllib.loads((project/'.codex/config.toml').read_text(encoding='utf8'))
  assert len(c['hooks'])==5 and 'mcp_servers' not in c
  sources=json.loads(proc(rt/'tooluseproxy_plugin.py','protect','--workspace',project,'list','--json').stdout)
@@ -48,4 +54,5 @@ else:
  assert isinstance(json.loads(o.stdout),dict)
  with sqlite3.connect(db) as conn:assert conn.execute("select count(*) from events where phase='session_start' and session_id='windows-smoke'").fetchone()[0]==1
  conn.close()
+ subprocess.run([sys.executable,'-X','utf8',str(Path(__file__).parent/'fixes/check_workspace.py'),str(rt)],check=True)
  print('PASS: install, live configuration, registered source, file DLP match and unrelated nonmatch, exclusive lock, session-start launcher.')

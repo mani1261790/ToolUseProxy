@@ -1,7 +1,10 @@
 name: Windows preview smoke
 on:
   push:
-    branches: [codex/windows-preview-20261108]
+    branches: [codex/windows-preview-20261108, codex/fix-347-workspace]
+  pull_request:
+    paths: ["preview-windows/**", ".github/workflows/windows-preview.yml"]
+  workflow_dispatch:
 permissions:
   contents: read
 jobs:
