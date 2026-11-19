@@ -2,8 +2,8 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import zipfile
+import stat
 import gzip
 import io
 import tarfile
@@ -311,21 +311,40 @@ def _scan_content(
     if len(content) > MAX_BLOB_BYTES:
         findings["oversized_blob"] += 1
         return 0
-    # Two historical CI snapshots contain the published Windows preview kit.
-    # Inspect every member; other unrecognized binary blobs remain findings.
-    if content.startswith(b"PK\x03\x04") and hashlib.sha256(content).hexdigest() in {
-        "985b47eb0745412bd5b516041e2cd8fffa8f3ee16d7615b92d34580008eb98ff",
-        "7c9ec511d94ab513a2a807646ec46fa72cb25566e12024379e99a22220370ebc",
-    }:
+    if content.startswith(b"PK"):
         ignored = 0
-        with zipfile.ZipFile(io.BytesIO(content)) as archive:
-            for entry in archive.infolist():
-                if _forbidden_path(entry.filename):
-                    findings["forbidden_path"] += 1
-                if not entry.is_dir():
-                    ignored += _scan_content(archive.read(entry), findings, observations, binary_allowed=False)
-        observations["audited_archive"] += 1
-        return ignored
+        try:
+            with zipfile.ZipFile(io.BytesIO(content)) as archive:
+                names = set()
+                total = 0
+                for member in archive.infolist():
+                    path = PurePosixPath(member.filename)
+                    mode = member.external_attr >> 16
+                    if (path.is_absolute() or ".." in path.parts
+                            or "\\" in member.filename or ":" in member.filename
+                            or member.filename in names or len(names) >= 10000
+                            or stat.S_ISLNK(mode) or member.flag_bits & 1):
+                        raise ValueError("invalid_archive_member")
+                    names.add(member.filename)
+                    if member.is_dir():
+                        continue
+                    total += member.file_size
+                    if member.file_size > MAX_BLOB_BYTES or total > 16 * 1024 * 1024:
+                        raise ValueError("archive_too_large")
+                    if _forbidden_path(member.filename):
+                        findings["forbidden_path"] += 1
+                    with archive.open(member) as stream:
+                        payload = stream.read(MAX_BLOB_BYTES + 1)
+                    if len(payload) != member.file_size:
+                        raise ValueError("archive_size_mismatch")
+                    if payload.startswith((b"PK", b"\x1f\x8b")):
+                        raise ValueError("nested_archive")
+                    ignored += _scan_content(payload, findings, observations, binary_allowed=False)
+            observations["audited_archive"] += 1
+            return ignored
+        except (OSError, EOFError, ValueError, RuntimeError, zipfile.BadZipFile, NotImplementedError):
+            findings["invalid_archive"] += 1
+            return ignored
     if content.startswith(b"\x1f\x8b"):
         # Audit archived source rather than allowing opaque compressed binaries.
         ignored = 0
@@ -345,7 +364,7 @@ def _scan_content(
                     if _forbidden_path(member.name):
                         findings["forbidden_path"] += 1
                     payload = archive.extractfile(member).read()
-                    if payload.startswith(b"\x1f\x8b"):
+                    if payload.startswith((b"PK", b"\x1f\x8b")):
                         raise ValueError("nested_archive")
                     ignored += _scan_content(payload, findings, observations, binary_allowed=False)
             observations["audited_archive"] += 1
