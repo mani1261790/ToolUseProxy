@@ -4,8 +4,8 @@ Codexがファイルを外部に送る前に、登録した秘密ファイルや
 
 | OS | 試せる版と確認状況 |
 | --- | --- |
-| macOS | [テスター版](https://github.com/mani1261790/ToolUseProxy/releases/tag/tester-20261108.6)。Codex Desktopで、止めた送信を拒否するか、今回だけ許可するかを選べます。 |
-| Windows | [プレビュー版](https://github.com/mani1261790/ToolUseProxy/releases/tag/windows-preview-20261108.1)。自動テストで基本動作を確認しています。「今回だけ許可」は使えません。 |
+| macOS | [テスター版](https://github.com/mani1261790/ToolUseProxy/releases/tag/tester-20261119.1)。Codex Desktopで、止めた送信を拒否するか、今回だけ許可するかを選べます。 |
+| Windows | [プレビュー版](https://github.com/mani1261790/ToolUseProxy/releases/tag/windows-preview-20261119.1)。自動テストで基本動作を確認しています。「今回だけ許可」は使えません。 |
 | Linux | [以前の公開版（alpha.16）の導入手順](QUICKSTART.md#以前の公開版alpha16を使う方へ)があります。Ubuntuでは自動テストと配布物の検証まで確認済みです。Macテスター版に相当するLinux版の配布と、実際の送信確認画面の検証はまだです。 |
 
 ## Macで始める
@@ -15,7 +15,7 @@ Codex Desktop、ログイン済みのCodex CLI、Python 3.11または3.12、自�
 **1. 使いたいプロジェクトをCodex Desktopで開き、次の一文を貼り付けます。**
 
 ```text
-https://github.com/mani1261790/ToolUseProxy/releases/tag/tester-20261108.6 のMac版を、今開いているプロジェクトに導入して。
+https://github.com/mani1261790/ToolUseProxy/releases/tag/tester-20261119.1 のMac版を、今開いているプロジェクトに導入して。
 ```
 
 CodexがZIPの取得・照合・展開・設定を行います。導入先を確認してください。APIキーをチャットに貼る必要はありません。
